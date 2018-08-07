@@ -17,7 +17,7 @@ pub enum Array {
 pub enum Resp {
     Error(BinSafeStr),
     Simple(BinSafeStr),
-    Bulk(BinSafeStr),
+    Bulk(BulkStr),
     Integer(BinSafeStr),
     Arr(Array),
 }

@@ -3,10 +3,11 @@ use std::error::Error;
 use std::fmt;
 use std::result::Result;
 use std::vec::Vec;
+use std::str::from_utf8;
 use tokio::prelude::{AsyncRead};
 use tokio::io::{read_until, read_exact};
 use futures::{future, Future};
-use super::resp::{Resp, BulkStr};
+use super::resp::{Resp, BulkStr, BinSafeStr, Array};
 
 #[derive(Debug)]
 pub enum DecodeError {
@@ -58,17 +59,10 @@ fn bytes_to_int(bytes: &[u8]) -> Result<i64, DecodeError> {
 fn decode_len<R>(reader: R) -> impl Future<Item = (R, i64), Error = DecodeError>
     where R: AsyncRead + io::BufRead
 {
-    let b = vec![];
-    read_until(reader, LF, b)
-        .map_err(DecodeError::Io)
-        .and_then(|(reader, buf)| {
-            if buf.len() <= 2 {
-                return future::err(DecodeError::InvalidProtocol)
-            }
-            let num_len = buf.len() - 2;
-            let len_res = bytes_to_int(&buf[..num_len]).map(|l| (reader, l));
-            future::result(len_res)
-        })
+    decode_line(reader).and_then(|(reader, s)| {
+        let len_res = bytes_to_int(&s[..]).map(|l| (reader, l));
+        future::result(len_res)
+    })
 }
 
 fn decode_bulk_str<R>(reader: R) -> impl Future<Item = (R, BulkStr), Error = DecodeError>
@@ -90,6 +84,62 @@ fn decode_bulk_str<R>(reader: R) -> impl Future<Item = (R, BulkStr), Error = Dec
         })
 }
 
+fn decode_line<R>(reader: R) -> impl Future<Item = (R, BinSafeStr), Error = DecodeError>
+    where R: AsyncRead + io::BufRead
+{
+    read_until(reader, LF, vec![])
+        .map_err(DecodeError::Io)
+        .and_then(|(reader, line)| {
+            let len = line.len();
+            if len <= 2 {
+                return future::err(DecodeError::InvalidProtocol)
+            }
+            let mut s = line;
+            s.truncate(len - 2);
+            future::ok((reader, s))
+        })
+}
+
+fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError>
+    where R: AsyncRead + io::BufRead + 'static
+{
+    read_exact(reader, vec![0; 1])
+        .map_err(DecodeError::Io)
+        .and_then(|(reader, prefix)| {
+            let bf: Box<Future<Item = (R, Resp), Error = DecodeError>> = match prefix[0] as char {
+                '$' => {
+                    Box::new(decode_bulk_str(reader)
+                        .and_then(|(reader, s)| future::ok((reader, Resp::Bulk(s)))))
+                }
+                '+' => {
+                    Box::new(decode_line(reader)
+                        .and_then(|(reader, s)| future::ok((reader, Resp::Simple(s)))))
+                }
+                ':' => {
+                    Box::new(decode_line(reader)
+                        .and_then(|(reader, s)| future::ok((reader, Resp::Integer(s)))))
+                }
+                '-' => {
+                    Box::new(decode_line(reader)
+                        .and_then(|(reader, s)| future::ok((reader, Resp::Error(s)))))
+                }
+                '*' => {
+                    Box::new(decode_array(reader)
+                        .and_then(|(reader, a)| future::ok((reader, Resp::Arr(a)))))
+                }
+                _ => Box::new(future::err(DecodeError::InvalidProtocol)),
+            };
+            bf
+        })
+}
+
+fn decode_array<R>(reader: R) -> impl Future<Item = (R, Array), Error = DecodeError>
+    where R: AsyncRead + io::BufRead + 'static
+{
+    unimplemented!();
+    future::ok((reader, Array::Nil))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,12 +152,18 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_int() {
+    fn test_decode_len() {
         let c = io::Cursor::new("233\r\n".as_bytes());
         let r = decode_len(c).wait();
         assert!(r.is_ok());
         let (_, l) = r.unwrap();
         assert_eq!(l, 233);
+
+        let c = io::Cursor::new("-233\r\n".as_bytes());
+        let r = decode_len(c).wait();
+        assert!(r.is_ok());
+        let (_, l) = r.unwrap();
+        assert_eq!(l, -233);
 
         let c = io::Cursor::new("2a3\r\n".as_bytes());
         let r = decode_len(c).wait();
@@ -131,5 +187,20 @@ mod tests {
         let c = io::Cursor::new("2a3\r\nab\r\n".as_bytes());
         let r = decode_bulk_str(c).wait();
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_decode_line() {
+        let c = io::Cursor::new("233\r\n".as_bytes());
+        let r = decode_line(c).wait();
+        assert!(r.is_ok());
+        let (_, l) = r.unwrap();
+        assert_eq!(from_utf8(&l[..]), Ok("233"));
+
+        let c = io::Cursor::new("-233\r\n".as_bytes());
+        let r = decode_line(c).wait();
+        assert!(r.is_ok());
+        let (_, l) = r.unwrap();
+        assert_eq!(from_utf8(&l[..]), Ok("-233"));
     }
 }
