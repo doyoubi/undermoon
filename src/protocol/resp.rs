@@ -3,6 +3,7 @@ use std::boxed::Box;
 
 pub type BinSafeStr = Vec<u8>;
 
+#[derive(Debug, PartialEq)]
 pub enum BulkStr {
     Str(BinSafeStr),
     Nil,
