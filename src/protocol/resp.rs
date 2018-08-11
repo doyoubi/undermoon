@@ -9,11 +9,13 @@ pub enum BulkStr {
     Nil,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Array {
     Arr(Vec<Resp>),
     Nil,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Resp {
     Error(BinSafeStr),
     Simple(BinSafeStr),
