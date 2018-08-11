@@ -3,10 +3,13 @@ use std::error::Error;
 use std::fmt;
 use std::result::Result;
 use std::vec::Vec;
+use std::cmp::max;
 use std::str::from_utf8;
+use std::iter;
 use tokio::prelude::{AsyncRead};
 use tokio::io::{read_until, read_exact};
-use futures::{future, Future};
+use futures::{future, Future, BoxFuture};
+use futures::{stream, Stream};
 use super::resp::{Resp, BulkStr, BinSafeStr, Array};
 
 #[derive(Debug)]
@@ -56,8 +59,8 @@ fn bytes_to_int(bytes: &[u8]) -> Result<i64, DecodeError> {
     }).map(|i| i * f)
 }
 
-fn decode_len<R>(reader: R) -> impl Future<Item = (R, i64), Error = DecodeError>
-    where R: AsyncRead + io::BufRead
+fn decode_len<R>(reader: R) -> impl Future<Item = (R, i64), Error = DecodeError> + Send
+    where R: AsyncRead + io::BufRead + Send
 {
     decode_line(reader).and_then(|(reader, s)| {
         let len_res = bytes_to_int(&s[..]).map(|l| (reader, l));
@@ -65,8 +68,8 @@ fn decode_len<R>(reader: R) -> impl Future<Item = (R, i64), Error = DecodeError>
     })
 }
 
-fn decode_bulk_str<R>(reader: R) -> impl Future<Item = (R, BulkStr), Error = DecodeError>
-    where R: AsyncRead + io::BufRead
+fn decode_bulk_str<R>(reader: R) -> impl Future<Item = (R, BulkStr), Error = DecodeError> + Send
+    where R: AsyncRead + io::BufRead + Send
 {
     decode_len(reader)
         .and_then(|(reader, len)| {
@@ -84,8 +87,8 @@ fn decode_bulk_str<R>(reader: R) -> impl Future<Item = (R, BulkStr), Error = Dec
         })
 }
 
-fn decode_line<R>(reader: R) -> impl Future<Item = (R, BinSafeStr), Error = DecodeError>
-    where R: AsyncRead + io::BufRead
+fn decode_line<R>(reader: R) -> impl Future<Item = (R, BinSafeStr), Error = DecodeError> + Send
+    where R: AsyncRead + io::BufRead + Send
 {
     read_until(reader, LF, vec![])
         .map_err(DecodeError::Io)
@@ -100,13 +103,13 @@ fn decode_line<R>(reader: R) -> impl Future<Item = (R, BinSafeStr), Error = Deco
         })
 }
 
-fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError>
-    where R: AsyncRead + io::BufRead + 'static
+fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
+    where R: AsyncRead + io::BufRead + Send + 'static
 {
     read_exact(reader, vec![0; 1])
         .map_err(DecodeError::Io)
         .and_then(|(reader, prefix)| {
-            let bf: Box<Future<Item = (R, Resp), Error = DecodeError>> = match prefix[0] as char {
+            let bf: BoxFuture<(R, Resp), DecodeError> = match prefix[0] as char {
                 '$' => {
                     Box::new(decode_bulk_str(reader)
                         .and_then(|(reader, s)| future::ok((reader, Resp::Bulk(s)))))
@@ -133,11 +136,30 @@ fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeErro
         })
 }
 
-fn decode_array<R>(reader: R) -> impl Future<Item = (R, Array), Error = DecodeError>
-    where R: AsyncRead + io::BufRead + 'static
+fn decode_array<R>(reader: R) -> impl Future<Item = (R, Array), Error = DecodeError> + Send
+    where R: AsyncRead + io::BufRead + Send + 'static
 {
-    unimplemented!();
-    future::ok((reader, Array::Nil))
+    decode_len(reader)
+        .and_then(|(reader, len)| {
+            let iter_size = max(0, len) as usize;
+            let stream = stream::iter_ok(iter::repeat(()).take(iter_size));
+            stream
+                .fold((reader, Vec::with_capacity(iter_size)), |(reader, acc), element| {
+                    let mut acc = acc;
+                    decode_resp(reader)
+                        .map(|(reader, resp)| {
+                            acc.push(resp);
+                            (reader, acc)
+                        })
+                })
+                .map(move |(reader, acc)| {
+                    if len < 0 {
+                        (reader, Array::Nil)
+                    } else {
+                        (reader, Array::Arr(acc))
+                    }
+                })
+        })
 }
 
 #[cfg(test)]
