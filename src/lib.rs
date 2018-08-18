@@ -2,4 +2,4 @@
 extern crate tokio;
 extern crate futures;
 
-mod protocol;
+pub mod protocol;

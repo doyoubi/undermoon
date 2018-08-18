@@ -107,7 +107,7 @@ fn decode_line<R>(reader: R) -> impl Future<Item = (R, BinSafeStr), Error = Deco
         })
 }
 
-fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
+pub fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
     where R: AsyncRead + io::BufRead + Send + 'static
 {
     read_exact(reader, vec![0; 1])
@@ -134,7 +134,10 @@ fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeErro
                     Box::new(decode_array(reader)
                         .and_then(|(reader, a)| future::ok((reader, Resp::Arr(a)))))
                 }
-                _ => Box::new(future::err(DecodeError::InvalidProtocol)),
+                prefix => {
+                    println!("Unexpected prefix {:?}", prefix);
+                    Box::new(future::err(DecodeError::InvalidProtocol))
+                },
             };
             bf
         })
@@ -289,7 +292,7 @@ mod tests {
         let (_, a) = r.unwrap();
         assert_eq!(Resp::Arr(Array::Nil), a);
 
-        let c = io::Cursor::new("*0\r\n\r\n".as_bytes());
+        let c = io::Cursor::new("*0\r\n".as_bytes());
         let r = decode_resp(c).wait();
         assert!(r.is_ok());
         let (_, a) = r.unwrap();
