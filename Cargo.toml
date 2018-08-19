@@ -6,4 +6,4 @@ authors = ["doyoubi"]
 [dependencies]
 quick-error = "1.2.2"
 tokio = "0.1"
-futures = "0.1.17"
+futures = "0.1.23"

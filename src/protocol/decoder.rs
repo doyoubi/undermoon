@@ -26,7 +26,7 @@ impl fmt::Display for DecodeError {
 
 impl Error for DecodeError {
     fn description(&self) -> &str {
-        "I'm the superhero of errors"
+        "decode error"
     }
 
     fn cause(&self) -> Option<&Error> {

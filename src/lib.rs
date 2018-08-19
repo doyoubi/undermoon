@@ -3,3 +3,4 @@ extern crate tokio;
 extern crate futures;
 
 pub mod protocol;
+pub mod proxy;
