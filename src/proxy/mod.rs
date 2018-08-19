@@ -1,3 +1,3 @@
-mod session;
+pub mod session;
 mod command;
 mod executor;
