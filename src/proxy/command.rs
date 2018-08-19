@@ -10,6 +10,14 @@ pub struct Command {
     request: Resp
 }
 
+impl Command {
+    pub fn new(request: Resp) -> Self {
+        Command{
+            request: request,
+        }
+    }
+}
+
 pub struct CmdReplySender {
     cmd: Command,
     reply_sender: oneshot::Sender<CommandResult>,
@@ -33,15 +41,20 @@ pub fn new_command_task(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
 }
 
 impl CmdReplySender {
-    fn get_request(&self) -> &Resp {
-        &self.request
+    fn get_cmd(&self) -> &Command {
+        &self.cmd
+    }
+
+    pub fn send(self, res: CommandResult) -> Result<(), CommandError> {
+        self.reply_sender.send(res)
+            .map_err(|_| CommandError::Canceled)
     }
 }
 
 impl CmdReplyReceiver {
-    fn wait_response(self) -> impl Future<Item = Resp, Error = CommandError> + Send {
+    pub fn wait_response(self) -> impl Future<Item = Resp, Error = CommandError> + Send {
         self.reply_receiver
-            .map_err(CommandError::Canceled)
+            .map_err(|_| CommandError::Canceled)
             .and_then(|result: CommandResult| {
                 future::result(result)
             })
@@ -51,7 +64,7 @@ impl CmdReplyReceiver {
 #[derive(Debug)]
 pub enum CommandError {
     Io(io::Error),
-    Canceled(oneshot::Canceled),
+    Canceled,
 }
 
 impl fmt::Display for CommandError {
@@ -73,4 +86,4 @@ impl Error for CommandError {
     }
 }
 
-type CommandResult = Result<Resp, CommandError>;
+pub type CommandResult = Result<Resp, CommandError>;
