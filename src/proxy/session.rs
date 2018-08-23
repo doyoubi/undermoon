@@ -8,7 +8,7 @@ use futures::sync::mpsc;
 use futures::Sink;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
-use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError};
+use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError, resp_to_buf};
 use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_task};
 
 pub trait RespHandler {
@@ -16,6 +16,12 @@ pub trait RespHandler {
 }
 
 pub struct Session {
+}
+
+impl Session {
+    pub fn new() -> Self {
+        Session{}
+    }
 }
 
 impl RespHandler for Session {
@@ -103,7 +109,10 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
                     let fut : BoxFuture<_, SessionError> = match res {
                         Ok(resp) => {
                             // TODO: Implement encode and use it
-                            let writeFut = write_all(writer, "+done\r\n")
+                            let mut buf = vec![];
+                            resp_to_buf(&mut buf, resp);
+                            println!("encode result {:?}", String::from_utf8(buf.clone()));
+                            let writeFut = write_all(writer, buf)
                                 .map(move |(writer, _)| writer)
                                 .map_err(SessionError::Io);
                             Box::new(writeFut)

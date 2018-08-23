@@ -19,7 +19,7 @@ fn main() {
         .map_err(|e| eprintln!("accept failed = {:?}", e))
         .for_each(|sock| {
             println!("accept conn {:?}", sock);
-            let handle_conn = handle_conn(Session{}, sock)
+            let handle_conn = handle_conn(Session::new(), sock)
                 .map_err(|err| {
                     eprintln!("IO error {:?}", err)
                 });
