@@ -9,10 +9,10 @@ use futures::Sink;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError, resp_to_buf};
-use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_task};
+use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair};
 
-pub trait RespHandler {
-    fn handle_resp(&mut self, sender: CmdReplySender);
+pub trait CmdHandler {
+    fn handle_cmd(&mut self, sender: CmdReplySender);
 }
 
 pub struct Session {
@@ -24,15 +24,15 @@ impl Session {
     }
 }
 
-impl RespHandler for Session {
-    fn handle_resp(&mut self, reply_sender: CmdReplySender) {
+impl CmdHandler for Session {
+    fn handle_cmd(&mut self, reply_sender: CmdReplySender) {
         let reply = Resp::Bulk(BulkStr::Str(String::from("done").into_bytes()));
         reply_sender.send(Ok(reply)).unwrap();
     }
 }
 
 pub fn handle_conn<H>(handler: H, sock: TcpStream) -> impl Future<Item = (), Error = SessionError> + Send
-   where H: RespHandler + Send + 'static
+   where H: CmdHandler + Send + 'static
 {
     let (reader, writer) = sock.split();
     let reader = io::BufReader::new(reader);
@@ -51,7 +51,7 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) -> impl Future<Item = (), Err
 }
 
 fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) -> impl Future<Item = (), Error = SessionError> + Send
-    where R: AsyncRead + io::BufRead + Send + 'static, H: RespHandler + Send + 'static
+    where R: AsyncRead + io::BufRead + Send + 'static, H: CmdHandler + Send + 'static
 {
     let reader_stream = stream::iter_ok(iter::repeat(()));
     let handler = reader_stream.fold((handler, tx, reader), move |(handler, tx, reader), _| {
@@ -59,10 +59,10 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
             .then(|res| {
                 let fut : BoxFuture<_, SessionError> = match res {
                     Ok((reader, resp)) => {
-                        let (reply_sender, reply_receiver) = new_command_task(Command::new(resp));
+                        let (reply_sender, reply_receiver) = new_command_pair(Command::new(resp));
 
                         let mut handler = handler;
-                        handler.handle_resp(reply_sender);
+                        handler.handle_cmd(reply_sender);
 
                         let sendFut = tx.send(reply_receiver)
                             .map(move |tx| (handler, tx, reader))
@@ -73,7 +73,7 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
                         Box::new(sendFut)
                     },
                     Err(DecodeError::InvalidProtocol) => {
-                        let (reply_sender, reply_receiver) = new_command_task(Command::new(Resp::Arr(Array::Nil)));
+                        let (reply_sender, reply_receiver) = new_command_pair(Command::new(Resp::Arr(Array::Nil)));
 
                         let reply = Resp::Error(String::from("Err invalid protocol").into_bytes());
                         reply_sender.send(Ok(reply)).unwrap();
@@ -108,10 +108,8 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
                 .then(|res| {
                     let fut : BoxFuture<_, SessionError> = match res {
                         Ok(resp) => {
-                            // TODO: Implement encode and use it
                             let mut buf = vec![];
-                            resp_to_buf(&mut buf, resp);
-                            println!("encode result {:?}", String::from_utf8(buf.clone()));
+                            resp_to_buf(&mut buf, &resp);
                             let writeFut = write_all(writer, buf)
                                 .map(move |(writer, _)| writer)
                                 .map_err(SessionError::Io);

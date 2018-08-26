@@ -28,7 +28,7 @@ pub struct CmdReplyReceiver {
 }
 
 
-pub fn new_command_task(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
+pub fn new_command_pair(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
     let (s, r) = oneshot::channel::<CommandResult>();
     let reply_sender = CmdReplySender{
         cmd: cmd,
