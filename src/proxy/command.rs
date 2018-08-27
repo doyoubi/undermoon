@@ -41,7 +41,7 @@ pub fn new_command_pair(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
 }
 
 impl CmdReplySender {
-    fn get_cmd(&self) -> &Command {
+    pub fn get_cmd(&self) -> &Command {
         &self.cmd
     }
 

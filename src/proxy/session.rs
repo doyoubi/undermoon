@@ -1,4 +1,5 @@
 use std::io;
+use std::sync;
 use std::iter;
 use std::fmt;
 use std::error::Error;
@@ -9,25 +10,57 @@ use futures::Sink;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError, resp_to_buf};
-use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair};
+use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair, CommandError};
 
 pub trait CmdHandler {
     fn handle_cmd(&mut self, sender: CmdReplySender);
 }
 
-pub struct Session {
+pub struct CmdCtx {
+    user: sync::Arc<sync::Mutex<String>>,
+    reply_sender: CmdReplySender,
 }
 
-impl Session {
-    pub fn new() -> Self {
-        Session{}
+impl CmdCtx {
+    fn new(user: sync::Arc<sync::Mutex<String>>, reply_sender: CmdReplySender) -> CmdCtx {
+        CmdCtx{
+            user: user,
+            reply_sender: reply_sender,
+        }
+    }
+
+    pub fn get_cmd(&self) -> &Command {
+        self.reply_sender.get_cmd()
+    }
+
+    pub fn send(self, res: CommandResult) -> Result<(), CommandError> {
+        self.reply_sender.send(res)
     }
 }
 
-impl CmdHandler for Session {
+pub trait CmdCtxHandler {
+    fn handle_cmd_ctx(&mut self, cmd_ctx: CmdCtx);
+}
+
+pub struct Session<H: CmdCtxHandler> {
+    user: sync::Arc<sync::Mutex<String>>,
+    cmd_ctx_handler: H,
+}
+
+static DEFAULT_USER: &'static str = "admin";
+
+impl<H: CmdCtxHandler> Session<H> {
+    pub fn new(cmd_ctx_handler: H) -> Self {
+        Session{
+            user: sync::Arc::new(sync::Mutex::new(DEFAULT_USER.to_string())),
+            cmd_ctx_handler: cmd_ctx_handler,
+        }
+    }
+}
+
+impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&mut self, reply_sender: CmdReplySender) {
-        let reply = Resp::Bulk(BulkStr::Str(String::from("done").into_bytes()));
-        reply_sender.send(Ok(reply)).unwrap();
+        self.cmd_ctx_handler.handle_cmd_ctx(CmdCtx::new(self.user.clone(), reply_sender));
     }
 }
 

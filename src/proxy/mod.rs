@@ -1,4 +1,4 @@
 pub mod session;
 mod command;
-mod executor;
+pub mod executor;
 mod backend;

@@ -9,6 +9,7 @@ use tokio::net::TcpListener;
 use tokio::io::{write_all, AsyncRead};
 use undermoon::protocol::{decode_resp, DecodeError};
 use undermoon::proxy::session::{Session, handle_conn};
+use undermoon::proxy::executor::ForwardHandler;
 
 fn main() {
     let addr = "127.0.0.1:5299".parse().unwrap();
@@ -19,7 +20,7 @@ fn main() {
         .map_err(|e| eprintln!("accept failed = {:?}", e))
         .for_each(|sock| {
             println!("accept conn {:?}", sock);
-            let handle_conn = handle_conn(Session::new(), sock)
+            let handle_conn = handle_conn(Session::new(ForwardHandler::new()), sock)
                 .map_err(|err| {
                     eprintln!("IO error {:?}", err)
                 });
