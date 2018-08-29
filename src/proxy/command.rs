@@ -16,6 +16,10 @@ impl Command {
             request: request,
         }
     }
+
+    pub fn get_resp(&self) -> &Resp {
+        &self.request
+    }
 }
 
 pub struct CmdReplySender {

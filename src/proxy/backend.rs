@@ -11,23 +11,36 @@ use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError, resp_to_buf};
 use super::command::{CommandResult, CommandError};
 
-type BackendResult = Result<Resp, BackendError>;
+pub type BackendResult = Result<Resp, BackendError>;
 
-pub trait ReplyHandler {
-    fn handle_reply(&self, result: BackendResult);
+pub trait ReplyHandler<T: CmdTask> {
+    fn handle_reply(&self, cmd_task: T, result: BackendResult);
 }
 
 pub trait CmdTask {
     fn get_resp(&self) -> &Resp;
-    fn set_result(&mut self, result: CommandResult);
+    fn set_result(self, result: CommandResult);
 }
 
-pub struct BackendNode<T: CmdTask> {
-    tx: mpsc::Sender<T>
+pub struct BackendNode<T: CmdTask + Send + 'static> {
+    tx: mpsc::UnboundedSender<T>
 }
 
-pub fn handle_backend<H, T>(handler: H, taskReceiver: mpsc::Receiver<T>, sock: TcpStream) -> impl Future<Item = (), Error = BackendError> + Send
-    where H: ReplyHandler + Send + 'static, T: CmdTask + Send + 'static
+impl<T: CmdTask + Send + 'static> BackendNode<T> {
+    pub fn new_pair<H: ReplyHandler<T> + Send + 'static>(sock: TcpStream, handler: H) -> (BackendNode<T>, impl Future<Item = (), Error = BackendError> + Send) {
+        let (tx, rx) = mpsc::unbounded();
+        (Self{tx: tx}, handle_backend(handler, rx, sock))
+    }
+
+    pub fn send(&self, cmd_task: T) -> Result<(), BackendError> {
+        self.tx.unbounded_send(cmd_task)
+            .map(|_| ())
+            .map_err(|_e| BackendError::Canceled)
+    }
+}
+
+pub fn handle_backend <H, T>(handler: H, taskReceiver: mpsc::UnboundedReceiver<T>, sock: TcpStream) -> impl Future<Item = (), Error = BackendError> + Send
+    where H: ReplyHandler<T> + Send + 'static, T: CmdTask + Send + 'static
 {
     let (reader, writer) = sock.split();
     let reader = io::BufReader::new(reader);
@@ -45,7 +58,7 @@ pub fn handle_backend<H, T>(handler: H, taskReceiver: mpsc::Receiver<T>, sock: T
     handler
 }
 
-fn handle_write<W, T>(taskReceiver: mpsc::Receiver<T>, writer: W, tx: mpsc::Sender<T>) -> impl Future<Item = (), Error = BackendError> + Send
+fn handle_write<W, T>(taskReceiver: mpsc::UnboundedReceiver<T>, writer: W, tx: mpsc::Sender<T>) -> impl Future<Item = (), Error = BackendError> + Send
     where W: AsyncWrite + Send + 'static, T: CmdTask + Send + 'static
 {
     let handler = taskReceiver
@@ -55,7 +68,7 @@ fn handle_write<W, T>(taskReceiver: mpsc::Receiver<T>, writer: W, tx: mpsc::Send
             resp_to_buf(&mut buf, task.get_resp());
             write_all(writer, buf)
                 .then(|res| {
-                    let mut task = task;
+                    let task = task;
                     let fut : BoxFuture<_, BackendError> = match res {
                         Ok((writer, _)) => {
                             let fut = tx.send(task)
@@ -78,7 +91,7 @@ fn handle_write<W, T>(taskReceiver: mpsc::Receiver<T>, writer: W, tx: mpsc::Send
 }
 
 fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where R: AsyncRead + io::BufRead + Send + 'static, H: ReplyHandler + Send + 'static, T: CmdTask + Send + 'static
+    where R: AsyncRead + io::BufRead + Send + 'static, H: ReplyHandler<T> + Send + 'static, T: CmdTask + Send + 'static
 {
     let rx = rx.into_future();
     let reader_stream = stream::iter_ok(iter::repeat(()));
@@ -89,11 +102,12 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
                     Ok((reader, resp)) => {
                         let sendFut = rx
                             .map_err(|e| {
+                                // TODO: task will leak here
                                 println!("backend: unexpected read");
                                 BackendError::Canceled
                             })
                             .and_then(|(taskOpt, rx)| {
-                                let mut task = taskOpt.unwrap();
+                                let task = taskOpt.unwrap();
                                 task.set_result(Ok(resp));
                                 // TODO: call handler
                                 future::ok((handler, rx.into_future(), reader))

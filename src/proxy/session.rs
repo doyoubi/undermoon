@@ -11,6 +11,7 @@ use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError, resp_to_buf};
 use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair, CommandError};
+use super::backend::CmdTask;
 
 pub trait CmdHandler {
     fn handle_cmd(&mut self, sender: CmdReplySender);
@@ -38,8 +39,19 @@ impl CmdCtx {
     }
 }
 
+impl CmdTask for CmdCtx {
+    fn get_resp(&self) -> &Resp {
+        self.reply_sender.get_cmd().get_resp()
+    }
+
+    fn set_result(self, result: CommandResult) {
+        // TODO: log error here
+        self.reply_sender.send(result);
+    }
+}
+
 pub trait CmdCtxHandler {
-    fn handle_cmd_ctx(&mut self, cmd_ctx: CmdCtx);
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx);
 }
 
 pub struct Session<H: CmdCtxHandler> {
@@ -137,7 +149,7 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
         .map_err(|e| SessionError::Canceled)
         .fold(writer, |writer, reply_receiver| {
             reply_receiver.wait_response()
-                .map_err(|e| SessionError::Other)
+                .map_err(SessionError::CmdErr)
                 .then(|res| {
                     let fut : BoxFuture<_, SessionError> = match res {
                         Ok(resp) => {
@@ -150,7 +162,8 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
                         },
                         Err(e) => {
                             // TODO: display error here
-                            let writeFut = write_all(writer, "-Err cmd error\r\n")
+                            let err_msg = format!("-Err cmd error {:?}\r\n", e);
+                            let writeFut = write_all(writer, err_msg.into_bytes())
                                 .map(move |(writer, _)| writer)
                                 .map_err(SessionError::Io);
                             Box::new(writeFut)
@@ -165,6 +178,7 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
 #[derive(Debug)]
 pub enum SessionError {
     Io(io::Error),
+    CmdErr(CommandError),
     InvalidProtocol,
     Canceled,
     Other,  // TODO: remove this
@@ -184,6 +198,7 @@ impl Error for SessionError {
     fn cause(&self) -> Option<&Error> {
         match self {
             SessionError::Io(err) => Some(err),
+            SessionError::CmdErr(err) => Some(err),
             _ => None,
         }
     }
