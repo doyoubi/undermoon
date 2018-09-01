@@ -28,6 +28,8 @@ impl CmdCtxHandler for ForwardHandler {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
 //        let backup = cmd_ctx.clone();  TODO: cmd_ctx might get lost
         let needInit = self.node.read().unwrap().is_none();
+        // Race condition here. Multiple threads might be creating new connection at the same time.
+        // Maybe it's just fine. If not, lock the creating connection phrase.
         if needInit {
             let nodeArc = self.node.clone();
             let addr = self.addr.parse().unwrap();
@@ -47,14 +49,14 @@ impl CmdCtxHandler for ForwardHandler {
                 };
                 fut.map_err(|_| ())
             });
+            // If this future fails, cmd_ctx will be lost. Let itself send back an error response.
             tokio::spawn(fut);
             return;
         }
-        // TODO: remove the last unwrap(). cmd ctx might leak.
-        self.node.read().unwrap().as_ref().unwrap().send(cmd_ctx).unwrap();
-
-//        let reply = Resp::Bulk(BulkStr::Str(String::from("done").into_bytes()));
-//        cmd_ctx.send(Ok(reply)).unwrap();
+        if let Err(err) = self.node.read().unwrap().as_ref().unwrap().send(cmd_ctx) {
+            // if it fails, remove this connection.
+            self.node.write().unwrap().take();
+        }
     }
 }
 

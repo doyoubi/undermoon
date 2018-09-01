@@ -2,6 +2,7 @@ use std::io;
 use std::sync;
 use std::iter;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::error::Error;
 use std::result::Result;
 use futures::{future, Future, stream, Stream, BoxFuture};
@@ -34,8 +35,15 @@ impl CmdCtx {
         self.reply_sender.get_cmd()
     }
 
-    pub fn send(self, res: CommandResult) -> Result<(), CommandError> {
+    pub fn send(&self, res: CommandResult) -> Result<(), CommandError> {
         self.reply_sender.send(res)
+    }
+}
+
+// Make sure that ctx will always be sent back.
+impl Drop for CmdCtx {
+    fn drop(&mut self) {
+        self.reply_sender.try_send(Err(CommandError::Dropped));
     }
 }
 
@@ -44,7 +52,7 @@ impl CmdTask for CmdCtx {
         self.reply_sender.get_cmd().get_resp()
     }
 
-    fn set_result(self, result: CommandResult) {
+    fn set_result(mut self, result: CommandResult) {
         // TODO: log error here
         self.reply_sender.send(result);
     }

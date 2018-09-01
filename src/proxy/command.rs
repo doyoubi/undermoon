@@ -2,8 +2,10 @@ use std::io;
 use std::fmt;
 use std::error::Error;
 use std::result::Result;
+use std::sync::atomic::Ordering;
 use futures::{future, Future};
 use futures::sync::oneshot;
+use atomic_option::AtomicOption;
 use protocol::Resp;
 
 pub struct Command {
@@ -24,7 +26,7 @@ impl Command {
 
 pub struct CmdReplySender {
     cmd: Command,
-    reply_sender: oneshot::Sender<CommandResult>,
+    reply_sender: AtomicOption<oneshot::Sender<CommandResult>>,
 }
 
 pub struct CmdReplyReceiver {
@@ -36,7 +38,7 @@ pub fn new_command_pair(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
     let (s, r) = oneshot::channel::<CommandResult>();
     let reply_sender = CmdReplySender{
         cmd: cmd,
-        reply_sender: s,
+        reply_sender: AtomicOption::new(Box::new(s)),
     };
     let reply_receiver = CmdReplyReceiver{
         reply_receiver: r,
@@ -49,9 +51,18 @@ impl CmdReplySender {
         &self.cmd
     }
 
-    pub fn send(self, res: CommandResult) -> Result<(), CommandError> {
-        self.reply_sender.send(res)
+    pub fn send(&self, res: CommandResult) -> Result<(), CommandError> {
+        // Must not send twice.
+        self.reply_sender.take(Ordering::SeqCst).unwrap().send(res)
             .map_err(|_| CommandError::Canceled)
+    }
+
+    pub fn try_send(&self, res: CommandResult) -> Option<Result<(), CommandError>> {
+        match self.reply_sender.take(Ordering::SeqCst) {
+            Some(reply_sender) => Some(reply_sender.send(res)
+                .map_err(|_| CommandError::Canceled)),
+            None => None,
+        }
     }
 }
 
@@ -68,6 +79,7 @@ impl CmdReplyReceiver {
 #[derive(Debug)]
 pub enum CommandError {
     Io(io::Error),
+    Dropped,
     Canceled,
 }
 
