@@ -51,9 +51,16 @@ pub fn handle_backend <H, T>(handler: H, taskReceiver: mpsc::UnboundedReceiver<T
     let reader_handler = handle_read(handler, reader, rx);
 
     let handler = reader_handler.select(writer_handler)
-        .then(move |_| {
-            println!("Connection closed.");
-            Result::Ok::<(), BackendError>(())
+        .then(move |res| {
+            println!("Backend connection closed.");
+            match res {
+                Ok(((), _another_future)) => {
+                    Result::Ok::<(), BackendError>(())
+                },
+                Err((e, _another_future)) => {
+                    Result::Err(e)
+                },
+            }
         });
     handler
 }
@@ -68,7 +75,6 @@ fn handle_write<W, T>(taskReceiver: mpsc::UnboundedReceiver<T>, writer: W, tx: m
             resp_to_buf(&mut buf, task.get_resp());
             write_all(writer, buf)
                 .then(|res| {
-                    let task = task;
                     let fut : BoxFuture<_, BackendError> = match res {
                         Ok((writer, _)) => {
                             let fut = tx.send(task)
@@ -80,6 +86,7 @@ fn handle_write<W, T>(taskReceiver: mpsc::UnboundedReceiver<T>, writer: W, tx: m
                             Box::new(fut)
                         },
                         Err(e) => {
+                            println!("Failed to write");
                             task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
                             Box::new(future::err(BackendError::Io(e)))
                         },
@@ -87,7 +94,12 @@ fn handle_write<W, T>(taskReceiver: mpsc::UnboundedReceiver<T>, writer: W, tx: m
                     fut
                 })
         });
-    handler.map(|_| ())
+    handler.map(|_| {
+        println!("write future closed")
+    }).map_err(|e| {
+        println!("write future closed with error {:?}", e);
+        e
+    })
 }
 
 fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Future<Item = (), Error = BackendError> + Send
@@ -126,7 +138,12 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
                 fut
             })
     });
-    handler.map(|_| ())
+    handler.map(|_| {
+        println!("read future closed");
+    }).map_err(|e| {
+        println!("read future closed with error {:?}", e);
+        e
+    })
 }
 
 #[derive(Debug)]

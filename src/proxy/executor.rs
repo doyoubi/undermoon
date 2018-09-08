@@ -26,12 +26,12 @@ impl ForwardHandler {
 
 impl CmdCtxHandler for ForwardHandler {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
-//        let backup = cmd_ctx.clone();  TODO: cmd_ctx might get lost
-        let needInit = self.node.read().unwrap().is_none();
+        let need_init = self.node.read().unwrap().is_none();
         // Race condition here. Multiple threads might be creating new connection at the same time.
         // Maybe it's just fine. If not, lock the creating connection phrase.
-        if needInit {
-            let nodeArc = self.node.clone();
+        if need_init {
+            let node_arc = self.node.clone();
+            let node_arc2 = self.node.clone();
             let addr = self.addr.parse().unwrap();
             let sock = TcpStream::connect(&addr);
             let fut = sock.then(move |res| {
@@ -39,7 +39,7 @@ impl CmdCtxHandler for ForwardHandler {
                     Ok(sock) => {
                         let (node, nodeFut) = BackendNode::<CmdCtx>::new_pair(sock, ReplyCommitHandler{});
                         node.send(cmd_ctx).unwrap();  // must not fail
-                        nodeArc.write().unwrap().get_or_insert(node);
+                        node_arc.write().unwrap().get_or_insert(node);
                         Box::new(nodeFut)
                     },
                     Err(e) => {
@@ -47,15 +47,20 @@ impl CmdCtxHandler for ForwardHandler {
                         Box::new(future::err(BackendError::Io(e)))
                     },
                 };
-                fut.map_err(|_| ())
+                fut.then(move |r| {
+                    node_arc2.write().unwrap().take();
+                    future::ok(())
+                })
             });
             // If this future fails, cmd_ctx will be lost. Let itself send back an error response.
             tokio::spawn(fut);
             return;
         }
-        if let Err(err) = self.node.read().unwrap().as_ref().unwrap().send(cmd_ctx) {
+        let res = self.node.read().unwrap().as_ref().unwrap().send(cmd_ctx);
+        if let Err(err) = res {
             // if it fails, remove this connection.
             self.node.write().unwrap().take();
+            println!("reset backend connecton")
         }
     }
 }

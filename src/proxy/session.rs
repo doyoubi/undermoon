@@ -18,6 +18,10 @@ pub trait CmdHandler {
     fn handle_cmd(&mut self, sender: CmdReplySender);
 }
 
+pub trait CmdCtxHandler {
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx);
+}
+
 pub struct CmdCtx {
     user: sync::Arc<sync::Mutex<String>>,
     reply_sender: CmdReplySender,
@@ -58,10 +62,6 @@ impl CmdTask for CmdCtx {
     }
 }
 
-pub trait CmdCtxHandler {
-    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx);
-}
-
 pub struct Session<H: CmdCtxHandler> {
     user: sync::Arc<sync::Mutex<String>>,
     cmd_ctx_handler: H,
@@ -97,7 +97,7 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) -> impl Future<Item = (), Err
 
     let handler = reader_handler.select(writer_handler)
         .then(move |_| {
-            println!("Connection closed.");
+            println!("Session Connection closed.");
             Result::Ok::<(), SessionError>(())
         });
     handler
