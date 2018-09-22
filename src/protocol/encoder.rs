@@ -1,5 +1,4 @@
 use std::io;
-use std::io::Write;
 use super::resp::{Resp, BulkStr, BinSafeStr, Array};
 
 pub fn resp_to_buf(buf: &mut Vec<u8>, resp: &Resp) {

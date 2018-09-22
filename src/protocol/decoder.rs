@@ -4,11 +4,11 @@ use std::fmt;
 use std::result::Result;
 use std::vec::Vec;
 use std::cmp::max;
-use std::str::from_utf8;
+use std::boxed::Box;
 use std::iter;
 use tokio::prelude::{AsyncRead};
 use tokio::io::{read_until, read_exact};
-use futures::{future, Future, BoxFuture};
+use futures::{future, Future};
 use futures::{stream, Stream};
 use super::resp::{Resp, BulkStr, BinSafeStr, Array};
 
@@ -36,8 +36,6 @@ impl Error for DecodeError {
         }
     }
 }
-
-type ParseResult = Result<(), DecodeError>;
 
 const CR: u8 = '\r' as u8;
 const LF: u8 = '\n' as u8;
@@ -113,7 +111,7 @@ pub fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = Decode
     read_exact(reader, vec![0; 1])
         .map_err(DecodeError::Io)
         .and_then(|(reader, prefix)| {
-            let bf: BoxFuture<(R, Resp), DecodeError> = match prefix[0] as char {
+            let bf: Box<Future<Item=(R, Resp), Error=DecodeError> + Send> = match prefix[0] as char {
                 '$' => {
                     Box::new(decode_bulk_str(reader)
                         .and_then(|(reader, s)| future::ok((reader, Resp::Bulk(s)))))
@@ -151,7 +149,7 @@ fn decode_array<R>(reader: R) -> impl Future<Item = (R, Array), Error = DecodeEr
             let iter_size = max(0, len) as usize;
             let stream = stream::iter_ok(iter::repeat(()).take(iter_size));
             stream
-                .fold((reader, Vec::with_capacity(iter_size)), |(reader, acc), element| {
+                .fold((reader, Vec::with_capacity(iter_size)), |(reader, acc), ()| {
                     let mut acc = acc;
                     decode_resp(reader)
                         .map(|(reader, resp)| {

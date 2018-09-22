@@ -79,6 +79,7 @@ impl CmdReplyReceiver {
 #[derive(Debug)]
 pub enum CommandError {
     Io(io::Error),
+    UnexpectedResponse,
     Dropped,
     Canceled,
 }

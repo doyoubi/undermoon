@@ -1,13 +1,13 @@
 use std::io;
 use std::sync;
 use std::clone::Clone;
-use futures::{future, Future, stream, Stream, BoxFuture};
+use std::boxed::Box;
+use futures::{future, Future};
 use tokio;
 use tokio::net::TcpStream;
-use super::command::{CmdReplySender, CommandError};
+use super::command::CommandError;
 use super::session::{CmdCtxHandler, CmdCtx};
 use super::backend::{BackendNode, ReplyHandler, CmdTask, BackendResult, BackendError};
-use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError, resp_to_buf};
 
 #[derive(Clone)]
 pub struct ForwardHandler {
@@ -35,19 +35,23 @@ impl CmdCtxHandler for ForwardHandler {
             let addr = self.addr.parse().unwrap();
             let sock = TcpStream::connect(&addr);
             let fut = sock.then(move |res| {
-                let fut : BoxFuture<_, BackendError> = match res {
+                let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
                     Ok(sock) => {
-                        let (node, nodeFut) = BackendNode::<CmdCtx>::new_pair(sock, ReplyCommitHandler{});
+                        let (node, node_fut) = BackendNode::<CmdCtx>::new_pair(sock, ReplyCommitHandler{});
                         node.send(cmd_ctx).unwrap();  // must not fail
                         node_arc.write().unwrap().get_or_insert(node);
-                        Box::new(nodeFut)
+                        Box::new(node_fut)
                     },
                     Err(e) => {
-                        cmd_ctx.send(Err(CommandError::Io(io::Error::from(e.kind()))));
+                        let res = cmd_ctx.send(Err(CommandError::Io(io::Error::from(e.kind()))));
+                        if let Err(e) = res {
+                            println!("Failed to send back error: {:?}", e)
+                        }
                         Box::new(future::err(BackendError::Io(e)))
                     },
                 };
                 fut.then(move |r| {
+                    println!("backend exited with result {:?}", r);
                     node_arc2.write().unwrap().take();
                     future::ok(())
                 })
@@ -57,17 +61,18 @@ impl CmdCtxHandler for ForwardHandler {
             return;
         }
         let res = self.node.read().unwrap().as_ref().unwrap().send(cmd_ctx);
-        if let Err(err) = res {
+        if let Err(e) = res {
             // if it fails, remove this connection.
             self.node.write().unwrap().take();
-            println!("reset backend connecton")
+            println!("reset backend connecton {:?}", e)
         }
     }
 }
 
+// TODO: Remove this. Retry can be built with a CmdTask wrapper
 pub struct ReplyCommitHandler {}
 
 impl<T: CmdTask> ReplyHandler<T> for ReplyCommitHandler {
-    fn handle_reply(&self, cmd_task: T, result: BackendResult) {
+    fn handle_reply(&self, _cmd_task: T, _result: BackendResult) {
     }
 }

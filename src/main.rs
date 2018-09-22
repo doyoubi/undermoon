@@ -2,12 +2,8 @@ extern crate undermoon;
 extern crate tokio;
 extern crate futures;
 
-use std::iter;
-use std::io;
-use futures::{future, Future, stream, Stream};
+use futures::{Future, Stream};
 use tokio::net::TcpListener;
-use tokio::io::{write_all, AsyncRead};
-use undermoon::protocol::{decode_resp, DecodeError};
 use undermoon::proxy::session::{Session, handle_conn};
 use undermoon::proxy::executor::ForwardHandler;
 

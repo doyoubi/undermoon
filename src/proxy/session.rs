@@ -2,15 +2,15 @@ use std::io;
 use std::sync;
 use std::iter;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::error::Error;
 use std::result::Result;
-use futures::{future, Future, stream, Stream, BoxFuture};
+use std::boxed::Box;
+use futures::{future, Future, stream, Stream};
 use futures::sync::mpsc;
 use futures::Sink;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
-use protocol::{Resp, Array, BulkStr, decode_resp, DecodeError, resp_to_buf};
+use protocol::{Resp, Array, decode_resp, DecodeError, resp_to_buf};
 use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair, CommandError};
 use super::backend::CmdTask;
 
@@ -23,14 +23,14 @@ pub trait CmdCtxHandler {
 }
 
 pub struct CmdCtx {
-    user: sync::Arc<sync::Mutex<String>>,
+    _user: sync::Arc<sync::Mutex<String>>,
     reply_sender: CmdReplySender,
 }
 
 impl CmdCtx {
     fn new(user: sync::Arc<sync::Mutex<String>>, reply_sender: CmdReplySender) -> CmdCtx {
         CmdCtx{
-            user: user,
+            _user: user,
             reply_sender: reply_sender,
         }
     }
@@ -56,9 +56,11 @@ impl CmdTask for CmdCtx {
         self.reply_sender.get_cmd().get_resp()
     }
 
-    fn set_result(mut self, result: CommandResult) {
-        // TODO: log error here
-        self.reply_sender.send(result);
+    fn set_result(self, result: CommandResult) {
+        let res = self.reply_sender.send(result);
+        if let Err(e) = res {
+            println!("Failed to send result {:?}", e);
+        }
     }
 }
 
@@ -110,20 +112,20 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
     let handler = reader_stream.fold((handler, tx, reader), move |(handler, tx, reader), _| {
         decode_resp(reader)
             .then(|res| {
-                let fut : BoxFuture<_, SessionError> = match res {
+                let fut : Box<Future<Item=_, Error=SessionError> + Send> = match res {
                     Ok((reader, resp)) => {
                         let (reply_sender, reply_receiver) = new_command_pair(Command::new(resp));
 
                         let mut handler = handler;
                         handler.handle_cmd(reply_sender);
 
-                        let sendFut = tx.send(reply_receiver)
+                        let send_fut = tx.send(reply_receiver)
                             .map(move |tx| (handler, tx, reader))
                             .map_err(|e| {
-                                println!("rx closed");
+                                println!("rx closed, {:?}", e);
                                 SessionError::Canceled
                             });
-                        Box::new(sendFut)
+                        Box::new(send_fut)
                     },
                     Err(DecodeError::InvalidProtocol) => {
                         let (reply_sender, reply_receiver) = new_command_pair(Command::new(Resp::Arr(Array::Nil)));
@@ -131,13 +133,13 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
                         let reply = Resp::Error(String::from("Err invalid protocol").into_bytes());
                         reply_sender.send(Ok(reply)).unwrap();
 
-                        let sendFut = tx.send(reply_receiver)
+                        let send_fut = tx.send(reply_receiver)
                             .map_err(|e| {
-                                println!("rx closed");
+                                println!("rx closed {:?}", e);
                                 SessionError::Canceled
                             })
                             .and_then(move |_tx| future::err(SessionError::InvalidProtocol));
-                        Box::new(sendFut)
+                        Box::new(send_fut)
                     },
                     Err(DecodeError::Io(e)) => {
                         println!("io error: {:?}", e);
@@ -154,27 +156,27 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
     where W: AsyncWrite + Send + 'static
 {
     let handler = rx
-        .map_err(|e| SessionError::Canceled)
+        .map_err(|()| SessionError::Canceled)
         .fold(writer, |writer, reply_receiver| {
             reply_receiver.wait_response()
                 .map_err(SessionError::CmdErr)
                 .then(|res| {
-                    let fut : BoxFuture<_, SessionError> = match res {
+                    let fut : Box<Future<Item=_, Error=SessionError> + Send> = match res {
                         Ok(resp) => {
                             let mut buf = vec![];
                             resp_to_buf(&mut buf, &resp);
-                            let writeFut = write_all(writer, buf)
+                            let write_fut = write_all(writer, buf)
                                 .map(move |(writer, _)| writer)
                                 .map_err(SessionError::Io);
-                            Box::new(writeFut)
+                            Box::new(write_fut)
                         },
                         Err(e) => {
                             // TODO: display error here
                             let err_msg = format!("-Err cmd error {:?}\r\n", e);
-                            let writeFut = write_all(writer, err_msg.into_bytes())
+                            let write_fut = write_all(writer, err_msg.into_bytes())
                                 .map(move |(writer, _)| writer)
                                 .map_err(SessionError::Io);
-                            Box::new(writeFut)
+                            Box::new(write_fut)
                         },
                     };
                     fut

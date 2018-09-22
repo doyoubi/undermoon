@@ -1,5 +1,4 @@
 use std::vec::Vec;
-use std::boxed::Box;
 
 pub type BinSafeStr = Vec<u8>;
 
