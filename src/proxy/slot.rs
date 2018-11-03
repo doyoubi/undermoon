@@ -1,5 +1,6 @@
 use std::sync::RwLock;
 use std::collections::HashMap;
+use crc16::{State, XMODEM};
 
 pub const SLOT_NUM: usize = 16384;
 
@@ -12,6 +13,11 @@ impl SlotMap {
         SlotMap{
             data: RwLock::new(SlotMapData::new(slot_map)),
         }
+    }
+
+    pub fn get_by_key(&self, key: &[u8]) -> Option<String> {
+        let slot = State::<XMODEM>::calculate(key) as usize % SLOT_NUM;
+        self.get(slot)
     }
 
     pub fn get(&self, slot: usize) -> Option<String> {
@@ -41,7 +47,7 @@ impl SlotMapData {
             addrs.push(addr);
             for s in slots.into_iter() {
                 slot_arr.get_mut(s).map(|opt| {
-                    *opt = Some(addrs.len());
+                    *opt = Some(addrs.len() - 1);
                 });
             }
         }

@@ -1,5 +1,5 @@
 use super::session::{CmdCtxHandler, CmdCtx};
-use super::backend::{RecoverableBackendNode, CmdTaskSender};
+use super::backend::RecoverableBackendNode;
 use super::database::Database;
 
 pub struct ForwardHandler {

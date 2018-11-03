@@ -26,8 +26,9 @@ pub trait CmdTask : Send + 'static {
 }
 
 pub trait CmdTaskSender {
-    type Task;
+    type Task: CmdTask;
 
+    fn new(addr: String) -> Self;
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError>;
 }
 
@@ -36,17 +37,15 @@ pub struct RecoverableBackendNode<T: CmdTask> {
     node: sync::Arc<sync::RwLock<Option<BackendNode<T>>>>,
 }
 
-impl<T: CmdTask> RecoverableBackendNode<T> {
-    pub fn new(addr: String) -> RecoverableBackendNode<T> {
+impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
+    type Task = T;
+
+    fn new(addr: String) -> RecoverableBackendNode<T> {
         Self{
             addr: sync::Arc::new(addr),
             node: sync::Arc::new(sync::RwLock::new(None)),
         }
     }
-}
-
-impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
-    type Task = T;
 
     fn send(&self, cmd_task: T) -> Result<(), BackendError> {
         let need_init = self.node.read().unwrap().is_none();
