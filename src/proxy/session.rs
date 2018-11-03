@@ -38,10 +38,6 @@ impl CmdCtx {
     pub fn get_cmd(&self) -> &Command {
         self.reply_sender.get_cmd()
     }
-
-    pub fn send(&self, res: CommandResult) -> Result<(), CommandError> {
-        self.reply_sender.send(res)
-    }
 }
 
 // Make sure that ctx will always be sent back.

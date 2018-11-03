@@ -1,12 +1,14 @@
 use std::io;
 use std::iter;
 use std::fmt;
+use std::sync;
 use std::error::Error;
 use std::result::Result;
 use std::boxed::Box;
 use futures::{future, Future, stream, Stream};
 use futures::sync::mpsc;
 use futures::Sink;
+use tokio;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use protocol::{Resp, decode_resp, DecodeError, resp_to_buf};
@@ -14,21 +16,93 @@ use super::command::{CommandResult, CommandError};
 
 pub type BackendResult = Result<Resp, BackendError>;
 
-pub trait ReplyHandler<T: CmdTask> {
+pub trait ReplyHandler<T: CmdTask> : Send + 'static {
     fn handle_reply(&self, cmd_task: T, result: BackendResult);
 }
 
-pub trait CmdTask {
+pub trait CmdTask : Send + 'static {
     fn get_resp(&self) -> &Resp;
     fn set_result(self, result: CommandResult);
 }
 
-pub struct BackendNode<T: CmdTask + Send + 'static> {
+pub trait CmdTaskSender<T: CmdTask> {
+    fn send(&self, cmd_task: T) -> Result<(), BackendError>;
+}
+
+pub struct RecoverableBackendNode<T: CmdTask> {
+    addr: sync::Arc<String>,
+    node: sync::Arc<sync::RwLock<Option<BackendNode<T>>>>,
+}
+
+impl<T: CmdTask> RecoverableBackendNode<T> {
+    pub fn new(addr: String) -> RecoverableBackendNode<T> {
+        Self{
+            addr: sync::Arc::new(addr),
+            node: sync::Arc::new(sync::RwLock::new(None)),
+        }
+    }
+}
+
+impl<T: CmdTask> CmdTaskSender<T> for RecoverableBackendNode<T> {
+    fn send(&self, cmd_task: T) -> Result<(), BackendError> {
+        let need_init = self.node.read().unwrap().is_none();
+        // Race condition here. Multiple threads might be creating new connection at the same time.
+        // Maybe it's just fine. If not, lock the creating connection phrase.
+        if need_init {
+            let node_arc = self.node.clone();
+            let node_arc2 = self.node.clone();
+            let addr = self.addr.parse().unwrap();
+            let sock = TcpStream::connect(&addr);
+            let fut = sock.then(move |res| {
+                let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
+                    Ok(sock) => {
+                        let (node, node_fut) = BackendNode::<T>::new_pair(sock, ReplyCommitHandler{});
+                        node.send(cmd_task).unwrap();  // must not fail
+                        node_arc.write().unwrap().get_or_insert(node);
+                        Box::new(node_fut)
+                    },
+                    Err(e) => {
+                        cmd_task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
+                        Box::new(future::err(BackendError::Io(e)))
+                    },
+                };
+                fut.then(move |r| {
+                    println!("backend exited with result {:?}", r);
+                    node_arc2.write().unwrap().take();
+                    future::ok(())
+                })
+            });
+            // If this future fails, cmd_task will be lost. Let itself send back an error response.
+            tokio::spawn(fut);
+            return Ok(());
+        }
+        let res = self.node.read().unwrap().as_ref().unwrap().send(cmd_task);
+        match res {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // if it fails, remove this connection.
+                self.node.write().unwrap().take();
+                println!("reset backend connecton {:?}", e);
+                Err(e)
+            }
+        }
+    }
+}
+
+// TODO: Remove this. Retry can be built with a CmdTask wrapper
+pub struct ReplyCommitHandler {}
+
+impl<T: CmdTask> ReplyHandler<T> for ReplyCommitHandler {
+    fn handle_reply(&self, _cmd_task: T, _result: BackendResult) {
+    }
+}
+
+pub struct BackendNode<T: CmdTask> {
     tx: mpsc::UnboundedSender<T>
 }
 
-impl<T: CmdTask + Send + 'static> BackendNode<T> {
-    pub fn new_pair<H: ReplyHandler<T> + Send + 'static>(sock: TcpStream, handler: H) -> (BackendNode<T>, impl Future<Item = (), Error = BackendError> + Send) {
+impl<T: CmdTask> BackendNode<T> {
+    pub fn new_pair<H: ReplyHandler<T>>(sock: TcpStream, handler: H) -> (BackendNode<T>, impl Future<Item = (), Error = BackendError> + Send) {
         let (tx, rx) = mpsc::unbounded();
         (Self{tx: tx}, handle_backend(handler, rx, sock))
     }
@@ -41,7 +115,7 @@ impl<T: CmdTask + Send + 'static> BackendNode<T> {
 }
 
 pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<T>, sock: TcpStream) -> impl Future<Item = (), Error = BackendError> + Send
-    where H: ReplyHandler<T> + Send + 'static, T: CmdTask + Send + 'static
+    where H: ReplyHandler<T>, T: CmdTask
 {
     let (reader, writer) = sock.split();
     let reader = io::BufReader::new(reader);
@@ -67,7 +141,7 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
 }
 
 fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: mpsc::Sender<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where W: AsyncWrite + Send + 'static, T: CmdTask + Send + 'static
+    where W: AsyncWrite + Send + 'static, T: CmdTask
 {
     let handler = task_receiver
         .map_err(|()| BackendError::Canceled)
@@ -104,7 +178,7 @@ fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: 
 }
 
 fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where R: AsyncRead + io::BufRead + Send + 'static, H: ReplyHandler<T> + Send + 'static, T: CmdTask + Send + 'static
+    where R: AsyncRead + io::BufRead + Send + 'static, H: ReplyHandler<T>, T: CmdTask
 {
     let rx = rx.into_future();
     let reader_stream = stream::iter_ok(iter::repeat(()));
