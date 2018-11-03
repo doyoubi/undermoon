@@ -12,7 +12,7 @@ use tokio;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use protocol::{Resp, decode_resp, DecodeError, resp_to_buf};
-use super::command::{CommandResult, CommandError};
+use super::command::{CommandError, CommandResult};
 
 pub type BackendResult = Result<Resp, BackendError>;
 
@@ -25,8 +25,10 @@ pub trait CmdTask : Send + 'static {
     fn set_result(self, result: CommandResult);
 }
 
-pub trait CmdTaskSender<T: CmdTask> {
-    fn send(&self, cmd_task: T) -> Result<(), BackendError>;
+pub trait CmdTaskSender {
+    type Task;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError>;
 }
 
 pub struct RecoverableBackendNode<T: CmdTask> {
@@ -43,7 +45,9 @@ impl<T: CmdTask> RecoverableBackendNode<T> {
     }
 }
 
-impl<T: CmdTask> CmdTaskSender<T> for RecoverableBackendNode<T> {
+impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
+    type Task = T;
+
     fn send(&self, cmd_task: T) -> Result<(), BackendError> {
         let need_init = self.node.read().unwrap().is_none();
         // Race condition here. Multiple threads might be creating new connection at the same time.
