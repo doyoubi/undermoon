@@ -13,6 +13,7 @@ use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use protocol::{Resp, Array, decode_resp, DecodeError, resp_to_buf};
 use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair, CommandError};
 use super::backend::CmdTask;
+use super::database::{DEFAULT_DB, DBTag};
 
 pub trait CmdHandler {
     fn handle_cmd(&mut self, sender: CmdReplySender);
@@ -23,14 +24,14 @@ pub trait CmdCtxHandler {
 }
 
 pub struct CmdCtx {
-    _user: sync::Arc<sync::Mutex<String>>,
+    db: sync::Arc<sync::RwLock<String>>,
     reply_sender: CmdReplySender,
 }
 
 impl CmdCtx {
-    fn new(user: sync::Arc<sync::Mutex<String>>, reply_sender: CmdReplySender) -> CmdCtx {
+    fn new(db: sync::Arc<sync::RwLock<String>>, reply_sender: CmdReplySender) -> CmdCtx {
         CmdCtx{
-            _user: user,
+            db: db,
             reply_sender: reply_sender,
         }
     }
@@ -60,17 +61,21 @@ impl CmdTask for CmdCtx {
     }
 }
 
-pub struct Session<H: CmdCtxHandler> {
-    user: sync::Arc<sync::Mutex<String>>,
-    cmd_ctx_handler: H,
+impl DBTag for CmdCtx {
+    fn get_db_name(&self) -> String {
+        return self.db.read().unwrap().clone()
+    }
 }
 
-static DEFAULT_USER: &'static str = "admin";
+pub struct Session<H: CmdCtxHandler> {
+    db: sync::Arc<sync::RwLock<String>>,
+    cmd_ctx_handler: H,
+}
 
 impl<H: CmdCtxHandler> Session<H> {
     pub fn new(cmd_ctx_handler: H) -> Self {
         Session{
-            user: sync::Arc::new(sync::Mutex::new(DEFAULT_USER.to_string())),
+            db: sync::Arc::new(sync::RwLock::new(DEFAULT_DB.to_string())),
             cmd_ctx_handler: cmd_ctx_handler,
         }
     }
@@ -78,7 +83,7 @@ impl<H: CmdCtxHandler> Session<H> {
 
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&mut self, reply_sender: CmdReplySender) {
-        self.cmd_ctx_handler.handle_cmd_ctx(CmdCtx::new(self.user.clone(), reply_sender));
+        self.cmd_ctx_handler.handle_cmd_ctx(CmdCtx::new(self.db.clone(), reply_sender));
     }
 }
 

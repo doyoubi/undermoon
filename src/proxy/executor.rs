@@ -1,14 +1,14 @@
 use super::session::{CmdCtxHandler, CmdCtx};
 use super::backend::RecoverableBackendNode;
-use super::database::Database;
+use super::database::DatabaseMap;
 
 pub struct ForwardHandler {
-    task_sender: Database<RecoverableBackendNode<CmdCtx>>,
+    task_sender: DatabaseMap<RecoverableBackendNode<CmdCtx>>,
 }
 
 impl ForwardHandler {
     pub fn new() -> ForwardHandler {
-        let db = Database::new("defaultdb".to_string());
+        let db = DatabaseMap::new();
         ForwardHandler{
             task_sender: db,
         }

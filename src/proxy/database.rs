@@ -5,6 +5,40 @@ use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender};
 use super::slot::{SlotMap, SLOT_NUM};
 
+pub const DEFAULT_DB : &'static str = "default_db";
+
+pub trait DBTag {
+    fn get_db_name(&self) -> String;
+}
+
+pub struct DatabaseMap<S: CmdTaskSender> where S::Task: DBTag {
+    local_dbs: sync::RwLock<HashMap<String, Database<S>>>,
+}
+
+impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
+    pub fn new() -> DatabaseMap<S> {
+        let default_db = Database::new(DEFAULT_DB.to_string());
+        let mut db_map = HashMap::new();
+        db_map.insert(DEFAULT_DB.to_string(), default_db);
+        Self{
+            local_dbs: sync::RwLock::new(db_map),
+        }
+    }
+
+    pub fn send(&self, cmd_task: S::Task) -> Result<(), BackendError> {
+        let db_name = cmd_task.get_db_name();
+        match self.local_dbs.read().unwrap().get(&db_name) {
+            Some(db) => {
+                db.send(cmd_task)
+            },
+            None => {
+                cmd_task.set_result(Ok(Resp::Error("db not found".to_string().into_bytes())));
+                Ok(())
+            },
+        }
+    }
+}
+
 pub struct Database<S: CmdTaskSender> {
     name: String,
     // We can improve this by using some concurrent map implementation.
@@ -14,6 +48,7 @@ pub struct Database<S: CmdTaskSender> {
 
 impl<S: CmdTaskSender> Database<S> {
     pub fn new(name: String) -> Database<S> {
+        // TODO: remove this default database config later
         let mut slot_map = HashMap::new();
         let mut slots = Vec::new();
         for s in 0..SLOT_NUM {
@@ -37,9 +72,7 @@ impl<S: CmdTaskSender> Database<S> {
     pub fn update(&self, slot_map: HashMap<String, Vec<usize>>) {
         self.slot_map.update(slot_map)
     }
-}
 
-impl<S: CmdTaskSender> Database<S> {
     // TODO: use other error type
     pub fn send(&self, cmd_task: S::Task) -> Result<(), BackendError> {
         {
