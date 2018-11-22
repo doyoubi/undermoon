@@ -8,6 +8,6 @@ Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol.
 - Basic proxy implementation (done)
 - Backend connection pool
 - Slot map and cluster map (in progress)
-- Implement AUTH command to select database
-- Implement meta data manipulation api
+- Implement AUTH command to select database (done)
+- Implement meta data manipulation api (in progress)
 - Implement coordinator

@@ -20,6 +20,7 @@ pub enum CmdType {
     Select,
     Others,
     Invalid,
+    UmCtl,
 }
 
 pub struct Command {
@@ -38,24 +39,6 @@ impl Command {
     }
 
     pub fn get_type(&self) -> CmdType {
-        let t = self.get_raw_type();
-        if t == CmdType::Others {
-            match self.get_resp() {
-                Resp::Arr(Array::Arr(ref resps)) => {
-                    if resps.len() < 2 {
-                        CmdType::Invalid
-                    } else {
-                        t
-                    }
-                },
-                _ => CmdType::Invalid,
-            }
-        } else {
-            t
-        }
-    }
-
-    fn get_raw_type(&self) -> CmdType {
         match self.request {
             Resp::Arr(Array::Arr(ref resps)) => {
                 match resps.first() {
@@ -76,6 +59,8 @@ impl Command {
                                             CmdType::Echo
                                         } else if caseless::canonical_caseless_match_str(cmd_name, "Select") {
                                             CmdType::Select
+                                        } else if caseless::canonical_caseless_match_str(cmd_name, "UmCtl") {
+                                            CmdType::UmCtl
                                         } else {
                                             CmdType::Others
                                         }

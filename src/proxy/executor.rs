@@ -1,19 +1,20 @@
 use std::str;
-use protocol::{Resp, BulkStr};
+use protocol::{Resp, BulkStr, Array};
+use caseless;
 use super::session::{CmdCtxHandler, CmdCtx};
 use super::backend::{RecoverableBackendNode, CmdTask};
 use super::database::{DatabaseMap, DBTag};
 use super::command::{CmdType};
 
 pub struct ForwardHandler {
-    task_sender: DatabaseMap<RecoverableBackendNode<CmdCtx>>,
+    db: DatabaseMap<RecoverableBackendNode<CmdCtx>>,
 }
 
 impl ForwardHandler {
     pub fn new() -> ForwardHandler {
         let db = DatabaseMap::new();
         ForwardHandler{
-            task_sender: db,
+            db: db,
         }
     }
 }
@@ -36,6 +37,36 @@ impl ForwardHandler {
                     }
                 }
             }
+        }
+    }
+
+    fn handle_umctl(&self, cmd_ctx: CmdCtx) {
+        let key = cmd_ctx.get_cmd().get_key();
+        let sub_cmd = match key {
+            None => {
+                cmd_ctx.set_result(Ok(Resp::Error(String::from("Missing sub command").into_bytes())));
+                return
+            }
+            Some(ref k) => {
+                match str::from_utf8(k) {
+                    Ok(sub_cmd) => sub_cmd,
+                    Err(_) => {
+                        cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
+                        return
+                    },
+                }
+            },
+        };
+
+        if caseless::canonical_caseless_match_str(sub_cmd, "listdb") {
+            let dbs = self.db.get_dbs();
+            let resps = dbs.into_iter().map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes()))).collect();
+            cmd_ctx.set_result(Ok(Resp::Arr(Array::Arr(resps))));
+        } else if caseless::canonical_caseless_match_str(sub_cmd, "cleardb") {
+            self.db.clear();
+            cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+        } else {
+            cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
         }
     }
 }
@@ -64,13 +95,16 @@ impl CmdCtxHandler for ForwardHandler {
                 cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Others => {
-                let res = self.task_sender.send(cmd_ctx);
+                let res = self.db.send(cmd_ctx);
                 if let Err(e) = res {
                     println!("Failed to foward cmd_ctx: {:?}", e)
                 }
             }
             CmdType::Invalid => {
                 cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid command").into_bytes())))
+            }
+            CmdType::UmCtl => {
+                self.handle_umctl(cmd_ctx)
             }
         };
     }

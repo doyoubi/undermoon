@@ -38,6 +38,14 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
             },
         }
     }
+
+    pub fn get_dbs(&self) -> Vec<String> {
+        self.local_dbs.read().unwrap().keys().map(|s| s.clone()).collect()
+    }
+
+    pub fn clear(&self) {
+        self.local_dbs.write().unwrap().clear()
+    }
 }
 
 pub struct Database<S: CmdTaskSender> {
