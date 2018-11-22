@@ -65,6 +65,10 @@ impl DBTag for CmdCtx {
     fn get_db_name(&self) -> String {
         return self.db.read().unwrap().clone()
     }
+
+    fn set_db_name(&self, db: String) {
+        *self.db.write().unwrap() = db
+    }
 }
 
 pub struct Session<H: CmdCtxHandler> {

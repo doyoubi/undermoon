@@ -9,6 +9,7 @@ pub const DEFAULT_DB : &'static str = "default_db";
 
 pub trait DBTag {
     fn get_db_name(&self) -> String;
+    fn set_db_name(&self, db: String);
 }
 
 pub struct DatabaseMap<S: CmdTaskSender> where S::Task: DBTag {
@@ -32,7 +33,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
                 db.send(cmd_task)
             },
             None => {
-                cmd_task.set_result(Ok(Resp::Error("db not found".to_string().into_bytes())));
+                cmd_task.set_result(Ok(Resp::Error(format!("db not found: {}", db_name).into_bytes())));
                 Ok(())
             },
         }

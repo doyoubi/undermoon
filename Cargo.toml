@@ -8,6 +8,7 @@ tokio = "0.1"
 futures = "0.1.23"
 atomic-option = "0.1"
 crc16 = "0.4.0"
+caseless = "0.2.1"
 
 [profile.release]
 debug = true
