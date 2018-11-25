@@ -3,7 +3,7 @@ use protocol::{Resp, BulkStr, Array};
 use caseless;
 use super::session::{CmdCtxHandler, CmdCtx};
 use super::backend::{RecoverableBackendNode, CmdTask};
-use super::database::{DatabaseMap, DBTag};
+use super::database::{DatabaseMap, DBTag, HostDBMap};
 use super::command::{CmdType};
 
 pub struct ForwardHandler {
@@ -65,9 +65,23 @@ impl ForwardHandler {
         } else if caseless::canonical_caseless_match_str(sub_cmd, "cleardb") {
             self.db.clear();
             cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+        } else if caseless::canonical_caseless_match_str(sub_cmd, "setdb") {
+            self.handle_umctl_setdb(cmd_ctx);
         } else {
             cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
         }
+    }
+
+    fn handle_umctl_setdb(&self, cmd_ctx: CmdCtx) {
+        let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(db_map) => db_map,
+            Err(_) => {
+                cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid arguments").into_bytes())));
+                return
+            }
+        };
+        self.db.set_dbs(db_map);
+        cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
     }
 }
 

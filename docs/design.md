@@ -14,7 +14,7 @@ Rules:
 - Coordinators
 - Clusters { ip:port => slots }
 - Machines { cluster => ip:port => slots }
-- Failure Count { ip => count }
+- Failure Count { ip => coordinator ips }
 
 # Operations
 
@@ -41,6 +41,14 @@ Lets say we're migrating a range of slots 0-1000 from node A to node B.
 
 Note that (1) can employ a blocking or non-blocking method for the comming commands during switching slot owner.
 
+## Failure Recovery in Migration
+Coordinator is totally stateless. There's only one coordinator start the process. But all of them will keep pushing meta data to proxy.
+
+The only problem is how to deal the failure of node A and B.
+
+If in any phase node A fails, the coordinators should create a new one with the same slots include the migrating flag.
+If node B fails, the coordinators should create a new one and tell node A to change its destination of migration.
+
 # Control Commands
 
 - nmctl listdb
@@ -53,3 +61,7 @@ Note that (1) can employ a blocking or non-blocking method for the comming comma
 - `slot_range` can be
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
+
+# Epoch
+
+- Zero epoch is used to tag uninitialized state.

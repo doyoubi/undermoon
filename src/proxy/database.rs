@@ -1,6 +1,9 @@
 use std::sync;
+use std::str;
 use std::collections::HashMap;
-use protocol::Resp;
+use std::iter::Iterator;
+use caseless;
+use protocol::{Resp, Array, BulkStr};
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender};
 use super::slot::{SlotMap, SLOT_NUM};
@@ -13,6 +16,7 @@ pub trait DBTag {
 }
 
 pub struct DatabaseMap<S: CmdTaskSender> where S::Task: DBTag {
+    epoch: u64,
     local_dbs: sync::RwLock<HashMap<String, Database<S>>>,
 }
 
@@ -22,6 +26,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         let mut db_map = HashMap::new();
         db_map.insert(DEFAULT_DB.to_string(), default_db);
         Self{
+            epoch: 0,
             local_dbs: sync::RwLock::new(db_map),
         }
     }
@@ -45,6 +50,13 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
 
     pub fn clear(&self) {
         self.local_dbs.write().unwrap().clear()
+    }
+
+    pub fn set_dbs(&self, db_map: HostDBMap) {
+        if db_map.epoch == self.epoch {
+            return
+        }
+        // TODO: implement this
     }
 }
 
@@ -79,6 +91,7 @@ impl<S: CmdTaskSender> Database<S> {
     }
 
     pub fn update(&self, slot_map: HashMap<String, Vec<usize>>) {
+        println!("{} is updating", self.get_name());
         self.slot_map.update(slot_map)
     }
 
@@ -106,5 +119,116 @@ impl<S: CmdTaskSender> Database<S> {
                 Err(BackendError::Canceled)
             }
         }
+    }
+}
+
+const MIGRATING_TAG: &'static str = "MIGRATING";
+
+pub enum SlotRangeTag {
+    Migrating(String),
+    None,
+}
+
+pub struct SlotRange {
+    start: usize,
+    end: usize,
+    tag: SlotRangeTag,
+}
+
+pub struct HostDBMap {
+    epoch: u64,
+    db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+}
+
+pub struct NMCtlParseError {}
+
+macro_rules! try_parse {
+    ($expression:expr) => ({
+        match $expression {
+            Ok(v) => (v),
+            Err(_) => return Err(NMCtlParseError{}),
+        }
+    })
+}
+
+macro_rules! try_get {
+    ($expression:expr) => ({
+        match $expression {
+            Some(v) => (v),
+            None => return Err(NMCtlParseError{}),
+        }
+    })
+}
+
+impl HostDBMap {
+    pub fn from_resp(resp: & Resp) -> Result<Self, NMCtlParseError> {
+        let arr = match resp {
+            Resp::Arr(Array::Arr(ref arr)) => {
+                arr
+            }
+            _ => return Err(NMCtlParseError{}),
+        };
+
+        let mut db_map = HashMap::new();
+        let it = arr.iter().skip(2).flat_map(|resp| {
+            match resp {
+                Resp::Bulk(BulkStr::Str(safe_str)) => {
+                    match str::from_utf8(safe_str) {
+                        Ok(s) => Some(s.to_string()),
+                        _ => return None,
+                    }
+                },
+                _ => None,
+            }
+        });
+        let mut it = it.peekable();
+
+        let epoch_str = try_get!(it.next());
+        let epoch = try_parse!(epoch_str.parse::<u64>());
+
+        while let Some(_) = it.peek() {
+            let (dbname, address, slot_range) = try_parse!(Self::parse_db(&mut it));
+            let db = db_map.entry(dbname).or_insert(HashMap::new());
+            let slots = db.entry(address).or_insert(vec![]);
+            slots.push(slot_range);
+        }
+
+        Ok(Self{
+            epoch: epoch,
+            db_map: db_map,
+        })
+    }
+
+    fn parse_db<It>(it: &mut It) -> Result<(String, String, SlotRange), NMCtlParseError>
+            where It: Iterator<Item=String> {
+        let dbname = try_get!(it.next());
+        let addr = try_get!(it.next());
+        let slot_range = try_parse!(Self::parse_tagged_slot_range(it));
+        Ok((dbname, addr, slot_range))
+    }
+
+    fn parse_tagged_slot_range<It>(it: &mut It) -> Result<SlotRange, NMCtlParseError> where It: Iterator<Item=String> {
+        let slot_range = try_get!(it.next());
+        if !caseless::canonical_caseless_match_str(&slot_range, MIGRATING_TAG) {
+            return Self::parse_slot_range(slot_range);
+        }
+
+        let dst = try_get!(it.next());
+        let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
+        slot_range.tag = SlotRangeTag::Migrating(dst);
+        Ok(slot_range)
+    }
+
+    fn parse_slot_range(s: String) -> Result<SlotRange, NMCtlParseError> {
+        let mut slot_range = s.split('-');
+        let start_str = try_get!(slot_range.next());
+        let end_str = try_get!(slot_range.next());
+        let start = try_parse!(start_str.parse::<usize>());
+        let end = try_parse!(end_str.parse::<usize>());
+        Ok(SlotRange{
+            start: start,
+            end: end,
+            tag: SlotRangeTag::None,
+        })
     }
 }
