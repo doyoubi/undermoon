@@ -6,7 +6,7 @@ use caseless;
 use protocol::{Resp, Array, BulkStr};
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender};
-use super::slot::{SlotMap, SLOT_NUM};
+use super::slot::{SlotMap, SLOT_NUM, SlotRange, SlotRangeTag};
 
 pub const DEFAULT_DB : &'static str = "default_db";
 
@@ -16,8 +16,8 @@ pub trait DBTag {
 }
 
 pub struct DatabaseMap<S: CmdTaskSender> where S::Task: DBTag {
-    epoch: u64,
-    local_dbs: sync::RwLock<HashMap<String, Database<S>>>,
+    // (epoch, meta data)
+    local_dbs: sync::RwLock<(u64, HashMap<String, Database<S>>)>,
 }
 
 impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
@@ -26,14 +26,13 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         let mut db_map = HashMap::new();
         db_map.insert(DEFAULT_DB.to_string(), default_db);
         Self{
-            epoch: 0,
-            local_dbs: sync::RwLock::new(db_map),
+            local_dbs: sync::RwLock::new((0, db_map)),
         }
     }
 
     pub fn send(&self, cmd_task: S::Task) -> Result<(), BackendError> {
         let db_name = cmd_task.get_db_name();
-        match self.local_dbs.read().unwrap().get(&db_name) {
+        match self.local_dbs.read().unwrap().1.get(&db_name) {
             Some(db) => {
                 db.send(cmd_task)
             },
@@ -45,18 +44,25 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
-        self.local_dbs.read().unwrap().keys().map(|s| s.clone()).collect()
+        self.local_dbs.read().unwrap().1.keys().map(|s| s.clone()).collect()
     }
 
     pub fn clear(&self) {
-        self.local_dbs.write().unwrap().clear()
+        self.local_dbs.write().unwrap().1.clear()
     }
 
     pub fn set_dbs(&self, db_map: HostDBMap) {
-        if db_map.epoch == self.epoch {
+        let mut map = HashMap::new();
+        for (db_name, slot_ranges) in db_map.db_map {
+            let db = Database::from_slot_map(db_name.clone(), slot_ranges);
+            map.insert(db_name, db);
+        }
+
+        let mut local = self.local_dbs.write().unwrap();
+        if db_map.epoch == local.0 {
             return
         }
-        // TODO: implement this
+        *local = (db_map.epoch, map);
     }
 }
 
@@ -83,6 +89,18 @@ impl<S: CmdTaskSender> Database<S> {
             name: name,
             nodes: sync::RwLock::new(nodes),
             slot_map: SlotMap::new(slot_map),
+        }
+    }
+
+    pub fn from_slot_map(name: String, slot_map: HashMap<String, Vec<SlotRange>>) -> Database<S> {
+        let mut nodes = HashMap::new();
+        for addr in slot_map.keys() {
+            nodes.insert(addr.to_string(), S::new(addr.to_string()));
+        }
+        Database{
+            name: name,
+            nodes: sync::RwLock::new(nodes),
+            slot_map: SlotMap::from_ranges(slot_map),
         }
     }
 
@@ -124,17 +142,6 @@ impl<S: CmdTaskSender> Database<S> {
 
 const MIGRATING_TAG: &'static str = "MIGRATING";
 
-pub enum SlotRangeTag {
-    Migrating(String),
-    None,
-}
-
-pub struct SlotRange {
-    start: usize,
-    end: usize,
-    tag: SlotRangeTag,
-}
-
 pub struct HostDBMap {
     epoch: u64,
     db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
@@ -161,7 +168,7 @@ macro_rules! try_get {
 }
 
 impl HostDBMap {
-    pub fn from_resp(resp: & Resp) -> Result<Self, NMCtlParseError> {
+    pub fn from_resp(resp: &Resp) -> Result<Self, NMCtlParseError> {
         let arr = match resp {
             Resp::Arr(Array::Arr(ref arr)) => {
                 arr
@@ -185,6 +192,8 @@ impl HostDBMap {
 
         let epoch_str = try_get!(it.next());
         let epoch = try_parse!(epoch_str.parse::<u64>());
+
+        let _flags = try_get!(it.next());
 
         while let Some(_) = it.peek() {
             let (dbname, address, slot_range) = try_parse!(Self::parse_db(&mut it));

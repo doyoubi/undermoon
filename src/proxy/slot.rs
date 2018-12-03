@@ -4,6 +4,17 @@ use crc16::{State, XMODEM};
 
 pub const SLOT_NUM: usize = 16384;
 
+pub enum SlotRangeTag {
+    Migrating(String),
+    None,
+}
+
+pub struct SlotRange {
+    pub start: usize,
+    pub end: usize,
+    pub tag: SlotRangeTag,
+}
+
 pub struct SlotMap {
     data: RwLock<SlotMapData>,
 }
@@ -13,6 +24,27 @@ impl SlotMap {
         SlotMap{
             data: RwLock::new(SlotMapData::new(slot_map)),
         }
+    }
+
+    pub fn from_ranges(slot_map: HashMap<String, Vec<SlotRange>>) -> Self {
+        let mut map = HashMap::new();
+        let mut addrs = Vec::new();
+        for (addr, slot_ranges) in slot_map {
+            addrs.push(addr.clone());
+            let mut slots = Vec::new();
+            for range in slot_ranges {
+                let mut slot = range.start;
+                while slot < range.end {
+                    if slot >= SLOT_NUM {
+                        continue;
+                    }
+                    slots.push(slot);
+                    slot += 1;
+                }
+            }
+            map.insert(addr, slots);
+        }
+        Self{data: RwLock::new(SlotMapData::new(map))}
     }
 
     pub fn get_by_key(&self, key: &[u8]) -> Option<String> {
