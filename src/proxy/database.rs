@@ -1,5 +1,6 @@
 use std::sync;
 use std::str;
+use std::iter::Peekable;
 use std::collections::HashMap;
 use std::iter::Iterator;
 use caseless;
@@ -52,6 +53,10 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     }
 
     pub fn set_dbs(&self, db_map: HostDBMap) {
+        if self.local_dbs.read().unwrap().0 >= db_map.epoch {
+            return
+        }
+
         let mut map = HashMap::new();
         for (db_name, slot_ranges) in db_map.db_map {
             let db = Database::from_slot_map(db_name.clone(), slot_ranges);
@@ -108,6 +113,7 @@ impl<S: CmdTaskSender> Database<S> {
         self.name.clone()
     }
 
+    // TODO: Remove this
     pub fn update(&self, slot_map: HashMap<String, Vec<usize>>) {
         println!("{} is updating", self.get_name());
         self.slot_map.update(slot_map)
@@ -147,6 +153,7 @@ pub struct HostDBMap {
     db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
 }
 
+#[derive(Debug)]
 pub struct NMCtlParseError {}
 
 macro_rules! try_parse {
@@ -176,7 +183,6 @@ impl HostDBMap {
             _ => return Err(NMCtlParseError{}),
         };
 
-        let mut db_map = HashMap::new();
         let it = arr.iter().skip(2).flat_map(|resp| {
             match resp {
                 Resp::Bulk(BulkStr::Str(safe_str)) => {
@@ -190,22 +196,31 @@ impl HostDBMap {
         });
         let mut it = it.peekable();
 
-        let epoch_str = try_get!(it.next());
-        let epoch = try_parse!(epoch_str.parse::<u64>());
-
-        let _flags = try_get!(it.next());
-
-        while let Some(_) = it.peek() {
-            let (dbname, address, slot_range) = try_parse!(Self::parse_db(&mut it));
-            let db = db_map.entry(dbname).or_insert(HashMap::new());
-            let slots = db.entry(address).or_insert(vec![]);
-            slots.push(slot_range);
-        }
+        let (epoch, db_map) = try_parse!(Self::parse(&mut it));
 
         Ok(Self{
             epoch: epoch,
             db_map: db_map,
         })
+    }
+
+    fn parse<It>(it: &mut Peekable<It>) -> Result<(u64, HashMap<String, HashMap<String, Vec<SlotRange>>>), NMCtlParseError>
+            where It: Iterator<Item=String> {
+        let epoch_str = try_get!(it.next());
+        let epoch = try_parse!(epoch_str.parse::<u64>());
+
+        let _flags = try_get!(it.next());
+
+        let mut db_map = HashMap::new();
+
+        while let Some(_) = it.peek() {
+            let (dbname, address, slot_range) = try_parse!(Self::parse_db(it));
+            let db = db_map.entry(dbname).or_insert(HashMap::new());
+            let slots = db.entry(address).or_insert(vec![]);
+            slots.push(slot_range);
+        }
+
+        return Ok((epoch, db_map))
     }
 
     fn parse_db<It>(it: &mut It) -> Result<(String, String, SlotRange), NMCtlParseError>
@@ -239,5 +254,75 @@ impl HostDBMap {
             end: end,
             tag: SlotRangeTag::None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_single_db() {
+        let mut arguments = vec![
+            "233", "noflags", "dbname", "127.0.0.1:6379", "0-1000",
+        ].into_iter().map(|s| s.to_string()).peekable();
+        let r = HostDBMap::parse(&mut arguments);
+        assert!(r.is_ok());
+        let (epoch, hash) = r.unwrap();
+        assert_eq!(epoch, 233);
+        assert_eq!(hash.len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_slots() {
+        let mut arguments = vec![
+            "233", "noflags",
+            "dbname", "127.0.0.1:6379", "0-1000",
+            "dbname", "127.0.0.1:6379", "1001-2000",
+        ].into_iter().map(|s| s.to_string()).peekable();
+        let r = HostDBMap::parse(&mut arguments);
+        assert!(r.is_ok());
+        let (epoch, hash) = r.unwrap();
+        assert_eq!(epoch, 233);
+        assert_eq!(hash.len(), 1);
+        assert_eq!(hash.get("dbname").unwrap().len(), 1);
+        assert_eq!(hash.get("dbname").unwrap().get("127.0.0.1:6379").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_multiple_nodes() {
+        let mut arguments = vec![
+            "233", "noflags",
+            "dbname", "127.0.0.1:7000", "0-1000",
+            "dbname", "127.0.0.1:7001", "1001-2000",
+        ].into_iter().map(|s| s.to_string()).peekable();
+        let r = HostDBMap::parse(&mut arguments);
+        assert!(r.is_ok());
+        let (epoch, hash) = r.unwrap();
+        assert_eq!(epoch, 233);
+        assert_eq!(hash.len(), 1);
+        assert_eq!(hash.get("dbname").unwrap().len(), 2);
+        assert_eq!(hash.get("dbname").unwrap().get("127.0.0.1:7000").unwrap().len(), 1);
+        assert_eq!(hash.get("dbname").unwrap().get("127.0.0.1:7001").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_db() {
+        let mut arguments = vec![
+            "233", "noflags",
+            "dbname", "127.0.0.1:7000", "0-1000",
+            "dbname", "127.0.0.1:7001", "1001-2000",
+            "another_db", "127.0.0.1:7002", "0-2000",
+        ].into_iter().map(|s| s.to_string()).peekable();
+        let r = HostDBMap::parse(&mut arguments);
+        assert!(r.is_ok());
+        let (epoch, hash) = r.unwrap();
+        assert_eq!(epoch, 233);
+        assert_eq!(hash.len(), 2);
+        assert_eq!(hash.get("dbname").unwrap().len(), 2);
+        assert_eq!(hash.get("dbname").unwrap().get("127.0.0.1:7000").unwrap().len(), 1);
+        assert_eq!(hash.get("dbname").unwrap().get("127.0.0.1:7001").unwrap().len(), 1);
+        assert_eq!(hash.get("another_db").unwrap().len(), 1);
+        assert_eq!(hash.get("another_db").unwrap().get("127.0.0.1:7002").unwrap().len(), 1);
     }
 }

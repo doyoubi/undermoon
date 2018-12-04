@@ -170,6 +170,7 @@ fn decode_array<R>(reader: R) -> impl Future<Item = (R, Array), Error = DecodeEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str;
 
     #[test]
     fn test_bytes_to_int() {
@@ -240,13 +241,13 @@ mod tests {
         let r = decode_line(c).wait();
         assert!(r.is_ok());
         let (_, l) = r.unwrap();
-        assert_eq!(from_utf8(&l[..]), Ok("233"));
+        assert_eq!(str::from_utf8(&l[..]), Ok("233"));
 
         let c = io::Cursor::new("-233\r\n".as_bytes());
         let r = decode_line(c).wait();
         assert!(r.is_ok());
         let (_, l) = r.unwrap();
-        assert_eq!(from_utf8(&l[..]), Ok("-233"));
+        assert_eq!(str::from_utf8(&l[..]), Ok("-233"));
     }
 
     #[test]
