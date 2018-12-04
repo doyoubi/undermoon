@@ -7,9 +7,10 @@ use caseless;
 use protocol::{Resp, Array, BulkStr};
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender};
-use super::slot::{SlotMap, SLOT_NUM, SlotRange, SlotRangeTag};
+use super::slot::{SlotMap, SlotRange, SlotRangeTag};
+use super::command::get_key;
 
-pub const DEFAULT_DB : &'static str = "default_db";
+pub const DEFAULT_DB : &'static str = "admin";
 
 pub trait DBTag {
     fn get_db_name(&self) -> String;
@@ -23,9 +24,7 @@ pub struct DatabaseMap<S: CmdTaskSender> where S::Task: DBTag {
 
 impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     pub fn new() -> DatabaseMap<S> {
-        let default_db = Database::new(DEFAULT_DB.to_string());
-        let mut db_map = HashMap::new();
-        db_map.insert(DEFAULT_DB.to_string(), default_db);
+        let db_map = HashMap::new();
         Self{
             local_dbs: sync::RwLock::new((0, db_map)),
         }
@@ -71,41 +70,30 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     }
 }
 
-pub struct Database<S: CmdTaskSender> {
-    name: String,
-    // We can improve this by using some concurrent map implementation.
-    nodes: sync::RwLock<HashMap<String, S>>,
+struct LocalDB<S: CmdTaskSender> {
+    nodes: HashMap<String, S>,
     slot_map: SlotMap,
 }
 
+pub struct Database<S: CmdTaskSender> {
+    name: String,
+    local_db: sync::RwLock<LocalDB<S>>,
+}
+
 impl<S: CmdTaskSender> Database<S> {
-    pub fn new(name: String) -> Database<S> {
-        // TODO: remove this default database config later
-        let mut slot_map = HashMap::new();
-        let mut slots = Vec::new();
-        for s in 0..SLOT_NUM {
-            slots.push(s);
-        }
-        let addr = "127.0.0.1:6379";
-        slot_map.insert(addr.to_string(), slots);
-        let mut nodes = HashMap::new();
-        nodes.insert(addr.to_string(), S::new(addr.to_string()));
-        Database{
-            name: name,
-            nodes: sync::RwLock::new(nodes),
-            slot_map: SlotMap::new(slot_map),
-        }
-    }
 
     pub fn from_slot_map(name: String, slot_map: HashMap<String, Vec<SlotRange>>) -> Database<S> {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
             nodes.insert(addr.to_string(), S::new(addr.to_string()));
         }
+        let local_db = LocalDB{
+            nodes: nodes,
+            slot_map: SlotMap::from_ranges(slot_map),
+        };
         Database{
             name: name,
-            nodes: sync::RwLock::new(nodes),
-            slot_map: SlotMap::from_ranges(slot_map),
+            local_db: sync::RwLock::new(local_db),
         }
     }
 
@@ -113,22 +101,17 @@ impl<S: CmdTaskSender> Database<S> {
         self.name.clone()
     }
 
-    // TODO: Remove this
-    pub fn update(&self, slot_map: HashMap<String, Vec<usize>>) {
-        println!("{} is updating", self.get_name());
-        self.slot_map.update(slot_map)
-    }
-
     // TODO: use other error type
     pub fn send(&self, cmd_task: S::Task) -> Result<(), BackendError> {
-        {
-            // TODO: get the key
-            let _resp: &Resp = cmd_task.get_resp();
-        }
-        match self.slot_map.get_by_key("dummy_key".as_bytes()) {
+        let key = match get_key(cmd_task.get_resp()) {
+            Some(key) => key,
+            None => return Err(BackendError::Canceled),
+        };
+
+        let local_db = self.local_db.read().unwrap();
+        match local_db.slot_map.get_by_key(&key) {
             Some(addr) => {
-                let guard = self.nodes.read().unwrap();
-                match guard.get(&addr) {
+                match local_db.nodes.get(&addr) {
                     Some(sender) => {
                         sender.send(cmd_task)
                     },
@@ -264,7 +247,7 @@ mod tests {
     #[test]
     fn test_single_db() {
         let mut arguments = vec![
-            "233", "noflags", "dbname", "127.0.0.1:6379", "0-1000",
+            "233", "noflag", "dbname", "127.0.0.1:6379", "0-1000",
         ].into_iter().map(|s| s.to_string()).peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
@@ -276,7 +259,7 @@ mod tests {
     #[test]
     fn test_multiple_slots() {
         let mut arguments = vec![
-            "233", "noflags",
+            "233", "noflag",
             "dbname", "127.0.0.1:6379", "0-1000",
             "dbname", "127.0.0.1:6379", "1001-2000",
         ].into_iter().map(|s| s.to_string()).peekable();
@@ -292,7 +275,7 @@ mod tests {
     #[test]
     fn test_multiple_nodes() {
         let mut arguments = vec![
-            "233", "noflags",
+            "233", "noflag",
             "dbname", "127.0.0.1:7000", "0-1000",
             "dbname", "127.0.0.1:7001", "1001-2000",
         ].into_iter().map(|s| s.to_string()).peekable();
@@ -309,7 +292,7 @@ mod tests {
     #[test]
     fn test_multiple_db() {
         let mut arguments = vec![
-            "233", "noflags",
+            "233", "noflag",
             "dbname", "127.0.0.1:7000", "0-1000",
             "dbname", "127.0.0.1:7001", "1001-2000",
             "another_db", "127.0.0.1:7002", "0-2000",

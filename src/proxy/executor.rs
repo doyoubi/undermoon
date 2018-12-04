@@ -67,12 +67,26 @@ impl ForwardHandler {
             cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
         } else if caseless::canonical_caseless_match_str(sub_cmd, "setdb") {
             self.handle_umctl_setdb(cmd_ctx);
+        } else if caseless::canonical_caseless_match_str(sub_cmd, "setpeer") {
+            self.handle_umctl_setpeer(cmd_ctx);
         } else {
             cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
         }
     }
 
     fn handle_umctl_setdb(&self, cmd_ctx: CmdCtx) {
+        let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(db_map) => db_map,
+            Err(_) => {
+                cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid arguments").into_bytes())));
+                return
+            }
+        };
+        self.db.set_dbs(db_map);
+        cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+    }
+
+    fn handle_umctl_setpeer(&self, cmd_ctx: CmdCtx) {
         let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
             Ok(db_map) => db_map,
             Err(_) => {

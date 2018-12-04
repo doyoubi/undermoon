@@ -62,6 +62,12 @@ If node B fails, the coordinators should create a new one and tell node A to cha
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
 
+### nmctl setpeer
+
+- nmctl setpeer epoch flags [dbname1 ip:port slot_range] ...
+- `flags` is reserved. Currently it's just NOFLAG
+- `slot_range` can be in the form of 0-1000
+
 # Epoch
 
 - Zero epoch is used to tag uninitialized state.

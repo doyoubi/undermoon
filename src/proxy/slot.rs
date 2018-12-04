@@ -1,4 +1,3 @@
-use std::sync::RwLock;
 use std::collections::HashMap;
 use crc16::{State, XMODEM};
 
@@ -16,21 +15,19 @@ pub struct SlotRange {
 }
 
 pub struct SlotMap {
-    data: RwLock<SlotMapData>,
+    data: SlotMapData,
 }
 
 impl SlotMap {
-    pub fn new(slot_map: HashMap<String, Vec<usize>>) -> SlotMap {
+    pub fn new(slot_map: HashMap<String, Vec<usize>>) -> Self {
         SlotMap{
-            data: RwLock::new(SlotMapData::new(slot_map)),
+            data: SlotMapData::new(slot_map),
         }
     }
 
     pub fn from_ranges(slot_map: HashMap<String, Vec<SlotRange>>) -> Self {
         let mut map = HashMap::new();
-        let mut addrs = Vec::new();
         for (addr, slot_ranges) in slot_map {
-            addrs.push(addr.clone());
             let mut slots = Vec::new();
             for range in slot_ranges {
                 let mut slot = range.start;
@@ -44,7 +41,7 @@ impl SlotMap {
             }
             map.insert(addr, slots);
         }
-        Self{data: RwLock::new(SlotMapData::new(map))}
+        Self::new(map)
     }
 
     pub fn get_by_key(&self, key: &[u8]) -> Option<String> {
@@ -53,13 +50,7 @@ impl SlotMap {
     }
 
     pub fn get(&self, slot: usize) -> Option<String> {
-        self.data.read().unwrap().get(slot)
-    }
-
-    pub fn update(&self, slot_map: HashMap<String, Vec<usize>>) {
-        let new_data = SlotMapData::new(slot_map);
-        let mut guard = self.data.write().unwrap();
-        *guard = new_data;
+        self.data.get(slot)
     }
 }
 
