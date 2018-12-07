@@ -1,10 +1,30 @@
 use std::str;
+use std::sync;
 use protocol::{Resp, BulkStr, Array};
 use caseless;
 use super::session::{CmdCtxHandler, CmdCtx};
 use super::backend::{RecoverableBackendNode, CmdTask};
 use super::database::{DatabaseMap, DBTag, HostDBMap};
 use super::command::{CmdType};
+
+#[derive(Clone)]
+pub struct SharedForwardHandler {
+    handler: sync::Arc<ForwardHandler>,
+}
+
+impl SharedForwardHandler {
+    pub fn new() -> SharedForwardHandler {
+        SharedForwardHandler{
+            handler: sync::Arc::new(ForwardHandler::new()),
+        }
+    }
+}
+
+impl CmdCtxHandler for SharedForwardHandler {
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
+        self.handler.handle_cmd_ctx(cmd_ctx)
+    }
+}
 
 pub struct ForwardHandler {
     db: DatabaseMap<RecoverableBackendNode<CmdCtx>>,
@@ -82,8 +102,14 @@ impl ForwardHandler {
                 return
             }
         };
-        self.db.set_dbs(db_map);
-        cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+        match self.db.set_dbs(db_map) {
+            Ok(()) => {
+                cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+            }
+            Err(e) => {
+                cmd_ctx.set_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+            }
+        }
     }
 
     fn handle_umctl_setpeer(&self, cmd_ctx: CmdCtx) {

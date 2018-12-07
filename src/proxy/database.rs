@@ -3,6 +3,8 @@ use std::str;
 use std::iter::Peekable;
 use std::collections::HashMap;
 use std::iter::Iterator;
+use std::error::Error;
+use std::fmt;
 use caseless;
 use protocol::{Resp, Array, BulkStr};
 use super::backend::CmdTask;
@@ -11,6 +13,27 @@ use super::slot::{SlotMap, SlotRange, SlotRangeTag};
 use super::command::get_key;
 
 pub const DEFAULT_DB : &'static str = "admin";
+
+#[derive(Debug)]
+pub enum DBError {
+    OldEpoch,
+}
+
+impl fmt::Display for DBError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for DBError {
+    fn description(&self) -> &str {
+        "db error"
+    }
+
+    fn cause(&self) -> Option<&Error> {
+        None
+    }
+}
 
 pub trait DBTag {
     fn get_db_name(&self) -> String;
@@ -34,7 +57,19 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         let db_name = cmd_task.get_db_name();
         match self.local_dbs.read().unwrap().1.get(&db_name) {
             Some(db) => {
-                db.send(cmd_task)
+                match db.send(cmd_task) {
+                    Ok(()) => Ok(()),
+                    Err(DBSendError::MissingKey) => {
+                        Ok(())
+                    }
+                    Err(DBSendError::SlotNotFound(cmd_task)) => {
+                        cmd_task.set_result(Ok(Resp::Error("moved".to_string().into_bytes())));
+                        Ok(())
+                    }
+                    Err(DBSendError::Backend(err)) => {
+                        Err(err)
+                    }
+                }
             },
             None => {
                 cmd_task.set_result(Ok(Resp::Error(format!("db not found: {}", db_name).into_bytes())));
@@ -51,9 +86,9 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         self.local_dbs.write().unwrap().1.clear()
     }
 
-    pub fn set_dbs(&self, db_map: HostDBMap) {
+    pub fn set_dbs(&self, db_map: HostDBMap) -> Result<(), DBError> {
         if self.local_dbs.read().unwrap().0 >= db_map.epoch {
-            return
+            return Err(DBError::OldEpoch)
         }
 
         let mut map = HashMap::new();
@@ -63,10 +98,11 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         }
 
         let mut local = self.local_dbs.write().unwrap();
-        if db_map.epoch == local.0 {
-            return
+        if db_map.epoch <= local.0 {
+            return Err(DBError::OldEpoch)
         }
         *local = (db_map.epoch, map);
+        Ok(())
     }
 }
 
@@ -101,11 +137,13 @@ impl<S: CmdTaskSender> Database<S> {
         self.name.clone()
     }
 
-    // TODO: use other error type
-    pub fn send(&self, cmd_task: S::Task) -> Result<(), BackendError> {
+    pub fn send(&self, cmd_task: S::Task) -> Result<(), DBSendError<S::Task>> {
         let key = match get_key(cmd_task.get_resp()) {
             Some(key) => key,
-            None => return Err(BackendError::Canceled),
+            None => {
+                cmd_task.set_result(Ok(Resp::Error("missing key".to_string().into_bytes())));
+                return Err(DBSendError::MissingKey)
+            },
         };
 
         let local_db = self.local_db.read().unwrap();
@@ -113,21 +151,53 @@ impl<S: CmdTaskSender> Database<S> {
             Some(addr) => {
                 match local_db.nodes.get(&addr) {
                     Some(sender) => {
-                        sender.send(cmd_task)
+                        sender.send(cmd_task).map_err(|err| DBSendError::Backend(err))
                     },
                     None => {
                         println!("Failed to get node");
-                        Err(BackendError::Canceled)
+                        Err(DBSendError::SlotNotFound(cmd_task))
                     },
                 }
             }
             None => {
                 println!("Failed to get slot");
-                Err(BackendError::Canceled)
+                Err(DBSendError::SlotNotFound(cmd_task))
             }
         }
     }
 }
+
+#[derive(Debug)]
+pub enum DBSendError<T: CmdTask> {
+    MissingKey,
+    SlotNotFound(T),
+    Backend(BackendError),
+}
+
+impl<T: CmdTask> fmt::Display for DBSendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl<T: CmdTask> Error for DBSendError<T> {
+    fn description(&self) -> &str {
+        match self {
+            DBSendError::MissingKey => "missing key",
+            DBSendError::SlotNotFound(_) => "slot not found",
+            DBSendError::Backend(_) => "backend error",
+        }
+    }
+
+    fn cause(&self) -> Option<&Error> {
+        match self {
+            DBSendError::MissingKey => None,
+            DBSendError::SlotNotFound(_) => None,
+            DBSendError::Backend(err) => Some(err),
+        }
+    }
+}
+
 
 const MIGRATING_TAG: &'static str = "MIGRATING";
 

@@ -23,6 +23,7 @@ pub enum CmdType {
     UmCtl,
 }
 
+#[derive(Debug)]
 pub struct Command {
     request: Resp
 }
@@ -103,10 +104,15 @@ pub struct CmdReplySender {
     reply_sender: AtomicOption<oneshot::Sender<CommandResult>>,
 }
 
+impl fmt::Debug for CmdReplySender {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "cmd: {:?}", self.cmd)
+    }
+}
+
 pub struct CmdReplyReceiver {
     reply_receiver: oneshot::Receiver<CommandResult>,
 }
-
 
 pub fn new_command_pair(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
     let (s, r) = oneshot::channel::<CommandResult>();

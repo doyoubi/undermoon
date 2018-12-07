@@ -20,7 +20,7 @@ pub trait ReplyHandler<T: CmdTask> : Send + 'static {
     fn handle_reply(&self, cmd_task: T, result: BackendResult);
 }
 
-pub trait CmdTask : Send + 'static {
+pub trait CmdTask : Send + 'static + fmt::Debug {
     fn get_resp(&self) -> &Resp;
     fn set_result(self, result: CommandResult);
 }

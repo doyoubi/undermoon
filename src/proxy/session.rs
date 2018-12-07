@@ -23,6 +23,7 @@ pub trait CmdCtxHandler {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx);
 }
 
+#[derive(Debug)]
 pub struct CmdCtx {
     db: sync::Arc<sync::RwLock<String>>,
     reply_sender: CmdReplySender,
