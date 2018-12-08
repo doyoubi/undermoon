@@ -99,7 +99,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
 
         let mut map = HashMap::new();
         for (db_name, slot_ranges) in db_map.db_map {
-            let db = Database::from_slot_map(db_name.clone(), slot_ranges);
+            let db = Database::from_slot_map(db_name.clone(), db_map.epoch, slot_ranges);
             map.insert(db_name, db);
         }
 
@@ -118,7 +118,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
 
         let mut map = HashMap::new();
         for (db_name, slot_ranges) in db_map.db_map {
-            let remote_db = RemoteDB::from_slot_map(db_name.clone(), slot_ranges);
+            let remote_db = RemoteDB::from_slot_map(db_name.clone(), db_map.epoch, slot_ranges);
             map.insert(db_name, remote_db);
         }
 
@@ -129,6 +129,14 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         *remote = (db_map.epoch, map);
         Ok(())
     }
+
+    pub fn gen_cluster_nodes(&self, dbname: String) -> String {
+        let local = self.local_dbs.read().unwrap().1.get(&dbname).
+            map_or("".to_string(), |db| db.gen_local_cluster_nodes());
+        let remote = self.remote_dbs.read().unwrap().1.get(&dbname).
+            map_or("".to_string(), |db| db.gen_remote_cluster_nodes());
+        format!("{}{}", local, remote)
+    }
 }
 
 struct LocalDB<S: CmdTaskSender> {
@@ -138,28 +146,27 @@ struct LocalDB<S: CmdTaskSender> {
 
 pub struct Database<S: CmdTaskSender> {
     name: String,
+    epoch: u64,
     local_db: LocalDB<S>,
+    slot_ranges: HashMap<String, Vec<SlotRange>>,
 }
 
 impl<S: CmdTaskSender> Database<S> {
-
-    pub fn from_slot_map(name: String, slot_map: HashMap<String, Vec<SlotRange>>) -> Database<S> {
+    pub fn from_slot_map(name: String, epoch: u64, slot_map: HashMap<String, Vec<SlotRange>>) -> Database<S> {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
             nodes.insert(addr.to_string(), S::new(addr.to_string()));
         }
         let local_db = LocalDB{
             nodes: nodes,
-            slot_map: SlotMap::from_ranges(slot_map),
+            slot_map: SlotMap::from_ranges(slot_map.clone()),
         };
         Database{
             name: name,
+            epoch: epoch,
             local_db: local_db,
+            slot_ranges: slot_map,
         }
-    }
-
-    pub fn get_name(&self) -> String {
-        self.name.clone()
     }
 
     pub fn send(&self, cmd_task: S::Task) -> Result<(), DBSendError<S::Task>> {
@@ -189,18 +196,26 @@ impl<S: CmdTaskSender> Database<S> {
             }
         }
     }
+
+    pub fn gen_local_cluster_nodes(&self) -> String {
+        gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges)
+    }
 }
 
 pub struct RemoteDB {
     name: String,
+    epoch: u64,
     slot_map: SlotMap,
+    slot_ranges: HashMap<String, Vec<SlotRange>>,
 }
 
 impl RemoteDB {
-    pub fn from_slot_map(name: String, slot_map: HashMap<String, Vec<SlotRange>>) -> RemoteDB {
+    pub fn from_slot_map(name: String, epoch: u64, slot_map: HashMap<String, Vec<SlotRange>>) -> RemoteDB {
         RemoteDB{
             name: name,
-            slot_map: SlotMap::from_ranges(slot_map),
+            epoch: epoch,
+            slot_map: SlotMap::from_ranges(slot_map.clone()),
+            slot_ranges: slot_map,
         }
     }
 
@@ -222,6 +237,10 @@ impl RemoteDB {
                 Err(DBSendError::SlotNotCovered)
             }
         }
+    }
+
+    pub fn gen_remote_cluster_nodes(&self) -> String {
+        gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges)
     }
 }
 
@@ -372,6 +391,29 @@ impl HostDBMap {
             tag: SlotRangeTag::None,
         })
     }
+}
+
+fn gen_cluster_nodes_helper(name: &String, epoch: u64, slot_ranges: &HashMap<String, Vec<SlotRange>>) -> String {
+    let mut cluster_nodes = String::from("");
+    let mut name_seg = format!("{:_<20}", name);
+    name_seg.truncate(20);
+    for (addr, ranges) in slot_ranges {
+        let mut addr_seg = format!("{:_<20}", addr);
+        let id = format!("{}{}", name_seg, addr_seg);
+        addr_seg.truncate(20);
+
+        let slot_range = ranges.iter().
+            map(|range| format!("{}-{}", range.start, range.end)).
+            collect::<Vec<String>>().join(" ");
+
+        let line = format!(
+            "{id} {addr} {flags} {master} {ping_sent} {pong_recv} {epoch} {link_state} {slot_range}\n",
+            id=id, addr=addr, flags="master", master="-", ping_sent=0, pong_recv=0, epoch=epoch,
+            link_state="connected", slot_range=slot_range,
+        );
+        cluster_nodes.extend(line.chars());
+    }
+    cluster_nodes
 }
 
 #[cfg(test)]

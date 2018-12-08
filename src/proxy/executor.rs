@@ -60,34 +60,54 @@ impl ForwardHandler {
         }
     }
 
-    fn handle_umctl(&self, cmd_ctx: CmdCtx) {
-        let key = cmd_ctx.get_cmd().get_key();
-        let sub_cmd = match key {
+    fn handle_cluster(&self, cmd_ctx: CmdCtx) {
+        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx) {
+            Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd),
+            None => return,
+        };
+
+        if caseless::canonical_caseless_match_str(&sub_cmd, "nodes") {
+            let cluster_nodes = self.db.gen_cluster_nodes(cmd_ctx.get_db_name());
+            cmd_ctx.set_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
+        } else {
+            cmd_ctx.set_result(Ok(Resp::Error(String::from("Unsupported sub command").into_bytes())));
+        }
+    }
+
+    fn get_sub_command(cmd_ctx: CmdCtx) -> Option<(CmdCtx, String)> {
+        match cmd_ctx.get_cmd().get_key() {
             None => {
                 cmd_ctx.set_result(Ok(Resp::Error(String::from("Missing sub command").into_bytes())));
-                return
+                None
             }
             Some(ref k) => {
                 match str::from_utf8(k) {
-                    Ok(sub_cmd) => sub_cmd,
+                    Ok(sub_cmd) => Some((cmd_ctx, sub_cmd.to_string())),
                     Err(_) => {
                         cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
-                        return
+                        None
                     },
                 }
             },
+        }
+    }
+
+    fn handle_umctl(&self, cmd_ctx: CmdCtx) {
+        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx) {
+            Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd),
+            None => return,
         };
 
-        if caseless::canonical_caseless_match_str(sub_cmd, "listdb") {
+        if caseless::canonical_caseless_match_str(&sub_cmd, "listdb") {
             let dbs = self.db.get_dbs();
             let resps = dbs.into_iter().map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes()))).collect();
             cmd_ctx.set_result(Ok(Resp::Arr(Array::Arr(resps))));
-        } else if caseless::canonical_caseless_match_str(sub_cmd, "cleardb") {
+        } else if caseless::canonical_caseless_match_str(&sub_cmd, "cleardb") {
             self.db.clear();
             cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
-        } else if caseless::canonical_caseless_match_str(sub_cmd, "setdb") {
+        } else if caseless::canonical_caseless_match_str(&sub_cmd, "setdb") {
             self.handle_umctl_setdb(cmd_ctx);
-        } else if caseless::canonical_caseless_match_str(sub_cmd, "setpeer") {
+        } else if caseless::canonical_caseless_match_str(&sub_cmd, "setpeer") {
             self.handle_umctl_setpeer(cmd_ctx);
         } else {
             cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
@@ -165,6 +185,9 @@ impl CmdCtxHandler for ForwardHandler {
             }
             CmdType::UmCtl => {
                 self.handle_umctl(cmd_ctx)
+            }
+            CmdType::Cluster => {
+                self.handle_cluster(cmd_ctx)
             }
         };
     }

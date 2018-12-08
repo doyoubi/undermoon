@@ -54,6 +54,8 @@ If node B fails, the coordinators should create a new one and tell node A to cha
 - nmctl listdb
 - nmctl cleardb
 - ping
+- cluster nodes
+- cluster slots
 ### nmctl setdb
 
 - nmctl setdb epoch flags [dbname1 ip:port slot_range] ...

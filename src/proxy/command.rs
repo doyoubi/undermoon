@@ -21,6 +21,7 @@ pub enum CmdType {
     Others,
     Invalid,
     UmCtl,
+    Cluster,
 }
 
 #[derive(Debug)]
@@ -40,42 +41,45 @@ impl Command {
     }
 
     pub fn get_type(&self) -> CmdType {
-        match self.request {
-            Resp::Arr(Array::Arr(ref resps)) => {
-                match resps.first() {
-                    Some(ref resp) => {
-                        match resp {
-                            Resp::Bulk(BulkStr::Str(ref s)) => {
-                                match str::from_utf8(s) {
-                                    Ok(cmd_name) => {
-                                        if caseless::canonical_caseless_match_str(cmd_name, "PING") {
-                                            CmdType::Ping
-                                        } else if caseless::canonical_caseless_match_str(cmd_name, "INFO") {
-                                            CmdType::Info
-                                        } else if caseless::canonical_caseless_match_str(cmd_name, "Auth") {
-                                            CmdType::Auth
-                                        } else if caseless::canonical_caseless_match_str(cmd_name, "Quit") {
-                                            CmdType::Quit
-                                        } else if caseless::canonical_caseless_match_str(cmd_name, "Echo") {
-                                            CmdType::Echo
-                                        } else if caseless::canonical_caseless_match_str(cmd_name, "Select") {
-                                            CmdType::Select
-                                        } else if caseless::canonical_caseless_match_str(cmd_name, "UmCtl") {
-                                            CmdType::UmCtl
-                                        } else {
-                                            CmdType::Others
-                                        }
-                                    },
-                                    Err(_) => CmdType::Invalid,
-                                }
-                            },
-                            _ => CmdType::Invalid,
-                        }
-                    },
-                    None => CmdType::Invalid,
-                }
-            },
-            _ => CmdType::Invalid,
+        let resps = match self.request {
+            Resp::Arr(Array::Arr(ref resps)) => resps,
+            _ => return CmdType::Invalid,
+        };
+
+        let first_resp = resps.first();
+        let resp = match first_resp {
+            Some(ref resp) => resp,
+            None => return CmdType::Invalid,
+        };
+
+        let first = match resp {
+            Resp::Bulk(BulkStr::Str(ref first)) => first,
+            _ => return CmdType::Invalid,
+        };
+
+        let cmd_name = match str::from_utf8(first) {
+            Ok(cmd_name) => cmd_name,
+            Err(_) => return CmdType::Invalid,
+        };
+
+        if caseless::canonical_caseless_match_str(cmd_name, "PING") {
+            CmdType::Ping
+        } else if caseless::canonical_caseless_match_str(cmd_name, "INFO") {
+            CmdType::Info
+        } else if caseless::canonical_caseless_match_str(cmd_name, "Auth") {
+            CmdType::Auth
+        } else if caseless::canonical_caseless_match_str(cmd_name, "Quit") {
+            CmdType::Quit
+        } else if caseless::canonical_caseless_match_str(cmd_name, "Echo") {
+            CmdType::Echo
+        } else if caseless::canonical_caseless_match_str(cmd_name, "Select") {
+            CmdType::Select
+        } else if caseless::canonical_caseless_match_str(cmd_name, "UmCtl") {
+            CmdType::UmCtl
+        } else if caseless::canonical_caseless_match_str(cmd_name, "Cluster") {
+            CmdType::Cluster
+        } else {
+            CmdType::Others
         }
     }
 

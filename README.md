@@ -12,6 +12,9 @@ Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol.
 127.0.0.1:5299> umctl setpeer 1 noflags mydb 127.0.0.1:7000 8001-16383
 127.0.0.1:5299> auth mydb
 OK
+127.0.0.1:5299> cluster nodes
+mydb________________127.0.0.1:6379______ 127.0.0.1:6379 master - 0 0 1 connected 0-8000
+mydb________________127.0.0.1:7000______ 127.0.0.1:7000 master - 0 0 1 connected 8001-16383
 127.0.0.1:5299> get a
 (error) MOVED 15495 127.0.0.1:7000
 127.0.0.1:5299> set b 1
