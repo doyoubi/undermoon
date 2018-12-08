@@ -120,8 +120,14 @@ impl ForwardHandler {
                 return
             }
         };
-        self.db.set_dbs(db_map);
-        cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+        match self.db.set_peers(db_map) {
+            Ok(()) => {
+                cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+            }
+            Err(e) => {
+                cmd_ctx.set_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+            }
+        }
     }
 }
 

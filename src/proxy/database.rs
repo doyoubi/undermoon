@@ -12,7 +12,11 @@ use super::backend::{BackendError, CmdTaskSender};
 use super::slot::{SlotMap, SlotRange, SlotRangeTag};
 use super::command::get_key;
 
-pub const DEFAULT_DB : &'static str = "admin";
+pub const DEFAULT_DB: &'static str = "admin";
+
+fn gen_moved(slot: usize, addr: String) -> String {
+    format!("MOVED {} {}", slot, addr)
+}
 
 #[derive(Debug)]
 pub enum DBError {
@@ -43,38 +47,40 @@ pub trait DBTag {
 pub struct DatabaseMap<S: CmdTaskSender> where S::Task: DBTag {
     // (epoch, meta data)
     local_dbs: sync::RwLock<(u64, HashMap<String, Database<S>>)>,
+    remote_dbs: sync::RwLock<(u64, HashMap<String, RemoteDB>)>,
 }
 
 impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     pub fn new() -> DatabaseMap<S> {
-        let db_map = HashMap::new();
         Self{
-            local_dbs: sync::RwLock::new((0, db_map)),
+            local_dbs: sync::RwLock::new((0, HashMap::new())),
+            remote_dbs: sync::RwLock::new((0, HashMap::new())),
         }
     }
 
-    pub fn send(&self, cmd_task: S::Task) -> Result<(), BackendError> {
+    pub fn send(&self, cmd_task: S::Task) -> Result<(), DBSendError<S::Task>> {
         let db_name = cmd_task.get_db_name();
-        match self.local_dbs.read().unwrap().1.get(&db_name) {
+        let (cmd_task, db_exists) = match self.local_dbs.read().unwrap().1.get(&db_name) {
             Some(db) => {
                 match db.send(cmd_task) {
-                    Ok(()) => Ok(()),
-                    Err(DBSendError::MissingKey) => {
-                        Ok(())
-                    }
-                    Err(DBSendError::SlotNotFound(cmd_task)) => {
-                        cmd_task.set_result(Ok(Resp::Error("moved".to_string().into_bytes())));
-                        Ok(())
-                    }
-                    Err(DBSendError::Backend(err)) => {
-                        Err(err)
-                    }
+                    Err(DBSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
+                    others => return others,
                 }
             },
+            None => (cmd_task, false),
+        };
+
+        match self.remote_dbs.read().unwrap().1.get(&db_name) {
+            Some(remote_db) => remote_db.send_remote(cmd_task),
             None => {
-                cmd_task.set_result(Ok(Resp::Error(format!("db not found: {}", db_name).into_bytes())));
-                Ok(())
-            },
+                if db_exists {
+                    cmd_task.set_result(Ok(Resp::Error(format!("slot not found: {}", db_name.clone()).into_bytes())));
+                    Err(DBSendError::SlotNotCovered)
+                } else {
+                    cmd_task.set_result(Ok(Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes())));
+                    Err(DBSendError::DBNotFound(db_name))
+                }
+            }
         }
     }
 
@@ -104,6 +110,25 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         *local = (db_map.epoch, map);
         Ok(())
     }
+
+    pub fn set_peers(&self, db_map: HostDBMap) -> Result<(), DBError> {
+        if self.remote_dbs.read().unwrap().0 >= db_map.epoch {
+            return Err(DBError::OldEpoch)
+        }
+
+        let mut map = HashMap::new();
+        for (db_name, slot_ranges) in db_map.db_map {
+            let remote_db = RemoteDB::from_slot_map(db_name.clone(), slot_ranges);
+            map.insert(db_name, remote_db);
+        }
+
+        let mut remote = self.remote_dbs.write().unwrap();
+        if db_map.epoch <= remote.0 {
+            return Err(DBError::OldEpoch)
+        }
+        *remote = (db_map.epoch, map);
+        Ok(())
+    }
 }
 
 struct LocalDB<S: CmdTaskSender> {
@@ -113,7 +138,7 @@ struct LocalDB<S: CmdTaskSender> {
 
 pub struct Database<S: CmdTaskSender> {
     name: String,
-    local_db: sync::RwLock<LocalDB<S>>,
+    local_db: LocalDB<S>,
 }
 
 impl<S: CmdTaskSender> Database<S> {
@@ -129,7 +154,7 @@ impl<S: CmdTaskSender> Database<S> {
         };
         Database{
             name: name,
-            local_db: sync::RwLock::new(local_db),
+            local_db: local_db,
         }
     }
 
@@ -146,10 +171,9 @@ impl<S: CmdTaskSender> Database<S> {
             },
         };
 
-        let local_db = self.local_db.read().unwrap();
-        match local_db.slot_map.get_by_key(&key) {
+        match self.local_db.slot_map.get_by_key(&key) {
             Some(addr) => {
-                match local_db.nodes.get(&addr) {
+                match self.local_db.nodes.get(&addr) {
                     Some(sender) => {
                         sender.send(cmd_task).map_err(|err| DBSendError::Backend(err))
                     },
@@ -167,10 +191,46 @@ impl<S: CmdTaskSender> Database<S> {
     }
 }
 
+pub struct RemoteDB {
+    name: String,
+    slot_map: SlotMap,
+}
+
+impl RemoteDB {
+    pub fn from_slot_map(name: String, slot_map: HashMap<String, Vec<SlotRange>>) -> RemoteDB {
+        RemoteDB{
+            name: name,
+            slot_map: SlotMap::from_ranges(slot_map),
+        }
+    }
+
+    pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), DBSendError<T>> {
+        let key = match get_key(cmd_task.get_resp()) {
+            Some(key) => key,
+            None => {
+                cmd_task.set_result(Ok(Resp::Error("missing key".to_string().into_bytes())));
+                return Err(DBSendError::MissingKey)
+            },
+        };
+        match self.slot_map.get_by_key(&key) {
+            Some(addr) => {
+                cmd_task.set_result(Ok(Resp::Error(gen_moved(self.slot_map.get_slot(&key), addr).into_bytes())));
+                Ok(())
+            }
+            None => {
+                cmd_task.set_result(Ok(Resp::Error(format!("slot not covered {:?}", key).into_bytes())));
+                Err(DBSendError::SlotNotCovered)
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum DBSendError<T: CmdTask> {
     MissingKey,
+    DBNotFound(String),
     SlotNotFound(T),
+    SlotNotCovered,
     Backend(BackendError),
 }
 
@@ -184,16 +244,20 @@ impl<T: CmdTask> Error for DBSendError<T> {
     fn description(&self) -> &str {
         match self {
             DBSendError::MissingKey => "missing key",
+            DBSendError::DBNotFound(_) => "db not found",
             DBSendError::SlotNotFound(_) => "slot not found",
             DBSendError::Backend(_) => "backend error",
+            DBSendError::SlotNotCovered => "slot not covered",
         }
     }
 
     fn cause(&self) -> Option<&Error> {
         match self {
             DBSendError::MissingKey => None,
+            DBSendError::DBNotFound(_) => None,
             DBSendError::SlotNotFound(_) => None,
             DBSendError::Backend(err) => Some(err),
+            DBSendError::SlotNotCovered => None,
         }
     }
 }

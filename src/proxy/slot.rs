@@ -44,8 +44,12 @@ impl SlotMap {
         Self::new(map)
     }
 
+    pub fn get_slot(&self, key: &[u8]) -> usize {
+        State::<XMODEM>::calculate(key) as usize % SLOT_NUM
+    }
+
     pub fn get_by_key(&self, key: &[u8]) -> Option<String> {
-        let slot = State::<XMODEM>::calculate(key) as usize % SLOT_NUM;
+        let slot = self.get_slot(key);
         self.get(slot)
     }
 
