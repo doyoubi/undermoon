@@ -26,11 +26,11 @@ impl SlotMap {
         for (addr, slot_ranges) in slot_map {
             let mut slots = Vec::new();
             for range in slot_ranges {
+                if range.end < range.start {
+                    continue
+                }
                 let mut slot = range.start;
-                while slot < range.end {
-                    if slot >= SLOT_NUM {
-                        continue;
-                    }
+                while slot < range.end && slot < SLOT_NUM {
                     slots.push(slot);
                     slot += 1;
                 }
@@ -85,5 +85,27 @@ impl SlotMapData {
     pub fn get(&self, slot: usize) -> Option<String> {
         let addr_index = self.slot_arr.get(slot).and_then(|opt| opt.clone())?;
         self.addrs.get(addr_index).and_then(|s| Some(s.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slot_map() {
+        let mut range_map = HashMap::new();
+        let backend = "127.0.0.1:6379".to_string();
+        range_map.insert(backend.clone(), vec![SlotRange{
+            start: 0,
+            end: SLOT_NUM,
+            tag: SlotRangeTag::None,
+        }]);
+
+        let slot_map = SlotMap::from_ranges(range_map);
+        for slot in 0..SLOT_NUM {
+            let node = slot_map.get(slot);
+            assert_eq!(node, Some(backend.clone()));
+        }
     }
 }

@@ -4,16 +4,17 @@ Rules:
 - Simple
 - Stateless coordinator
 - Communicate by pushing meta data to server-side proxy
-- Coordinator don't need to communicate with each other
-- Rely on a global epoch
+- Coordinator don't need to communicate with each others
+- Rely on epoch for each host, cluster
 - No replica currently
 
 # Meta Data
 
-- Global epoch
-- Coordinators
-- Clusters { ip:port => slots }
-- Machines { cluster => ip:port => slots }
+- Cluster epoch { cluster => epoch }
+- Cluster { ip:port => slots }
+- Machine epoch { machine => epoch }
+- Machine cluster { cluster => ip:port => slots }
+- Coordinator
 - Failure Count { ip => coordinator ips }
 
 # Operations
@@ -59,6 +60,7 @@ If node B fails, the coordinators should create a new one and tell node A to cha
 ### nmctl setdb
 
 - nmctl setdb epoch flags [dbname1 ip:port slot_range] ...
+- `epoch` is the epoch of host
 - `flags` is reserved. Currently it's just NOFLAG
 - `slot_range` can be
     - 0-1000
@@ -67,9 +69,18 @@ If node B fails, the coordinators should create a new one and tell node A to cha
 ### nmctl setpeer
 
 - nmctl setpeer epoch flags [dbname1 ip:port slot_range] ...
+- `epoch` is the epoch of host
 - `flags` is reserved. Currently it's just NOFLAG
 - `slot_range` can be in the form of 0-1000
 
 # Epoch
 
 - Zero epoch is used to tag uninitialized state.
+
+# Coordinator
+The coordinators keep getting the meta data from brokers and push the meta data to the corresponding server-side proxies.
+
+## Create Cluster
+- get the meta data about clusters and machines
+- find where to deploy new redis
+- write that new meta data to brokers with transaction

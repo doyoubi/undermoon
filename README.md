@@ -2,7 +2,7 @@
 Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol.
 
 # Architecture
-![architecture](doc/architecture.svg)
+![architecture](docs/architecture.svg)
 
 # Initialize Server-side Proxy
 ```
