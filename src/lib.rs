@@ -6,3 +6,4 @@ extern crate caseless;
 
 pub mod protocol;
 pub mod proxy;
+pub mod coordinator;

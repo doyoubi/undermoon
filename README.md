@@ -27,4 +27,6 @@ OK
 - Slot map and cluster map (done)
 - Implement AUTH command to select database (done)
 - Implement meta data manipulation api (done)
-- Implement coordinator
+- Implement coordinator (in progress)
+- Implement Redis Replication Protocol
+- Support slot migration via replication
