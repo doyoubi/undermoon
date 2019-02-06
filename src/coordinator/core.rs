@@ -1,99 +1,154 @@
 use std::io;
 use std::fmt;
 use std::error::Error;
-use futures::{future, Future};
+use std::sync::Arc;
+use futures::{future, Future, Stream};
+use super::cluster::{Address, Host, Node, FullMetaData};
+
+pub trait ProxiesRetriever: Sync + Send + 'static {
+    fn retrieve_proxies(&self) -> Box<dyn Stream<Item = Address, Error = CoordinateError> + Send>;
+}
 
 pub struct ProxyFailure {
-    proxy_address: String,
+    proxy_address: Address,
     report_id: String,
 }
 
-pub trait FailureChecker {
-    fn check(&self, address: String) -> Box<dyn Future<Item = Option<ProxyFailure>, Error = CheckError> + Send>;
+type NodeFailure = Node;
+
+pub trait FailureChecker: Sync + Send + 'static {
+    fn check(&self, address: Address) -> Box<dyn Future<Item = Option<ProxyFailure>, Error = CoordinateError> + Send>;
 }
 
-pub trait FailureReporter {
-    fn report(&self, failure: ProxyFailure) -> Box<dyn Future<Item = Option<ProxyFailure>, Error = ReportError> + Send>;
+pub trait FailureReporter: Sync + Send + 'static {
+    fn report(&self, failure: ProxyFailure) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+}
+
+pub trait FailureDetector {
+    type Retriever: ProxiesRetriever;
+    type Checker: FailureChecker;
+    type Reporter: FailureReporter;
+
+    fn new(receiver: Self::Retriever, checker: Self::Checker, reporter: Self::Reporter) -> Self;
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
+}
+
+pub struct SeqFailureDetector<Retriever: ProxiesRetriever, Checker: FailureChecker, Reporter: FailureReporter> {
+    retriever: Retriever,
+    checker: Arc<Checker>,
+    reporter: Arc<Reporter>,
+}
+
+impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
+    for SeqFailureDetector<T, C, P> {
+
+    type Retriever = T;
+    type Checker = C;
+    type Reporter = P;
+
+    fn new(retriever: T, checker: C, reporter: P) -> Self {
+        Self{
+            retriever,
+            checker: Arc::new(checker),
+            reporter: Arc::new(reporter),
+        }
+    }
+
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+        let checker = self.checker.clone();
+        let reporter = self.reporter.clone();
+        Box::new(
+            self.retriever.retrieve_proxies()
+                .and_then(move |address| checker.check(address))
+                .skip_while(|failure| future::ok(failure.is_none())).map(Option::unwrap)
+                .and_then(move |failure| reporter.report(failure))
+        )
+    }
+}
+
+pub trait ProxyFailureRetriever: Sync + Send + 'static {
+    fn retrieve_proxy_failures(&self) -> Box<dyn Stream<Item = ProxyFailure, Error = CoordinateError> + Send>;
+}
+
+pub trait NodeFailureRetriever: Sync + Send + 'static {
+    fn retrieve_node_failures(&self, proxy_failure: ProxyFailure) -> Box<dyn Stream<Item = NodeFailure, Error = CoordinateError> + Send>;
+}
+
+pub trait NodeFailureHandler: Sync + Send + 'static {
+    fn handle_node_failure(&self, failure_node: NodeFailure) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
 }
 
 pub trait FailureHandler {
-    fn handle_failure(&self, failure: ProxyFailure) -> Box<dyn Future<Item = (), Error = FailureHandlerError> + Send>;
+    type PFRetriever: ProxyFailureRetriever;
+    type NFRetriever: NodeFailureRetriever;
+    type Handler: NodeFailureHandler;
+
+    fn new(proxy_failure_retriever: Self::PFRetriever, node_failure_retriever: Self::NFRetriever, handler: Self::Handler) -> Self;
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
 }
 
-#[derive(Debug)]
-pub enum ReportError {
-    Io(io::Error),
-    Rejected,
+pub struct SeqFailureHandler<PFRetriever: ProxyFailureRetriever, NFRetriever: NodeFailureRetriever, Handler: NodeFailureHandler> {
+    proxy_failure_retriever: PFRetriever,
+    node_failure_retriever: Arc<NFRetriever>,
+    handler: Arc<Handler>,
 }
 
-impl fmt::Display for ReportError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl<P: ProxyFailureRetriever, N: NodeFailureRetriever, H: NodeFailureHandler> FailureHandler
+for SeqFailureHandler<P, N, H> {
 
-impl Error for ReportError {
-    fn description(&self) -> &str {
-        "report error"
-    }
+    type PFRetriever = P;
+    type NFRetriever = N;
+    type Handler = H;
 
-    fn cause(&self) -> Option<&Error> {
-        match self {
-            ReportError::Io(err) => Some(err),
-            _ => None,
+    fn new(proxy_failure_retriever: P, node_failure_retriever: N, handler: H) -> Self {
+        Self{
+            proxy_failure_retriever,
+            node_failure_retriever: Arc::new(node_failure_retriever),
+            handler: Arc::new(handler),
         }
     }
-}
 
-#[derive(Debug)]
-pub enum CheckError {
-    Io(io::Error),
-    InvalidReply,
-}
-
-impl fmt::Display for CheckError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl Error for CheckError {
-    fn description(&self) -> &str {
-        "check error"
-    }
-
-    fn cause(&self) -> Option<&Error> {
-        match self {
-            CheckError::Io(err) => Some(err),
-            _ => None,
-        }
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+        let node_failure_retriever = self.node_failure_retriever.clone();
+        let handler = self.handler.clone();
+        Box::new(
+            self.proxy_failure_retriever.retrieve_proxy_failures()
+                .and_then(move |proxy_failure| {
+                    let cloned_handler = handler.clone();
+                    node_failure_retriever.retrieve_node_failures(proxy_failure)
+                        .for_each(move |node_failure| {
+                            cloned_handler.handle_node_failure(node_failure)
+                        })
+                })
+        )
     }
 }
 
 #[derive(Debug)]
-pub enum FailureHandlerError {
+pub enum CoordinateError {
     Io(io::Error),
     InvalidReply,
 }
 
-impl fmt::Display for FailureHandlerError {
+impl fmt::Display for CoordinateError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl Error for FailureHandlerError {
+impl Error for CoordinateError {
     fn description(&self) -> &str {
-        "failure handler error"
+        "coordinate error"
     }
 
     fn cause(&self) -> Option<&Error> {
         match self {
-            FailureHandlerError::Io(err) => Some(err),
+            CoordinateError::Io(err) => Some(err),
             _ => None,
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -102,7 +157,7 @@ mod tests {
     struct DummyChecker {}
 
     impl FailureChecker for DummyChecker {
-        fn check(&self, address: String) -> Box<dyn Future<Item = Option<ProxyFailure>, Error = CheckError> + Send> {
+        fn check(&self, address: String) -> Box<dyn Future<Item = Option<ProxyFailure>, Error = CoordinateError> + Send> {
             Box::new(future::ok(None))
         }
     }

@@ -9,6 +9,7 @@ futures = "0.1.23"
 atomic-option = "0.1"
 crc16 = "0.4.0"
 caseless = "0.2.1"
+arc-swap = "0.3.7"
 
 [profile.release]
 debug = true
