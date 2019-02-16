@@ -1,6 +1,12 @@
 use std::io;
 use super::resp::{Resp, BulkStr, BinSafeStr, Array};
 
+pub fn command_to_buf(buf: &mut Vec<u8>, command: Vec<BinSafeStr>) {
+    let arr: Vec<Resp> = command.into_iter().map(|s| Resp::Bulk(BulkStr::Str(s))).collect();
+    let resp = Resp::Arr(Array::Arr(arr));
+    resp_to_buf(buf, &resp);
+}
+
 pub fn resp_to_buf(buf: &mut Vec<u8>, resp: &Resp) {
     encode_resp(buf, resp).unwrap();
 }

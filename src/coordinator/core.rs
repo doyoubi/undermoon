@@ -3,6 +3,7 @@ use std::fmt;
 use std::error::Error;
 use std::sync::Arc;
 use futures::{future, Future, Stream};
+use super::broker::{ElectionBrokerError, MetaDataBrokerError};
 use super::cluster::{Address, Host, Node, FullMetaData};
 
 pub trait ProxiesRetriever: Sync + Send + 'static {
@@ -17,11 +18,11 @@ pub struct ProxyFailure {
 type NodeFailure = Node;
 
 pub trait FailureChecker: Sync + Send + 'static {
-    fn check(&self, address: Address) -> Box<dyn Future<Item = Option<ProxyFailure>, Error = CoordinateError> + Send>;
+    fn check(&self, address: Address) -> Box<dyn Future<Item = Option<Address>, Error = CoordinateError> + Send>;
 }
 
 pub trait FailureReporter: Sync + Send + 'static {
-    fn report(&self, failure: ProxyFailure) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+    fn report(&self, address: Address) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
 }
 
 pub trait FailureDetector {
@@ -60,8 +61,8 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
         Box::new(
             self.retriever.retrieve_proxies()
                 .and_then(move |address| checker.check(address))
-                .skip_while(|failure| future::ok(failure.is_none())).map(Option::unwrap)
-                .and_then(move |failure| reporter.report(failure))
+                .skip_while(|address| future::ok(address.is_none())).map(Option::unwrap)
+                .and_then(move |address| reporter.report(address))
         )
     }
 }
@@ -127,6 +128,8 @@ for SeqFailureHandler<P, N, H> {
 #[derive(Debug)]
 pub enum CoordinateError {
     Io(io::Error),
+    Election(ElectionBrokerError),
+    MetaData(MetaDataBrokerError),
     InvalidReply,
 }
 
@@ -157,7 +160,7 @@ mod tests {
     struct DummyChecker {}
 
     impl FailureChecker for DummyChecker {
-        fn check(&self, address: String) -> Box<dyn Future<Item = Option<ProxyFailure>, Error = CoordinateError> + Send> {
+        fn check(&self, address: String) -> Box<dyn Future<Item = Option<Address>, Error = CoordinateError> + Send> {
             Box::new(future::ok(None))
         }
     }

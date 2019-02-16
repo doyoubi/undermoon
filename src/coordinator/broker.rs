@@ -1,14 +1,16 @@
 use std::io;
 use std::fmt;
 use std::error::Error;
-use futures::Future;
+use futures::{Future, Stream};
 use super::cluster::{Cluster, Node, Host, Address};
 
 
-pub trait MetaDataBroker {
-    fn get_cluster_names(&self) -> Box<dyn Future<Item = Vec<String>, Error = MetaDataBrokerError> + Send>;
-    fn get_cluster(&self, name: String) -> Box<dyn Future<Item = Cluster, Error = MetaDataBrokerError> + Send>;
-    fn get_hosts(&self, name: String) -> Box<dyn Future<Item = Vec<Host>, Error = MetaDataBrokerError> + Send>;
+pub trait MetaDataBroker: Sync + Send + 'static {
+    fn get_cluster_names(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
+    fn get_cluster(&self, name: String) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send>;
+    fn get_host_addresses(&self) -> Box<dyn Stream<Item = Address, Error = MetaDataBrokerError> + Send>;
+    fn get_host(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send>;
+    fn add_failure(&self, address: String, reporter_id: String) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send>;
 }
 
 // Maybe we would want to support other database supporting redis protocol.
