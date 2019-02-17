@@ -128,9 +128,8 @@ mod tests {
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
         let detector = SeqFailureDetector::new(retriever, checker, reporter);
         detector.run().into_future().wait();
-        let failed_num = broker.reported_failures.lock().unwrap().len();
-        assert_eq!(1, failed_num);
-        let failed_node = broker.reported_failures.lock().unwrap()[0];
-        assert_eq1(NODE2, failed_node);
+        let failed_nodes = broker.reported_failures.lock().unwrap().clone();
+        assert_eq!(1, failed_nodes.len());
+        assert_eq!(NODE2, failed_nodes[0]);
     }
 }
