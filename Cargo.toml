@@ -10,6 +10,10 @@ atomic-option = "0.1"
 crc16 = "0.4.0"
 caseless = "0.2.1"
 arc-swap = "0.3.7"
+reqwest = "0.9.9"
+serde = "1.0"
+serde_derive = "1.0.88"
+serde_json = "1.0"
 
 [profile.release]
 debug = true

@@ -2,7 +2,7 @@ use std::io;
 use std::fmt;
 use std::error::Error;
 use futures::{future, Future};
-use super::cluster::{Cluster, Host};
+use ::common::cluster::{Cluster, Host};
 
 pub struct DBMetaSender {}
 

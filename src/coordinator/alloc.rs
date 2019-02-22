@@ -2,15 +2,15 @@ use std::io;
 use std::fmt;
 use std::error::Error;
 use futures::Future;
-use super::cluster::{Node, Address};
+use ::common::cluster::Node;
 use super::broker::{ElectionBroker, ElectionBrokerError};
 
 pub trait NodeAllocator {
-    fn allocate(&self, cluster_name: String) -> Box<dyn Future<Item = Address, Error = AllocateError> + Send>;
+    fn allocate(&self, cluster_name: String) -> Box<dyn Future<Item = String, Error = AllocateError> + Send>;
 }
 
 impl<T> ElectionBroker for T where T: NodeAllocator {
-    fn elect_node(&self, failed_node: Node) -> Box<dyn Future<Item = Address , Error = ElectionBrokerError> + Send> {
+    fn elect_node(&self, failed_node: Node) -> Box<dyn Future<Item = String , Error = ElectionBrokerError> + Send> {
         let fut = self.allocate(failed_node.get_cluster_name().clone())
             .map_err(|e| {
                 match e {

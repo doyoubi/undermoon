@@ -1,20 +1,8 @@
 use std::collections::HashMap;
 use crc16::{State, XMODEM};
+use ::common::cluster::{SlotRangeTag, SlotRange};
 
 pub const SLOT_NUM: usize = 16384;
-
-#[derive(Debug, Clone)]
-pub enum SlotRangeTag {
-    Migrating(String),
-    None,
-}
-
-#[derive(Debug, Clone)]
-pub struct SlotRange {
-    pub start: usize,
-    pub end: usize,
-    pub tag: SlotRangeTag,
-}
 
 pub struct SlotMap {
     data: SlotMapData,

@@ -1,7 +1,8 @@
 use futures::{Future, Stream, future, stream};
 use protocol::{RedisClient, SimpleRedisClient, ClientError};
+use ::common::cluster::{Host, Node, Cluster};
+use super::cluster::FullMetaData;
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use super::cluster::{Address, Host, Node, FullMetaData, Cluster};
 use super::core::{ProxyFailure, ProxiesRetriever, FailureChecker, FailureReporter, CoordinateError, SeqFailureDetector, FailureDetector};
 
 pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
@@ -15,7 +16,7 @@ impl<B: MetaDataBroker> BrokerProxiesRetriever<B> {
 }
 
 impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
-    fn retrieve_proxies(&self) -> Box<dyn Stream<Item = Address, Error = CoordinateError> + Send> {
+    fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send> {
         Box::new(
             self.meta_data_broker.get_host_addresses().map_err(|e| CoordinateError::MetaData(e))
         )
@@ -33,7 +34,7 @@ impl<C: RedisClient + Sync + Send + 'static> PingFailureDetector<C> {
 }
 
 impl<C: RedisClient + Sync + Send + 'static> FailureChecker for PingFailureDetector<C> {
-    fn check(&self, address: Address) -> Box<dyn Future<Item = Option<Address>, Error = CoordinateError> + Send> {
+    fn check(&self, address: String) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send> {
         let ping_command = vec!["ping".to_string().into_bytes()];
         Box::new(
             self.client.execute(address.clone(), ping_command).then(move |result| {
@@ -58,7 +59,7 @@ impl<B: MetaDataBroker> BrokerFailureReporter<B> {
 }
 
 impl<B: MetaDataBroker> FailureReporter for BrokerFailureReporter<B> {
-    fn report(&self, address: Address) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+    fn report(&self, address: String) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
         Box::new(
             self.meta_data_broker.add_failure(address, self.reporter_id.clone())
                 .map_err(|e| CoordinateError::MetaData(e))
@@ -105,7 +106,7 @@ mod tests {
         fn get_cluster(&self, name: String) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send> {
             Box::new(future::ok(None))
         }
-        fn get_host_addresses(&self) -> Box<dyn Stream<Item = Address, Error = MetaDataBrokerError> + Send> {
+        fn get_host_addresses(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
             Box::new(stream::iter(vec![
                 Ok::<String, MetaDataBrokerError>(NODE1.to_string()),
                 Ok::<String, MetaDataBrokerError>(NODE2.to_string()),

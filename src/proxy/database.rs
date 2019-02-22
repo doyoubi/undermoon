@@ -7,9 +7,10 @@ use std::error::Error;
 use std::fmt;
 use caseless;
 use protocol::{Resp, Array, BulkStr};
+use ::common::cluster::{SlotRange, SlotRangeTag};
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender};
-use super::slot::{SlotMap, SlotRange, SlotRangeTag};
+use super::slot::SlotMap;
 use super::command::get_key;
 
 pub const DEFAULT_DB: &'static str = "admin";

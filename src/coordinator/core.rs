@@ -3,26 +3,27 @@ use std::fmt;
 use std::error::Error;
 use std::sync::Arc;
 use futures::{future, Future, Stream};
+use ::common::cluster::{Host, Node};
+use super::cluster::FullMetaData;
 use super::broker::{ElectionBrokerError, MetaDataBrokerError};
-use super::cluster::{Address, Host, Node, FullMetaData};
 
 pub trait ProxiesRetriever: Sync + Send + 'static {
-    fn retrieve_proxies(&self) -> Box<dyn Stream<Item = Address, Error = CoordinateError> + Send>;
+    fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
 }
 
 pub struct ProxyFailure {
-    proxy_address: Address,
+    proxy_address: String,
     report_id: String,
 }
 
 type NodeFailure = Node;
 
 pub trait FailureChecker: Sync + Send + 'static {
-    fn check(&self, address: Address) -> Box<dyn Future<Item = Option<Address>, Error = CoordinateError> + Send>;
+    fn check(&self, address: String) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send>;
 }
 
 pub trait FailureReporter: Sync + Send + 'static {
-    fn report(&self, address: Address) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+    fn report(&self, address: String) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
 }
 
 pub trait FailureDetector {
@@ -160,7 +161,7 @@ mod tests {
     struct DummyChecker {}
 
     impl FailureChecker for DummyChecker {
-        fn check(&self, address: String) -> Box<dyn Future<Item = Option<Address>, Error = CoordinateError> + Send> {
+        fn check(&self, address: String) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send> {
             Box::new(future::ok(None))
         }
     }

@@ -2,20 +2,20 @@ use std::io;
 use std::fmt;
 use std::error::Error;
 use futures::{Future, Stream};
-use super::cluster::{Cluster, Node, Host, Address};
+use ::common::cluster::{Cluster, Node, Host};
 
 
 pub trait MetaDataBroker: Sync + Send + 'static {
     fn get_cluster_names(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
     fn get_cluster(&self, name: String) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send>;
-    fn get_host_addresses(&self) -> Box<dyn Stream<Item = Address, Error = MetaDataBrokerError> + Send>;
+    fn get_host_addresses(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
     fn get_host(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send>;
     fn add_failure(&self, address: String, reporter_id: String) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send>;
 }
 
 // Maybe we would want to support other database supporting redis protocol.
 pub trait ElectionBroker {
-    fn elect_node(&self, failed_node: Node) -> Box<dyn Future<Item = Address , Error = ElectionBrokerError> + Send>;
+    fn elect_node(&self, failed_node: Node) -> Box<dyn Future<Item = String , Error = ElectionBrokerError> + Send>;
 }
 
 #[derive(Debug)]
