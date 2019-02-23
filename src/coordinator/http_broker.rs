@@ -57,13 +57,73 @@ impl MetaDataBroker for HttpMetaBroker {
     }
 
     fn get_host_addresses(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
-        Box::new(stream::iter(vec![]))
+        let url = format!("http://{}/api/hosts/addresses", self.broker_address);
+        let request = self.client.get(&url).send();
+        let addresses_fut = request.map_err(|e| {
+            println!("Failed to get host addresses {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        }).and_then(|mut response| {
+            response.json().map(|payload| {
+                let HostAddressesPayload{ addresses } = payload;
+                return addresses;
+            }).map_err(|e| {
+                println!("Failed to get host adddresses from json {:?}", e);
+                MetaDataBrokerError::InvalidReply
+            })
+        });
+        let s = addresses_fut.map(|addresses| {
+            stream::iter(addresses.into_iter().map(|address| Ok(address)))
+        }).flatten_stream();
+        Box::new(s)
     }
+
     fn get_host(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
-        Box::new(future::ok(None))
+        let url = format!("http://{}/api/hosts/address/{}", self.broker_address, address);
+        let request = self.client.get(&url).send();
+        let host_fut = request.map_err(|e| {
+            println!("Failed to get host {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        }).and_then(|mut response| {
+            response.json().map(|payload| {
+                let HostPayload{ host } = payload;
+                return host;
+            }).map_err(|e| {
+                println!("Failed to get host from json {:?}", e);
+                MetaDataBrokerError::InvalidReply
+            })
+        });
+        Box::new(host_fut)
     }
+
     fn add_failure(&self, address: String, reporter_id: String) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> {
-        Box::new(future::ok(()))
+        let url = format!("http://{}/api/failures/{}/{}", self.broker_address, address, reporter_id);
+        let request = self.client.post(&url).send();
+        let fut = request.map_err(|e| {
+            println!("Failed to add failures {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        }).and_then(|response| {
+            let status = response.status();
+            let fut: Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> = if status.is_success() {
+                Box::new(future::ok(()))
+            } else {
+                println!("Failed to add failures: {:?}", status);
+                let body_fut = response.into_body().collect().then(|result| {
+                    match result {
+                        Err(e) => {
+                            println!("Failed to get body: {:?}", e);
+                            future::err(MetaDataBrokerError::InvalidReply)
+                        },
+                        Ok(body) => {
+                            println!("Error body: {:?}", body);
+                            future::err(MetaDataBrokerError::InvalidReply)
+                        },
+                    }
+                });
+                Box::new(body_fut)
+            };
+            fut
+        });
+        Box::new(fut)
     }
 }
 
@@ -75,4 +135,14 @@ struct ClusterNamesPayload {
 #[derive(Deserialize)]
 struct ClusterPayload {
     cluster: Option<Cluster>,
+}
+
+#[derive(Deserialize)]
+struct HostAddressesPayload {
+    addresses: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct HostPayload {
+    host: Option<Host>,
 }
