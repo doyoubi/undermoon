@@ -31,7 +31,7 @@ pub trait FailureDetector {
     type Checker: FailureChecker;
     type Reporter: FailureReporter;
 
-    fn new(receiver: Self::Retriever, checker: Self::Checker, reporter: Self::Reporter) -> Self;
+    fn new(retriever: Self::Retriever, checker: Self::Checker, reporter: Self::Reporter) -> Self;
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
 }
 
@@ -125,6 +125,18 @@ for SeqFailureHandler<P, N, H> {
                 })
         )
     }
+}
+
+pub trait HostMetaSender: Sync + Send + 'static {
+    fn handle_node_failure(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+}
+
+pub trait HostMetaSynchronizer {
+    type Retriever: ProxiesRetriever;
+    type Sender: HostMetaSender;
+
+    fn new(retriever: Self::Retriever, sender: Self::Sender) -> Self;
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
 }
 
 #[derive(Debug)]

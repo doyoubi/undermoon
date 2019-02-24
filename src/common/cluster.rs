@@ -1,7 +1,6 @@
 use serde::{Deserialize, Deserializer};
 use serde::de::Error;
 
-
 #[derive(Debug, Clone)]
 pub enum SlotRangeTag {
     Migrating(String),

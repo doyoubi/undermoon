@@ -2,9 +2,10 @@ use std::str;
 use std::sync;
 use protocol::{Resp, BulkStr, Array};
 use caseless;
+use ::common::db::HostDBMap;
 use super::session::{CmdCtxHandler, CmdCtx};
 use super::backend::{RecoverableBackendNode, CmdTask};
-use super::database::{DatabaseMap, DBTag, HostDBMap};
+use super::database::{DatabaseMap, DBTag};
 use super::command::{CmdType};
 
 #[derive(Clone)]
