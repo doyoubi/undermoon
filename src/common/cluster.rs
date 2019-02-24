@@ -42,6 +42,7 @@ pub struct Node {
 impl Node {
     pub fn get_address(&self) -> &String { &self.address }
     pub fn get_cluster_name(&self) -> &String { &self.cluster_name }
+    pub fn get_slots(&self) -> &Vec<SlotRange> { &self.slots }
 }
 
 #[derive(Debug, Deserialize)]

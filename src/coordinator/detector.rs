@@ -1,5 +1,5 @@
 use futures::{Future, Stream, future, stream};
-use protocol::{RedisClient, SimpleRedisClient, ClientError};
+use protocol::{RedisClient, SimpleRedisClient, RedisClientError};
 use ::common::cluster::{Host, Node, Cluster};
 use super::cluster::FullMetaData;
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
@@ -83,11 +83,11 @@ mod tests {
     impl ThreadSafe for DummyClient {}
 
     impl RedisClient for DummyClient {
-        fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error = ClientError> + Send> {
+        fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error =RedisClientError> + Send> {
             if address == NODE1 {
                 Box::new(future::ok(Resp::Arr(Array::Nil)))
             } else {
-                Box::new(future::err(ClientError::InvalidReply))
+                Box::new(future::err(RedisClientError::InvalidReply))
             }
         }
     }

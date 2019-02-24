@@ -33,9 +33,34 @@ macro_rules! try_get {
 }
 
 impl HostDBMap {
+    pub fn new(epoch: u64, db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>) -> Self {
+        Self{ epoch, db_map }
+    }
+
     pub fn get_epoch(&self) -> u64 { self.epoch }
 
     pub fn into_map(self) -> HashMap<String, HashMap<String, Vec<SlotRange>>> { self.db_map }
+
+    pub fn db_map_to_args(&self) -> Vec<String> {
+        let mut args = vec![];
+        for (db_name, node_map) in &self.db_map {
+            for (node, slot_ranges) in node_map {
+                for slot_range in slot_ranges {
+                    args.push(db_name.clone());
+                    args.push(node.clone());
+                    match &slot_range.tag {
+                        &SlotRangeTag::Migrating(ref dst) => {
+                            args.push("migrating".to_string());
+                            args.push(dst.clone());
+                        },
+                        &SlotRangeTag::None => (),
+                    };
+                    args.push(format!("{}-{}", slot_range.start, slot_range.end));
+                }
+            }
+        }
+        args
+    }
 
     pub fn from_resp(resp: &Resp) -> Result<Self, NMCtlParseError> {
         let arr = match resp {
@@ -187,5 +212,25 @@ mod tests {
         assert_eq!(hash.get("dbname").unwrap().get("127.0.0.1:7001").unwrap().len(), 1);
         assert_eq!(hash.get("another_db").unwrap().len(), 1);
         assert_eq!(hash.get("another_db").unwrap().get("127.0.0.1:7002").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_to_map() {
+        let arguments = vec![
+            "233", "noflag",
+            "dbname", "127.0.0.1:7000", "0-1000",
+            "dbname", "127.0.0.1:7001", "1001-2000",
+            "another_db", "127.0.0.1:7002", "0-2000",
+        ];
+        let mut it = arguments.clone().into_iter().map(|s| s.to_string()).peekable();
+        let r = HostDBMap::parse(&mut it);
+        let (epoch, hash) = r.unwrap();
+
+        let db_map = HostDBMap::new(epoch, hash);
+        let mut args = db_map.db_map_to_args();
+        let mut db_args: Vec<String> = arguments.into_iter().skip(2).map(|s| s.to_string()).collect();
+        args.sort();
+        db_args.sort();
+        assert_eq!(args, db_args);
     }
 }

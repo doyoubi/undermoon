@@ -4,8 +4,9 @@ use std::error::Error;
 use std::sync::Arc;
 use futures::{future, Future, Stream};
 use ::common::cluster::{Host, Node};
+use ::protocol::RedisClientError;
 use super::cluster::FullMetaData;
-use super::broker::{ElectionBrokerError, MetaDataBrokerError};
+use super::broker::{MetaDataBroker, ElectionBrokerError, MetaDataBrokerError};
 
 pub trait ProxiesRetriever: Sync + Send + 'static {
     fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
@@ -128,15 +129,48 @@ for SeqFailureHandler<P, N, H> {
 }
 
 pub trait HostMetaSender: Sync + Send + 'static {
-    fn handle_node_failure(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+    fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
 }
 
 pub trait HostMetaSynchronizer {
     type Retriever: ProxiesRetriever;
     type Sender: HostMetaSender;
+    type Broker: MetaDataBroker;
 
-    fn new(retriever: Self::Retriever, sender: Self::Sender) -> Self;
+    fn new(retriever: Self::Retriever, sender: Self::Sender, broker: Self::Broker) -> Self;
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
+}
+
+pub struct HostMetaRespSynchronizer<Retriever: ProxiesRetriever, Sender: HostMetaSender, Broker: MetaDataBroker> {
+    retriever: Retriever,
+    sender: Arc<Sender>,
+    broker: Arc<Broker>,
+}
+
+impl<R: ProxiesRetriever, S: HostMetaSender, B: MetaDataBroker> HostMetaSynchronizer for HostMetaRespSynchronizer<R, S, B> {
+    type Retriever = R;
+    type Sender = S;
+    type Broker = B;
+
+    fn new(retriever: Self::Retriever, sender: Self::Sender, broker: Self::Broker) -> Self {
+        Self{
+            retriever,
+            sender: Arc::new(sender),
+            broker: Arc::new(broker),
+        }
+    }
+
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+        let sender = self.sender.clone();
+        let broker = self.broker.clone();
+        Box::new(
+            self.retriever.retrieve_proxies()
+                .map(move |address| broker.get_host(address).map_err(CoordinateError::MetaData))
+                .buffer_unordered(10)
+                .skip_while(|host| future::ok(host.is_none())).map(Option::unwrap)
+                .and_then(move |address| sender.send_meta(address))
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -144,6 +178,7 @@ pub enum CoordinateError {
     Io(io::Error),
     Election(ElectionBrokerError),
     MetaData(MetaDataBrokerError),
+    Redis(RedisClientError),
     InvalidReply,
 }
 

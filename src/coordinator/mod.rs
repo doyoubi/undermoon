@@ -1,8 +1,9 @@
 mod core;
 mod cluster;
-pub mod broker;
 mod alloc;
 mod heartbeat;
 mod detector;
+mod sync;
 pub mod http_broker;
 pub mod service;
+pub mod broker;
