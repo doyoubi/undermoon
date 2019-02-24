@@ -1,18 +1,29 @@
 use std::fmt;
 use std::io;
+use std::time::Duration;
 use std::error::Error;
 use futures::{Future, Stream, future};
+use tokio::prelude::FutureExt;
+use tokio_core::reactor;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
+use ::common::utils::ThreadSafe;
 use super::resp::{Resp, BinSafeStr};
 use super::decoder::{decode_resp, DecodeError};
 use super::encoder::command_to_buf;
 
-pub trait RedisClient {
+pub trait RedisClient : ThreadSafe {
     fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error = ClientError> + Send>;
 }
 
+#[derive(Clone)]
 pub struct SimpleRedisClient;
+
+impl SimpleRedisClient {
+    pub fn new() -> Self { Self }
+}
+
+impl ThreadSafe for SimpleRedisClient {}
 
 impl RedisClient for SimpleRedisClient {
     fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error = ClientError> + Send> {
@@ -20,7 +31,7 @@ impl RedisClient for SimpleRedisClient {
             Ok(address) => address,
             Err(e) => return Box::new(future::err(ClientError::InvalidAddress))
         };
-        let f = TcpStream::connect(&sock_address)
+        let connect_fut = TcpStream::connect(&sock_address)
             .map_err(|e| ClientError::Io(e))
             .and_then(move |sock| {
                 let mut buf = Vec::new();
@@ -41,6 +52,10 @@ impl RedisClient for SimpleRedisClient {
                             .map(|(_sock, resp)| resp)
                     })
             });
+        let f = connect_fut.timeout(Duration::from_secs(1)).map_err(|e| {
+            println!("timeout {:?}", e);
+            ClientError::Timeout
+        });
         Box::new(f)
     }
 }
@@ -48,6 +63,7 @@ impl RedisClient for SimpleRedisClient {
 #[derive(Debug)]
 pub enum ClientError {
     Io(io::Error),
+    Timeout,
     InvalidReply,
     InvalidAddress,
 }

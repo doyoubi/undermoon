@@ -5,6 +5,7 @@ authors = ["doyoubi"]
 
 [dependencies]
 tokio = "0.1"
+tokio-core = "0.1"
 futures = "0.1.23"
 atomic-option = "0.1"
 crc16 = "0.4.0"

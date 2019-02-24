@@ -10,7 +10,7 @@ pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
 }
 
 impl<B: MetaDataBroker> BrokerProxiesRetriever<B> {
-    fn new(meta_data_broker: B) -> Self {
+    pub fn new(meta_data_broker: B) -> Self {
         Self{ meta_data_broker }
     }
 }
@@ -28,7 +28,7 @@ pub struct PingFailureDetector<C: RedisClient + Sync + Send + 'static> {
 }
 
 impl<C: RedisClient + Sync + Send + 'static> PingFailureDetector<C> {
-    fn new(client: C) -> Self {
+    pub fn new(client: C) -> Self {
         Self{ client }
     }
 }
@@ -53,7 +53,7 @@ pub struct BrokerFailureReporter<B: MetaDataBroker> {
 }
 
 impl<B: MetaDataBroker> BrokerFailureReporter<B> {
-    fn new(reporter_id: String, meta_data_broker: B) -> Self {
+    pub fn new(reporter_id: String, meta_data_broker: B) -> Self {
         Self{ reporter_id, meta_data_broker }
     }
 }
@@ -70,13 +70,17 @@ impl<B: MetaDataBroker> FailureReporter for BrokerFailureReporter<B> {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
-    use protocol::{RedisClient, BinSafeStr, Resp, Array};
+    use ::common::utils::ThreadSafe;
+    use ::protocol::{RedisClient, BinSafeStr, Resp, Array};
     use super::*;
 
     const NODE1: &'static str = "127.0.0.1:7000";
     const NODE2: &'static str = "127.0.0.1:7001";
 
+    #[derive(Clone)]
     struct DummyClient;
+
+    impl ThreadSafe for DummyClient {}
 
     impl RedisClient for DummyClient {
         fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error = ClientError> + Send> {
@@ -98,6 +102,8 @@ mod tests {
             Self { reported_failures: Arc::new(Mutex::new(vec![])) }
         }
     }
+
+    impl ThreadSafe for DummyMetaBroker {}
 
     impl MetaDataBroker for DummyMetaBroker {
         fn get_cluster_names(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {

@@ -5,3 +5,4 @@ mod alloc;
 mod heartbeat;
 mod detector;
 pub mod http_broker;
+pub mod service;

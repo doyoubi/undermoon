@@ -1,6 +1,7 @@
 use futures::{Future, Stream, future, stream};
 use reqwest::async;
 use serde_derive::Deserialize;
+use ::common::utils::ThreadSafe;
 use ::common::cluster::{Cluster, Node, Host};
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
 
@@ -15,6 +16,8 @@ impl HttpMetaBroker {
         HttpMetaBroker{ broker_address, client }
     }
 }
+
+impl ThreadSafe for HttpMetaBroker {}
 
 impl MetaDataBroker for HttpMetaBroker {
     fn get_cluster_names(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
@@ -33,7 +36,7 @@ impl MetaDataBroker for HttpMetaBroker {
             })
         });
         let s = names_fut.map(|names| {
-            stream::iter(names.into_iter().map(|name| Ok(name)))
+            stream::iter_ok(names)
         }).flatten_stream();
         Box::new(s)
     }
@@ -72,7 +75,7 @@ impl MetaDataBroker for HttpMetaBroker {
             })
         });
         let s = addresses_fut.map(|addresses| {
-            stream::iter(addresses.into_iter().map(|address| Ok(address)))
+            stream::iter_ok(addresses)
         }).flatten_stream();
         Box::new(s)
     }

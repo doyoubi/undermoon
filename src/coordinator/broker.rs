@@ -2,10 +2,11 @@ use std::io;
 use std::fmt;
 use std::error::Error;
 use futures::{Future, Stream};
+use ::common::utils::ThreadSafe;
 use ::common::cluster::{Cluster, Node, Host};
 
 
-pub trait MetaDataBroker: Sync + Send + 'static {
+pub trait MetaDataBroker: ThreadSafe {
     fn get_cluster_names(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
     fn get_cluster(&self, name: String) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send>;
     fn get_host_addresses(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;

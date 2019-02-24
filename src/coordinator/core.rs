@@ -61,7 +61,8 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
         let reporter = self.reporter.clone();
         Box::new(
             self.retriever.retrieve_proxies()
-                .and_then(move |address| checker.check(address))
+                .map(move |address| checker.check(address))
+                .buffer_unordered(10)
                 .skip_while(|address| future::ok(address.is_none())).map(Option::unwrap)
                 .and_then(move |address| reporter.report(address))
         )
