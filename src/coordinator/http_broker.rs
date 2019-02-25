@@ -98,6 +98,11 @@ impl MetaDataBroker for HttpMetaBroker {
         Box::new(host_fut)
     }
 
+    fn get_peer(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
+        // TODO: implement it
+        self.get_host(address)
+    }
+
     fn add_failure(&self, address: String, reporter_id: String) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> {
         let url = format!("http://{}/api/failures/{}/{}", self.broker_address, address, reporter_id);
         let request = self.client.post(&url).send();

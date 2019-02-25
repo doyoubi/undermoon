@@ -137,40 +137,44 @@ pub trait HostMetaSender: Sync + Send + 'static {
     fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
 }
 
-pub trait HostMetaSynchronizer {
-    type Retriever: ProxiesRetriever;
-    type Sender: HostMetaSender;
-    type Broker: MetaDataBroker;
+pub trait HostMetaRetriever: Sync + Send + 'static {
+    fn get_host_meta(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send>;
+}
 
-    fn new(retriever: Self::Retriever, sender: Self::Sender, broker: Self::Broker) -> Self;
+pub trait HostMetaSynchronizer {
+    type PRetriever: ProxiesRetriever;
+    type MRetriever: HostMetaRetriever;
+    type Sender: HostMetaSender;
+
+    fn new(proxy_retriever: Self::PRetriever, meta_retriever: Self::MRetriever, sender: Self::Sender) -> Self;
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
 }
 
-pub struct HostMetaRespSynchronizer<Retriever: ProxiesRetriever, Sender: HostMetaSender, Broker: MetaDataBroker> {
-    retriever: Retriever,
+pub struct HostMetaRespSynchronizer<PRetriever: ProxiesRetriever, MRetriever: HostMetaRetriever, Sender: HostMetaSender> {
+    proxy_retriever: PRetriever,
+    meta_retriever: Arc<MRetriever>,
     sender: Arc<Sender>,
-    broker: Arc<Broker>,
 }
 
-impl<R: ProxiesRetriever, S: HostMetaSender, B: MetaDataBroker> HostMetaSynchronizer for HostMetaRespSynchronizer<R, S, B> {
-    type Retriever = R;
+impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynchronizer for HostMetaRespSynchronizer<P, M, S> {
+    type PRetriever = P;
+    type MRetriever = M;
     type Sender = S;
-    type Broker = B;
 
-    fn new(retriever: Self::Retriever, sender: Self::Sender, broker: Self::Broker) -> Self {
+    fn new(proxy_retriever: Self::PRetriever, meta_retriever: Self::MRetriever, sender: Self::Sender) -> Self {
         Self{
-            retriever,
+            proxy_retriever,
+            meta_retriever: Arc::new(meta_retriever),
             sender: Arc::new(sender),
-            broker: Arc::new(broker),
         }
     }
 
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+        let meta_retriever = self.meta_retriever.clone();
         let sender = self.sender.clone();
-        let broker = self.broker.clone();
         Box::new(
-            self.retriever.retrieve_proxies()
-                .map(move |address| broker.get_host(address).map_err(CoordinateError::MetaData))
+            self.proxy_retriever.retrieve_proxies()
+                .map(move |address| meta_retriever.get_host_meta(address))
                 .buffer_unordered(10)
                 .skip_while(|host| future::ok(host.is_none())).map(Option::unwrap)
                 .and_then(move |host| sender.send_meta(host).then(|res| {
