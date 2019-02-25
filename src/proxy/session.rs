@@ -148,7 +148,10 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
                         Box::new(send_fut)
                     },
                     Err(DecodeError::Io(e)) => {
-                        println!("io error: {:?}", e);
+                        match e.kind() {
+                            io::ErrorKind::UnexpectedEof => info!("connection closed by peer when reading from client"),
+                            k => error!("io error when reading from client {:?}", &e),
+                        };
                         Box::new(future::err(SessionError::Io(e)))
                     },
                 };

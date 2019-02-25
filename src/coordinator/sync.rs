@@ -10,7 +10,7 @@ pub struct HostMetaRespSender<C: RedisClient> {
 }
 
 impl<C: RedisClient> HostMetaRespSender<C> {
-    fn new(client: C) -> Self { Self{ client }}
+    pub fn new(client: C) -> Self { Self{ client }}
 }
 
 impl<C: RedisClient> HostMetaSender for HostMetaRespSender<C> {
@@ -24,15 +24,17 @@ impl<C: RedisClient> HostMetaSender for HostMetaRespSender<C> {
         }
         let args = HostDBMap::new(epoch, db_map).db_map_to_args();
         let mut cmd = vec![
-            "NMCTL".to_string(), "SETDB".to_string(), epoch.to_string(), "NOFLAG".to_string(),
+            "UMCTL".to_string(), "SETDB".to_string(), epoch.to_string(), "NOFLAG".to_string(),
         ];
         cmd.extend(args.into_iter());
+        debug!("sending meta {:?}", cmd);
         let f = self.client.execute(address, cmd.into_iter().map(|s| s.into_bytes()).collect())
             .map_err(|e| {
                 println!("Failed to send meta data of host {:?}", e);
                 CoordinateError::Redis(e)
             })
             .and_then(|resp| {
+                error!("failed to send meta, invalid reply {:?}", resp);
                 match resp {
                     Resp::Error(err_str) => {
                         future::err(CoordinateError::InvalidReply)

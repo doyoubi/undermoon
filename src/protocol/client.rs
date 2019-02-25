@@ -30,6 +30,7 @@ impl RedisClient for SimpleRedisClient {
             Ok(address) => address,
             Err(e) => return Box::new(future::err(RedisClientError::InvalidAddress))
         };
+        let address_clone = address.clone();
         let connect_fut = TcpStream::connect(&sock_address)
             .map_err(|e| RedisClientError::Io(e))
             .and_then(move |sock| {
@@ -51,8 +52,8 @@ impl RedisClient for SimpleRedisClient {
                             .map(|(_sock, resp)| resp)
                     })
             });
-        let f = connect_fut.timeout(Duration::from_secs(1)).map_err(|e| {
-            println!("timeout {:?}", e);
+        let f = connect_fut.timeout(Duration::from_secs(1)).map_err(move |e| {
+            error!("redis client error {} {:?}", address_clone, e);
             RedisClientError::Timeout
         });
         Box::new(f)

@@ -34,9 +34,7 @@ pub struct ForwardHandler {
 impl ForwardHandler {
     pub fn new() -> ForwardHandler {
         let db = DatabaseMap::new();
-        ForwardHandler{
-            db: db,
-        }
+        ForwardHandler{ db }
     }
 }
 
@@ -123,11 +121,14 @@ impl ForwardHandler {
                 return
             }
         };
+        debug!("local meta data: {:?}", db_map);
         match self.db.set_dbs(db_map) {
             Ok(()) => {
+                debug!("Successfully update meta data");
                 cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {
+                debug!("Failed to update meta data {:?}", e);
                 cmd_ctx.set_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }
@@ -154,6 +155,7 @@ impl ForwardHandler {
 
 impl CmdCtxHandler for ForwardHandler {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
+        debug!("get command {:?}", cmd_ctx.get_cmd());
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {
             CmdType::Ping => {

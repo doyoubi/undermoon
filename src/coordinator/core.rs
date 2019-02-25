@@ -65,7 +65,12 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
                 .map(move |address| checker.check(address))
                 .buffer_unordered(10)
                 .skip_while(|address| future::ok(address.is_none())).map(Option::unwrap)
-                .and_then(move |address| reporter.report(address))
+                .and_then(move |address| reporter.report(address).then(|res| {
+                    if let Err(e) = res {
+                        error!("failed to report failure: {:?}", e);
+                    }
+                    future::ok(())
+                }))
         )
     }
 }
@@ -168,7 +173,12 @@ impl<R: ProxiesRetriever, S: HostMetaSender, B: MetaDataBroker> HostMetaSynchron
                 .map(move |address| broker.get_host(address).map_err(CoordinateError::MetaData))
                 .buffer_unordered(10)
                 .skip_while(|host| future::ok(host.is_none())).map(Option::unwrap)
-                .and_then(move |address| sender.send_meta(address))
+                .and_then(move |host| sender.send_meta(host).then(|res| {
+                    if let Err(e) = res {
+                        error!("failed to set meta: {:?}", e);
+                    }
+                    future::ok(())
+                }))
         )
     }
 }

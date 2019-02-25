@@ -9,6 +9,8 @@ extern crate reqwest;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 extern crate serde_json;
+#[macro_use] extern crate log;
+#[macro_use(defer)] extern crate scopeguard;
 
 pub mod protocol;
 pub mod proxy;

@@ -6,6 +6,7 @@ use super::cluster::{SlotRangeTag, SlotRange};
 
 const MIGRATING_TAG: &'static str = "MIGRATING";
 
+#[derive(Debug)]
 pub struct HostDBMap {
     epoch: u64,
     db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
