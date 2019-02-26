@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use futures::{Future, Stream, future, stream};
 use reqwest::async;
 use serde_derive::Deserialize;
+use itertools::Itertools;
 use ::common::utils::ThreadSafe;
 use ::common::cluster::{Cluster, Node, Host};
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
@@ -112,33 +113,28 @@ impl MetaDataBroker for HttpMetaBroker {
                 ),
             };
 
-            let address_clone2 = address_clone1.clone();
-
-            let mut segs: Vec<&str> = address_clone1.split_terminator(':').collect();
-            let host = if let Some(h) = segs.drain(..).next() {
-                h.to_string()
-            } else {
-                error!("invalid address format {}", address_clone1);
-                return Box::new(future::err(MetaDataBrokerError::InvalidReply))
-            };
-
             let s = stream::iter_ok(clusters);
             let f = s.map(move |cluster_name| self_clone.get_cluster(cluster_name))
                 .buffer_unordered(1000)  // try buffering all
                 .skip_while(|cluster| future::ok(cluster.is_none())).map(Option::unwrap)
-                .map(|cluster| cluster.into_nodes())
+                .map(|cluster| {
+                    let cluster_name = cluster.get_name().clone();
+                    cluster.into_nodes().into_iter()
+                        .group_by(|node| node.get_proxy_address().clone()).into_iter()
+                        .map(|(proxy_address, nodes)| {
+                            let slots = nodes.map(Node::into_slots).flatten().collect();
+                            // proxy as node
+                            Node::new(proxy_address.clone(), proxy_address, cluster_name.clone(), slots)
+                        })
+                        .collect::<Vec<Node>>()
+                })
                 .collect()
                 .map(move |nested_nodes| {
+                    let address_clone2 = address_clone1.clone();
                     let nodes = nested_nodes.into_iter()
                         .flatten()
-                        .filter(|node| {
-                            let mut segs: Vec<&str> = node.get_address().split_terminator(':').collect();
-                            let node_host = if let Some(h) = segs.drain(..).next() {
-                                h
-                            } else {
-                                return false;
-                            };
-                            !host.eq(node_host)
+                        .filter(move |node| {
+                            node.get_proxy_address().ne(&address_clone1)
                         })
                         .collect::<Vec<Node>>();
                     debug!("get peer meta {} {} {:?}", address_clone2, epoch, nodes);

@@ -35,14 +35,20 @@ pub struct SlotRange {
 #[derive(Debug, Deserialize)]
 pub struct Node {
     address: String,
+    proxy_address: String,
     cluster_name: String,
     slots: Vec<SlotRange>,
 }
 
 impl Node {
+    pub fn new(address: String, proxy_address: String, cluster_name: String, slots: Vec<SlotRange>,) -> Self {
+        Node { address, proxy_address, cluster_name, slots }
+    }
     pub fn get_address(&self) -> &String { &self.address }
+    pub fn get_proxy_address(&self) -> &String { &self.proxy_address }
     pub fn get_cluster_name(&self) -> &String { &self.cluster_name }
     pub fn get_slots(&self) -> &Vec<SlotRange> { &self.slots }
+    pub fn into_slots(self) -> Vec<SlotRange> { self.slots }
 }
 
 #[derive(Debug, Deserialize)]
