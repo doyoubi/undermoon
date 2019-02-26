@@ -14,9 +14,9 @@ pub struct SharedForwardHandler {
 }
 
 impl SharedForwardHandler {
-    pub fn new() -> SharedForwardHandler {
+    pub fn new(service_address: String) -> SharedForwardHandler {
         SharedForwardHandler{
-            handler: sync::Arc::new(ForwardHandler::new()),
+            handler: sync::Arc::new(ForwardHandler::new(service_address)),
         }
     }
 }
@@ -28,13 +28,14 @@ impl CmdCtxHandler for SharedForwardHandler {
 }
 
 pub struct ForwardHandler {
+    service_address: String,
     db: DatabaseMap<RecoverableBackendNode<CmdCtx>>,
 }
 
 impl ForwardHandler {
-    pub fn new() -> ForwardHandler {
+    pub fn new(service_address: String) -> ForwardHandler {
         let db = DatabaseMap::new();
-        ForwardHandler{ db }
+        ForwardHandler{ service_address, db }
     }
 }
 
@@ -66,7 +67,7 @@ impl ForwardHandler {
         };
 
         if caseless::canonical_caseless_match_str(&sub_cmd, "nodes") {
-            let cluster_nodes = self.db.gen_cluster_nodes(cmd_ctx.get_db_name());
+            let cluster_nodes = self.db.gen_cluster_nodes(cmd_ctx.get_db_name(), self.service_address.clone());
             cmd_ctx.set_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else {
             cmd_ctx.set_result(Ok(Resp::Error(String::from("Unsupported sub command").into_bytes())));

@@ -12,11 +12,12 @@ use undermoon::proxy::executor::SharedForwardHandler;
 fn main() {
     env_logger::init();
 
-    let addr = "127.0.0.1:5299".parse().unwrap();
+    let service_address = "127.0.0.1:5299";
+    let addr = service_address.parse().unwrap();
     let listener = TcpListener::bind(&addr)
         .expect("unable to bind TCP listener");
 
-    let forward_handler = SharedForwardHandler::new();
+    let forward_handler = SharedForwardHandler::new(service_address.to_string());
 
     let server = listener.incoming()
         .map_err(|e| eprintln!("accept failed = {:?}", e))

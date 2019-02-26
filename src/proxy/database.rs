@@ -133,9 +133,9 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         Ok(())
     }
 
-    pub fn gen_cluster_nodes(&self, dbname: String) -> String {
+    pub fn gen_cluster_nodes(&self, dbname: String, service_address: String) -> String {
         let local = self.local_dbs.read().unwrap().1.get(&dbname).
-            map_or("".to_string(), |db| db.gen_local_cluster_nodes());
+            map_or("".to_string(), |db| db.gen_local_cluster_nodes(service_address));
         let remote = self.remote_dbs.read().unwrap().1.get(&dbname).
             map_or("".to_string(), |db| db.gen_remote_cluster_nodes());
         format!("{}{}", local, remote)
@@ -200,8 +200,14 @@ impl<S: CmdTaskSender> Database<S> {
         }
     }
 
-    pub fn gen_local_cluster_nodes(&self) -> String {
-        gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges)
+    pub fn gen_local_cluster_nodes(&self, service_address: String) -> String {
+        let slots: Vec<SlotRange> = self.slot_ranges.values()
+            .map(|slot_ranges| slot_ranges.clone())
+            .flatten()
+            .collect::<Vec<SlotRange>>();
+        let mut slot_ranges = HashMap::new();
+        slot_ranges.insert(service_address, slots);
+        gen_cluster_nodes_helper(&self.name, self.epoch, &slot_ranges)
     }
 }
 
