@@ -77,22 +77,25 @@ fn send_meta<C: RedisClient>(client: &C, host: Host, sub_command: String, flag: 
     }
     let args = HostDBMap::new(epoch, db_map).db_map_to_args();
     let mut cmd = vec![
-        "UMCTL".to_string(), "SETDB".to_string(), epoch.to_string(), "NOFLAG".to_string(),
+        "UMCTL".to_string(), sub_command.clone(), epoch.to_string(), flag,
     ];
     cmd.extend(args.into_iter());
-    debug!("sending meta {:?}", cmd);
+    debug!("sending meta {} {:?}", sub_command, cmd);
     client.execute(address, cmd.into_iter().map(|s| s.into_bytes()).collect())
         .map_err(|e| {
             println!("Failed to send meta data of host {:?}", e);
             CoordinateError::Redis(e)
         })
-        .and_then(|resp| {
-            error!("failed to send meta, invalid reply {:?}", resp);
+        .and_then(move |resp| {
             match resp {
                 Resp::Error(err_str) => {
+                    error!("failed to send meta, invalid reply {:?}", err_str);
                     future::err(CoordinateError::InvalidReply)
                 },
-                _ => future::ok(()),
+                reply => {
+                    debug!("Successfully set meta {} {:?}", sub_command, reply);
+                    future::ok(())
+                },
             }
         })
 }

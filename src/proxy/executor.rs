@@ -124,7 +124,7 @@ impl ForwardHandler {
         debug!("local meta data: {:?}", db_map);
         match self.db.set_dbs(db_map) {
             Ok(()) => {
-                debug!("Successfully update meta data");
+                debug!("Successfully update local meta data");
                 cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {
@@ -144,9 +144,11 @@ impl ForwardHandler {
         };
         match self.db.set_peers(db_map) {
             Ok(()) => {
+                debug!("Successfully update peer meta data");
                 cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {
+                debug!("Failed to update peer meta data {:?}", e);
                 cmd_ctx.set_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }

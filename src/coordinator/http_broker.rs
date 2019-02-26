@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use futures::{Future, Stream, future, stream};
 use reqwest::async;
 use serde_derive::Deserialize;
@@ -99,8 +100,35 @@ impl MetaDataBroker for HttpMetaBroker {
     }
 
     fn get_peer(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
-        // TODO: implement it
-        self.get_host(address)
+        debug!("get peer {}", address);
+        let address_clone1 = address.clone();
+        let self_clone = self.clone();
+        let host_fut = self.get_host(address).and_then(move |host| -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
+            let (epoch, clusters) = match host {
+                None => return Box::new(future::ok(None)),
+                Some(host) => (
+                    host.get_epoch(),
+                    host.get_nodes().iter().map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
+                ),
+            };
+            let s = stream::iter_ok(clusters);
+            let address_clone2 = address_clone1.clone();
+            let f = s.map(move |cluster_name| self_clone.get_cluster(cluster_name))
+                .buffer_unordered(1000)  // try buffering all
+                .skip_while(|cluster| future::ok(cluster.is_none())).map(Option::unwrap)
+                .map(|cluster| cluster.into_nodes())
+                .collect()
+                .map(move |nested_nodes| {
+                    let nodes = nested_nodes.into_iter()
+                        .flatten()
+                        .filter(|node| node.get_address().eq(&address_clone2))
+                        .collect::<Vec<Node>>();
+                    debug!("get peer meta {} {} {:?}", address_clone2, epoch, nodes);
+                    Host::new(address_clone2, epoch, nodes)
+                });
+            Box::new(f.map(Some))
+        });
+        Box::new(host_fut)
     }
 
     fn add_failure(&self, address: String, reporter_id: String) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> {

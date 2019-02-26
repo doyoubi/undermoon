@@ -72,8 +72,8 @@ impl<B: MetaDataBroker + ThreadSafe + Clone, C: RedisClient + ThreadSafe + Clone
         let s = stream::iter_ok(iter::repeat(()));
         Box::new(
             s.fold(self.clone(), |service, ()| {
-                debug!("start sync meta data");
-                defer!(debug!("sync finished a round"));
+                debug!("start sync local meta data");
+                defer!(debug!("local sync finished a round"));
                 service.gen_local_meta_synchronizer().run().collect().map(move |_| service)
             }).map(|_| debug!("loop_sync stopped"))
         )
@@ -83,8 +83,8 @@ impl<B: MetaDataBroker + ThreadSafe + Clone, C: RedisClient + ThreadSafe + Clone
         let s = stream::iter_ok(iter::repeat(()));
         Box::new(
             s.fold(self.clone(), |service, ()| {
-                debug!("start sync meta data");
-                defer!(debug!("sync finished a round"));
+                debug!("start sync peer meta data");
+                defer!(debug!("peer sync finished a round"));
                 service.gen_peer_meta_synchronizer().run().collect().map(move |_| service)
             }).map(|_| debug!("loop_sync stopped"))
         )

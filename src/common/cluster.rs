@@ -56,6 +56,7 @@ impl Cluster {
     pub fn get_name(&self) -> &String { &self.name }
     pub fn get_nodes(&self) -> &Vec<Node> { &self.nodes }
     pub fn get_epoch(&self) -> u64 { self.epoch }
+    pub fn into_nodes(self) -> Vec<Node> { self.nodes }
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,7 +67,9 @@ pub struct Host {
 }
 
 impl Host {
+    pub fn new(address: String, epoch: u64, nodes: Vec<Node>) -> Self { Self{ address, epoch, nodes } }
     pub fn get_address(&self) -> &String { &self.address }
     pub fn get_nodes(&self) -> &Vec<Node> { &self.nodes }
     pub fn get_epoch(&self) -> u64 { self.epoch }
+    pub fn into_nodes(self) -> Vec<Node> { self.nodes }
 }
