@@ -111,8 +111,18 @@ impl MetaDataBroker for HttpMetaBroker {
                     host.get_nodes().iter().map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
                 ),
             };
-            let s = stream::iter_ok(clusters);
+
             let address_clone2 = address_clone1.clone();
+
+            let mut segs: Vec<&str> = address_clone1.split_terminator(':').collect();
+            let host = if let Some(h) = segs.drain(..).next() {
+                h.to_string()
+            } else {
+                error!("invalid address format {}", address_clone1);
+                return Box::new(future::err(MetaDataBrokerError::InvalidReply))
+            };
+
+            let s = stream::iter_ok(clusters);
             let f = s.map(move |cluster_name| self_clone.get_cluster(cluster_name))
                 .buffer_unordered(1000)  // try buffering all
                 .skip_while(|cluster| future::ok(cluster.is_none())).map(Option::unwrap)
@@ -121,7 +131,15 @@ impl MetaDataBroker for HttpMetaBroker {
                 .map(move |nested_nodes| {
                     let nodes = nested_nodes.into_iter()
                         .flatten()
-                        .filter(|node| node.get_address().eq(&address_clone2))
+                        .filter(|node| {
+                            let mut segs: Vec<&str> = node.get_address().split_terminator(':').collect();
+                            let node_host = if let Some(h) = segs.drain(..).next() {
+                                h
+                            } else {
+                                return false;
+                            };
+                            !host.eq(node_host)
+                        })
                         .collect::<Vec<Node>>();
                     debug!("get peer meta {} {} {:?}", address_clone2, epoch, nodes);
                     Host::new(address_clone2, epoch, nodes)

@@ -128,7 +128,7 @@ impl ForwardHandler {
                 cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {
-                debug!("Failed to update meta data {:?}", e);
+                debug!("Failed to update local meta data {:?}", e);
                 cmd_ctx.set_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }

@@ -6,7 +6,7 @@ use ::protocol::{RedisClient, SimpleRedisClient};
 use super::broker::MetaDataBroker;
 use super::core::{FailureDetector, SeqFailureDetector, CoordinateError, HostMetaSynchronizer, HostMetaRespSynchronizer};
 use super::detector::{BrokerProxiesRetriever, PingFailureDetector, BrokerFailureReporter};
-use super::sync::{HostMetaRespSender, LocalMetaRetriever, PeerMetaRetriever};
+use super::sync::{HostMetaRespSender, PeerMetaRespSender, LocalMetaRetriever, PeerMetaRetriever};
 
 #[derive(Clone)]
 pub struct CoordinatorService<B: MetaDataBroker + ThreadSafe + Clone, C: RedisClient + ThreadSafe + Clone> {
@@ -53,7 +53,7 @@ impl<B: MetaDataBroker + ThreadSafe + Clone, C: RedisClient + ThreadSafe + Clone
     fn gen_peer_meta_synchronizer(&self) -> impl HostMetaSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(self.broker.clone());
         let meta_retriever = PeerMetaRetriever::new(self.broker.clone());
-        let sender = HostMetaRespSender::new(self.client.clone());
+        let sender = PeerMetaRespSender::new(self.client.clone());
         HostMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)
     }
 
