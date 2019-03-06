@@ -128,6 +128,9 @@ mod tests {
             self.reported_failures.lock().unwrap().push(address);
             Box::new(future::ok(()))
         }
+        fn get_failures(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
+            Box::new(stream::iter_ok(vec![]))
+        }
     }
 
     #[test]

@@ -17,7 +17,7 @@ pub struct ProxyFailure {
     report_id: String,
 }
 
-type NodeFailure = Node;
+pub type NodeFailure = Node;
 
 pub trait FailureChecker: Sync + Send + 'static {
     fn check(&self, address: String) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send>;
@@ -76,11 +76,11 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
 }
 
 pub trait ProxyFailureRetriever: Sync + Send + 'static {
-    fn retrieve_proxy_failures(&self) -> Box<dyn Stream<Item = ProxyFailure, Error = CoordinateError> + Send>;
+    fn retrieve_proxy_failures(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
 }
 
 pub trait NodeFailureRetriever: Sync + Send + 'static {
-    fn retrieve_node_failures(&self, proxy_failure: ProxyFailure) -> Box<dyn Stream<Item = NodeFailure, Error = CoordinateError> + Send>;
+    fn retrieve_node_failures(&self, failed_proxy_address: String) -> Box<dyn Stream<Item = NodeFailure, Error = CoordinateError> + Send>;
 }
 
 pub trait NodeFailureHandler: Sync + Send + 'static {
@@ -122,9 +122,9 @@ for SeqFailureHandler<P, N, H> {
         let handler = self.handler.clone();
         Box::new(
             self.proxy_failure_retriever.retrieve_proxy_failures()
-                .and_then(move |proxy_failure| {
+                .and_then(move |proxy_address| {
                     let cloned_handler = handler.clone();
-                    node_failure_retriever.retrieve_node_failures(proxy_failure)
+                    node_failure_retriever.retrieve_node_failures(proxy_address)
                         .for_each(move |node_failure| {
                             cloned_handler.handle_node_failure(node_failure)
                         })

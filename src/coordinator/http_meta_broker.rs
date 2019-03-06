@@ -175,6 +175,27 @@ impl MetaDataBroker for HttpMetaBroker {
         });
         Box::new(fut)
     }
+
+    fn get_failures(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
+        let url = format!("http://{}/api/failures", self.broker_address);
+        let request = self.client.get(&url).send();
+        let addresses_fut = request.map_err(|e| {
+            error!("Failed to get failures {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        }).and_then(|mut response| {
+            response.json().map(|failures| {
+                let FailuresPayload{ addresses } = failures;
+                return addresses;
+            }).map_err(|e| {
+                error!("Failed to get cluster names from json {:?}", e);
+                MetaDataBrokerError::InvalidReply
+            })
+        });
+        let s = addresses_fut.map(|addresses| {
+            stream::iter_ok(addresses)
+        }).flatten_stream();
+        Box::new(s)
+    }
 }
 
 #[derive(Deserialize)]
@@ -195,4 +216,9 @@ struct HostAddressesPayload {
 #[derive(Deserialize)]
 struct HostPayload {
     host: Option<Host>,
+}
+
+#[derive(Deserialize)]
+struct FailuresPayload {
+    addresses: Vec<String>,
 }
