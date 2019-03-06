@@ -7,7 +7,7 @@ use futures::Future;
 use futures::future::join_all;
 use futures::stream::Stream;
 use reqwest::async;
-use undermoon::coordinator::http_broker::HttpMetaBroker;
+use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
 use undermoon::coordinator::broker::MetaDataBroker;
 
 fn main() {

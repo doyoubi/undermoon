@@ -30,3 +30,4 @@ OK
 - Implement coordinator (in progress)
 - Implement Redis Replication Protocol
 - Support slot migration via replication
+- Optimize RESP parsing

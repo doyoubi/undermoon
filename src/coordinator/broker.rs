@@ -3,7 +3,7 @@ use std::fmt;
 use std::error::Error;
 use futures::{Future, Stream};
 use ::common::utils::ThreadSafe;
-use ::common::cluster::{Cluster, Node, Host};
+use ::common::cluster::{Cluster, Node, Host, SlotRange};
 
 
 pub trait MetaDataBroker: ThreadSafe {
@@ -16,8 +16,9 @@ pub trait MetaDataBroker: ThreadSafe {
 }
 
 // Maybe we would want to support other database supporting redis protocol.
-pub trait ElectionBroker {
-    fn elect_node(&self, failed_node: Node) -> Box<dyn Future<Item = String , Error = ElectionBrokerError> + Send>;
+// For them, we may need to trigger other action such as migrating data.
+pub trait MetaManipulationBroker:  ThreadSafe {
+    fn replace_node(&self, cluster_epoch: u64, failed_node: Node) -> Box<dyn Future<Item = Node, Error =MetaManipulationBrokerError> + Send>;
 }
 
 #[derive(Debug)]
@@ -46,25 +47,26 @@ impl Error for MetaDataBrokerError {
 }
 
 #[derive(Debug)]
-pub enum ElectionBrokerError {
+pub enum MetaManipulationBrokerError {
     Io(io::Error),
     ResourceNotAvailable,
+    InvalidReply,
 }
 
-impl fmt::Display for ElectionBrokerError {
+impl fmt::Display for MetaManipulationBrokerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl Error for ElectionBrokerError {
+impl Error for MetaManipulationBrokerError {
     fn description(&self) -> &str {
         "broker error"
     }
 
     fn cause(&self) -> Option<&Error> {
         match self {
-            ElectionBrokerError::Io(err) => Some(err),
+            MetaManipulationBrokerError::Io(err) => Some(err),
             _ => None,
         }
     }

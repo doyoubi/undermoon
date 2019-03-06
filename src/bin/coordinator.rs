@@ -6,7 +6,7 @@ extern crate env_logger;
 
 use futures::Future;
 use undermoon::coordinator::service::CoordinatorService;
-use undermoon::coordinator::http_broker::HttpMetaBroker;
+use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
 use undermoon::protocol::SimpleRedisClient;
 
 fn main() {

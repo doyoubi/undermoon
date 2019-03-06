@@ -6,7 +6,7 @@ use futures::{future, Future, Stream};
 use ::common::cluster::{Host, Node};
 use ::protocol::RedisClientError;
 use super::cluster::FullMetaData;
-use super::broker::{MetaDataBroker, ElectionBrokerError, MetaDataBrokerError};
+use super::broker::{MetaDataBroker, MetaManipulationBrokerError, MetaDataBrokerError};
 
 pub trait ProxiesRetriever: Sync + Send + 'static {
     fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
@@ -190,7 +190,7 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynch
 #[derive(Debug)]
 pub enum CoordinateError {
     Io(io::Error),
-    Election(ElectionBrokerError),
+    MetaMani(MetaManipulationBrokerError),
     MetaData(MetaDataBrokerError),
     Redis(RedisClientError),
     InvalidReply,

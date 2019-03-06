@@ -1,10 +1,22 @@
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::Error;
 
 #[derive(Debug, Clone)]
 pub enum SlotRangeTag {
     Migrating(String),
     None,
+}
+
+impl Serialize for SlotRangeTag {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer,
+    {
+        let tag = match self {
+            SlotRangeTag::Migrating(dst) => format!("migrating {}", dst),
+            SlotRangeTag::None => String::new(),
+        };
+        serializer.serialize_str(&tag)
+    }
 }
 
 impl<'de> Deserialize<'de> for SlotRangeTag {
@@ -25,14 +37,14 @@ impl<'de> Deserialize<'de> for SlotRangeTag {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SlotRange {
     pub start: usize,
     pub end: usize,
     pub tag: SlotRangeTag,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Node {
     address: String,
     proxy_address: String,
