@@ -1,6 +1,7 @@
 extern crate tokio;
 extern crate tokio_core;
 extern crate futures;
+extern crate futures_timer;
 extern crate atomic_option;
 extern crate crc16;
 extern crate caseless;

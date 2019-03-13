@@ -4,6 +4,9 @@ Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol.
 # Architecture
 ![architecture](docs/architecture.svg)
 
+# Broker
+Since rust does not have a good etcd v3 client. We use a [proxy service](https://github.com/doyoubi/overmoon) written in Golang as a broker.
+
 # Initialize Server-side Proxy
 ```
 > ./undermoon  # runs on port 5299 and forward commands to 127.0.0.1:6379

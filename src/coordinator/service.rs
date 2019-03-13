@@ -1,6 +1,8 @@
 use std::iter;
-use futures::{Future, stream, Stream};
+use std::time::Duration;
+use futures::{future, Future, stream, Stream};
 use futures::future::select_all;
+use futures_timer::Delay;
 use ::common::utils::ThreadSafe;
 use ::protocol::{RedisClient, SimpleRedisClient};
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
@@ -82,7 +84,17 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
             s.fold(self.clone(), |service, ()| {
                 debug!("start detecting failures");
                 defer!(debug!("detecting finished a round"));
-                service.gen_detector().run().collect().map(move |_| service)
+                let delay = Delay::new(Duration::from_secs(1))
+                    .map_err(CoordinateError::Io);
+                service.gen_detector().run().collect()
+                    .then(move |res| {
+                        if let Err(e) = res {
+                            error!("detector stream err {:?}", e)
+                        }
+                        future::ok(())
+                    })
+                    .join(delay)
+                    .then(move |_| future::ok(service))
             }).map(|_| debug!("loop_detect stopped"))
         )
     }
@@ -93,7 +105,17 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
             s.fold(self.clone(), |service, ()| {
                 debug!("start sync local meta data");
                 defer!(debug!("local sync finished a round"));
-                service.gen_local_meta_synchronizer().run().collect().map(move |_| service)
+                let delay = Delay::new(Duration::from_secs(1))
+                    .map_err(CoordinateError::Io);
+                service.gen_local_meta_synchronizer().run().collect()
+                    .then(move |res| {
+                        if let Err(e) = res {
+                            error!("sync stream err {:?}", e)
+                        }
+                        future::ok(())
+                    })
+                    .join(delay)
+                    .then(move |_| future::ok(service))
             }).map(|_| debug!("loop_sync stopped"))
         )
     }
@@ -104,7 +126,17 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
             s.fold(self.clone(), |service, ()| {
                 debug!("start sync peer meta data");
                 defer!(debug!("peer sync finished a round"));
-                service.gen_peer_meta_synchronizer().run().collect().map(move |_| service)
+                let delay = Delay::new(Duration::from_secs(1))
+                    .map_err(CoordinateError::Io);
+                service.gen_peer_meta_synchronizer().run().collect()
+                    .then(|res| {
+                        if let Err(e) = res {
+                            error!("peer sync stream err {:?}", e)
+                        }
+                        future::ok(())
+                    })
+                    .join(delay)
+                    .then(move |_| future::ok(service))
             }).map(|_| debug!("loop_sync stopped"))
         )
     }
@@ -115,7 +147,17 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
             s.fold(self.clone(), |service, ()| {
                 debug!("start handling failures");
                 defer!(debug!("handling finished a round"));
-                service.gen_failure_handler().run().collect().map(move |_| service)
+                let delay = Delay::new(Duration::from_secs(1))
+                    .map_err(CoordinateError::Io);
+                service.gen_failure_handler().run().collect()
+                    .then(|res| {
+                        if let Err(e) = res {
+                            error!("failure handler stream err {:?}", e)
+                        }
+                        future::ok(())
+                    })
+                    .join(delay)
+                    .then(move |_| future::ok(service))
             }).map(|_| debug!("loop_failure_handler stopped"))
         )
     }
