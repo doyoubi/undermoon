@@ -26,6 +26,7 @@ pub struct CoordinatorService<
 impl<DB: MetaDataBroker + ThreadSafe + Clone,
     MB: MetaManipulationBroker + Clone,
     C: RedisClient + ThreadSafe + Clone> CoordinatorService<DB, MB, C> {
+
     pub fn new(reporter_id: String, data_broker: DB, mani_broker: MB, client: C) -> Self {
         Self{
             reporter_id,
@@ -34,11 +35,7 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
             client,
         }
     }
-}
 
-impl<DB: MetaDataBroker + ThreadSafe + Clone,
-    MB: MetaManipulationBroker + Clone,
-    C: RedisClient + ThreadSafe + Clone> CoordinatorService<DB, MB, C> {
     pub fn run(&self) -> impl Future<Item = (), Error = CoordinateError> {
         select_all(vec![
             self.loop_detect(),

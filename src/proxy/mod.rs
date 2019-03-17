@@ -4,3 +4,4 @@ pub mod executor;
 mod backend;
 mod slot;
 mod database;
+pub mod service;

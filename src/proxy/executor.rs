@@ -3,6 +3,7 @@ use std::sync;
 use protocol::{Resp, BulkStr, Array};
 use caseless;
 use ::common::db::HostDBMap;
+use ::common::utils::ThreadSafe;
 use super::session::{CmdCtxHandler, CmdCtx};
 use super::backend::{RecoverableBackendNode, CmdTask};
 use super::database::{DatabaseMap, DBTag};
@@ -20,6 +21,8 @@ impl SharedForwardHandler {
         }
     }
 }
+
+impl ThreadSafe for SharedForwardHandler {}
 
 impl CmdCtxHandler for SharedForwardHandler {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
