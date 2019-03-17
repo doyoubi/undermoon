@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use futures::{Future, future};
-use ::common::db::HostDBMap;
+use ::common::db::{HostDBMap, DBMapFlags};
 use ::common::cluster::{Host, SlotRange};
 use protocol::{RedisClient, SimpleRedisClient, Resp};
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
@@ -17,7 +17,7 @@ impl<C: RedisClient> HostMetaRespSender<C> {
 impl<C: RedisClient> HostMetaSender for HostMetaRespSender<C> {
     fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
         Box::new(
-            send_meta(&self.client, host, "SETDB".to_string(), "NOFLAG".to_string())
+            send_meta(&self.client, host, "SETDB".to_string(), DBMapFlags{ force: false })
         )
     }
 }
@@ -33,7 +33,7 @@ impl<C: RedisClient> PeerMetaRespSender<C> {
 impl<C: RedisClient> HostMetaSender for PeerMetaRespSender<C> {
     fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
         Box::new(
-            send_meta(&self.client, host, "SETPEER".to_string(), "NOFLAG".to_string())
+            send_meta(&self.client, host, "SETPEER".to_string(), DBMapFlags{ force: false })
         )
     }
 }
@@ -67,7 +67,7 @@ impl<B: MetaDataBroker> HostMetaRetriever for PeerMetaRetriever<B> {
 }
 
 // sub_command should be SETDB or SETPEER
-fn send_meta<C: RedisClient>(client: &C, host: Host, sub_command: String, flag: String) -> impl Future<Item = (), Error = CoordinateError> + Send {
+fn send_meta<C: RedisClient>(client: &C, host: Host, sub_command: String, flags: DBMapFlags) -> impl Future<Item = (), Error = CoordinateError> + Send {
     let address = host.get_address().clone();
     let epoch = host.get_epoch();
     let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
@@ -75,9 +75,9 @@ fn send_meta<C: RedisClient>(client: &C, host: Host, sub_command: String, flag: 
         let dbs = db_map.entry(node.get_cluster_name().clone()).or_insert(HashMap::new());
         dbs.insert(node.get_address().clone(), node.get_slots().clone());
     }
-    let args = HostDBMap::new(epoch, db_map).db_map_to_args();
+    let args = HostDBMap::new(epoch, flags.clone(), db_map).db_map_to_args();
     let mut cmd = vec![
-        "UMCTL".to_string(), sub_command.clone(), epoch.to_string(), flag,
+        "UMCTL".to_string(), sub_command.clone(), epoch.to_string(), flags.to_arg(),
     ];
     cmd.extend(args.into_iter());
     debug!("sending meta {} {:?}", sub_command, cmd);

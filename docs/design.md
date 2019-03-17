@@ -61,7 +61,7 @@ If node B fails, the coordinators should create a new one and tell node A to cha
 
 - nmctl setdb epoch flags [dbname1 ip:port slot_range] ...
 - `epoch` is the epoch of host
-- `flags` is reserved. Currently it's just NOFLAG
+- `flags` is reserved. Currently it may be NOFLAG or FORCE. In the future if we add more flags, separate them by ','.
 - `slot_range` can be
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
@@ -70,7 +70,7 @@ If node B fails, the coordinators should create a new one and tell node A to cha
 
 - nmctl setpeer epoch flags [dbname1 ip:port slot_range] ...
 - `epoch` is the epoch of host
-- `flags` is reserved. Currently it's just NOFLAG
+- `flags` is reserved. Currently it may be NOFLAG or FORCE.
 - `slot_range` can be in the form of 0-1000
 
 # Epoch

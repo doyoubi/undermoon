@@ -25,12 +25,18 @@ OK
 ```
 
 ## TODO
-- Basic proxy implementation (done)
+- ~~Basic proxy implementation~~ (done)
 - Backend connection pool
-- Slot map and cluster map (done)
-- Implement AUTH command to select database (done)
-- Implement meta data manipulation api (done)
+- ~~Slot map and cluster map~~ (done)
+- ~~Implement AUTH command to select database~~ (done)
+- ~~Implement meta data manipulation api~~ (done)
 - Implement coordinator (in progress)
 - Implement Redis Replication Protocol
 - Support slot migration via replication
 - Optimize RESP parsing
+- Implement CLUSTER SLOTS
+- Implement commands to get proxy meta
+- Track spawned futures
+- Simple script to push configuration to proxy for demonstration
+- Batch syscall
+- Add configuration

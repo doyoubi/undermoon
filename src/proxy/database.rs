@@ -94,7 +94,9 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     }
 
     pub fn set_dbs(&self, db_map: HostDBMap) -> Result<(), DBError> {
-        if self.local_dbs.read().unwrap().0 >= db_map.get_epoch() {
+        let force = db_map.get_flags().force;
+
+        if !force && self.local_dbs.read().unwrap().0 >= db_map.get_epoch() {
             return Err(DBError::OldEpoch)
         }
 
@@ -106,7 +108,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         }
 
         let mut local = self.local_dbs.write().unwrap();
-        if epoch <= local.0 {
+        if !force && epoch <= local.0 {
             return Err(DBError::OldEpoch)
         }
         *local = (epoch, map);
@@ -114,7 +116,9 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     }
 
     pub fn set_peers(&self, db_map: HostDBMap) -> Result<(), DBError> {
-        if self.remote_dbs.read().unwrap().0 >= db_map.get_epoch() {
+        let force = db_map.get_flags().force;
+
+        if !force && self.remote_dbs.read().unwrap().0 >= db_map.get_epoch() {
             return Err(DBError::OldEpoch)
         }
 
@@ -126,7 +130,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         }
 
         let mut remote = self.remote_dbs.write().unwrap();
-        if epoch <= remote.0 {
+        if !force && epoch <= remote.0 {
             return Err(DBError::OldEpoch)
         }
         *remote = (epoch, map);

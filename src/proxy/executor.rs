@@ -122,6 +122,7 @@ impl ForwardHandler {
                 return
             }
         };
+
         debug!("local meta data: {:?}", db_map);
         match self.db.set_dbs(db_map) {
             Ok(()) => {
@@ -143,6 +144,7 @@ impl ForwardHandler {
                 return
             }
         };
+
         match self.db.set_peers(db_map) {
             Ok(()) => {
                 debug!("Successfully update peer meta data");
