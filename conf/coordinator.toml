@@ -1,0 +1,2 @@
+broker_address = "127.0.0.1:7799"
+reporter_id = "127.0.0.1:6699"

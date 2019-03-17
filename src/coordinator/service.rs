@@ -12,12 +12,18 @@ use super::detector::{BrokerProxiesRetriever, PingFailureDetector, BrokerFailure
 use super::sync::{HostMetaRespSender, PeerMetaRespSender, LocalMetaRetriever, PeerMetaRetriever};
 use super::recover::{BrokerProxyFailureRetriever, BrokerNodeFailureRetriever, ReplaceNodeHandler};
 
+#[derive(Debug, Clone)]
+pub struct CoordinatorConfig {
+    pub broker_address: String,
+    pub reporter_id: String,
+}
+
 #[derive(Clone)]
 pub struct CoordinatorService<
         DB: MetaDataBroker + ThreadSafe + Clone,
         MB: MetaManipulationBroker + Clone,
         C: RedisClient + ThreadSafe + Clone> {
-    reporter_id: String,
+    config: CoordinatorConfig,
     data_broker: DB,
     mani_broker: MB,
     client: C,
@@ -27,9 +33,9 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
     MB: MetaManipulationBroker + Clone,
     C: RedisClient + ThreadSafe + Clone> CoordinatorService<DB, MB, C> {
 
-    pub fn new(reporter_id: String, data_broker: DB, mani_broker: MB, client: C) -> Self {
+    pub fn new(config: CoordinatorConfig, data_broker: DB, mani_broker: MB, client: C) -> Self {
         Self{
-            reporter_id,
+            config,
             data_broker,
             mani_broker,
             client,
@@ -37,6 +43,8 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
     }
 
     pub fn run(&self) -> impl Future<Item = (), Error = CoordinateError> {
+        info!("coordinator config: {:?}", self.config);
+
         select_all(vec![
             self.loop_detect(),
             self.loop_local_sync(),
@@ -50,7 +58,7 @@ impl<DB: MetaDataBroker + ThreadSafe + Clone,
     fn gen_detector(&self) -> impl FailureDetector {
         let retriever = BrokerProxiesRetriever::new(self.data_broker.clone());
         let checker = PingFailureDetector::new(self.client.clone());
-        let reporter = BrokerFailureReporter::new("test_id".to_string(), self.data_broker.clone());
+        let reporter = BrokerFailureReporter::new(self.config.reporter_id.clone(), self.data_broker.clone());
         SeqFailureDetector::new(retriever, checker, reporter)
     }
 

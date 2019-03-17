@@ -39,4 +39,4 @@ OK
 - Track spawned futures
 - Simple script to push configuration to proxy for demonstration
 - Batch syscall
-- Add configuration
+- ~~Add configuration~~ (done)

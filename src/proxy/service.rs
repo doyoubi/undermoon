@@ -5,25 +5,34 @@ use super::session::{Session, handle_conn};
 use super::session::CmdCtxHandler;
 use super::executor::SharedForwardHandler;
 
+#[derive(Debug, Clone)]
+pub struct ServerProxyConfig {
+    pub address: String,
+}
+
 #[derive(Clone)]
 pub struct ServerProxyService<H: CmdCtxHandler + ThreadSafe + Clone> {
-    address: String,
+    config: ServerProxyConfig,
     cmd_ctx_handler: H,
 }
 
 impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
-    pub fn new(address: String, cmd_ctx_handler: H) -> Self {
+    pub fn new(config: ServerProxyConfig, cmd_ctx_handler: H) -> Self {
         Self{
-            address,
+            config,
             cmd_ctx_handler,
         }
     }
 
     pub fn run(&self) -> Box<dyn Future<Item = (), Error = ()> + Send> {
-        let address = match self.address.parse() {
+        info!("config: {:?}", self.config);
+
+        let address = self.config.address.clone();
+
+        let address = match address.parse() {
             Ok(a) => a,
             Err(e) => {
-                error!("failed to parse address: {}", self.address);
+                error!("failed to parse address: {}", address);
                 return Box::new(future::err(()))
             },
         };
@@ -31,7 +40,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let listener = match TcpListener::bind(&address) {
             Ok(l) => l,
             Err(e) => {
-                error!("unable to bind address: {}", self.address);
+                error!("unable to bind address: {}", address);
                 return Box::new(future::err(()))
             },
         };

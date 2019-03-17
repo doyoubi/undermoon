@@ -229,7 +229,7 @@ mod tests {
     }
 
     fn check<C: FailureChecker>(checker: C) {
-        checker.check("".to_string()).wait();
+        checker.check("".to_string()).wait().unwrap();
     }
 
     #[test]

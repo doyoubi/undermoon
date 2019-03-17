@@ -109,7 +109,7 @@ mod tests {
         fn get_cluster_names(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
             Box::new(stream::empty())
         }
-        fn get_cluster(&self, name: String) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send> {
+        fn get_cluster(&self, _name: String) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send> {
             Box::new(future::ok(None))
         }
         fn get_host_addresses(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
@@ -118,13 +118,13 @@ mod tests {
                 Ok::<String, MetaDataBrokerError>(NODE2.to_string()),
             ]))
         }
-        fn get_host(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
+        fn get_host(&self, _address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
             Box::new(future::ok(None))
         }
-        fn get_peer(&self, address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
+        fn get_peer(&self, _address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
             Box::new(future::ok(None))
         }
-        fn add_failure(&self, address: String, reporter_id: String) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> {
+        fn add_failure(&self, address: String, _reporter_id: String) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> {
             self.reported_failures.lock().unwrap().push(address);
             Box::new(future::ok(()))
         }
@@ -140,7 +140,8 @@ mod tests {
         let checker = PingFailureDetector::new(DummyClient{});
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
         let detector = SeqFailureDetector::new(retriever, checker, reporter);
-        detector.run().into_future().wait();
+        let res = detector.run().into_future().wait();
+        assert!(res.is_ok());
         let failed_nodes = broker.reported_failures.lock().unwrap().clone();
         assert_eq!(1, failed_nodes.len());
         assert_eq!(NODE2, failed_nodes[0]);
