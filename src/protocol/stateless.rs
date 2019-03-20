@@ -1,10 +1,12 @@
-use std::io;
-use std::io::BufRead;
+use std::mem;
+use std::io::{self, BufRead};
 use std::error::Error;
 use std::fmt;
 use btoi::btoi;
+use futures::{Future, Poll, Async};
+use tokio::prelude::AsyncRead;
 use super::resp::{Resp, BulkStr, BinSafeStr, Array};
-use super::decoder::{CR, LF};
+use super::decoder::{CR, LF, DecodeError};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -28,6 +30,59 @@ impl Error for ParseError {
         match self {
             ParseError::Io(err) => Some(err),
             _ => None,
+        }
+    }
+}
+
+pub fn stateless_decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
+    where R: AsyncRead + io::BufRead + Send + 'static
+{
+    RespParser::new(reader)
+}
+
+#[derive(Debug)]
+enum State<R> {
+    Reading(R),
+    Empty,
+}
+
+pub struct RespParser<R: AsyncRead + io::BufRead + Send + 'static> {
+    state: State<R>
+}
+
+impl<R: AsyncRead + io::BufRead + Send + 'static> RespParser<R> {
+    fn new(reader: R) -> Self {
+        Self{state: State::Reading(reader)}
+    }
+}
+
+impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
+    type Item = (R, Resp);
+    type Error = DecodeError;
+
+    fn poll(&mut self) -> Poll<Self::Item, DecodeError> {
+        let (resp, consumed) = match self.state {
+            State::Reading(ref mut reader) => {
+                let mut buf = match reader.fill_buf() {
+                    Ok(buf) => buf,
+                    Err(e) => return Err(DecodeError::Io(e)),
+                };
+                match parse_resp(buf) {
+                    Ok(r) => r,
+                    Err(ParseError::NotEnoughData) => return Ok(Async::NotReady),
+                    Err(ParseError::InvalidProtocol) => return Err(DecodeError::InvalidProtocol),
+                    Err(ParseError::Io(e)) => return Err(DecodeError::Io(e)),
+                }
+            },
+            State::Empty => panic!("poll ReadUntil after it's done"),
+        };
+
+        match mem::replace(&mut self.state, State::Empty) {
+            State::Reading(mut reader) => {
+                reader.consume(consumed);
+                Ok(Async::Ready((reader, resp)))
+            },
+            State::Empty => unreachable!(),
         }
     }
 }
