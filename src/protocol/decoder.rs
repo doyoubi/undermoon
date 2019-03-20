@@ -37,8 +37,8 @@ impl Error for DecodeError {
     }
 }
 
-const CR: u8 = '\r' as u8;
-const LF: u8 = '\n' as u8;
+pub const CR: u8 = '\r' as u8;
+pub const LF: u8 = '\n' as u8;
 
 fn bytes_to_int(bytes: &[u8]) -> Result<i64, DecodeError> {
     const ZERO : u8 = '0' as u8;
@@ -133,7 +133,7 @@ pub fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = Decode
                         .and_then(|(reader, a)| future::ok((reader, Resp::Arr(a)))))
                 }
                 prefix => {
-                    println!("Unexpected prefix {:?}", prefix);
+                    error!("Unexpected prefix {:?}", prefix);
                     Box::new(future::err(DecodeError::InvalidProtocol))
                 },
             };
@@ -254,7 +254,6 @@ mod tests {
     fn test_decode_array() {
         let c = io::Cursor::new("2\r\n$1\r\na\r\n$2\r\nbc\r\n".as_bytes());
         let r = decode_array(c).wait();
-        println!("{:?}", r);
         assert!(r.is_ok());
         let (_, a) = r.unwrap();
         assert_eq!(Array::Arr(vec![

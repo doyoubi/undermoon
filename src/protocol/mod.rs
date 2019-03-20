@@ -2,6 +2,7 @@ mod resp;
 mod decoder;
 mod encoder;
 mod client;
+mod stateless;
 
 pub use self::decoder::{decode_resp, DecodeError};
 pub use self::encoder::{resp_to_buf, encode_resp};
