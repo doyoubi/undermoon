@@ -10,7 +10,7 @@ use futures::sync::mpsc;
 use futures::Sink;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
-use protocol::{Resp, Array, decode_resp, DecodeError, resp_to_buf};
+use protocol::{Resp, Array, decode_resp, DecodeError, resp_to_buf, stateless_decode_resp};
 use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair, CommandError};
 use super::backend::CmdTask;
 use super::database::{DEFAULT_DB, DBTag};
@@ -57,7 +57,7 @@ impl CmdTask for CmdCtx {
     fn set_result(self, result: CommandResult) {
         let res = self.reply_sender.send(result);
         if let Err(e) = res {
-            println!("Failed to send result {:?}", e);
+            error!("Failed to send result {:?}", e);
         }
     }
 }
@@ -104,8 +104,11 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) -> impl Future<Item = (), Err
     let writer_handler = handle_write(writer, rx);
 
     let handler = reader_handler.select(writer_handler)
-        .then(move |_| {
-            println!("Session Connection closed.");
+        .then(move |res| {
+            if let Err((e, _)) = res {
+                error!("Sesssion error: {:?}", e);
+            }
+            info!("Session Connection closed");
             Result::Ok::<(), SessionError>(())
         });
     handler
@@ -116,7 +119,7 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
 {
     let reader_stream = stream::iter_ok(iter::repeat(()));
     let handler = reader_stream.fold((handler, tx, reader), move |(handler, tx, reader), _| {
-        decode_resp(reader)
+        stateless_decode_resp(reader)
             .then(|res| {
                 let fut : Box<Future<Item=_, Error=SessionError> + Send> = match res {
                     Ok((reader, resp)) => {
@@ -128,7 +131,7 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
                         let send_fut = tx.send(reply_receiver)
                             .map(move |tx| (handler, tx, reader))
                             .map_err(|e| {
-                                println!("rx closed, {:?}", e);
+                                warn!("rx closed, {:?}", e);
                                 SessionError::Canceled
                             });
                         Box::new(send_fut)
@@ -136,12 +139,13 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
                     Err(DecodeError::InvalidProtocol) => {
                         let (reply_sender, reply_receiver) = new_command_pair(Command::new(Resp::Arr(Array::Nil)));
 
+                        debug!("invalid protocol");
                         let reply = Resp::Error(String::from("Err invalid protocol").into_bytes());
                         reply_sender.send(Ok(reply)).unwrap();
 
                         let send_fut = tx.send(reply_receiver)
                             .map_err(|e| {
-                                println!("rx closed {:?}", e);
+                                warn!("rx closed {:?}", e);
                                 SessionError::Canceled
                             })
                             .and_then(move |_tx| future::err(SessionError::InvalidProtocol));
@@ -150,7 +154,7 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
                     Err(DecodeError::Io(e)) => {
                         match e.kind() {
                             io::ErrorKind::UnexpectedEof => info!("connection closed by peer when reading from client"),
-                            k => error!("io error when reading from client {:?}", &e),
+                            k => error!("io error when reading from client: {:?}", &e),
                         };
                         Box::new(future::err(SessionError::Io(e)))
                     },

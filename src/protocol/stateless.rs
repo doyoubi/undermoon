@@ -65,13 +65,25 @@ impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
             State::Reading(ref mut reader) => {
                 let mut buf = match reader.fill_buf() {
                     Ok(buf) => buf,
-                    Err(e) => return Err(DecodeError::Io(e)),
+                    Err(e) => {
+                        if e.kind() == io::ErrorKind::WouldBlock {
+                            return Ok(Async::NotReady);
+                        }
+                        error!("io error when parsing {:?}", e);
+                        return Err(DecodeError::Io(e));
+                    },
                 };
                 match parse_resp(buf) {
                     Ok(r) => r,
                     Err(ParseError::NotEnoughData) => return Ok(Async::NotReady),
                     Err(ParseError::InvalidProtocol) => return Err(DecodeError::InvalidProtocol),
-                    Err(ParseError::Io(e)) => return Err(DecodeError::Io(e)),
+                    Err(ParseError::Io(e)) => {
+                        if e.kind() == io::ErrorKind::WouldBlock {
+                            return Ok(Async::NotReady)
+                        }
+                        error!("io error when parsing {:?}", e);
+                        return Err(DecodeError::Io(e))
+                    },
                 }
             },
             State::Empty => panic!("poll ReadUntil after it's done"),

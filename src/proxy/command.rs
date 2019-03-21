@@ -58,25 +58,25 @@ impl Command {
         };
 
         let cmd_name = match str::from_utf8(first) {
-            Ok(cmd_name) => cmd_name,
+            Ok(cmd_name) => cmd_name.to_uppercase(),
             Err(_) => return CmdType::Invalid,
         };
 
-        if caseless::canonical_caseless_match_str(cmd_name, "PING") {
+        if cmd_name.eq("PING") {
             CmdType::Ping
-        } else if caseless::canonical_caseless_match_str(cmd_name, "INFO") {
+        } else if cmd_name.eq("INFO") {
             CmdType::Info
-        } else if caseless::canonical_caseless_match_str(cmd_name, "Auth") {
+        } else if cmd_name.eq("AUTH") {
             CmdType::Auth
-        } else if caseless::canonical_caseless_match_str(cmd_name, "Quit") {
+        } else if cmd_name.eq("QUIT") {
             CmdType::Quit
-        } else if caseless::canonical_caseless_match_str(cmd_name, "Echo") {
+        } else if cmd_name.eq("ECHO") {
             CmdType::Echo
-        } else if caseless::canonical_caseless_match_str(cmd_name, "Select") {
+        } else if cmd_name.eq("SELECT") {
             CmdType::Select
-        } else if caseless::canonical_caseless_match_str(cmd_name, "UmCtl") {
+        } else if cmd_name.eq("UMCTL") {
             CmdType::UmCtl
-        } else if caseless::canonical_caseless_match_str(cmd_name, "Cluster") {
+        } else if cmd_name.eq("CLUSTER") {
             CmdType::Cluster
         } else {
             CmdType::Others
@@ -137,8 +137,14 @@ impl CmdReplySender {
 
     pub fn send(&self, res: CommandResult) -> Result<(), CommandError> {
         // Must not send twice.
-        self.reply_sender.take(Ordering::SeqCst).unwrap().send(res)
-            .map_err(|_| CommandError::Canceled)
+        match self.reply_sender.take(Ordering::SeqCst) {
+            Some(reply_sender) => reply_sender.send(res)
+                .map_err(|_| CommandError::Canceled),
+            None => {
+                error!("unexpected send again");
+                Err(CommandError::InnerError)
+            },
+        }
     }
 
     pub fn try_send(&self, res: CommandResult) -> Option<Result<(), CommandError>> {
@@ -166,6 +172,7 @@ pub enum CommandError {
     UnexpectedResponse,
     Dropped,
     Canceled,
+    InnerError,
 }
 
 impl fmt::Display for CommandError {

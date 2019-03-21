@@ -163,7 +163,7 @@ impl ForwardHandler {
 
 impl CmdCtxHandler for ForwardHandler {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
-        debug!("get command {:?}", cmd_ctx.get_cmd());
+//        debug!("get command {:?}", cmd_ctx.get_cmd());
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {
             CmdType::Ping => {
@@ -188,7 +188,7 @@ impl CmdCtxHandler for ForwardHandler {
             CmdType::Others => {
                 let res = self.db.send(cmd_ctx);
                 if let Err(e) = res {
-                    println!("Failed to foward cmd_ctx: {:?}", e)
+                    error!("Failed to foward cmd_ctx: {:?}", e)
                 }
             }
             CmdType::Invalid => {

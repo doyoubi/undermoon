@@ -11,7 +11,7 @@ use futures::Sink;
 use tokio;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
-use protocol::{Resp, decode_resp, DecodeError, resp_to_buf};
+use protocol::{Resp, decode_resp, DecodeError, resp_to_buf, stateless_decode_resp};
 use super::command::{CommandError, CommandResult};
 
 pub type BackendResult = Result<Resp, BackendError>;
@@ -32,6 +32,7 @@ pub trait CmdTaskSender {
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError>;
 }
 
+// TODO: change to use AtomicOption
 pub struct RecoverableBackendNode<T: CmdTask> {
     addr: sync::Arc<String>,
     node: sync::Arc<sync::RwLock<Option<BackendNode<T>>>>,
@@ -57,6 +58,7 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
             let addr = self.addr.parse().unwrap();
             let sock = TcpStream::connect(&addr);
             let fut = sock.then(move |res| {
+                debug!("sock result: {:?}", res);
                 let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
                     Ok(sock) => {
                         let (node, node_fut) = BackendNode::<T>::new_pair(sock, ReplyCommitHandler{});
@@ -65,12 +67,13 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
                         Box::new(node_fut)
                     },
                     Err(e) => {
+                        error!("sock err: {:?}", e);
                         cmd_task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
                         Box::new(future::err(BackendError::Io(e)))
                     },
                 };
                 fut.then(move |r| {
-                    println!("backend exited with result {:?}", r);
+                    info!("backend exited with result {:?}", r);
                     node_arc2.write().unwrap().take();
                     future::ok(())
                 })
@@ -79,13 +82,20 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
             tokio::spawn(fut);
             return Ok(());
         }
-        let res = self.node.read().unwrap().as_ref().unwrap().send(cmd_task);
+
+        let res = match self.node.read().unwrap().as_ref() {
+            Some(n) => n.send(cmd_task),
+            None => {
+                cmd_task.set_result(Err(CommandError::InnerError));
+                return Err(BackendError::NodeNotFound);
+            }
+        };
         match res {
             Ok(()) => Ok(()),
             Err(e) => {
                 // if it fails, remove this connection.
                 self.node.write().unwrap().take();
-                println!("reset backend connecton {:?}", e);
+                error!("reset backend connecton {:?}", e);
                 Err(e)
             }
         }
@@ -130,12 +140,13 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
 
     let handler = reader_handler.select(writer_handler)
         .then(move |res| {
-            println!("Backend connection closed.");
+            warn!("Backend connection closed.");
             match res {
                 Ok(((), _another_future)) => {
                     Result::Ok::<(), BackendError>(())
                 },
                 Err((e, _another_future)) => {
+                    error!("Backend connection closed with error: {:?}", e);
                     Result::Err(e)
                 },
             }
@@ -158,13 +169,13 @@ fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: 
                             let fut = tx.send(task)
                                 .map(move |tx| (writer, tx))
                                 .map_err(|e| {
-                                    println!("rx closed {:?}", e);
+                                    error!("rx closed {:?}", e);
                                     BackendError::Canceled
                                 });
                             Box::new(fut)
                         },
                         Err(e) => {
-                            println!("Failed to write");
+                            error!("Failed to write");
                             task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
                             Box::new(future::err(BackendError::Io(e)))
                         },
@@ -173,9 +184,9 @@ fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: 
                 })
         });
     handler.map(|_| {
-        println!("write future closed")
+        warn!("write future closed")
     }).map_err(|e| {
-        println!("write future closed with error {:?}", e);
+        error!("write future closed with error {:?}", e);
         e
     })
 }
@@ -186,7 +197,7 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
     let rx = rx.into_future();
     let reader_stream = stream::iter_ok(iter::repeat(()));
     let read_handler = reader_stream.fold((handler, rx, reader), move |(handler, rx, reader), _| {
-        decode_resp(reader)
+        stateless_decode_resp(reader)
             .then(|res| {
                 let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
                     Ok((reader, resp)) => {
@@ -228,6 +239,7 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
 #[derive(Debug)]
 pub enum BackendError {
     Io(io::Error),
+    NodeNotFound,
     InvalidProtocol,
     Canceled,
 }
