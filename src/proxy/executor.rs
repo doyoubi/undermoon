@@ -5,7 +5,7 @@ use caseless;
 use ::common::db::HostDBMap;
 use ::common::utils::ThreadSafe;
 use super::session::{CmdCtxHandler, CmdCtx};
-use super::backend::{RecoverableBackendNode, CmdTask};
+use super::backend::{RecoverableBackendNode, CmdTask, RRSenderGroup};
 use super::database::{DatabaseMap, DBTag};
 use super::command::{CmdType};
 
@@ -32,7 +32,7 @@ impl CmdCtxHandler for SharedForwardHandler {
 
 pub struct ForwardHandler {
     service_address: String,
-    db: DatabaseMap<RecoverableBackendNode<CmdCtx>>,
+    db: DatabaseMap<RRSenderGroup<RecoverableBackendNode<CmdCtx>>>,
 }
 
 impl ForwardHandler {

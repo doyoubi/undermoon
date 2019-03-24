@@ -5,6 +5,7 @@ use std::sync;
 use std::error::Error;
 use std::result::Result;
 use std::boxed::Box;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::{future, Future, stream, Stream};
 use futures::sync::mpsc;
 use futures::Sink;
@@ -260,5 +261,36 @@ impl Error for BackendError {
             BackendError::Io(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+const DEFAULT_GROUP_SIZE: usize = 4;
+
+pub struct RRSenderGroup<S: CmdTaskSender> {
+    senders: Vec<S>,
+    cursor: AtomicUsize,
+}
+
+impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
+    type Task = S::Task;
+
+    fn new(address: String) -> Self {
+        let mut senders = Vec::new();
+        for _ in 0..DEFAULT_GROUP_SIZE {
+            senders.push(S::new(address.clone()));
+        }
+        Self {
+            senders,
+            cursor: AtomicUsize::new(0),
+        }
+    }
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+        let index = self.cursor.fetch_add(1, Ordering::SeqCst);
+        let sender = match self.senders.get(index % self.senders.len()) {
+            Some(s) => s,
+            None => return Err(BackendError::NodeNotFound),
+        };
+        sender.send(cmd_task)
     }
 }
