@@ -198,7 +198,7 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
     let rx = rx.into_future();
     let reader_stream = stream::iter_ok(iter::repeat(()));
     let read_handler = reader_stream.fold((handler, rx, reader), move |(handler, rx, reader), _| {
-        stateless_decode_resp(reader)
+        decode_resp(reader)
             .then(|res| {
                 let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
                     Ok((reader, resp)) => {

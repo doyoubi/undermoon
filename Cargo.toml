@@ -4,8 +4,10 @@ version = "0.1.0"
 authors = ["doyoubi"]
 
 [dependencies]
+bytes = "0.4.12"
 tokio = "0.1"
 tokio-core = "0.1"
+tokio-io = "0.1.7"
 futures = "0.1.23"
 atomic-option = "0.1"
 crc16 = "0.4.0"

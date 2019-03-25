@@ -37,6 +37,12 @@ impl Error for DecodeError {
     }
 }
 
+impl From<io::Error> for DecodeError {
+    fn from(e: io::Error) -> Self {
+        DecodeError::Io(e)
+    }
+}
+
 pub const CR: u8 = '\r' as u8;
 pub const LF: u8 = '\n' as u8;
 

@@ -99,7 +99,7 @@ impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
     }
 }
 
-fn parse_resp(buf: &[u8]) -> Result<(Resp, usize), ParseError> {
+pub fn parse_resp(buf: &[u8]) -> Result<(Resp, usize), ParseError> {
     if buf.len() == 0 {
         return Err(ParseError::NotEnoughData);
     }

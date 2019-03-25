@@ -1,3 +1,4 @@
+extern crate bytes;
 extern crate tokio;
 extern crate tokio_core;
 extern crate futures;

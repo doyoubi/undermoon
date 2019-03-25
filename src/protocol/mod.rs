@@ -3,7 +3,9 @@ mod decoder;
 mod encoder;
 mod client;
 mod stateless;
+mod codec;
 
+pub use self::codec::RespCodec;
 pub use self::stateless::stateless_decode_resp;
 pub use self::decoder::{decode_resp, DecodeError};
 pub use self::encoder::{resp_to_buf, encode_resp};
