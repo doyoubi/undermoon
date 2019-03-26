@@ -100,7 +100,7 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) -> impl Future<Item = (), Err
     let (tx, rx) = mpsc::channel(1024);
 
     let reader_handler = handle_read(handler, reader, tx);
-    let writer_handler = handle_write(writer, rx);
+    let writer_handler = handle_write(writer.buffer(20), rx);
 
     let handler = reader_handler.select(writer_handler)
         .then(move |res| {

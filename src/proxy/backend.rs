@@ -54,6 +54,7 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
         let need_init = self.node.read().unwrap().is_none();
         // Race condition here. Multiple threads might be creating new connection at the same time.
         // Maybe it's just fine. If not, lock the creating connection phrase.
+        // TODO: use existing connection when there already is.
         if need_init {
             let node_arc = self.node.clone();
             let node_arc2 = self.node.clone();
@@ -136,7 +137,7 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
 
     let (tx, rx) = mpsc::channel(1024);
 
-    let writer_handler = handle_write(task_receiver, writer, tx);
+    let writer_handler = handle_write(task_receiver, writer.buffer(20), tx);
     let reader_handler = handle_read(handler, reader, rx);
 
     let handler = reader_handler.select(writer_handler)
