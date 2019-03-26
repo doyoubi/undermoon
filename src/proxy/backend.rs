@@ -10,9 +10,10 @@ use futures::{future, Future, stream, Stream};
 use futures::sync::mpsc;
 use futures::Sink;
 use tokio;
+use tokio::codec::Decoder;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
-use protocol::{Resp, decode_resp, DecodeError, resp_to_buf, stateless_decode_resp};
+use protocol::{Resp, decode_resp, DecodeError, resp_to_buf, RespCodec};
 use super::command::{CommandError, CommandResult};
 
 pub type BackendResult = Result<Resp, BackendError>;
@@ -131,8 +132,7 @@ impl<T: CmdTask> BackendNode<T> {
 pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<T>, sock: TcpStream) -> impl Future<Item = (), Error = BackendError> + Send
     where H: ReplyHandler<T>, T: CmdTask
 {
-    let (reader, writer) = sock.split();
-    let reader = io::BufReader::new(reader);
+    let (writer, reader) = RespCodec{}.framed(sock).split();
 
     let (tx, rx) = mpsc::channel(1024);
 
@@ -156,17 +156,15 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
 }
 
 fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: mpsc::Sender<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where W: AsyncWrite + Send + 'static, T: CmdTask
+    where W: Sink<SinkItem = Resp, SinkError = io::Error> + Send + 'static, T: CmdTask
 {
-    let handler = task_receiver
-        .map_err(|()| BackendError::Canceled)
+    task_receiver.map_err(|()| BackendError::Canceled)
         .fold((writer, tx), |(writer, tx), task| {
-            let mut buf = vec![];
-            resp_to_buf(&mut buf, task.get_resp());
-            write_all(writer, buf)
+            // TODO: remove the clone
+            writer.send(task.get_resp().clone())
                 .then(|res| {
                     let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
-                        Ok((writer, _)) => {
+                        Ok(writer) => {
                             let fut = tx.send(task)
                                 .map(move |tx| (writer, tx))
                                 .map_err(|e| {
@@ -179,62 +177,47 @@ fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: 
                             error!("Failed to write");
                             task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
                             Box::new(future::err(BackendError::Io(e)))
-                        },
+                        }
                     };
                     fut
                 })
-        });
-    handler.map(|_| {
-        warn!("write future closed")
-    }).map_err(|e| {
-        error!("write future closed with error {:?}", e);
-        e
-    })
+        })
+        .map(|_| warn!("write future closed"))
+        .map_err(|e| {error!("write future closed with error {:?}", e); e})
 }
 
 fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where R: AsyncRead + io::BufRead + Send + 'static, H: ReplyHandler<T>, T: CmdTask
+    where R: Stream<Item = Resp, Error = DecodeError> + Send + 'static, H: ReplyHandler<T>, T: CmdTask
 {
     let rx = rx.into_future();
-    let reader_stream = stream::iter_ok(iter::repeat(()));
-    let read_handler = reader_stream.fold((handler, rx, reader), move |(handler, rx, reader), _| {
-        decode_resp(reader)
-            .then(|res| {
-                let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
-                    Ok((reader, resp)) => {
-                        let send_fut = rx
-                            .map_err(|((), _receiver)| {
-                                // TODO: The remaining tasks in _receiver might leak here
-                                // It's up to the tasks inside Receiver to gracefully drop themselves in destructor.
-                                println!("backend: unexpected read");
-                                BackendError::Canceled
-                            })
-                            .and_then(|(task_opt, rx)| {
-                                let task = task_opt.unwrap();
-                                task.set_result(Ok(resp));
-                                // TODO: call handler
-                                future::ok((handler, rx.into_future(), reader))
-                            });
-                        Box::new(send_fut)
-                    },
-                    Err(DecodeError::InvalidProtocol) => {
-                        println!("backend: invalid protocol");
-                        Box::new(future::err(BackendError::InvalidProtocol))
-                    },
-                    Err(DecodeError::Io(e)) => {
-                        println!("backend: io error: {:?}", e);
-                        Box::new(future::err(BackendError::Io(e)))
-                    },
-                };
-                fut
+    reader
+        .map_err(|e| {
+            match e {
+                DecodeError::InvalidProtocol => {
+                    error!("backend: invalid protocol");
+                    BackendError::InvalidProtocol
+                },
+                DecodeError::Io(e) => {
+                    error!("backend: io error: {:?}", e);
+                    BackendError::Io(e)
+                },
+            }
+        })
+        .fold((handler, rx), move |(handler, rx), resp| {
+            rx.map_err(|((), _receiver)| {
+                // The remaining tasks in _receiver might leak here
+                // It's up to the tasks inside Receiver to gracefully drop themselves in destructor.
+                error!("backend: unexpected read");
+                BackendError::Canceled
             })
-    });
-    read_handler.map(|_| {
-        println!("read future closed");
-    }).map_err(|e| {
-        println!("read future closed with error {:?}", e);
-        e
-    })
+                .and_then(|(task_opt, rx)| {
+                    let task = task_opt.unwrap();
+                    task.set_result(Ok(resp));
+                    // TODO: call handler
+                    future::ok((handler, rx.into_future()))
+                })
+        })
+        .map(|_| warn!("backend read future closed"))
 }
 
 #[derive(Debug)]
