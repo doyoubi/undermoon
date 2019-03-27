@@ -5,12 +5,13 @@ use std::fmt;
 use std::error::Error;
 use std::result::Result;
 use std::boxed::Box;
+use bytes::BytesMut;
 use futures::{future, Future, stream, Stream, Sink};
 use futures::sync::mpsc;
 use tokio::net::TcpStream;
 use tokio::codec::Decoder;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
-use protocol::{Resp, Array, decode_resp, DecodeError, resp_to_buf, stateless_decode_resp, RespCodec};
+use protocol::{Resp, Array, decode_resp, DecodeError, RespCodec, RespPacket};
 use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair, CommandError};
 use super::backend::CmdTask;
 use super::database::{DEFAULT_DB, DBTag};
@@ -60,6 +61,10 @@ impl CmdTask for CmdCtx {
             error!("Failed to send result {:?}", e);
         }
     }
+
+    fn drain_packet_data(&self) -> Option<BytesMut> {
+        self.reply_sender.get_cmd().drain_packet_data()
+    }
 }
 
 impl DBTag for CmdCtx {
@@ -100,7 +105,7 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) -> impl Future<Item = (), Err
     let (tx, rx) = mpsc::channel(1024);
 
     let reader_handler = handle_read(handler, reader, tx);
-    let writer_handler = handle_write(writer.buffer(20), rx);
+    let writer_handler = handle_write(writer, rx);
 
     let handler = reader_handler.select(writer_handler)
         .then(move |res| {
@@ -114,7 +119,7 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) -> impl Future<Item = (), Err
 }
 
 fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) -> impl Future<Item = (), Error = SessionError> + Send
-    where R: Stream<Item = Resp, Error = DecodeError> + Send + 'static, H: CmdHandler + Send + 'static
+    where R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static, H: CmdHandler + Send + 'static
 {
     reader
         .map_err(|e| match e {
@@ -125,7 +130,7 @@ fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) 
         .map(|_| ())
 }
 
-fn handle_read_resp<H>(handler: H, tx: mpsc::Sender<CmdReplyReceiver>, resp: Resp) -> impl Future<Item = (H, mpsc::Sender<CmdReplyReceiver>), Error = SessionError> + Send
+fn handle_read_resp<H>(handler: H, tx: mpsc::Sender<CmdReplyReceiver>, resp: Box<RespPacket>) -> impl Future<Item = (H, mpsc::Sender<CmdReplyReceiver>), Error = SessionError> + Send
     where H: CmdHandler + Send + 'static
 {
     let (reply_sender, reply_receiver) = new_command_pair(Command::new(resp));
@@ -142,7 +147,7 @@ fn handle_read_resp<H>(handler: H, tx: mpsc::Sender<CmdReplyReceiver>, resp: Res
 }
 
 fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Future<Item = (), Error = SessionError> + Send
-    where W: Sink<SinkItem = Resp, SinkError = io::Error> + Send + 'static
+    where W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static
 {
     rx.map_err(|()| SessionError::Canceled)
         .fold(writer, handle_write_resp)
@@ -150,19 +155,21 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
 }
 
 fn handle_write_resp<W>(writer: W, reply_receiver: CmdReplyReceiver) -> impl Future<Item = W, Error = SessionError> + Send
-    where W: Sink<SinkItem = Resp, SinkError = io::Error> + Send + 'static
+    where W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static
 {
     reply_receiver.wait_response()
         .map_err(SessionError::CmdErr)
         .then(|res| match res {
-                Ok(resp) => {
-                    writer.send(resp)
+                Ok(packet) => {
+                    writer.send(packet)
                         .map_err(SessionError::Io)
                 },
                 Err(e) => {
                     let err_msg = format!("Err cmd error {:?}", e);
                     error!("{}", err_msg);
-                    writer.send(Resp::Error(err_msg.into_bytes()))
+                    let resp = Resp::Error(err_msg.into_bytes());
+                    let packet = Box::new(RespPacket::new(resp));
+                    writer.send(packet)
                         .map_err(SessionError::Io)
                 },
         })

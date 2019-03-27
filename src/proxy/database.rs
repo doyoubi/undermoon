@@ -5,7 +5,7 @@ use std::iter::Iterator;
 use std::error::Error;
 use std::fmt;
 use caseless;
-use protocol::{Resp, Array, BulkStr};
+use protocol::{Resp, Array, BulkStr, RespPacket};
 use ::common::db::HostDBMap;
 use ::common::cluster::{SlotRange, SlotRangeTag};
 use super::backend::CmdTask;
@@ -75,10 +75,12 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
             Some(remote_db) => remote_db.send_remote(cmd_task),
             None => {
                 if db_exists {
-                    cmd_task.set_result(Ok(Resp::Error(format!("slot not found: {}", db_name.clone()).into_bytes())));
+                    let resp = Resp::Error(format!("slot not found: {}", db_name.clone()).into_bytes());
+                    cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::SlotNotCovered)
                 } else {
-                    cmd_task.set_result(Ok(Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes())));
+                    let resp = Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes());
+                    cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::DBNotFound(db_name))
                 }
             }
@@ -180,7 +182,8 @@ impl<S: CmdTaskSender> Database<S> {
         let key = match get_key(cmd_task.get_resp()) {
             Some(key) => key,
             None => {
-                cmd_task.set_result(Ok(Resp::Error("missing key".to_string().into_bytes())));
+                let resp = Resp::Error("missing key".to_string().into_bytes());
+                cmd_task.set_resp_result(Ok(resp));
                 return Err(DBSendError::MissingKey)
             },
         };
@@ -236,17 +239,20 @@ impl RemoteDB {
         let key = match get_key(cmd_task.get_resp()) {
             Some(key) => key,
             None => {
-                cmd_task.set_result(Ok(Resp::Error("missing key".to_string().into_bytes())));
+                let resp = Resp::Error("missing key".to_string().into_bytes());
+                cmd_task.set_resp_result(Ok(resp));
                 return Err(DBSendError::MissingKey)
             },
         };
         match self.slot_map.get_by_key(&key) {
             Some(addr) => {
-                cmd_task.set_result(Ok(Resp::Error(gen_moved(self.slot_map.get_slot(&key), addr).into_bytes())));
+                let resp = Resp::Error(gen_moved(self.slot_map.get_slot(&key), addr).into_bytes());
+                cmd_task.set_resp_result(Ok(resp));
                 Ok(())
             }
             None => {
-                cmd_task.set_result(Ok(Resp::Error(format!("slot not covered {:?}", key).into_bytes())));
+                let resp = Resp::Error(format!("slot not covered {:?}", key).into_bytes());
+                cmd_task.set_resp_result(Ok(resp));
                 Err(DBSendError::SlotNotCovered)
             }
         }

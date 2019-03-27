@@ -6,6 +6,7 @@ use std::error::Error;
 use std::result::Result;
 use std::boxed::Box;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use bytes::BytesMut;
 use futures::{future, Future, stream, Stream};
 use futures::sync::mpsc;
 use futures::Sink;
@@ -13,7 +14,7 @@ use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
-use protocol::{Resp, decode_resp, DecodeError, resp_to_buf, RespCodec};
+use protocol::{Resp, Array, DecodeError, RespCodec, RespPacket};
 use super::command::{CommandError, CommandResult};
 
 pub type BackendResult = Result<Resp, BackendError>;
@@ -25,6 +26,11 @@ pub trait ReplyHandler<T: CmdTask> : Send + 'static {
 pub trait CmdTask : Send + 'static + fmt::Debug {
     fn get_resp(&self) -> &Resp;
     fn set_result(self, result: CommandResult);
+    fn drain_packet_data(&self) -> Option<BytesMut>;
+
+    fn set_resp_result(self, result: Result<Resp, CommandError>) where Self: Sized {
+        self.set_result(result.map(|resp| Box::new(RespPacket::new(resp))))
+    }
 }
 
 pub trait CmdTaskSender {
@@ -137,7 +143,7 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
 
     let (tx, rx) = mpsc::channel(1024);
 
-    let writer_handler = handle_write(task_receiver, writer.buffer(20), tx);
+    let writer_handler = handle_write(task_receiver, writer, tx);
     let reader_handler = handle_read(handler, reader, rx);
 
     let handler = reader_handler.select(writer_handler)
@@ -157,12 +163,23 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
 }
 
 fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: mpsc::Sender<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where W: Sink<SinkItem = Resp, SinkError = io::Error> + Send + 'static, T: CmdTask
+    where W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static, T: CmdTask
 {
     task_receiver.map_err(|()| BackendError::Canceled)
         .fold((writer, tx), |(writer, tx), task| {
-            // TODO: remove the clone
-            writer.send(task.get_resp().clone())
+            let item = match task.drain_packet_data() {
+                Some(data) => {
+                    // Tricky code here. The nil array will be ignored when encoded.
+                    // TODO: Refactor it by using enum to differentiate this two packet type.
+                    RespPacket::new_with_buf(Resp::Arr(Array::Nil), data)
+                },
+                None => {
+                    // TODO: remove the clone
+                    let resp = task.get_resp().clone();
+                    RespPacket::new(resp)
+                },
+            };
+            writer.send(Box::new(item))
                 .then(|res| {
                     let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
                         Ok(writer) => {
@@ -188,7 +205,7 @@ fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: 
 }
 
 fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where R: Stream<Item = Resp, Error = DecodeError> + Send + 'static, H: ReplyHandler<T>, T: CmdTask
+    where R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static, H: ReplyHandler<T>, T: CmdTask
 {
     let rx = rx.into_future();
     reader
@@ -204,7 +221,7 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
                 },
             }
         })
-        .fold((handler, rx), move |(handler, rx), resp| {
+        .fold((handler, rx), move |(handler, rx), packet| {
             rx.map_err(|((), _receiver)| {
                 // The remaining tasks in _receiver might leak here
                 // It's up to the tasks inside Receiver to gracefully drop themselves in destructor.
@@ -212,8 +229,9 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
                 BackendError::Canceled
             })
                 .and_then(|(task_opt, rx)| {
+                    // TODO: remove this unwrap
                     let task = task_opt.unwrap();
-                    task.set_result(Ok(resp));
+                    task.set_result(Ok(packet));
                     // TODO: call handler
                     future::ok((handler, rx.into_future()))
                 })

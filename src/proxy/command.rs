@@ -4,11 +4,12 @@ use std::str;
 use std::error::Error;
 use std::result::Result;
 use std::sync::atomic::Ordering;
+use bytes::BytesMut;
 use caseless;
 use futures::{future, Future};
 use futures::sync::oneshot;
 use atomic_option::AtomicOption;
-use protocol::{Resp, BulkStr, BinSafeStr, Array};
+use protocol::{Resp, BulkStr, BinSafeStr, Array, RespPacket};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum CmdType {
@@ -26,22 +27,26 @@ pub enum CmdType {
 
 #[derive(Debug)]
 pub struct Command {
-    request: Resp
+    request: Box<RespPacket>,
 }
 
 impl Command {
-    pub fn new(request: Resp) -> Self {
+    pub fn new(request: Box<RespPacket>) -> Self {
         Command{
-            request: request,
+            request
         }
     }
 
+    pub fn drain_packet_data(&self) -> Option<BytesMut> {
+        self.request.drain_data()
+    }
+
     pub fn get_resp(&self) -> &Resp {
-        &self.request
+        self.request.get_resp()
     }
 
     pub fn get_type(&self) -> CmdType {
-        let resps = match self.request {
+        let resps = match self.get_resp() {
             Resp::Arr(Array::Arr(ref resps)) => resps,
             _ => return CmdType::Invalid,
         };
@@ -157,7 +162,7 @@ impl CmdReplySender {
 }
 
 impl CmdReplyReceiver {
-    pub fn wait_response(self) -> impl Future<Item = Resp, Error = CommandError> + Send {
+    pub fn wait_response(self) -> impl Future<Item = Box<RespPacket>, Error = CommandError> + Send {
         self.reply_receiver
             .map_err(|_| CommandError::Canceled)
             .and_then(|result: CommandResult| {
@@ -194,4 +199,4 @@ impl Error for CommandError {
     }
 }
 
-pub type CommandResult = Result<Resp, CommandError>;
+pub type CommandResult = Result<Box<RespPacket>, CommandError>;

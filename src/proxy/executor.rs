@@ -47,16 +47,16 @@ impl ForwardHandler {
         let key = cmd_ctx.get_cmd().get_key();
         match key {
             None => {
-                cmd_ctx.set_result(Ok(Resp::Error(String::from("Missing database name").into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Missing database name").into_bytes())))
             }
             Some(db_name) => {
                 match str::from_utf8(&db_name) {
                     Ok(ref db) => {
                         cmd_ctx.set_db_name(db.to_string());
-                        cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+                        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
                     }
                     Err(_) => {
-                        cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid database name").into_bytes())))
+                        cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Invalid database name").into_bytes())))
                     }
                 }
             }
@@ -71,23 +71,23 @@ impl ForwardHandler {
 
         if caseless::canonical_caseless_match_str(&sub_cmd, "nodes") {
             let cluster_nodes = self.db.gen_cluster_nodes(cmd_ctx.get_db_name(), self.service_address.clone());
-            cmd_ctx.set_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
+            cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else {
-            cmd_ctx.set_result(Ok(Resp::Error(String::from("Unsupported sub command").into_bytes())));
+            cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Unsupported sub command").into_bytes())));
         }
     }
 
     fn get_sub_command(cmd_ctx: CmdCtx) -> Option<(CmdCtx, String)> {
         match cmd_ctx.get_cmd().get_key() {
             None => {
-                cmd_ctx.set_result(Ok(Resp::Error(String::from("Missing sub command").into_bytes())));
+                cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Missing sub command").into_bytes())));
                 None
             }
             Some(ref k) => {
                 match str::from_utf8(k) {
                     Ok(sub_cmd) => Some((cmd_ctx, sub_cmd.to_string())),
                     Err(_) => {
-                        cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
+                        cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
                         None
                     },
                 }
@@ -104,16 +104,16 @@ impl ForwardHandler {
         if caseless::canonical_caseless_match_str(&sub_cmd, "listdb") {
             let dbs = self.db.get_dbs();
             let resps = dbs.into_iter().map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes()))).collect();
-            cmd_ctx.set_result(Ok(Resp::Arr(Array::Arr(resps))));
+            cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
         } else if caseless::canonical_caseless_match_str(&sub_cmd, "cleardb") {
             self.db.clear();
-            cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+            cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
         } else if caseless::canonical_caseless_match_str(&sub_cmd, "setdb") {
             self.handle_umctl_setdb(cmd_ctx);
         } else if caseless::canonical_caseless_match_str(&sub_cmd, "setpeer") {
             self.handle_umctl_setpeer(cmd_ctx);
         } else {
-            cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
+            cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Invalid sub command").into_bytes())));
         }
     }
 
@@ -121,7 +121,7 @@ impl ForwardHandler {
         let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
             Ok(db_map) => db_map,
             Err(_) => {
-                cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid arguments").into_bytes())));
+                cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Invalid arguments").into_bytes())));
                 return
             }
         };
@@ -130,11 +130,11 @@ impl ForwardHandler {
         match self.db.set_dbs(db_map) {
             Ok(()) => {
                 debug!("Successfully update local meta data");
-                cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {
                 debug!("Failed to update local meta data {:?}", e);
-                cmd_ctx.set_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }
     }
@@ -143,7 +143,7 @@ impl ForwardHandler {
         let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
             Ok(db_map) => db_map,
             Err(_) => {
-                cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid arguments").into_bytes())));
+                cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Invalid arguments").into_bytes())));
                 return
             }
         };
@@ -151,11 +151,11 @@ impl ForwardHandler {
         match self.db.set_peers(db_map) {
             Ok(()) => {
                 debug!("Successfully update peer meta data");
-                cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {
                 debug!("Failed to update peer meta data {:?}", e);
-                cmd_ctx.set_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }
     }
@@ -167,23 +167,23 @@ impl CmdCtxHandler for ForwardHandler {
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {
             CmdType::Ping => {
-                cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Info => {
-                cmd_ctx.set_result(Ok(Resp::Bulk(BulkStr::Str(String::from("version:dev\r\n").into_bytes()))))
+                cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(String::from("version:dev\r\n").into_bytes()))))
             }
             CmdType::Auth => {
                 self.handle_auth(cmd_ctx)
             }
             CmdType::Quit => {
-                cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Echo => {
                 let req = cmd_ctx.get_cmd().get_resp().clone();
-                cmd_ctx.set_result(Ok(req))
+                cmd_ctx.set_resp_result(Ok(req))
             }
             CmdType::Select => {
-                cmd_ctx.set_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Others => {
                 let res = self.db.send(cmd_ctx);
@@ -192,7 +192,7 @@ impl CmdCtxHandler for ForwardHandler {
                 }
             }
             CmdType::Invalid => {
-                cmd_ctx.set_result(Ok(Resp::Error(String::from("Invalid command").into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Error(String::from("Invalid command").into_bytes())))
             }
             CmdType::UmCtl => {
                 self.handle_umctl(cmd_ctx)
