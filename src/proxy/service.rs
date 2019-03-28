@@ -1,4 +1,5 @@
 use futures::{Future, future, Stream};
+use futures::IntoFuture;
 use tokio::net::TcpListener;
 use ::common::utils::ThreadSafe;
 use super::session::{Session, handle_conn};
@@ -53,11 +54,17 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                 .for_each(move |sock| {
                     info!("accept conn {:?}", sock.peer_addr());
                     let handle_clone = forward_handler.clone();
-                    let handle_conn = handle_conn(Session::new(handle_clone), sock)
-                        .map_err(|err| {
-                            error!("IO error {:?}", err)
-                        });
-                    tokio::spawn(handle_conn)
+                    handle_conn(Session::new(handle_clone), sock);
+                    future::ok(())
+//                    let handle_conn = handle_conn(Session::new(handle_clone), sock)
+//                        .map_err(|err| {
+//                            error!("IO error {:?}", err)
+//                        });
+//                    let (r, w) = handle_conn(Session::new(handle_clone), sock);
+//                    tokio::spawn(r.map_err(|err| error!("Read IO error {:?}", err))).into_future()
+//                        .select(tokio::spawn(w.map_err(|err| error!("Write IO error {:?}", err))).into_future())
+//                        .map(|_| error!("client connection closed"))
+//                    tokio::spawn(handle_conn)
                 })
         )
     }

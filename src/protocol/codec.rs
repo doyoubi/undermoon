@@ -68,7 +68,7 @@ impl Encoder for RespCodec {
                 buf.extend_from_slice(&raw_data);
             },
             None => {
-                let mut b = Vec::with_capacity(2 * 1024);
+                let mut b = Vec::with_capacity(1024);
                 let size = encode_resp(&mut b, item.get_resp())?;
                 assert_eq!(b.len(), size);
                 buf.extend_from_slice(&b);
