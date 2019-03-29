@@ -196,8 +196,7 @@ fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: 
                     fut
                 })
         })
-        .map(|_| warn!("write future closed"))
-        .map_err(|e| {error!("write future closed with error {:?}", e); e})
+        .map(|_| ())
 }
 
 fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Future<Item = (), Error = BackendError> + Send
@@ -232,7 +231,7 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
                     future::ok((handler, rx.into_future()))
                 })
         })
-        .map(|_| warn!("backend read future closed"))
+        .map(|_| ())
 }
 
 #[derive(Debug)]

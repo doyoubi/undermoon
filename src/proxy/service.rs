@@ -64,15 +64,6 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                         .map(|()| info!("Write IO closed"))
                         .map_err(|err| error!("Write IO error {:?}", err)));
                     future::ok(())
-//                    let handle_conn = handle_conn(Session::new(handle_clone), sock)
-//                        .map_err(|err| {
-//                            error!("IO error {:?}", err)
-//                        });
-//                    let (r, w) = handle_conn(Session::new(handle_clone), sock);
-//                    tokio::spawn(r.map_err(|err| error!("Read IO error {:?}", err))).into_future()
-//                        .select(tokio::spawn(w.map_err(|err| error!("Write IO error {:?}", err))).into_future())
-//                        .map(|_| error!("client connection closed"))
-//                    tokio::spawn(handle_conn)
                 })
         )
     }

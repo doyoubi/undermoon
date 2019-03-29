@@ -145,7 +145,7 @@ fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Futu
 {
     rx.map_err(|()| SessionError::Canceled)
         .fold(writer, handle_write_resp)
-        .map(|_| info!("session channel closed"))
+        .map(|_| ())
 }
 
 fn handle_write_resp<W>(writer: W, reply_receiver: CmdReplyReceiver) -> impl Future<Item = W, Error = SessionError> + Send
