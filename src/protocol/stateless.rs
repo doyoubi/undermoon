@@ -168,7 +168,7 @@ fn parse_bulk_str(mut buf: &[u8]) -> Result<(BulkStr, usize), ParseError> {
     ))
 }
 
-fn parse_len(mut buf: &[u8]) -> Result<(i64, usize), ParseError> {
+fn parse_len(buf: &[u8]) -> Result<(i64, usize), ParseError> {
     let (line, consumed) = parse_line(buf)?;
     // TODO: optimize it by not allocating the Vec
     let len = btoi(&line).map_err(|_| ParseError::InvalidProtocol)?;

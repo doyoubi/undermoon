@@ -97,8 +97,10 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     }
 }
 
-pub fn handle_conn<H>(handler: H, sock: TcpStream) // -> impl Future<Item = (), Error = SessionError> + Send
-   where H: CmdHandler + Send + 'static
+pub fn handle_conn<H>(handler: H, sock: TcpStream) -> (
+        impl Future<Item = (), Error = SessionError> + Send,
+        impl Future<Item = (), Error = SessionError> + Send)
+    where H: CmdHandler + Send + 'static
 {
     let (writer, reader) = RespCodec{}.framed(sock).split();
 
@@ -107,27 +109,7 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) // -> impl Future<Item = (), 
     let reader_handler = handle_read(handler, reader, tx);
     let writer_handler = handle_write(writer, rx);
 
-//    (reader_handler, writer_handler)
-    tokio::spawn(reader_handler
-        .map(|()| info!("Read IO closed"))
-        .map_err(|err| error!("Read IO error {:?}", err)));
-    tokio::spawn(writer_handler
-        .map(|()| info!("Write IO closed"))
-        .map_err(|err| error!("Write IO error {:?}", err)));
-//    let (r, w) = handle_conn(Session::new(handle_clone), sock);
-//    tokio::spawn(r.map_err(|err| error!("Read IO error {:?}", err))).into_future()
-//        .select(tokio::spawn(w.map_err(|err| error!("Write IO error {:?}", err))).into_future())
-//        .map(|_| error!("client connection closed"))
-
-//    let handler = reader_handler.select(writer_handler)
-//        .then(move |res| {
-//            if let Err((e, _)) = res {
-//                error!("Sesssion error: {:?}", e);
-//            }
-//            info!("Session Connection closed");
-//            Result::Ok::<(), SessionError>(())
-//        });
-//    handler
+    (reader_handler, writer_handler)
 }
 
 fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) -> impl Future<Item = (), Error = SessionError> + Send

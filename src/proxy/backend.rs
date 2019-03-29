@@ -14,6 +14,7 @@ use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead, AsyncWrite};
+use common::future_group::new_future_group;
 use protocol::{Resp, Array, DecodeError, RespCodec, RespPacket};
 use super::command::{CommandError, CommandResult};
 
@@ -68,11 +69,10 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
             let sock = TcpStream::connect(&addr);
             let fut = sock.then(move |res| {
                 debug!("sock result: {:?}", res);
-//                let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
                 match res {
                     Ok(sock) => {
-//                        let (node, node_fut) = BackendNode::<T>::new_pair(sock, ReplyCommitHandler{});
-                        let (node, reader_handler, writer_handler) = BackendNode::<T>::new_pair(sock, ReplyCommitHandler{});
+                        let (node, reader_handler, writer_handler) = BackendNode::<T>::new(sock, ReplyCommitHandler{});
+                        let (reader_handler, writer_handler) = new_future_group(reader_handler, writer_handler);
                         node.send(cmd_task).unwrap();  // must not fail
                         node_arc.write().unwrap().get_or_insert(node);
                         tokio::spawn(reader_handler
@@ -81,20 +81,14 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
                         tokio::spawn(writer_handler
                             .map(|()| info!("backend write IO closed"))
                             .map_err(|e| error!("backend write IO error {:?}", e)));
-//                        Box::new(node_fut)
+                        future::ok(())
                     },
                     Err(e) => {
                         error!("sock err: {:?}", e);
                         cmd_task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
-//                        Box::new(future::err(BackendError::Io(e)))
+                        future::err(())
                     },
-                };
-                future::ok(())
-//                fut.then(move |r| {
-//                    info!("backend exited with result {:?}", r);
-//                    node_arc2.write().unwrap().take();
-//                    future::ok(())
-//                })
+                }
             });
             // If this future fails, cmd_task will be lost. Let itself send back an error response.
             tokio::spawn(fut);
@@ -120,7 +114,7 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
     }
 }
 
-// TODO: Remove this. Retry can be built with a CmdTask wrapper
+// TODO: Remove this. Use handler to do some statistics.
 pub struct ReplyCommitHandler {}
 
 impl<T: CmdTask> ReplyHandler<T> for ReplyCommitHandler {
@@ -133,14 +127,13 @@ pub struct BackendNode<T: CmdTask> {
 }
 
 impl<T: CmdTask> BackendNode<T> {
-    pub fn new_pair<H: ReplyHandler<T>>(sock: TcpStream, handler: H) -> (
+    pub fn new<H: ReplyHandler<T>>(sock: TcpStream, handler: H) -> (
             BackendNode<T>,
             impl Future<Item = (), Error = BackendError> + Send,
             impl Future<Item = (), Error = BackendError> + Send) {
         let (tx, rx) = mpsc::unbounded();
         let (reader_handler, writer_handler) = handle_backend(handler, rx, sock);
         (Self{tx}, reader_handler, writer_handler)
-//        (Self{tx}, handle_backend(handler, rx, sock))
     }
 
     pub fn send(&self, cmd_task: T) -> Result<(), BackendError> {
@@ -163,21 +156,6 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
     let reader_handler = handle_read(handler, reader, rx);
 
     (reader_handler, writer_handler)
-
-//    let handler = reader_handler.select(writer_handler)
-//        .then(move |res| {
-//            warn!("Backend connection closed.");
-//            match res {
-//                Ok(((), _another_future)) => {
-//                    Result::Ok::<(), BackendError>(())
-//                },
-//                Err((e, _another_future)) => {
-//                    error!("Backend connection closed with error: {:?}", e);
-//                    Result::Err(e)
-//                },
-//            }
-//        });
-//    handler
 }
 
 fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: mpsc::Sender<T>) -> impl Future<Item = (), Error = BackendError> + Send
