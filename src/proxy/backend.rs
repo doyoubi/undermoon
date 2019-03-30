@@ -62,7 +62,6 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
         let need_init = self.node.read().unwrap().is_none();
         // Race condition here. Multiple threads might be creating new connection at the same time.
         // Maybe it's just fine. If not, lock the creating connection phrase.
-        // TODO: use existing connection when there already is.
         if need_init {
             let node_arc = self.node.clone();
             let addr = self.addr.parse().unwrap();
@@ -75,18 +74,30 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
                             BackendNode::<T>::new(sock, ReplyCommitHandler {});
                         let (reader_handler, writer_handler) =
                             new_future_group(reader_handler, writer_handler);
-                        node.send(cmd_task).unwrap(); // must not fail
-                        node_arc.write().unwrap().get_or_insert(node);
-                        tokio::spawn(
-                            reader_handler
-                                .map(|()| info!("backend read IO closed"))
-                                .map_err(|e| error!("backend read IO error {:?}", e)),
-                        );
-                        tokio::spawn(
-                            writer_handler
-                                .map(|()| info!("backend write IO closed"))
-                                .map_err(|e| error!("backend write IO error {:?}", e)),
-                        );
+
+                        let (spawn_new, res) = {
+                            let mut guard = node_arc.write().unwrap();
+                            let empty = guard.is_none();
+                            let inner_node = guard.get_or_insert(node);
+                            (empty, inner_node.send(cmd_task))
+                        };
+
+                        if let Err(e) = res {
+                            error!("failed to forward cmd {:?}", e);
+                        }
+
+                        if spawn_new {
+                            tokio::spawn(
+                                reader_handler
+                                    .map(|()| error!("backend read IO closed"))
+                                    .map_err(|e| error!("backend read IO error {:?}", e)),
+                            );
+                            tokio::spawn(
+                                writer_handler
+                                    .map(|()| error!("backend write IO closed"))
+                                    .map_err(|e| error!("backend write IO error {:?}", e)),
+                            );
+                        }
                         future::ok(())
                     }
                     Err(e) => {

@@ -60,12 +60,12 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                         new_future_group(reader_handler, writer_handler);
                     tokio::spawn(
                         reader_handler
-                            .map(|()| info!("Read IO closed"))
+                            .map(|()| error!("Read IO closed"))
                             .map_err(|err| error!("Read IO error {:?}", err)),
                     );
                     tokio::spawn(
                         writer_handler
-                            .map(|()| info!("Write IO closed"))
+                            .map(|()| error!("Write IO closed"))
                             .map_err(|err| error!("Write IO error {:?}", err)),
                     );
                     future::ok(())
