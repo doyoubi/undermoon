@@ -32,7 +32,7 @@ impl MetaDataBroker for HttpMetaBroker {
         let request = self.client.get(&url).send();
         let names_fut = request
             .map_err(|e| {
-                println!("Failed to get cluster names {:?}", e);
+                error!("failed to get cluster names {:?}", e);
                 MetaDataBrokerError::InvalidReply
             })
             .and_then(|mut response| {
@@ -43,7 +43,7 @@ impl MetaDataBroker for HttpMetaBroker {
                         names
                     })
                     .map_err(|e| {
-                        println!("Failed to get cluster names from json {:?}", e);
+                        error!("failed to get cluster names from json {:?}", e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
@@ -59,7 +59,7 @@ impl MetaDataBroker for HttpMetaBroker {
         let request = self.client.get(&url).send();
         let cluster_fut = request
             .map_err(|e| {
-                println!("Failed to get cluster {:?}", e);
+                error!("failed to get cluster {:?}", e);
                 MetaDataBrokerError::InvalidReply
             })
             .and_then(|mut response| {
@@ -70,7 +70,7 @@ impl MetaDataBroker for HttpMetaBroker {
                         cluster
                     })
                     .map_err(|e| {
-                        println!("Failed to get cluster from json {:?}", e);
+                        error!("failed to get cluster from json {:?}", e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
@@ -84,7 +84,7 @@ impl MetaDataBroker for HttpMetaBroker {
         let request = self.client.get(&url).send();
         let addresses_fut = request
             .map_err(|e| {
-                println!("Failed to get host addresses {:?}", e);
+                error!("failed to get host addresses {:?}", e);
                 MetaDataBrokerError::InvalidReply
             })
             .and_then(|mut response| {
@@ -95,7 +95,7 @@ impl MetaDataBroker for HttpMetaBroker {
                         addresses
                     })
                     .map_err(|e| {
-                        println!("Failed to get host adddresses from json {:?}", e);
+                        error!("failed to get host adddresses from json {:?}", e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
@@ -114,7 +114,7 @@ impl MetaDataBroker for HttpMetaBroker {
         let request = self.client.get(&url).send();
         let host_fut = request
             .map_err(|e| {
-                println!("Failed to get host {:?}", e);
+                error!("failed to get host {:?}", e);
                 MetaDataBrokerError::InvalidReply
             })
             .and_then(|mut response| {
@@ -125,7 +125,7 @@ impl MetaDataBroker for HttpMetaBroker {
                         host
                     })
                     .map_err(|e| {
-                        println!("Failed to get host from json {:?}", e);
+                        error!("failed to get host from json {:?}", e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
@@ -192,7 +192,7 @@ impl MetaDataBroker for HttpMetaBroker {
         let request = self.client.post(&url).send();
         let fut = request
             .map_err(|e| {
-                println!("Failed to add failures {:?}", e);
+                error!("failed to add failures {:?}", e);
                 MetaDataBrokerError::InvalidReply
             })
             .and_then(|response| {
@@ -201,14 +201,13 @@ impl MetaDataBroker for HttpMetaBroker {
                     if status.is_success() {
                         Box::new(future::ok(()))
                     } else {
-                        println!("Failed to add failures: {:?}", status);
                         let body_fut = response.into_body().collect().then(|result| match result {
                             Err(e) => {
-                                println!("Failed to get body: {:?}", e);
+                                error!("Failed to get body: {:?}", e);
                                 future::err(MetaDataBrokerError::InvalidReply)
                             }
                             Ok(body) => {
-                                println!("Error body: {:?}", body);
+                                error!("Error body: {:?}", body);
                                 future::err(MetaDataBrokerError::InvalidReply)
                             }
                         });

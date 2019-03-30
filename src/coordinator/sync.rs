@@ -122,7 +122,7 @@ fn send_meta<C: RedisClient>(
     client
         .execute(address, cmd.into_iter().map(|s| s.into_bytes()).collect())
         .map_err(|e| {
-            println!("Failed to send meta data of host {:?}", e);
+            error!("failed to send meta data of host {:?}", e);
             CoordinateError::Redis(e)
         })
         .and_then(move |resp| match resp {

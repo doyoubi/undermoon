@@ -212,12 +212,12 @@ impl<S: CmdTaskSender> Database<S> {
             Some(addr) => match self.local_db.nodes.get(&addr) {
                 Some(sender) => sender.send(cmd_task).map_err(DBSendError::Backend),
                 None => {
-                    println!("Failed to get node");
+                    error!("failed to get node");
                     Err(DBSendError::SlotNotFound(cmd_task))
                 }
             },
             None => {
-                println!("Failed to get slot");
+                error!("failed to get slot");
                 Err(DBSendError::SlotNotFound(cmd_task))
             }
         }

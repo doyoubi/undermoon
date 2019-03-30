@@ -54,6 +54,6 @@ fn main() {
     let redis_client = SimpleRedisClient::new();
     let service = CoordinatorService::new(config, data_broker, mani_broker, redis_client);
     tokio::run(service.run().map_err(|e| {
-        println!("coordinator error {:?}", e);
+        error!("coordinator error {:?}", e);
     }));
 }
