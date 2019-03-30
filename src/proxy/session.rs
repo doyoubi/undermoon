@@ -1,17 +1,19 @@
+use super::backend::CmdTask;
+use super::command::{
+    new_command_pair, CmdReplyReceiver, CmdReplySender, Command, CommandError, CommandResult,
+};
+use super::database::{DBTag, DEFAULT_DB};
+use bytes::BytesMut;
+use futures::sync::mpsc;
+use futures::{Future, Sink, Stream};
+use protocol::{DecodeError, Resp, RespCodec, RespPacket};
+use std::boxed::Box;
+use std::error::Error;
+use std::fmt;
 use std::io;
 use std::sync;
-use std::fmt;
-use std::error::Error;
-use std::boxed::Box;
-use bytes::BytesMut;
-use futures::{Future, Stream, Sink};
-use futures::sync::mpsc;
-use tokio::net::TcpStream;
 use tokio::codec::Decoder;
-use protocol::{Resp, DecodeError, RespCodec, RespPacket};
-use super::command::{CmdReplySender, CmdReplyReceiver, CommandResult, Command, new_command_pair, CommandError};
-use super::backend::CmdTask;
-use super::database::{DEFAULT_DB, DBTag};
+use tokio::net::TcpStream;
 
 pub trait CmdHandler {
     fn handle_cmd(&mut self, sender: CmdReplySender);
@@ -29,10 +31,7 @@ pub struct CmdCtx {
 
 impl CmdCtx {
     fn new(db: sync::Arc<sync::RwLock<String>>, reply_sender: CmdReplySender) -> CmdCtx {
-        CmdCtx{
-            db: db,
-            reply_sender: reply_sender,
-        }
+        CmdCtx { db, reply_sender }
     }
 
     pub fn get_cmd(&self) -> &Command {
@@ -66,7 +65,7 @@ impl CmdTask for CmdCtx {
 
 impl DBTag for CmdCtx {
     fn get_db_name(&self) -> String {
-        return self.db.read().unwrap().clone()
+        return self.db.read().unwrap().clone();
     }
 
     fn set_db_name(&self, db: String) {
@@ -81,25 +80,31 @@ pub struct Session<H: CmdCtxHandler> {
 
 impl<H: CmdCtxHandler> Session<H> {
     pub fn new(cmd_ctx_handler: H) -> Self {
-        Session{
+        Session {
             db: sync::Arc::new(sync::RwLock::new(DEFAULT_DB.to_string())),
-            cmd_ctx_handler: cmd_ctx_handler,
+            cmd_ctx_handler,
         }
     }
 }
 
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&mut self, reply_sender: CmdReplySender) {
-        self.cmd_ctx_handler.handle_cmd_ctx(CmdCtx::new(self.db.clone(), reply_sender));
+        self.cmd_ctx_handler
+            .handle_cmd_ctx(CmdCtx::new(self.db.clone(), reply_sender));
     }
 }
 
-pub fn handle_conn<H>(handler: H, sock: TcpStream) -> (
-        impl Future<Item = (), Error = SessionError> + Send,
-        impl Future<Item = (), Error = SessionError> + Send)
-    where H: CmdHandler + Send + 'static
+pub fn handle_conn<H>(
+    handler: H,
+    sock: TcpStream,
+) -> (
+    impl Future<Item = (), Error = SessionError> + Send,
+    impl Future<Item = (), Error = SessionError> + Send,
+)
+where
+    H: CmdHandler + Send + 'static,
 {
-    let (writer, reader) = RespCodec{}.framed(sock).split();
+    let (writer, reader) = RespCodec {}.framed(sock).split();
 
     let (tx, rx) = mpsc::channel(1024);
 
@@ -109,20 +114,33 @@ pub fn handle_conn<H>(handler: H, sock: TcpStream) -> (
     (reader_handler, writer_handler)
 }
 
-fn handle_read<H, R>(handler: H, reader: R, tx: mpsc::Sender<CmdReplyReceiver>) -> impl Future<Item = (), Error = SessionError> + Send
-    where R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static, H: CmdHandler + Send + 'static
+fn handle_read<H, R>(
+    handler: H,
+    reader: R,
+    tx: mpsc::Sender<CmdReplyReceiver>,
+) -> impl Future<Item = (), Error = SessionError> + Send
+where
+    R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static,
+    H: CmdHandler + Send + 'static,
 {
     reader
         .map_err(|e| match e {
             DecodeError::Io(e) => SessionError::Io(e),
             DecodeError::InvalidProtocol => SessionError::Canceled,
         })
-        .fold((handler, tx), move |(handler, tx), resp| handle_read_resp(handler, tx, resp))
+        .fold((handler, tx), move |(handler, tx), resp| {
+            handle_read_resp(handler, tx, resp)
+        })
         .map(|_| ())
 }
 
-fn handle_read_resp<H>(handler: H, tx: mpsc::Sender<CmdReplyReceiver>, resp: Box<RespPacket>) -> impl Future<Item = (H, mpsc::Sender<CmdReplyReceiver>), Error = SessionError> + Send
-    where H: CmdHandler + Send + 'static
+fn handle_read_resp<H>(
+    handler: H,
+    tx: mpsc::Sender<CmdReplyReceiver>,
+    resp: Box<RespPacket>,
+) -> impl Future<Item = (H, mpsc::Sender<CmdReplyReceiver>), Error = SessionError> + Send
+where
+    H: CmdHandler + Send + 'static,
 {
     let (reply_sender, reply_receiver) = new_command_pair(Command::new(resp));
 
@@ -137,32 +155,37 @@ fn handle_read_resp<H>(handler: H, tx: mpsc::Sender<CmdReplyReceiver>, resp: Box
         })
 }
 
-fn handle_write<W>(writer: W, rx: mpsc::Receiver<CmdReplyReceiver>) -> impl Future<Item = (), Error = SessionError> + Send
-    where W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static
+fn handle_write<W>(
+    writer: W,
+    rx: mpsc::Receiver<CmdReplyReceiver>,
+) -> impl Future<Item = (), Error = SessionError> + Send
+where
+    W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static,
 {
     rx.map_err(|()| SessionError::Canceled)
         .fold(writer, handle_write_resp)
         .map(|_| ())
 }
 
-fn handle_write_resp<W>(writer: W, reply_receiver: CmdReplyReceiver) -> impl Future<Item = W, Error = SessionError> + Send
-    where W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static
+fn handle_write_resp<W>(
+    writer: W,
+    reply_receiver: CmdReplyReceiver,
+) -> impl Future<Item = W, Error = SessionError> + Send
+where
+    W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static,
 {
-    reply_receiver.wait_response()
+    reply_receiver
+        .wait_response()
         .map_err(SessionError::CmdErr)
         .then(|res| match res {
-                Ok(packet) => {
-                    writer.send(packet)
-                        .map_err(SessionError::Io)
-                },
-                Err(e) => {
-                    let err_msg = format!("Err cmd error {:?}", e);
-                    error!("{}", err_msg);
-                    let resp = Resp::Error(err_msg.into_bytes());
-                    let packet = Box::new(RespPacket::new(resp));
-                    writer.send(packet)
-                        .map_err(SessionError::Io)
-                },
+            Ok(packet) => writer.send(packet).map_err(SessionError::Io),
+            Err(e) => {
+                let err_msg = format!("Err cmd error {:?}", e);
+                error!("{}", err_msg);
+                let resp = Resp::Error(err_msg.into_bytes());
+                let packet = Box::new(RespPacket::new(resp));
+                writer.send(packet).map_err(SessionError::Io)
+            }
         })
 }
 
@@ -172,7 +195,7 @@ pub enum SessionError {
     CmdErr(CommandError),
     InvalidProtocol,
     Canceled,
-    Other,  // TODO: remove this
+    Other, // TODO: remove this
 }
 
 impl fmt::Display for SessionError {

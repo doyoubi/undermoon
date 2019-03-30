@@ -1,14 +1,14 @@
-use std::io;
-use std::fmt;
-use std::str;
-use std::error::Error;
-use std::result::Result;
-use std::sync::atomic::Ordering;
-use bytes::BytesMut;
-use futures::{future, Future};
-use futures::sync::oneshot;
 use atomic_option::AtomicOption;
-use protocol::{Resp, BulkStr, BinSafeStr, Array, RespPacket};
+use bytes::BytesMut;
+use futures::sync::oneshot;
+use futures::{future, Future};
+use protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket};
+use std::error::Error;
+use std::fmt;
+use std::io;
+use std::result::Result;
+use std::str;
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum CmdType {
@@ -31,9 +31,7 @@ pub struct Command {
 
 impl Command {
     pub fn new(request: Box<RespPacket>) -> Self {
-        Command{
-            request
-        }
+        Command { request }
     }
 
     pub fn drain_packet_data(&self) -> Option<BytesMut> {
@@ -92,17 +90,13 @@ impl Command {
     }
 }
 
-pub fn get_key(resp :&Resp) -> Option<BinSafeStr> {
+pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
     match resp {
-        Resp::Arr(Array::Arr(ref resps)) => {
-            resps.get(1).and_then(|resp| {
-                match resp {
-                    Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
-                    Resp::Simple(ref s) => Some(s.clone()),
-                    _ => None,
-                }
-            })
-        },
+        Resp::Arr(Array::Arr(ref resps)) => resps.get(1).and_then(|resp| match resp {
+            Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
+            Resp::Simple(ref s) => Some(s.clone()),
+            _ => None,
+        }),
         _ => None,
     }
 }
@@ -124,13 +118,11 @@ pub struct CmdReplyReceiver {
 
 pub fn new_command_pair(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
     let (s, r) = oneshot::channel::<CommandResult>();
-    let reply_sender = CmdReplySender{
-        cmd: cmd,
+    let reply_sender = CmdReplySender {
+        cmd,
         reply_sender: AtomicOption::new(Box::new(s)),
     };
-    let reply_receiver = CmdReplyReceiver{
-        reply_receiver: r,
-    };
+    let reply_receiver = CmdReplyReceiver { reply_receiver: r };
     (reply_sender, reply_receiver)
 }
 
@@ -142,19 +134,17 @@ impl CmdReplySender {
     pub fn send(&self, res: CommandResult) -> Result<(), CommandError> {
         // Must not send twice.
         match self.reply_sender.take(Ordering::SeqCst) {
-            Some(reply_sender) => reply_sender.send(res)
-                .map_err(|_| CommandError::Canceled),
+            Some(reply_sender) => reply_sender.send(res).map_err(|_| CommandError::Canceled),
             None => {
                 error!("unexpected send again");
                 Err(CommandError::InnerError)
-            },
+            }
         }
     }
 
     pub fn try_send(&self, res: CommandResult) -> Option<Result<(), CommandError>> {
         match self.reply_sender.take(Ordering::SeqCst) {
-            Some(reply_sender) => Some(reply_sender.send(res)
-                .map_err(|_| CommandError::Canceled)),
+            Some(reply_sender) => Some(reply_sender.send(res).map_err(|_| CommandError::Canceled)),
             None => None,
         }
     }
@@ -164,9 +154,7 @@ impl CmdReplyReceiver {
     pub fn wait_response(self) -> impl Future<Item = Box<RespPacket>, Error = CommandError> + Send {
         self.reply_receiver
             .map_err(|_| CommandError::Canceled)
-            .and_then(|result: CommandResult| {
-                future::result(result)
-            })
+            .and_then(|result: CommandResult| future::result(result))
     }
 }
 

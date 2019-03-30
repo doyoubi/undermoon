@@ -1,6 +1,10 @@
 build:
 	cargo build
 
+lint:
+	find src -name "*.rs" | xargs rustup run stable rustfmt
+	cargo clippy
+
 release:
 	cargo build --release
 

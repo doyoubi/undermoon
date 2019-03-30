@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use common::cluster::SlotRange;
 use crc16::{State, XMODEM};
-use ::common::cluster::SlotRange;
+use std::collections::HashMap;
 
 pub const SLOT_NUM: usize = 16384;
 
@@ -15,7 +15,7 @@ impl SlotMap {
             let mut slots = Vec::new();
             for range in slot_ranges {
                 if range.end < range.start {
-                    continue
+                    continue;
                 }
                 let mut slot = range.start;
                 while slot < range.end && slot < SLOT_NUM {
@@ -25,7 +25,7 @@ impl SlotMap {
             }
             map.insert(addr, slots);
         }
-        SlotMap{
+        SlotMap {
             data: SlotMapData::new(map),
         }
     }
@@ -64,10 +64,7 @@ impl SlotMapData {
                 });
             }
         }
-        SlotMapData{
-            slot_arr: slot_arr,
-            addrs: addrs,
-        }
+        SlotMapData { slot_arr, addrs }
     }
 
     pub fn get(&self, slot: usize) -> Option<String> {
@@ -79,17 +76,20 @@ impl SlotMapData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::common::cluster::{SlotRange, SlotRangeTag};
+    use common::cluster::{SlotRange, SlotRangeTag};
 
     #[test]
     fn test_slot_map() {
         let mut range_map = HashMap::new();
         let backend = "127.0.0.1:6379".to_string();
-        range_map.insert(backend.clone(), vec![SlotRange{
-            start: 0,
-            end: SLOT_NUM,
-            tag: SlotRangeTag::None,
-        }]);
+        range_map.insert(
+            backend.clone(),
+            vec![SlotRange {
+                start: 0,
+                end: SLOT_NUM,
+                tag: SlotRangeTag::None,
+            }],
+        );
 
         let slot_map = SlotMap::from_ranges(range_map);
         for slot in 0..SLOT_NUM {

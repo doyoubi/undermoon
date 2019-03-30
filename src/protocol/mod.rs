@@ -1,13 +1,13 @@
-mod resp;
+mod client;
+mod codec;
 mod decoder;
 mod encoder;
-mod client;
+mod resp;
 mod stateless;
-mod codec;
 
+pub use self::client::{RedisClient, RedisClientError, SimpleRedisClient};
 pub use self::codec::{RespCodec, RespPacket};
-pub use self::stateless::stateless_decode_resp;
 pub use self::decoder::{decode_resp, DecodeError};
-pub use self::encoder::{resp_to_buf, encode_resp};
-pub use self::resp::{Resp, Array, BulkStr, BinSafeStr};
-pub use self::client::{RedisClient, SimpleRedisClient, RedisClientError};
+pub use self::encoder::{encode_resp, resp_to_buf};
+pub use self::resp::{Array, BinSafeStr, BulkStr, Resp};
+pub use self::stateless::stateless_decode_resp;

@@ -1,15 +1,15 @@
-use std::sync;
-use std::collections::HashMap;
-use std::iter::Iterator;
-use std::error::Error;
-use std::fmt;
-use protocol::Resp;
-use ::common::db::HostDBMap;
-use ::common::cluster::SlotRange;
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender};
-use super::slot::SlotMap;
 use super::command::get_key;
+use super::slot::SlotMap;
+use common::cluster::SlotRange;
+use common::db::HostDBMap;
+use protocol::Resp;
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+use std::iter::Iterator;
+use std::sync;
 
 pub const DEFAULT_DB: &'static str = "admin";
 
@@ -43,15 +43,21 @@ pub trait DBTag {
     fn set_db_name(&self, db: String);
 }
 
-pub struct DatabaseMap<S: CmdTaskSender> where S::Task: DBTag {
+pub struct DatabaseMap<S: CmdTaskSender>
+where
+    S::Task: DBTag,
+{
     // (epoch, meta data)
     local_dbs: sync::RwLock<(u64, HashMap<String, Database<S>>)>,
     remote_dbs: sync::RwLock<(u64, HashMap<String, RemoteDB>)>,
 }
 
-impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
+impl<S: CmdTaskSender> DatabaseMap<S>
+where
+    S::Task: DBTag,
+{
     pub fn new() -> DatabaseMap<S> {
-        Self{
+        Self {
             local_dbs: sync::RwLock::new((0, HashMap::new())),
             remote_dbs: sync::RwLock::new((0, HashMap::new())),
         }
@@ -60,11 +66,9 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     pub fn send(&self, cmd_task: S::Task) -> Result<(), DBSendError<S::Task>> {
         let db_name = cmd_task.get_db_name();
         let (cmd_task, db_exists) = match self.local_dbs.read().unwrap().1.get(&db_name) {
-            Some(db) => {
-                match db.send(cmd_task) {
-                    Err(DBSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
-                    others => return others,
-                }
+            Some(db) => match db.send(cmd_task) {
+                Err(DBSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
+                others => return others,
             },
             None => (cmd_task, false),
         };
@@ -73,11 +77,13 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
             Some(remote_db) => remote_db.send_remote(cmd_task),
             None => {
                 if db_exists {
-                    let resp = Resp::Error(format!("slot not found: {}", db_name.clone()).into_bytes());
+                    let resp =
+                        Resp::Error(format!("slot not found: {}", db_name.clone()).into_bytes());
                     cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::SlotNotCovered)
                 } else {
-                    let resp = Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes());
+                    let resp =
+                        Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes());
                     cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::DBNotFound(db_name))
                 }
@@ -86,7 +92,13 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
-        self.local_dbs.read().unwrap().1.keys().map(|s| s.clone()).collect()
+        self.local_dbs
+            .read()
+            .unwrap()
+            .1
+            .keys()
+            .map(|s| s.clone())
+            .collect()
     }
 
     pub fn clear(&self) {
@@ -97,7 +109,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         let force = db_map.get_flags().force;
 
         if !force && self.local_dbs.read().unwrap().0 >= db_map.get_epoch() {
-            return Err(DBError::OldEpoch)
+            return Err(DBError::OldEpoch);
         }
 
         let epoch = db_map.get_epoch();
@@ -109,7 +121,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
 
         let mut local = self.local_dbs.write().unwrap();
         if !force && epoch <= local.0 {
-            return Err(DBError::OldEpoch)
+            return Err(DBError::OldEpoch);
         }
         *local = (epoch, map);
         Ok(())
@@ -119,7 +131,7 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
         let force = db_map.get_flags().force;
 
         if !force && self.remote_dbs.read().unwrap().0 >= db_map.get_epoch() {
-            return Err(DBError::OldEpoch)
+            return Err(DBError::OldEpoch);
         }
 
         let epoch = db_map.get_epoch();
@@ -131,17 +143,29 @@ impl<S: CmdTaskSender> DatabaseMap<S> where S::Task: DBTag {
 
         let mut remote = self.remote_dbs.write().unwrap();
         if !force && epoch <= remote.0 {
-            return Err(DBError::OldEpoch)
+            return Err(DBError::OldEpoch);
         }
         *remote = (epoch, map);
         Ok(())
     }
 
     pub fn gen_cluster_nodes(&self, dbname: String, service_address: String) -> String {
-        let local = self.local_dbs.read().unwrap().1.get(&dbname).
-            map_or("".to_string(), |db| db.gen_local_cluster_nodes(service_address));
-        let remote = self.remote_dbs.read().unwrap().1.get(&dbname).
-            map_or("".to_string(), |db| db.gen_remote_cluster_nodes());
+        let local = self
+            .local_dbs
+            .read()
+            .unwrap()
+            .1
+            .get(&dbname)
+            .map_or("".to_string(), |db| {
+                db.gen_local_cluster_nodes(service_address)
+            });
+        let remote = self
+            .remote_dbs
+            .read()
+            .unwrap()
+            .1
+            .get(&dbname)
+            .map_or("".to_string(), |db| db.gen_remote_cluster_nodes());
         format!("{}{}", local, remote)
     }
 }
@@ -159,19 +183,23 @@ pub struct Database<S: CmdTaskSender> {
 }
 
 impl<S: CmdTaskSender> Database<S> {
-    pub fn from_slot_map(name: String, epoch: u64, slot_map: HashMap<String, Vec<SlotRange>>) -> Database<S> {
+    pub fn from_slot_map(
+        name: String,
+        epoch: u64,
+        slot_map: HashMap<String, Vec<SlotRange>>,
+    ) -> Database<S> {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
             nodes.insert(addr.to_string(), S::new(addr.to_string()));
         }
-        let local_db = LocalDB{
-            nodes: nodes,
+        let local_db = LocalDB {
+            nodes,
             slot_map: SlotMap::from_ranges(slot_map.clone()),
         };
-        Database{
-            name: name,
-            epoch: epoch,
-            local_db: local_db,
+        Database {
+            name,
+            epoch,
+            local_db,
             slot_ranges: slot_map,
         }
     }
@@ -182,22 +210,20 @@ impl<S: CmdTaskSender> Database<S> {
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
-                return Err(DBSendError::MissingKey)
-            },
+                return Err(DBSendError::MissingKey);
+            }
         };
 
         match self.local_db.slot_map.get_by_key(&key) {
-            Some(addr) => {
-                match self.local_db.nodes.get(&addr) {
-                    Some(sender) => {
-                        sender.send(cmd_task).map_err(|err| DBSendError::Backend(err))
-                    },
-                    None => {
-                        println!("Failed to get node");
-                        Err(DBSendError::SlotNotFound(cmd_task))
-                    },
+            Some(addr) => match self.local_db.nodes.get(&addr) {
+                Some(sender) => sender
+                    .send(cmd_task)
+                    .map_err(|err| DBSendError::Backend(err)),
+                None => {
+                    println!("Failed to get node");
+                    Err(DBSendError::SlotNotFound(cmd_task))
                 }
-            }
+            },
             None => {
                 println!("Failed to get slot");
                 Err(DBSendError::SlotNotFound(cmd_task))
@@ -206,7 +232,9 @@ impl<S: CmdTaskSender> Database<S> {
     }
 
     pub fn gen_local_cluster_nodes(&self, service_address: String) -> String {
-        let slots: Vec<SlotRange> = self.slot_ranges.values()
+        let slots: Vec<SlotRange> = self
+            .slot_ranges
+            .values()
             .map(|slot_ranges| slot_ranges.clone())
             .flatten()
             .collect::<Vec<SlotRange>>();
@@ -224,10 +252,14 @@ pub struct RemoteDB {
 }
 
 impl RemoteDB {
-    pub fn from_slot_map(name: String, epoch: u64, slot_map: HashMap<String, Vec<SlotRange>>) -> RemoteDB {
-        RemoteDB{
-            name: name,
-            epoch: epoch,
+    pub fn from_slot_map(
+        name: String,
+        epoch: u64,
+        slot_map: HashMap<String, Vec<SlotRange>>,
+    ) -> RemoteDB {
+        RemoteDB {
+            name,
+            epoch,
             slot_map: SlotMap::from_ranges(slot_map.clone()),
             slot_ranges: slot_map,
         }
@@ -239,8 +271,8 @@ impl RemoteDB {
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
-                return Err(DBSendError::MissingKey)
-            },
+                return Err(DBSendError::MissingKey);
+            }
         };
         match self.slot_map.get_by_key(&key) {
             Some(addr) => {
@@ -298,7 +330,11 @@ impl<T: CmdTask> Error for DBSendError<T> {
     }
 }
 
-fn gen_cluster_nodes_helper(name: &String, epoch: u64, slot_ranges: &HashMap<String, Vec<SlotRange>>) -> String {
+fn gen_cluster_nodes_helper(
+    name: &String,
+    epoch: u64,
+    slot_ranges: &HashMap<String, Vec<SlotRange>>,
+) -> String {
     let mut cluster_nodes = String::from("");
     let mut name_seg = format!("{:_<20}", name);
     name_seg.truncate(20);
@@ -307,9 +343,11 @@ fn gen_cluster_nodes_helper(name: &String, epoch: u64, slot_ranges: &HashMap<Str
         let id = format!("{}{}", name_seg, addr_seg);
         addr_seg.truncate(20);
 
-        let slot_range = ranges.iter().
-            map(|range| format!("{}-{}", range.start, range.end)).
-            collect::<Vec<String>>().join(" ");
+        let slot_range = ranges
+            .iter()
+            .map(|range| format!("{}-{}", range.start, range.end))
+            .collect::<Vec<String>>()
+            .join(" ");
 
         let line = format!(
             "{id} {addr} {flags} {master} {ping_sent} {pong_recv} {epoch} {link_state} {slot_range}\n",

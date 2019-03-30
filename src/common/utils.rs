@@ -1,8 +1,7 @@
-use std::str;
 use caseless;
+use std::str;
 
 pub trait ThreadSafe: Send + Sync + 'static {}
-
 
 #[derive(Debug)]
 pub struct CmdParseError {}

@@ -1,8 +1,8 @@
+pub mod broker;
 mod core;
 mod detector;
-mod sync;
-mod recover;
-pub mod http_meta_broker;
 pub mod http_mani_broker;
+pub mod http_meta_broker;
+mod recover;
 pub mod service;
-pub mod broker;
+mod sync;

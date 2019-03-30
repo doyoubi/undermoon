@@ -1,33 +1,36 @@
-use std::io;
-use std::fmt;
-use std::sync;
-use std::error::Error;
-use std::result::Result;
-use std::boxed::Box;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use super::command::{CommandError, CommandResult};
 use bytes::BytesMut;
-use futures::{future, Future, Stream};
+use common::future_group::new_future_group;
 use futures::sync::mpsc;
 use futures::Sink;
+use futures::{future, Future, Stream};
+use protocol::{Array, DecodeError, Resp, RespCodec, RespPacket};
+use std::boxed::Box;
+use std::error::Error;
+use std::fmt;
+use std::io;
+use std::result::Result;
+use std::sync;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
-use common::future_group::new_future_group;
-use protocol::{Resp, Array, DecodeError, RespCodec, RespPacket};
-use super::command::{CommandError, CommandResult};
 
 pub type BackendResult = Result<Resp, BackendError>;
 
-pub trait ReplyHandler<T: CmdTask> : Send + 'static {
+pub trait ReplyHandler<T: CmdTask>: Send + 'static {
     fn handle_reply(&self, cmd_task: T, result: BackendResult);
 }
 
-pub trait CmdTask : Send + 'static + fmt::Debug {
+pub trait CmdTask: Send + 'static + fmt::Debug {
     fn get_resp(&self) -> &Resp;
     fn set_result(self, result: CommandResult);
     fn drain_packet_data(&self) -> Option<BytesMut>;
 
-    fn set_resp_result(self, result: Result<Resp, CommandError>) where Self: Sized {
+    fn set_resp_result(self, result: Result<Resp, CommandError>)
+    where
+        Self: Sized,
+    {
         self.set_result(result.map(|resp| Box::new(RespPacket::new(resp))))
     }
 }
@@ -49,7 +52,7 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
     type Task = T;
 
     fn new(addr: String) -> RecoverableBackendNode<T> {
-        Self{
+        Self {
             addr: sync::Arc::new(addr),
             node: sync::Arc::new(sync::RwLock::new(None)),
         }
@@ -68,23 +71,29 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
                 debug!("sock result: {:?}", res);
                 match res {
                     Ok(sock) => {
-                        let (node, reader_handler, writer_handler) = BackendNode::<T>::new(sock, ReplyCommitHandler{});
-                        let (reader_handler, writer_handler) = new_future_group(reader_handler, writer_handler);
-                        node.send(cmd_task).unwrap();  // must not fail
+                        let (node, reader_handler, writer_handler) =
+                            BackendNode::<T>::new(sock, ReplyCommitHandler {});
+                        let (reader_handler, writer_handler) =
+                            new_future_group(reader_handler, writer_handler);
+                        node.send(cmd_task).unwrap(); // must not fail
                         node_arc.write().unwrap().get_or_insert(node);
-                        tokio::spawn(reader_handler
-                            .map(|()| info!("backend read IO closed"))
-                            .map_err(|e| error!("backend read IO error {:?}", e)));
-                        tokio::spawn(writer_handler
-                            .map(|()| info!("backend write IO closed"))
-                            .map_err(|e| error!("backend write IO error {:?}", e)));
+                        tokio::spawn(
+                            reader_handler
+                                .map(|()| info!("backend read IO closed"))
+                                .map_err(|e| error!("backend read IO error {:?}", e)),
+                        );
+                        tokio::spawn(
+                            writer_handler
+                                .map(|()| info!("backend write IO closed"))
+                                .map_err(|e| error!("backend write IO error {:?}", e)),
+                        );
                         future::ok(())
-                    },
+                    }
                     Err(e) => {
                         error!("sock err: {:?}", e);
                         cmd_task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
                         future::err(())
-                    },
+                    }
                 }
             });
             // If this future fails, cmd_task will be lost. Let itself send back an error response.
@@ -115,37 +124,48 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
 pub struct ReplyCommitHandler {}
 
 impl<T: CmdTask> ReplyHandler<T> for ReplyCommitHandler {
-    fn handle_reply(&self, _cmd_task: T, _result: BackendResult) {
-    }
+    fn handle_reply(&self, _cmd_task: T, _result: BackendResult) {}
 }
 
 pub struct BackendNode<T: CmdTask> {
-    tx: mpsc::UnboundedSender<T>
+    tx: mpsc::UnboundedSender<T>,
 }
 
 impl<T: CmdTask> BackendNode<T> {
-    pub fn new<H: ReplyHandler<T>>(sock: TcpStream, handler: H) -> (
-            BackendNode<T>,
-            impl Future<Item = (), Error = BackendError> + Send,
-            impl Future<Item = (), Error = BackendError> + Send) {
+    pub fn new<H: ReplyHandler<T>>(
+        sock: TcpStream,
+        handler: H,
+    ) -> (
+        BackendNode<T>,
+        impl Future<Item = (), Error = BackendError> + Send,
+        impl Future<Item = (), Error = BackendError> + Send,
+    ) {
         let (tx, rx) = mpsc::unbounded();
         let (reader_handler, writer_handler) = handle_backend(handler, rx, sock);
-        (Self{tx}, reader_handler, writer_handler)
+        (Self { tx }, reader_handler, writer_handler)
     }
 
     pub fn send(&self, cmd_task: T) -> Result<(), BackendError> {
-        self.tx.unbounded_send(cmd_task)
+        self.tx
+            .unbounded_send(cmd_task)
             .map(|_| ())
             .map_err(|_e| BackendError::Canceled)
     }
 }
 
-pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<T>, sock: TcpStream) -> (
-        impl Future<Item = (), Error = BackendError> + Send,
-        impl Future<Item = (), Error = BackendError> + Send)
-    where H: ReplyHandler<T>, T: CmdTask
+pub fn handle_backend<H, T>(
+    handler: H,
+    task_receiver: mpsc::UnboundedReceiver<T>,
+    sock: TcpStream,
+) -> (
+    impl Future<Item = (), Error = BackendError> + Send,
+    impl Future<Item = (), Error = BackendError> + Send,
+)
+where
+    H: ReplyHandler<T>,
+    T: CmdTask,
 {
-    let (writer, reader) = RespCodec{}.framed(sock).split();
+    let (writer, reader) = RespCodec {}.framed(sock).split();
 
     let (tx, rx) = mpsc::channel(1024);
 
@@ -155,62 +175,71 @@ pub fn handle_backend <H, T>(handler: H, task_receiver: mpsc::UnboundedReceiver<
     (reader_handler, writer_handler)
 }
 
-fn handle_write<W, T>(task_receiver: mpsc::UnboundedReceiver<T>, writer: W, tx: mpsc::Sender<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static, T: CmdTask
+fn handle_write<W, T>(
+    task_receiver: mpsc::UnboundedReceiver<T>,
+    writer: W,
+    tx: mpsc::Sender<T>,
+) -> impl Future<Item = (), Error = BackendError> + Send
+where
+    W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static,
+    T: CmdTask,
 {
-    task_receiver.map_err(|()| BackendError::Canceled)
+    task_receiver
+        .map_err(|()| BackendError::Canceled)
         .fold((writer, tx), |(writer, tx), task| {
             let item = match task.drain_packet_data() {
                 Some(data) => {
                     // Tricky code here. The nil array will be ignored when encoded.
                     // TODO: Refactor it by using enum to differentiate this two packet type.
                     RespPacket::new_with_buf(Resp::Arr(Array::Nil), data)
-                },
+                }
                 None => {
                     // TODO: remove the clone
                     let resp = task.get_resp().clone();
                     RespPacket::new(resp)
-                },
+                }
             };
-            writer.send(Box::new(item))
-                .then(|res| {
-                    let fut : Box<Future<Item=_, Error=BackendError> + Send> = match res {
-                        Ok(writer) => {
-                            let fut = tx.send(task)
-                                .map(move |tx| (writer, tx))
-                                .map_err(|e| {
-                                    error!("rx closed {:?}", e);
-                                    BackendError::Canceled
-                                });
-                            Box::new(fut)
-                        },
-                        Err(e) => {
-                            error!("Failed to write");
-                            task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
-                            Box::new(future::err(BackendError::Io(e)))
-                        }
-                    };
-                    fut
-                })
+            writer.send(Box::new(item)).then(|res| {
+                let fut: Box<Future<Item = _, Error = BackendError> + Send> = match res {
+                    Ok(writer) => {
+                        let fut = tx.send(task).map(move |tx| (writer, tx)).map_err(|e| {
+                            error!("rx closed {:?}", e);
+                            BackendError::Canceled
+                        });
+                        Box::new(fut)
+                    }
+                    Err(e) => {
+                        error!("Failed to write");
+                        task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
+                        Box::new(future::err(BackendError::Io(e)))
+                    }
+                };
+                fut
+            })
         })
         .map(|_| ())
 }
 
-fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Future<Item = (), Error = BackendError> + Send
-    where R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static, H: ReplyHandler<T>, T: CmdTask
+fn handle_read<H, T, R>(
+    handler: H,
+    reader: R,
+    rx: mpsc::Receiver<T>,
+) -> impl Future<Item = (), Error = BackendError> + Send
+where
+    R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static,
+    H: ReplyHandler<T>,
+    T: CmdTask,
 {
     let rx = rx.into_future();
     reader
-        .map_err(|e| {
-            match e {
-                DecodeError::InvalidProtocol => {
-                    error!("backend: invalid protocol");
-                    BackendError::InvalidProtocol
-                },
-                DecodeError::Io(e) => {
-                    error!("backend: io error: {:?}", e);
-                    BackendError::Io(e)
-                },
+        .map_err(|e| match e {
+            DecodeError::InvalidProtocol => {
+                error!("backend: invalid protocol");
+                BackendError::InvalidProtocol
+            }
+            DecodeError::Io(e) => {
+                error!("backend: io error: {:?}", e);
+                BackendError::Io(e)
             }
         })
         .fold((handler, rx), move |(handler, rx), packet| {
@@ -220,13 +249,13 @@ fn handle_read<H, T, R>(handler: H, reader: R, rx: mpsc::Receiver<T>) -> impl Fu
                 error!("backend: unexpected read");
                 BackendError::Canceled
             })
-                .and_then(|(task_opt, rx)| {
-                    // TODO: remove this unwrap
-                    let task = task_opt.unwrap();
-                    task.set_result(Ok(packet));
-                    // TODO: call handler
-                    future::ok((handler, rx.into_future()))
-                })
+            .and_then(|(task_opt, rx)| {
+                // TODO: remove this unwrap
+                let task = task_opt.unwrap();
+                task.set_result(Ok(packet));
+                // TODO: call handler
+                future::ok((handler, rx.into_future()))
+            })
         })
         .map(|_| ())
 }

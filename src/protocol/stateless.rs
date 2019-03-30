@@ -1,12 +1,12 @@
-use std::mem;
-use std::io::{self, BufRead};
+use super::decoder::{DecodeError, LF};
+use super::resp::{Array, BinSafeStr, BulkStr, Resp};
+use btoi::btoi;
+use futures::{Async, Future, Poll};
 use std::error::Error;
 use std::fmt;
-use btoi::btoi;
-use futures::{Future, Poll, Async};
+use std::io::{self, BufRead};
+use std::mem;
 use tokio::prelude::AsyncRead;
-use super::resp::{Resp, BulkStr, BinSafeStr, Array};
-use super::decoder::{LF, DecodeError};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -34,8 +34,11 @@ impl Error for ParseError {
     }
 }
 
-pub fn stateless_decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
-    where R: AsyncRead + io::BufRead + Send + 'static
+pub fn stateless_decode_resp<R>(
+    reader: R,
+) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
+where
+    R: AsyncRead + io::BufRead + Send + 'static,
 {
     RespParser::new(reader)
 }
@@ -47,12 +50,14 @@ enum State<R> {
 }
 
 pub struct RespParser<R: AsyncRead + io::BufRead + Send + 'static> {
-    state: State<R>
+    state: State<R>,
 }
 
 impl<R: AsyncRead + io::BufRead + Send + 'static> RespParser<R> {
     fn new(reader: R) -> Self {
-        Self{state: State::Reading(reader)}
+        Self {
+            state: State::Reading(reader),
+        }
     }
 }
 
@@ -71,7 +76,7 @@ impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
                         }
                         error!("io error when parsing {:?}", e);
                         return Err(DecodeError::Io(e));
-                    },
+                    }
                 };
                 match parse_resp(buf) {
                     Ok(r) => r,
@@ -79,13 +84,13 @@ impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
                     Err(ParseError::InvalidProtocol) => return Err(DecodeError::InvalidProtocol),
                     Err(ParseError::Io(e)) => {
                         if e.kind() == io::ErrorKind::WouldBlock {
-                            return Ok(Async::NotReady)
+                            return Ok(Async::NotReady);
                         }
                         error!("io error when parsing {:?}", e);
-                        return Err(DecodeError::Io(e))
-                    },
+                        return Err(DecodeError::Io(e));
+                    }
                 }
-            },
+            }
             State::Empty => panic!("poll ReadUntil after it's done"),
         };
 
@@ -93,7 +98,7 @@ impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
             State::Reading(mut reader) => {
                 reader.consume(consumed);
                 Ok(Async::Ready((reader, resp)))
-            },
+            }
             State::Empty => unreachable!(),
         }
     }
@@ -129,7 +134,7 @@ pub fn parse_resp(buf: &[u8]) -> Result<(Resp, usize), ParseError> {
         prefix => {
             error!("Unexpected prefix {:?}", prefix);
             Err(ParseError::InvalidProtocol)
-        },
+        }
     }
 }
 
@@ -163,8 +168,8 @@ fn parse_bulk_str(buf: &[u8]) -> Result<(BulkStr, usize), ParseError> {
     }
 
     Ok((
-        BulkStr::Str(buf[consumed..consumed+content_size].to_vec()),
-        consumed + content_size + 2
+        BulkStr::Str(buf[consumed..consumed + content_size].to_vec()),
+        consumed + content_size + 2,
     ))
 }
 
@@ -178,7 +183,7 @@ fn parse_len(buf: &[u8]) -> Result<(i64, usize), ParseError> {
 fn parse_line(mut buf: &[u8]) -> Result<(BinSafeStr, usize), ParseError> {
     let mut line = Vec::new();
     let consumed = buf.read_until(LF, &mut line).map_err(ParseError::Io)?;
-    if consumed == 0 || line[consumed-1] != LF {
+    if consumed == 0 || line[consumed - 1] != LF {
         return Err(ParseError::NotEnoughData);
     }
 
@@ -187,7 +192,7 @@ fn parse_line(mut buf: &[u8]) -> Result<(BinSafeStr, usize), ParseError> {
     }
     // s >= 2
     // Just ignore the CR
-    line.truncate(consumed-2);
+    line.truncate(consumed - 2);
     Ok((line, consumed))
 }
 
@@ -272,10 +277,13 @@ mod tests {
         assert!(r.is_ok());
         let (a, s) = r.unwrap();
         assert_eq!(s, 18);
-        assert_eq!(Array::Arr(vec![
-            Resp::Bulk(BulkStr::Str(String::from("a").into_bytes())),
-            Resp::Bulk(BulkStr::Str(String::from("bc").into_bytes())),
-        ]), a);
+        assert_eq!(
+            Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(String::from("a").into_bytes())),
+                Resp::Bulk(BulkStr::Str(String::from("bc").into_bytes())),
+            ]),
+            a
+        );
 
         let r = parse_array("-1\r\n".as_bytes());
         assert!(r.is_ok());
@@ -333,6 +341,9 @@ mod tests {
         assert!(r.is_ok());
         let (a, s) = r.unwrap();
         assert_eq!(s, 9);
-        assert_eq!(Resp::Bulk(BulkStr::Str(String::from("foo").into_bytes())), a);
+        assert_eq!(
+            Resp::Bulk(BulkStr::Str(String::from("foo").into_bytes())),
+            a
+        );
     }
 }

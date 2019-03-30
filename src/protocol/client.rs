@@ -1,34 +1,44 @@
+use super::decoder::{decode_resp, DecodeError};
+use super::encoder::command_to_buf;
+use super::resp::{BinSafeStr, Resp};
+use common::utils::ThreadSafe;
+use futures::{future, Future};
+use std::error::Error;
 use std::fmt;
 use std::io;
 use std::time::Duration;
-use std::error::Error;
-use futures::{Future, future};
-use tokio::prelude::FutureExt;
-use tokio::net::TcpStream;
 use tokio::io::{write_all, AsyncRead};
-use ::common::utils::ThreadSafe;
-use super::resp::{Resp, BinSafeStr};
-use super::decoder::{decode_resp, DecodeError};
-use super::encoder::command_to_buf;
+use tokio::net::TcpStream;
+use tokio::prelude::FutureExt;
 
-pub trait RedisClient : ThreadSafe {
-    fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error =RedisClientError> + Send>;
+pub trait RedisClient: ThreadSafe {
+    fn execute(
+        &self,
+        address: String,
+        command: Vec<BinSafeStr>,
+    ) -> Box<dyn Future<Item = Resp, Error = RedisClientError> + Send>;
 }
 
 #[derive(Clone)]
 pub struct SimpleRedisClient;
 
 impl SimpleRedisClient {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl ThreadSafe for SimpleRedisClient {}
 
 impl RedisClient for SimpleRedisClient {
-    fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error =RedisClientError> + Send> {
+    fn execute(
+        &self,
+        address: String,
+        command: Vec<BinSafeStr>,
+    ) -> Box<dyn Future<Item = Resp, Error = RedisClientError> + Send> {
         let sock_address = match address.parse() {
             Ok(address) => address,
-            Err(_e) => return Box::new(future::err(RedisClientError::InvalidAddress))
+            Err(_e) => return Box::new(future::err(RedisClientError::InvalidAddress)),
         };
         let address_clone = address.clone();
         let connect_fut = TcpStream::connect(&sock_address)
@@ -43,19 +53,19 @@ impl RedisClient for SimpleRedisClient {
                     .map_err(|e| RedisClientError::Io(e))
                     .and_then(move |(_writer, _buf)| {
                         decode_resp(reader)
-                            .map_err(|e| {
-                                match e {
-                                    DecodeError::Io(e) => RedisClientError::Io(e),
-                                    DecodeError::InvalidProtocol => RedisClientError::InvalidReply,
-                                }
+                            .map_err(|e| match e {
+                                DecodeError::Io(e) => RedisClientError::Io(e),
+                                DecodeError::InvalidProtocol => RedisClientError::InvalidReply,
                             })
                             .map(|(_sock, resp)| resp)
                     })
             });
-        let f = connect_fut.timeout(Duration::from_secs(1)).map_err(move |e| {
-            error!("redis client error {} {:?}", address_clone, e);
-            RedisClientError::Timeout
-        });
+        let f = connect_fut
+            .timeout(Duration::from_secs(1))
+            .map_err(move |e| {
+                error!("redis client error {} {:?}", address_clone, e);
+                RedisClientError::Timeout
+            });
         Box::new(f)
     }
 }

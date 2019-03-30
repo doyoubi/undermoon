@@ -1,9 +1,9 @@
-use futures::{Future, future, Stream};
-use tokio::net::TcpListener;
-use ::common::utils::ThreadSafe;
-use ::common::future_group::new_future_group;
-use super::session::{Session, handle_conn};
 use super::session::CmdCtxHandler;
+use super::session::{handle_conn, Session};
+use common::future_group::new_future_group;
+use common::utils::ThreadSafe;
+use futures::{future, Future, Stream};
+use tokio::net::TcpListener;
 
 #[derive(Debug, Clone)]
 pub struct ServerProxyConfig {
@@ -18,7 +18,7 @@ pub struct ServerProxyService<H: CmdCtxHandler + ThreadSafe + Clone> {
 
 impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
     pub fn new(config: ServerProxyConfig, cmd_ctx_handler: H) -> Self {
-        Self{
+        Self {
             config,
             cmd_ctx_handler,
         }
@@ -33,37 +33,43 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
             Ok(a) => a,
             Err(e) => {
                 error!("failed to parse address: {} {:?}", address, e);
-                return Box::new(future::err(()))
-            },
+                return Box::new(future::err(()));
+            }
         };
 
         let listener = match TcpListener::bind(&address) {
             Ok(l) => l,
             Err(e) => {
                 error!("unable to bind address: {} {:?}", address, e);
-                return Box::new(future::err(()))
-            },
+                return Box::new(future::err(()));
+            }
         };
 
         let forward_handler = self.cmd_ctx_handler.clone();
 
         Box::new(
-            listener.incoming()
+            listener
+                .incoming()
                 .map_err(|e| error!("accept failed: {:?}", e))
                 .for_each(move |sock| {
                     info!("accept conn {:?}", sock.peer_addr());
                     let handle_clone = forward_handler.clone();
-                    let (reader_handler, writer_handler) = handle_conn(Session::new(handle_clone), sock);
-                    let (reader_handler, writer_handler) = new_future_group(reader_handler, writer_handler);
-                    tokio::spawn(reader_handler
-                        .map(|()| info!("Read IO closed"))
-                        .map_err(|err| error!("Read IO error {:?}", err)));
-                    tokio::spawn(writer_handler
-                        .map(|()| info!("Write IO closed"))
-                        .map_err(|err| error!("Write IO error {:?}", err)));
+                    let (reader_handler, writer_handler) =
+                        handle_conn(Session::new(handle_clone), sock);
+                    let (reader_handler, writer_handler) =
+                        new_future_group(reader_handler, writer_handler);
+                    tokio::spawn(
+                        reader_handler
+                            .map(|()| info!("Read IO closed"))
+                            .map_err(|err| error!("Read IO error {:?}", err)),
+                    );
+                    tokio::spawn(
+                        writer_handler
+                            .map(|()| info!("Write IO closed"))
+                            .map_err(|err| error!("Write IO error {:?}", err)),
+                    );
                     future::ok(())
-                })
+                }),
         )
     }
-
 }

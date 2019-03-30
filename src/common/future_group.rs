@@ -1,11 +1,22 @@
-use futures::{Future, Poll, Async};
 use futures::sync::oneshot;
+use futures::{Async, Future, Poll};
 
-pub fn new_future_group<FA: Future, FB: Future>(future1: FA, future2: FB) -> (FutureGroupHandle<FA>, FutureGroupHandle<FB>) {
+pub fn new_future_group<FA: Future, FB: Future>(
+    future1: FA,
+    future2: FB,
+) -> (FutureGroupHandle<FA>, FutureGroupHandle<FB>) {
     let (s1, r1) = oneshot::channel();
     let (s2, r2) = oneshot::channel();
-    let handle1 = FutureGroupHandle{ inner: future1, signal_sender: Some(s1), signal_receiver: r2 };
-    let handle2 = FutureGroupHandle{ inner: future2, signal_sender: Some(s2), signal_receiver: r1 };
+    let handle1 = FutureGroupHandle {
+        inner: future1,
+        signal_sender: Some(s1),
+        signal_receiver: r2,
+    };
+    let handle2 = FutureGroupHandle {
+        inner: future2,
+        signal_sender: Some(s2),
+        signal_receiver: r1,
+    };
     (handle1, handle2)
 }
 
@@ -32,16 +43,16 @@ impl<F: Future> Future for FutureGroupHandle<F> {
                         debug!("failed to signal");
                     }
                 }
-                return Ok(Async::Ready(()))
-            },
+                return Ok(Async::Ready(()));
+            }
             Err(e) => {
                 if let Some(sender) = signal_sender.take() {
                     if let Err(()) = sender.send(()) {
                         debug!("failed to signal");
                     }
                 }
-                return Err(e)
-            },
+                return Err(e);
+            }
         };
         match signal_receiver.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),

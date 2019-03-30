@@ -1,15 +1,19 @@
-extern crate undermoon;
 extern crate tokio;
-#[macro_use] extern crate log;
-extern crate env_logger;
+extern crate undermoon;
+#[macro_use]
+extern crate log;
 extern crate config;
+extern crate env_logger;
 
 use std::env;
 use undermoon::proxy::executor::SharedForwardHandler;
-use undermoon::proxy::service::{ServerProxyService, ServerProxyConfig};
+use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 
 fn gen_conf() -> ServerProxyConfig {
-    let conf_file_path = env::args().skip(1).next().unwrap_or("server-proxy.toml".to_string());
+    let conf_file_path = env::args()
+        .skip(1)
+        .next()
+        .unwrap_or("server-proxy.toml".to_string());
 
     let mut s = config::Config::new();
     s.merge(config::File::with_name(&conf_file_path))
@@ -20,8 +24,10 @@ fn gen_conf() -> ServerProxyConfig {
         .map(|_| ())
         .unwrap_or_else(|e| warn!("failed to read address from env vars {:?}", e));
 
-    ServerProxyConfig{
-        address: s.get::<String>("address").unwrap_or("127.0.0.1:5299".to_string())
+    ServerProxyConfig {
+        address: s
+            .get::<String>("address")
+            .unwrap_or("127.0.0.1:5299".to_string()),
     }
 }
 
