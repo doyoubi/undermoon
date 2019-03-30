@@ -1,6 +1,6 @@
 use futures::{future, stream, Stream, Future};
-use super::broker::{MetaDataBroker, MetaDataBrokerError, MetaManipulationBroker};
-use super::core::{ProxyFailureRetriever, NodeFailureRetriever, NodeFailureHandler, ProxyFailure, CoordinateError, NodeFailure};
+use super::broker::{MetaDataBroker, MetaManipulationBroker};
+use super::core::{ProxyFailureRetriever, NodeFailureRetriever, NodeFailureHandler, CoordinateError, NodeFailure};
 
 pub struct BrokerProxyFailureRetriever<B: MetaDataBroker> {
     broker: B

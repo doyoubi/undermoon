@@ -5,7 +5,6 @@ use std::error::Error;
 use std::result::Result;
 use std::sync::atomic::Ordering;
 use bytes::BytesMut;
-use caseless;
 use futures::{future, Future};
 use futures::sync::oneshot;
 use atomic_option::AtomicOption;

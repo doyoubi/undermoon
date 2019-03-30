@@ -1,13 +1,11 @@
 use std::sync;
-use std::iter::Peekable;
 use std::collections::HashMap;
 use std::iter::Iterator;
 use std::error::Error;
 use std::fmt;
-use caseless;
-use protocol::{Resp, Array, BulkStr, RespPacket};
+use protocol::Resp;
 use ::common::db::HostDBMap;
-use ::common::cluster::{SlotRange, SlotRangeTag};
+use ::common::cluster::SlotRange;
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender};
 use super::slot::SlotMap;

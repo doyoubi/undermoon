@@ -4,7 +4,7 @@ use futures::{future, Future, stream, Stream};
 use futures::future::select_all;
 use futures_timer::Delay;
 use ::common::utils::ThreadSafe;
-use ::protocol::{RedisClient, SimpleRedisClient};
+use ::protocol::RedisClient;
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{FailureDetector, SeqFailureDetector, CoordinateError, HostMetaSynchronizer, HostMetaRespSynchronizer,
                   FailureHandler, SeqFailureHandler};

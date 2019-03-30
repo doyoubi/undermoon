@@ -6,7 +6,7 @@ use btoi::btoi;
 use futures::{Future, Poll, Async};
 use tokio::prelude::AsyncRead;
 use super::resp::{Resp, BulkStr, BinSafeStr, Array};
-use super::decoder::{CR, LF, DecodeError};
+use super::decoder::{LF, DecodeError};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -133,7 +133,7 @@ pub fn parse_resp(buf: &[u8]) -> Result<(Resp, usize), ParseError> {
     }
 }
 
-fn parse_array(mut buf: &[u8]) -> Result<(Array, usize), ParseError> {
+fn parse_array(buf: &[u8]) -> Result<(Array, usize), ParseError> {
     let (len, mut consumed) = parse_len(buf)?;
     if len < 0 {
         return Ok((Array::Nil, consumed));
@@ -151,7 +151,7 @@ fn parse_array(mut buf: &[u8]) -> Result<(Array, usize), ParseError> {
     Ok((Array::Arr(array), consumed))
 }
 
-fn parse_bulk_str(mut buf: &[u8]) -> Result<(BulkStr, usize), ParseError> {
+fn parse_bulk_str(buf: &[u8]) -> Result<(BulkStr, usize), ParseError> {
     let (len, consumed) = parse_len(buf)?;
     if len < 0 {
         return Ok((BulkStr::Nil, consumed));
@@ -219,11 +219,13 @@ mod tests {
         let r = parse_line("233\r\n".as_bytes());
         assert!(r.is_ok());
         let (b, l) = r.unwrap();
+        assert_eq!(l, 5);
         assert_eq!(str::from_utf8(&b), Ok("233"));
 
         let r = parse_line("\r\n".as_bytes());
         assert!(r.is_ok());
         let (b, l) = r.unwrap();
+        assert_eq!(l, 2);
         assert_eq!(str::from_utf8(&b), Ok(""));
     }
 

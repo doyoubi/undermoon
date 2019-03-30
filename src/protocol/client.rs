@@ -2,10 +2,10 @@ use std::fmt;
 use std::io;
 use std::time::Duration;
 use std::error::Error;
-use futures::{Future, Stream, future};
+use futures::{Future, future};
 use tokio::prelude::FutureExt;
 use tokio::net::TcpStream;
-use tokio::io::{write_all, AsyncRead, AsyncWrite};
+use tokio::io::{write_all, AsyncRead};
 use ::common::utils::ThreadSafe;
 use super::resp::{Resp, BinSafeStr};
 use super::decoder::{decode_resp, DecodeError};
@@ -28,7 +28,7 @@ impl RedisClient for SimpleRedisClient {
     fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error =RedisClientError> + Send> {
         let sock_address = match address.parse() {
             Ok(address) => address,
-            Err(e) => return Box::new(future::err(RedisClientError::InvalidAddress))
+            Err(_e) => return Box::new(future::err(RedisClientError::InvalidAddress))
         };
         let address_clone = address.clone();
         let connect_fut = TcpStream::connect(&sock_address)
@@ -41,7 +41,7 @@ impl RedisClient for SimpleRedisClient {
                 let writer = tx;
                 write_all(writer, buf)
                     .map_err(|e| RedisClientError::Io(e))
-                    .and_then(move |(writer, _buf)| {
+                    .and_then(move |(_writer, _buf)| {
                         decode_resp(reader)
                             .map_err(|e| {
                                 match e {

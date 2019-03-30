@@ -1,8 +1,7 @@
-use std::str;
 use std::io;
 use std::fmt;
 use std::sync::atomic::Ordering;
-use bytes::{BufMut, BytesMut};
+use bytes::{BytesMut};
 use tokio::codec::{Encoder, Decoder};
 use atomic_option::AtomicOption;
 use super::resp::Resp;

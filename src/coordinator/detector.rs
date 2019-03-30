@@ -1,9 +1,7 @@
-use futures::{Future, Stream, future, stream};
-use protocol::{RedisClient, SimpleRedisClient, RedisClientError};
-use ::common::cluster::{Host, Node, Cluster};
-use super::cluster::FullMetaData;
-use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use super::core::{ProxyFailure, ProxiesRetriever, FailureChecker, FailureReporter, CoordinateError, SeqFailureDetector, FailureDetector};
+use futures::{Future, Stream, future};
+use protocol::RedisClient;
+use super::broker::MetaDataBroker;
+use super::core::{ProxiesRetriever, FailureChecker, FailureReporter, CoordinateError};
 
 pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
     meta_data_broker: B
@@ -70,8 +68,12 @@ impl<B: MetaDataBroker> FailureReporter for BrokerFailureReporter<B> {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use futures::stream;
+    use ::common::cluster::{Host, Cluster};
     use ::common::utils::ThreadSafe;
-    use ::protocol::{RedisClient, BinSafeStr, Resp, Array};
+    use ::protocol::{RedisClient, RedisClientError, BinSafeStr, Resp, Array};
+    use super::super::broker::{MetaDataBroker, MetaDataBrokerError};
+    use super::super::core::{SeqFailureDetector, FailureDetector};
     use super::*;
 
     const NODE1: &'static str = "127.0.0.1:7000";
@@ -83,7 +85,7 @@ mod tests {
     impl ThreadSafe for DummyClient {}
 
     impl RedisClient for DummyClient {
-        fn execute(&self, address: String, command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error =RedisClientError> + Send> {
+        fn execute(&self, address: String, _command: Vec<BinSafeStr>) -> Box<dyn Future<Item = Resp, Error =RedisClientError> + Send> {
             if address == NODE1 {
                 Box::new(future::ok(Resp::Arr(Array::Nil)))
             } else {
@@ -113,9 +115,9 @@ mod tests {
             Box::new(future::ok(None))
         }
         fn get_host_addresses(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
-            Box::new(stream::iter(vec![
-                Ok::<String, MetaDataBrokerError>(NODE1.to_string()),
-                Ok::<String, MetaDataBrokerError>(NODE2.to_string()),
+            Box::new(stream::iter_ok(vec![
+                NODE1.to_string(),
+                NODE2.to_string(),
             ]))
         }
         fn get_host(&self, _address: String) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {

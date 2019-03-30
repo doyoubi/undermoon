@@ -1,5 +1,4 @@
 use std::io;
-use std::iter;
 use std::fmt;
 use std::sync;
 use std::error::Error;
@@ -7,13 +6,12 @@ use std::result::Result;
 use std::boxed::Box;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::BytesMut;
-use futures::{future, Future, stream, Stream};
+use futures::{future, Future, Stream};
 use futures::sync::mpsc;
 use futures::Sink;
 use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
-use tokio::io::{write_all, AsyncRead, AsyncWrite};
 use common::future_group::new_future_group;
 use protocol::{Resp, Array, DecodeError, RespCodec, RespPacket};
 use super::command::{CommandError, CommandResult};
@@ -64,7 +62,6 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
         // TODO: use existing connection when there already is.
         if need_init {
             let node_arc = self.node.clone();
-            let node_arc2 = self.node.clone();
             let addr = self.addr.parse().unwrap();
             let sock = TcpStream::connect(&addr);
             let fut = sock.then(move |res| {

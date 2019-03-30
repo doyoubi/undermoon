@@ -1,4 +1,4 @@
-use futures::{Future, Poll, Async, IntoFuture};
+use futures::{Future, Poll, Async};
 use futures::sync::oneshot;
 
 pub fn new_future_group<FA: Future, FB: Future>(future1: FA, future2: FB) -> (FutureGroupHandle<FA>, FutureGroupHandle<FB>) {

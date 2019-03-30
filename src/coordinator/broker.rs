@@ -3,7 +3,7 @@ use std::fmt;
 use std::error::Error;
 use futures::{Future, Stream};
 use ::common::utils::ThreadSafe;
-use ::common::cluster::{Cluster, Node, Host, SlotRange};
+use ::common::cluster::{Cluster, Node, Host};
 
 
 pub trait MetaDataBroker: ThreadSafe {

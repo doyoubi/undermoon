@@ -1,11 +1,9 @@
 use futures::{Future, future, Stream};
-use futures::IntoFuture;
 use tokio::net::TcpListener;
 use ::common::utils::ThreadSafe;
 use ::common::future_group::new_future_group;
 use super::session::{Session, handle_conn};
 use super::session::CmdCtxHandler;
-use super::executor::SharedForwardHandler;
 
 #[derive(Debug, Clone)]
 pub struct ServerProxyConfig {
@@ -34,7 +32,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let address = match address.parse() {
             Ok(a) => a,
             Err(e) => {
-                error!("failed to parse address: {}", address);
+                error!("failed to parse address: {} {:?}", address, e);
                 return Box::new(future::err(()))
             },
         };
@@ -42,7 +40,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let listener = match TcpListener::bind(&address) {
             Ok(l) => l,
             Err(e) => {
-                error!("unable to bind address: {}", address);
+                error!("unable to bind address: {} {:?}", address, e);
                 return Box::new(future::err(()))
             },
         };

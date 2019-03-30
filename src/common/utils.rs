@@ -1,6 +1,5 @@
 use std::str;
 use caseless;
-use ::protocol::{Resp, Array, BulkStr};
 
 pub trait ThreadSafe: Send + Sync + 'static {}
 

@@ -1,5 +1,4 @@
 mod core;
-mod cluster;
 mod detector;
 mod sync;
 mod recover;

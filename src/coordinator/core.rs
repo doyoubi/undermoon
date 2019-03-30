@@ -5,16 +5,10 @@ use std::sync::Arc;
 use futures::{future, Future, Stream};
 use ::common::cluster::{Host, Node};
 use ::protocol::RedisClientError;
-use super::cluster::FullMetaData;
-use super::broker::{MetaDataBroker, MetaManipulationBrokerError, MetaDataBrokerError};
+use super::broker::{MetaManipulationBrokerError, MetaDataBrokerError};
 
 pub trait ProxiesRetriever: Sync + Send + 'static {
     fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
-}
-
-pub struct ProxyFailure {
-    proxy_address: String,
-    report_id: String,
 }
 
 pub type NodeFailure = Node;
@@ -223,7 +217,7 @@ mod tests {
     struct DummyChecker {}
 
     impl FailureChecker for DummyChecker {
-        fn check(&self, address: String) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send> {
+        fn check(&self, _address: String) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send> {
             Box::new(future::ok(None))
         }
     }

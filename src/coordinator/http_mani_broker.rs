@@ -1,8 +1,8 @@
-use futures::{Future, Stream, future, stream};
+use futures::{Future, Stream, future};
 use reqwest::async;
 use serde_derive::{Deserialize, Serialize};
 use ::common::utils::ThreadSafe;
-use ::common::cluster::{Cluster, Node, Host, SlotRange};
+use ::common::cluster::Node;
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
 
 #[derive(Clone)]

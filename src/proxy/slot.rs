@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crc16::{State, XMODEM};
-use ::common::cluster::{SlotRangeTag, SlotRange};
+use ::common::cluster::SlotRange;
 
 pub const SLOT_NUM: usize = 16384;
 
@@ -79,6 +79,7 @@ impl SlotMapData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::common::cluster::{SlotRange, SlotRangeTag};
 
     #[test]
     fn test_slot_map() {

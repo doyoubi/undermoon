@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use futures::{Future, future};
 use ::common::db::{HostDBMap, DBMapFlags};
 use ::common::cluster::{Host, SlotRange};
-use protocol::{RedisClient, SimpleRedisClient, Resp};
-use super::broker::{MetaDataBroker, MetaDataBrokerError};
+use protocol::{RedisClient, Resp};
+use super::broker::MetaDataBroker;
 use super::core::{HostMetaSender, HostMetaRetriever, CoordinateError};
 
 pub struct HostMetaRespSender<C: RedisClient> {
