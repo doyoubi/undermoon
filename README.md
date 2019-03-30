@@ -1,3 +1,5 @@
+![undermoon logo](docs/undermoon-logo.png)
+
 # Undermoon
 Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol.
 
