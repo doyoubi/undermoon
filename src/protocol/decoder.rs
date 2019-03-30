@@ -43,11 +43,11 @@ impl From<io::Error> for DecodeError {
     }
 }
 
-pub const CR: u8 = '\r' as u8;
-pub const LF: u8 = '\n' as u8;
+pub const CR: u8 = b'\r';
+pub const LF: u8 = b'\n';
 
 fn bytes_to_int(bytes: &[u8]) -> Result<i64, DecodeError> {
-    const ZERO: u8 = '0' as u8;
+    const ZERO: u8 = b'0';
     let mut it = bytes.iter().peekable();
     let f = match it.peek().map(|first| **first as char) {
         Some('-') => {
@@ -57,7 +57,7 @@ fn bytes_to_int(bytes: &[u8]) -> Result<i64, DecodeError> {
         _ => 1,
     };
     it.fold(Ok(0), |sum, i| match *i as char {
-        '0'...'9' => sum.map(|s| s * 10 + (i - ZERO) as i64),
+        '0'...'9' => sum.map(|s| s * 10 + i64::from(i - ZERO)),
         _ => Err(DecodeError::InvalidProtocol),
     })
     .map(|i| i * f)

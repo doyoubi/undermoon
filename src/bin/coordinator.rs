@@ -17,9 +17,8 @@ use undermoon::protocol::SimpleRedisClient;
 
 fn gen_conf() -> CoordinatorConfig {
     let conf_file_path = env::args()
-        .skip(1)
-        .next()
-        .unwrap_or("coordinator.toml".to_string());
+        .nth(1)
+        .unwrap_or_else(|| "coordinator.toml".to_string());
 
     let mut s = config::Config::new();
     s.merge(config::File::with_name(&conf_file_path))
@@ -37,10 +36,10 @@ fn gen_conf() -> CoordinatorConfig {
     CoordinatorConfig {
         broker_address: s
             .get::<String>("broker_address")
-            .unwrap_or("127.0.0.1:7799".to_string()),
+            .unwrap_or_else(|_| "127.0.0.1:7799".to_string()),
         reporter_id: s
             .get::<String>("broker_address")
-            .unwrap_or("127.0.0.1:6699".to_string()),
+            .unwrap_or_else(|_| "127.0.0.1:6699".to_string()),
     }
 }
 

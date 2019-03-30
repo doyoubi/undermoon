@@ -107,7 +107,7 @@ fn send_meta<C: RedisClient>(
     for node in host.get_nodes() {
         let dbs = db_map
             .entry(node.get_cluster_name().clone())
-            .or_insert(HashMap::new());
+            .or_insert_with(HashMap::new);
         dbs.insert(node.get_address().clone(), node.get_slots().clone());
     }
     let args = HostDBMap::new(epoch, flags.clone(), db_map).db_map_to_args();

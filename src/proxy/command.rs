@@ -154,7 +154,7 @@ impl CmdReplyReceiver {
     pub fn wait_response(self) -> impl Future<Item = Box<RespPacket>, Error = CommandError> + Send {
         self.reply_receiver
             .map_err(|_| CommandError::Canceled)
-            .and_then(|result: CommandResult| future::result(result))
+            .and_then(future::result)
     }
 }
 

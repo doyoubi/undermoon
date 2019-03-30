@@ -65,7 +65,7 @@ impl CmdTask for CmdCtx {
 
 impl DBTag for CmdCtx {
     fn get_db_name(&self) -> String {
-        return self.db.read().unwrap().clone();
+        self.db.read().unwrap().clone()
     }
 
     fn set_db_name(&self, db: String) {

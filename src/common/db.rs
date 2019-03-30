@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::iter::Peekable;
 use std::str;
 
-const MIGRATING_TAG: &'static str = "MIGRATING";
+const MIGRATING_TAG: &str = "MIGRATING";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DBMapFlags {
@@ -85,11 +85,11 @@ impl HostDBMap {
                     args.push(db_name.clone());
                     args.push(node.clone());
                     match &slot_range.tag {
-                        &SlotRangeTag::Migrating(ref dst) => {
+                        SlotRangeTag::Migrating(ref dst) => {
                             args.push("migrating".to_string());
                             args.push(dst.clone());
                         }
-                        &SlotRangeTag::None => (),
+                        SlotRangeTag::None => (),
                     };
                     args.push(format!("{}-{}", slot_range.start, slot_range.end));
                 }
@@ -108,31 +108,16 @@ impl HostDBMap {
         let it = arr.iter().skip(2).flat_map(|resp| match resp {
             Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str) {
                 Ok(s) => Some(s.to_string()),
-                _ => return None,
+                _ => None,
             },
             _ => None,
         });
         let mut it = it.peekable();
 
-        let (epoch, flags, db_map) = try_parse!(Self::parse(&mut it));
-
-        Ok(Self {
-            epoch,
-            flags,
-            db_map,
-        })
+        Self::parse(&mut it)
     }
 
-    fn parse<It>(
-        it: &mut Peekable<It>,
-    ) -> Result<
-        (
-            u64,
-            DBMapFlags,
-            HashMap<String, HashMap<String, Vec<SlotRange>>>,
-        ),
-        CmdParseError,
-    >
+    fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
     where
         It: Iterator<Item = String>,
     {
@@ -145,12 +130,16 @@ impl HostDBMap {
 
         while let Some(_) = it.peek() {
             let (dbname, address, slot_range) = try_parse!(Self::parse_db(it));
-            let db = db_map.entry(dbname).or_insert(HashMap::new());
-            let slots = db.entry(address).or_insert(vec![]);
+            let db = db_map.entry(dbname).or_insert_with(HashMap::new);
+            let slots = db.entry(address).or_insert_with(Vec::new);
             slots.push(slot_range);
         }
 
-        return Ok((epoch, flags, db_map));
+        Ok(Self {
+            epoch,
+            flags,
+            db_map,
+        })
     }
 
     fn parse_db<It>(it: &mut It) -> Result<(String, String, SlotRange), CmdParseError>
@@ -204,10 +193,10 @@ mod tests {
             .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let (epoch, flags, hash) = r.unwrap();
-        assert_eq!(epoch, 233);
-        assert_eq!(flags, DBMapFlags { force: true });
-        assert_eq!(hash.len(), 1);
+        let host_db_map = r.unwrap();
+        assert_eq!(host_db_map.epoch, 233);
+        assert_eq!(host_db_map.flags, DBMapFlags { force: true });
+        assert_eq!(host_db_map.db_map.len(), 1);
     }
 
     #[test]
@@ -227,13 +216,15 @@ mod tests {
         .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let (epoch, flags, hash) = r.unwrap();
-        assert_eq!(epoch, 233);
-        assert_eq!(flags, DBMapFlags { force: false });
-        assert_eq!(hash.len(), 1);
-        assert_eq!(hash.get("dbname").unwrap().len(), 1);
+        let host_db_map = r.unwrap();
+        assert_eq!(host_db_map.epoch, 233);
+        assert_eq!(host_db_map.flags, DBMapFlags { force: false });
+        assert_eq!(host_db_map.db_map.len(), 1);
+        assert_eq!(host_db_map.db_map.get("dbname").unwrap().len(), 1);
         assert_eq!(
-            hash.get("dbname")
+            host_db_map
+                .db_map
+                .get("dbname")
                 .unwrap()
                 .get("127.0.0.1:6379")
                 .unwrap()
@@ -259,13 +250,15 @@ mod tests {
         .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let (epoch, flags, hash) = r.unwrap();
-        assert_eq!(epoch, 233);
-        assert_eq!(flags, DBMapFlags { force: false });
-        assert_eq!(hash.len(), 1);
-        assert_eq!(hash.get("dbname").unwrap().len(), 2);
+        let host_db_map = r.unwrap();
+        assert_eq!(host_db_map.epoch, 233);
+        assert_eq!(host_db_map.flags, DBMapFlags { force: false });
+        assert_eq!(host_db_map.db_map.len(), 1);
+        assert_eq!(host_db_map.db_map.get("dbname").unwrap().len(), 2);
         assert_eq!(
-            hash.get("dbname")
+            host_db_map
+                .db_map
+                .get("dbname")
                 .unwrap()
                 .get("127.0.0.1:7000")
                 .unwrap()
@@ -273,7 +266,9 @@ mod tests {
             1
         );
         assert_eq!(
-            hash.get("dbname")
+            host_db_map
+                .db_map
+                .get("dbname")
                 .unwrap()
                 .get("127.0.0.1:7001")
                 .unwrap()
@@ -302,13 +297,15 @@ mod tests {
         .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let (epoch, flags, hash) = r.unwrap();
-        assert_eq!(epoch, 233);
-        assert_eq!(flags, DBMapFlags { force: false });
-        assert_eq!(hash.len(), 2);
-        assert_eq!(hash.get("dbname").unwrap().len(), 2);
+        let host_db_map = r.unwrap();
+        assert_eq!(host_db_map.epoch, 233);
+        assert_eq!(host_db_map.flags, DBMapFlags { force: false });
+        assert_eq!(host_db_map.db_map.len(), 2);
+        assert_eq!(host_db_map.db_map.get("dbname").unwrap().len(), 2);
         assert_eq!(
-            hash.get("dbname")
+            host_db_map
+                .db_map
+                .get("dbname")
                 .unwrap()
                 .get("127.0.0.1:7000")
                 .unwrap()
@@ -316,16 +313,20 @@ mod tests {
             1
         );
         assert_eq!(
-            hash.get("dbname")
+            host_db_map
+                .db_map
+                .get("dbname")
                 .unwrap()
                 .get("127.0.0.1:7001")
                 .unwrap()
                 .len(),
             1
         );
-        assert_eq!(hash.get("another_db").unwrap().len(), 1);
+        assert_eq!(host_db_map.db_map.get("another_db").unwrap().len(), 1);
         assert_eq!(
-            hash.get("another_db")
+            host_db_map
+                .db_map
+                .get("another_db")
                 .unwrap()
                 .get("127.0.0.1:7002")
                 .unwrap()
@@ -355,9 +356,9 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
         let r = HostDBMap::parse(&mut it);
-        let (epoch, flags, hash) = r.unwrap();
+        let host_db_map = r.unwrap();
 
-        let db_map = HostDBMap::new(epoch, flags, hash);
+        let db_map = HostDBMap::new(host_db_map.epoch, host_db_map.flags, host_db_map.db_map);
         let mut args = db_map.db_map_to_args();
         let mut db_args: Vec<String> = arguments
             .into_iter()

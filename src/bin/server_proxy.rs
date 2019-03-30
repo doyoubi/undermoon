@@ -11,9 +11,8 @@ use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 
 fn gen_conf() -> ServerProxyConfig {
     let conf_file_path = env::args()
-        .skip(1)
-        .next()
-        .unwrap_or("server-proxy.toml".to_string());
+        .nth(1)
+        .unwrap_or_else(|| "server-proxy.toml".to_string());
 
     let mut s = config::Config::new();
     s.merge(config::File::with_name(&conf_file_path))
@@ -27,7 +26,7 @@ fn gen_conf() -> ServerProxyConfig {
     ServerProxyConfig {
         address: s
             .get::<String>("address")
-            .unwrap_or("127.0.0.1:5299".to_string()),
+            .unwrap_or_else(|_| "127.0.0.1:5299".to_string()),
     }
 }
 

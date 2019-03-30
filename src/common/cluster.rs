@@ -36,7 +36,7 @@ impl<'de> Deserialize<'de> for SlotRangeTag {
         }
         let dst = segs
             .next()
-            .ok_or(D::Error::custom("Missing destination address"))?;
+            .ok_or_else(|| D::Error::custom("Missing destination address"))?;
         Ok(SlotRangeTag::Migrating(dst.to_string()))
     }
 }

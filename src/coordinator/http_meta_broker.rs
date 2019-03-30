@@ -40,16 +40,14 @@ impl MetaDataBroker for HttpMetaBroker {
                     .json()
                     .map(|cluster_names| {
                         let ClusterNamesPayload { names } = cluster_names;
-                        return names;
+                        names
                     })
                     .map_err(|e| {
                         println!("Failed to get cluster names from json {:?}", e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
-        let s = names_fut
-            .map(|names| stream::iter_ok(names))
-            .flatten_stream();
+        let s = names_fut.map(stream::iter_ok).flatten_stream();
         Box::new(s)
     }
 
@@ -69,7 +67,7 @@ impl MetaDataBroker for HttpMetaBroker {
                     .json()
                     .map(|cluster_payload| {
                         let ClusterPayload { cluster } = cluster_payload;
-                        return cluster;
+                        cluster
                     })
                     .map_err(|e| {
                         println!("Failed to get cluster from json {:?}", e);
@@ -94,16 +92,14 @@ impl MetaDataBroker for HttpMetaBroker {
                     .json()
                     .map(|payload| {
                         let HostAddressesPayload { addresses } = payload;
-                        return addresses;
+                        addresses
                     })
                     .map_err(|e| {
                         println!("Failed to get host adddresses from json {:?}", e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
-        let s = addresses_fut
-            .map(|addresses| stream::iter_ok(addresses))
-            .flatten_stream();
+        let s = addresses_fut.map(stream::iter_ok).flatten_stream();
         Box::new(s)
     }
 
@@ -126,7 +122,7 @@ impl MetaDataBroker for HttpMetaBroker {
                     .json()
                     .map(|payload| {
                         let HostPayload { host } = payload;
-                        return host;
+                        host
                     })
                     .map_err(|e| {
                         println!("Failed to get host from json {:?}", e);
@@ -236,16 +232,14 @@ impl MetaDataBroker for HttpMetaBroker {
                     .json()
                     .map(|failures| {
                         let FailuresPayload { addresses } = failures;
-                        return addresses;
+                        addresses
                     })
                     .map_err(|e| {
                         error!("Failed to get cluster names from json {:?}", e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
-        let s = addresses_fut
-            .map(|addresses| stream::iter_ok(addresses))
-            .flatten_stream();
+        let s = addresses_fut.map(stream::iter_ok).flatten_stream();
         Box::new(s)
     }
 }

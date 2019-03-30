@@ -28,6 +28,12 @@ impl SimpleRedisClient {
     }
 }
 
+impl Default for SimpleRedisClient {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl ThreadSafe for SimpleRedisClient {}
 
 impl RedisClient for SimpleRedisClient {
@@ -42,7 +48,7 @@ impl RedisClient for SimpleRedisClient {
         };
         let address_clone = address.clone();
         let connect_fut = TcpStream::connect(&sock_address)
-            .map_err(|e| RedisClientError::Io(e))
+            .map_err(RedisClientError::Io)
             .and_then(move |sock| {
                 let mut buf = Vec::new();
                 command_to_buf(&mut buf, command);
@@ -50,7 +56,7 @@ impl RedisClient for SimpleRedisClient {
                 let reader = io::BufReader::new(rx);
                 let writer = tx;
                 write_all(writer, buf)
-                    .map_err(|e| RedisClientError::Io(e))
+                    .map_err(RedisClientError::Io)
                     .and_then(move |(_writer, _buf)| {
                         decode_resp(reader)
                             .map_err(|e| match e {

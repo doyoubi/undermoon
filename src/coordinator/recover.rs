@@ -106,7 +106,11 @@ impl<DB: MetaDataBroker, MB: MetaManipulationBroker + Clone> NodeFailureHandler
                         }
                         Some(c) => c,
                     };
-                    if let None = c.get_nodes().iter().find(|n| n.get_address().eq(&address2)) {
+                    if c.get_nodes()
+                        .iter()
+                        .find(|n| n.get_address().eq(&address2))
+                        .is_none()
+                    {
                         return Box::new(future::ok(()));
                     }
                     Box::new(

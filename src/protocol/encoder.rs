@@ -31,9 +31,9 @@ fn encode_array<W>(writer: &mut W, array: &Array) -> io::Result<usize>
 where
     W: io::Write,
 {
-    match array {
-        &Array::Nil => writer.write(b"*-1\r\n"),
-        &Array::Arr(ref arr) => {
+    match *array {
+        Array::Nil => writer.write(b"*-1\r\n"),
+        Array::Arr(ref arr) => {
             let mut l = encode_simple_element(writer, b"*", &arr.len().to_string().into_bytes())?;
             for element in arr {
                 l += encode_resp(writer, element)?;
@@ -47,9 +47,9 @@ fn encode_bulk_str<W>(writer: &mut W, bulk_str: &BulkStr) -> io::Result<usize>
 where
     W: io::Write,
 {
-    match bulk_str {
-        &BulkStr::Nil => writer.write(b"$-1\r\n"),
-        &BulkStr::Str(ref s) => Ok(encode_simple_element(
+    match *bulk_str {
+        BulkStr::Nil => writer.write(b"$-1\r\n"),
+        BulkStr::Str(ref s) => Ok(encode_simple_element(
             writer,
             b"$",
             &s.len().to_string().into_bytes(),
@@ -58,7 +58,7 @@ where
     }
 }
 
-fn encode_simple_element<W>(writer: &mut W, prefix: &[u8], s: &BinSafeStr) -> io::Result<usize>
+fn encode_simple_element<W>(writer: &mut W, prefix: &[u8], s: &[u8]) -> io::Result<usize>
 where
     W: io::Write,
 {

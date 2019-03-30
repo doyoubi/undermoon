@@ -59,16 +59,16 @@ impl SlotMapData {
         for (addr, slots) in slot_map.into_iter() {
             addrs.push(addr);
             for s in slots.into_iter() {
-                slot_arr.get_mut(s).map(|opt| {
+                if let Some(opt) = slot_arr.get_mut(s) {
                     *opt = Some(addrs.len() - 1);
-                });
+                }
             }
         }
         SlotMapData { slot_arr, addrs }
     }
 
     pub fn get(&self, slot: usize) -> Option<String> {
-        let addr_index = self.slot_arr.get(slot).and_then(|opt| opt.clone())?;
+        let addr_index = self.slot_arr.get(slot).and_then(|opt| *opt)?;
         self.addrs.get(addr_index).and_then(|s| Some(s.clone()))
     }
 }

@@ -18,7 +18,7 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
         Box::new(
             self.meta_data_broker
                 .get_host_addresses()
-                .map_err(|e| CoordinateError::MetaData(e)),
+                .map_err(CoordinateError::MetaData),
         )
     }
 }
@@ -70,7 +70,7 @@ impl<B: MetaDataBroker> FailureReporter for BrokerFailureReporter<B> {
         Box::new(
             self.meta_data_broker
                 .add_failure(address, self.reporter_id.clone())
-                .map_err(|e| CoordinateError::MetaData(e)),
+                .map_err(CoordinateError::MetaData),
         )
     }
 }

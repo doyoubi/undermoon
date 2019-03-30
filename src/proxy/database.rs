@@ -11,7 +11,7 @@ use std::fmt;
 use std::iter::Iterator;
 use std::sync;
 
-pub const DEFAULT_DB: &'static str = "admin";
+pub const DEFAULT_DB: &str = "admin";
 
 fn gen_moved(slot: usize, addr: String) -> String {
     format!("MOVED {} {}", slot, addr)
@@ -92,13 +92,7 @@ where
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
-        self.local_dbs
-            .read()
-            .unwrap()
-            .1
-            .keys()
-            .map(|s| s.clone())
-            .collect()
+        self.local_dbs.read().unwrap().1.keys().cloned().collect()
     }
 
     pub fn clear(&self) {
@@ -216,9 +210,7 @@ impl<S: CmdTaskSender> Database<S> {
 
         match self.local_db.slot_map.get_by_key(&key) {
             Some(addr) => match self.local_db.nodes.get(&addr) {
-                Some(sender) => sender
-                    .send(cmd_task)
-                    .map_err(|err| DBSendError::Backend(err)),
+                Some(sender) => sender.send(cmd_task).map_err(DBSendError::Backend),
                 None => {
                     println!("Failed to get node");
                     Err(DBSendError::SlotNotFound(cmd_task))
@@ -235,7 +227,7 @@ impl<S: CmdTaskSender> Database<S> {
         let slots: Vec<SlotRange> = self
             .slot_ranges
             .values()
-            .map(|slot_ranges| slot_ranges.clone())
+            .cloned()
             .flatten()
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
@@ -331,7 +323,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
 }
 
 fn gen_cluster_nodes_helper(
-    name: &String,
+    name: &str,
     epoch: u64,
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
 ) -> String {
@@ -354,7 +346,7 @@ fn gen_cluster_nodes_helper(
             id=id, addr=addr, flags="master", master="-", ping_sent=0, pong_recv=0, epoch=epoch,
             link_state="connected", slot_range=slot_range,
         );
-        cluster_nodes.extend(line.chars());
+        cluster_nodes.push_str(&line);
     }
     cluster_nodes
 }
