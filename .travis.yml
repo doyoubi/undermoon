@@ -4,7 +4,19 @@ sudo: required
 
 rust:
   - stable
+  - nightly
+
+matrix:
+  allow_failures:
+    - rust: nightly
+  fast_finish: true
+
+cache:
+  cargo: true
 
 script:
   - cargo build --verbose --all
   - cargo test --verbose --all
+
+notifications:
+  email: false

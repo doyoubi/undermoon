@@ -1,6 +1,6 @@
 ![undermoon logo](docs/undermoon-logo.png)
 
-# Undermoon
+# Undermoon [![Build Status](https://travis-ci.com/doyoubi/undermoon.svg?branch=master)](https://travis-ci.com/doyoubi/undermoon)
 Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol.
 
 # Architecture
@@ -11,7 +11,7 @@ Since rust does not have a good etcd v3 client. We use a [proxy service](https:/
 
 # Initialize Server-side Proxy
 ```
-> ./undermoon  # runs on port 5299 and forward commands to 127.0.0.1:6379
+> ./server_proxy  # runs on port 5299 and forward commands to 127.0.0.1:6379
 > redis-cli -p 5299
 127.0.0.1:5299> umctl setdb 1 noflags mydb 127.0.0.1:6379 0-8000
 127.0.0.1:5299> umctl setpeer 1 noflags mydb 127.0.0.1:7000 8001-16383
