@@ -1,6 +1,7 @@
 use super::command::{CommandError, CommandResult};
 use bytes::BytesMut;
 use common::future_group::new_future_group;
+use common::utils::revolve_first_address;
 use futures::sync::mpsc;
 use futures::Sink;
 use futures::{future, Future, Stream};
@@ -64,8 +65,12 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
         // Maybe it's just fine. If not, lock the creating connection phrase.
         if need_init {
             let node_arc = self.node.clone();
-            let addr = self.addr.parse().unwrap();
-            let sock = TcpStream::connect(&addr);
+            let address = match revolve_first_address(&self.addr) {
+                Some(address) => address,
+                None => return Err(BackendError::InvalidAddress),
+            };
+
+            let sock = TcpStream::connect(&address);
             let fut = sock.then(move |res| {
                 debug!("sock result: {:?}", res);
                 match res {
@@ -276,6 +281,7 @@ pub enum BackendError {
     Io(io::Error),
     NodeNotFound,
     InvalidProtocol,
+    InvalidAddress,
     Canceled,
 }
 

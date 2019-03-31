@@ -17,4 +17,7 @@ coord:
 flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy
 
+docker-multi-redis:
+	docker-compose -f examples/docker-compose-multi-redis.yml up
+
 .PHONY: build server coord

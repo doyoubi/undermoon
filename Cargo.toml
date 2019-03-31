@@ -3,6 +3,18 @@ name = "undermoon"
 version = "0.1.0"
 authors = ["doyoubi"]
 
+[[bin]]
+name="server_proxy"
+path="src/bin/server_proxy.rs"
+
+[[bin]]
+name="coordinator"
+path="src/bin/coordinator.rs"
+
+[[bin]]
+name="test_http_broker"
+path="src/bin/test_http_broker.rs"
+
 [dependencies]
 bytes = "0.4.12"
 tokio = "0.1"

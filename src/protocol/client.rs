@@ -1,7 +1,7 @@
 use super::decoder::{decode_resp, DecodeError};
 use super::encoder::command_to_buf;
 use super::resp::{BinSafeStr, Resp};
-use common::utils::ThreadSafe;
+use common::utils::{revolve_first_address, ThreadSafe};
 use futures::{future, Future};
 use std::error::Error;
 use std::fmt;
@@ -42,9 +42,9 @@ impl RedisClient for SimpleRedisClient {
         address: String,
         command: Vec<BinSafeStr>,
     ) -> Box<dyn Future<Item = Resp, Error = RedisClientError> + Send> {
-        let sock_address = match address.parse() {
-            Ok(address) => address,
-            Err(_e) => return Box::new(future::err(RedisClientError::InvalidAddress)),
+        let sock_address = match revolve_first_address(&address) {
+            Some(address) => address,
+            None => return Box::new(future::err(RedisClientError::InvalidAddress)),
         };
         let address_clone = address.clone();
         let connect_fut = TcpStream::connect(&sock_address)
