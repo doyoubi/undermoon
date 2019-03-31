@@ -1,9 +1,7 @@
 version: '3'
 services:
   server_proxy:
-    build:
-      context: ../
-      dockerfile: examples/Dockerfile-undermoon
+    image: "undermoon"
     volumes:
     - ${PWD}/examples/multi-redis/server_proxy.toml:/undermoon/config/server_proxy.toml
     command: /undermoon/target/debug/server_proxy config/server_proxy.toml
@@ -15,6 +13,7 @@ services:
     - "redis1"
     - "redis2"
     - "redis3"
+
   init_script:
     image: "redis"
     volumes:
@@ -24,6 +23,8 @@ services:
     - "redis1"
     - "redis2"
     - "redis3"
+    - "server_proxy"
+
   redis1:
     container_name: redis1
     image: "redis"

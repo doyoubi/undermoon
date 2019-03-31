@@ -1,7 +1,69 @@
 ![undermoon logo](docs/undermoon-logo.png)
 
 # Undermoon [![Build Status](https://travis-ci.com/doyoubi/undermoon.svg?branch=master)](https://travis-ci.com/doyoubi/undermoon)
-Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol.
+Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol supporting multiple tenants and easy scaling.
+
+## Quick Tour Examples
+Requirements:
+
+- docker-compose
+- redis-cli
+
+Before run any example, run this command to build the basic `undermoon` docker image:
+```bash
+$ make docker-build-image
+```
+
+### (1) Multi-process Redis
+This example will run a redis proxy with multiple redis processes behind the proxy. You can use it as a "multi-threaded" redis.
+
+```bash
+$ make docker-multi-redis
+```
+
+Then you can connect to redis:
+
+```bash
+# Note that we need to add '-a' to select our database.
+$ redis-cli -a mydb -h 127.0.0.1 -p 5299 SET key value
+```
+
+### (2) Redis Cluster
+This example will run a sharding redis cluster with similar protocol as the [official Redis Cluster](https://redis.io/topics/cluster-tutorial).
+
+```bash
+$ make docker-multi-redis
+```
+
+You also need to add the following records to the `/etc/hosts` to support the redirection.
+
+```
+# /etc/hosts
+127.0.0.1 server_proxy1
+127.0.0.1 server_proxy2
+127.0.0.1 server_proxy3
+```
+
+Now you have a Redis Cluster with 3 nodes!
+
+- server_proxy1:6001
+- server_proxy2:6002
+- server_proxy3:6003
+
+Connect to any node above and enable cluster mode by adding '-c':
+```bash
+$ redis-cli -h server_proxy1 -p 6001 -a mydb -c
+
+127.0.0.1:6001> set a 1
+-> Redirected to slot [15495] located at server_proxy3:6003
+OK
+server_proxy3:6003> set b 2
+-> Redirected to slot [3300] located at server_proxy1:6001
+OK
+server_proxy1:6001> set c 3
+-> Redirected to slot [7365] located at server_proxy2:6002
+OK
+```
 
 # Architecture
 ![architecture](docs/architecture.svg)

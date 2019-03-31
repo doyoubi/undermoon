@@ -1,0 +1,67 @@
+version: '3'
+services:
+  server_proxy1:
+    container_name: server_proxy1
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/multi-shard/server_proxy1.toml:/undermoon/config/server_proxy.toml
+    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    ports:
+    - "6001:6001"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    depends_on:
+    - "redis1"
+  server_proxy2:
+    container_name: server_proxy2
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/multi-shard/server_proxy2.toml:/undermoon/config/server_proxy.toml
+    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    ports:
+    - "6002:6002"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    depends_on:
+    - "redis2"
+  server_proxy3:
+    container_name: server_proxy3
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/multi-shard/server_proxy3.toml:/undermoon/config/server_proxy.toml
+    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    ports:
+    - "6003:6003"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    depends_on:
+    - "redis3"
+
+  init_script:
+    image: "redis"
+    volumes:
+    - ${PWD}/examples/multi-shard/init.sh:/init.sh
+    command: /init.sh
+    depends_on:
+    - "redis1"
+    - "redis2"
+    - "redis3"
+    - "server_proxy1"
+    - "server_proxy2"
+    - "server_proxy3"
+
+  redis1:
+    container_name: redis1
+    image: "redis"
+    ports:
+    - "7001:6379"
+  redis2:
+    container_name: redis2
+    image: "redis"
+    ports:
+    - "7002:6379"
+  redis3:
+    container_name: redis3
+    image: "redis"
+    ports:
+    - "7003:6379"
