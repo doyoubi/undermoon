@@ -1,5 +1,5 @@
 use super::backend::CmdTask;
-use super::backend::{BackendError, CmdTaskSender};
+use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::command::get_key;
 use super::slot::SlotMap;
 use common::cluster::SlotRange;
@@ -43,27 +43,32 @@ pub trait DBTag {
     fn set_db_name(&self, db: String);
 }
 
-pub struct DatabaseMap<S: CmdTaskSender>
+pub struct DatabaseMap<F: CmdTaskSenderFactory>
 where
-    S::Task: DBTag,
+    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
     // (epoch, meta data)
-    local_dbs: sync::RwLock<(u64, HashMap<String, Database<S>>)>,
+    local_dbs: sync::RwLock<(u64, HashMap<String, Database<F>>)>,
     remote_dbs: sync::RwLock<(u64, HashMap<String, RemoteDB>)>,
+    sender_factory: F,
 }
 
-impl<S: CmdTaskSender> DatabaseMap<S>
+impl<F: CmdTaskSenderFactory> DatabaseMap<F>
 where
-    S::Task: DBTag,
+    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
-    pub fn new() -> DatabaseMap<S> {
+    pub fn new(sender_factory: F) -> DatabaseMap<F> {
         Self {
             local_dbs: sync::RwLock::new((0, HashMap::new())),
             remote_dbs: sync::RwLock::new((0, HashMap::new())),
+            sender_factory,
         }
     }
 
-    pub fn send(&self, cmd_task: S::Task) -> Result<(), DBSendError<S::Task>> {
+    pub fn send(
+        &self,
+        cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
         let db_name = cmd_task.get_db_name();
         let (cmd_task, db_exists) = match self.local_dbs.read().unwrap().1.get(&db_name) {
             Some(db) => match db.send(cmd_task) {
@@ -109,7 +114,8 @@ where
         let epoch = db_map.get_epoch();
         let mut map = HashMap::new();
         for (db_name, slot_ranges) in db_map.into_map() {
-            let db = Database::from_slot_map(db_name.clone(), epoch, slot_ranges);
+            let db =
+                Database::from_slot_map(&self.sender_factory, db_name.clone(), epoch, slot_ranges);
             map.insert(db_name, db);
         }
 
@@ -169,22 +175,23 @@ struct LocalDB<S: CmdTaskSender> {
     slot_map: SlotMap,
 }
 
-pub struct Database<S: CmdTaskSender> {
+pub struct Database<F: CmdTaskSenderFactory> {
     name: String,
     epoch: u64,
-    local_db: LocalDB<S>,
+    local_db: LocalDB<F::Sender>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
 }
 
-impl<S: CmdTaskSender> Database<S> {
+impl<F: CmdTaskSenderFactory> Database<F> {
     pub fn from_slot_map(
+        sender_factory: &F,
         name: String,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
-    ) -> Database<S> {
+    ) -> Database<F> {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
-            nodes.insert(addr.to_string(), S::new(addr.to_string()));
+            nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
         }
         let local_db = LocalDB {
             nodes,
@@ -198,7 +205,10 @@ impl<S: CmdTaskSender> Database<S> {
         }
     }
 
-    pub fn send(&self, cmd_task: S::Task) -> Result<(), DBSendError<S::Task>> {
+    pub fn send(
+        &self,
+        cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
         let key = match get_key(cmd_task.get_resp()) {
             Some(key) => key,
             None => {

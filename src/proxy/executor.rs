@@ -1,4 +1,6 @@
-use super::backend::{CmdTask, RRSenderGroup, RecoverableBackendNode};
+use super::backend::{
+    CachedSenderFactory, CmdTask, RRSenderGroupFactory, RecoverableBackendNodeFactory,
+};
 use super::command::CmdType;
 use super::database::{DBTag, DatabaseMap};
 use super::session::{CmdCtx, CmdCtxHandler};
@@ -32,12 +34,17 @@ impl CmdCtxHandler for SharedForwardHandler {
 
 pub struct ForwardHandler {
     service_address: String,
-    db: DatabaseMap<RRSenderGroup<RecoverableBackendNode<CmdCtx>>>,
+    db: DatabaseMap<
+        CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
+    >,
 }
 
 impl ForwardHandler {
     pub fn new(service_address: String) -> ForwardHandler {
-        let db = DatabaseMap::new();
+        let sender_facotry = CachedSenderFactory::new(RRSenderGroupFactory::new(
+            RecoverableBackendNodeFactory::new(),
+        ));
+        let db = DatabaseMap::new(sender_facotry);
         ForwardHandler {
             service_address,
             db,

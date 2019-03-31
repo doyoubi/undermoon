@@ -1,7 +1,7 @@
 use super::session::CmdCtxHandler;
 use super::session::{handle_conn, Session};
 use common::future_group::new_future_group;
-use common::utils::{ThreadSafe, revolve_first_address};
+use common::utils::{revolve_first_address, ThreadSafe};
 use futures::{future, Future, Stream};
 use tokio::net::TcpListener;
 

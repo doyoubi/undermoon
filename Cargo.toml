@@ -36,6 +36,7 @@ itertools = "0.8.0"
 futures-timer = "0.1"
 config = "0.9"
 btoi = "0.4.0"
+crossbeam = "0.7.1"
 
 [profile.release]
 debug = true

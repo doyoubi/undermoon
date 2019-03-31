@@ -7,9 +7,11 @@ use futures::Sink;
 use futures::{future, Future, Stream};
 use protocol::{Array, DecodeError, Resp, RespCodec, RespPacket};
 use std::boxed::Box;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::marker::PhantomData;
 use std::result::Result;
 use std::sync;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,8 +41,13 @@ pub trait CmdTask: Send + 'static + fmt::Debug {
 pub trait CmdTaskSender {
     type Task: CmdTask;
 
-    fn new(addr: String) -> Self;
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError>;
+}
+
+pub trait CmdTaskSenderFactory {
+    type Sender: CmdTaskSender;
+
+    fn create(&self, address: String) -> Self::Sender;
 }
 
 // TODO: change to use AtomicOption
@@ -49,15 +56,27 @@ pub struct RecoverableBackendNode<T: CmdTask> {
     node: sync::Arc<sync::RwLock<Option<BackendNode<T>>>>,
 }
 
-impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
-    type Task = T;
+pub struct RecoverableBackendNodeFactory<T: CmdTask>(PhantomData<T>);
 
-    fn new(addr: String) -> RecoverableBackendNode<T> {
-        Self {
-            addr: sync::Arc::new(addr),
+impl<T: CmdTask> RecoverableBackendNodeFactory<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: CmdTask> CmdTaskSenderFactory for RecoverableBackendNodeFactory<T> {
+    type Sender = RecoverableBackendNode<T>;
+
+    fn create(&self, address: String) -> Self::Sender {
+        Self::Sender {
+            addr: sync::Arc::new(address),
             node: sync::Arc::new(sync::RwLock::new(None)),
         }
     }
+}
+
+impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
+    type Task = T;
 
     fn send(&self, cmd_task: T) -> Result<(), BackendError> {
         let need_init = self.node.read().unwrap().is_none();
@@ -311,19 +330,33 @@ pub struct RRSenderGroup<S: CmdTaskSender> {
     cursor: AtomicUsize,
 }
 
-impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
-    type Task = S::Task;
+pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
+    inner_factory: F,
+}
 
-    fn new(address: String) -> Self {
+impl<F: CmdTaskSenderFactory> RRSenderGroupFactory<F> {
+    pub fn new(inner_factory: F) -> Self {
+        Self { inner_factory }
+    }
+}
+
+impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for RRSenderGroupFactory<F> {
+    type Sender = RRSenderGroup<F::Sender>;
+
+    fn create(&self, address: String) -> Self::Sender {
         let mut senders = Vec::new();
         for _ in 0..DEFAULT_GROUP_SIZE {
-            senders.push(S::new(address.clone()));
+            senders.push(self.inner_factory.create(address.clone()));
         }
-        Self {
+        Self::Sender {
             senders,
             cursor: AtomicUsize::new(0),
         }
     }
+}
+
+impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
+    type Task = S::Task;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         let index = self.cursor.fetch_add(1, Ordering::SeqCst);
@@ -332,5 +365,55 @@ impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
             None => return Err(BackendError::NodeNotFound),
         };
         sender.send(cmd_task)
+    }
+}
+
+pub struct CachedSender<S: CmdTaskSender> {
+    inner_sender: sync::Arc<S>,
+}
+
+// TODO: support cleanup here to avoid memory leak.
+pub struct CachedSenderFactory<F: CmdTaskSenderFactory> {
+    inner_factory: F,
+    cached_senders: sync::Arc<sync::RwLock<HashMap<String, sync::Arc<F::Sender>>>>,
+}
+
+impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
+    pub fn new(inner_factory: F) -> Self {
+        Self {
+            inner_factory,
+            cached_senders: sync::Arc::new(sync::RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
+    type Sender = CachedSender<F::Sender>;
+
+    fn create(&self, address: String) -> Self::Sender {
+        if let Some(sender) = self.cached_senders.read().unwrap().get(&address) {
+            return CachedSender {
+                inner_sender: sender.clone(),
+            };
+        }
+
+        // Acceptable race condition here. Multiple threads might be creating at the same time.
+        let inner_sender = sync::Arc::new(self.inner_factory.create(address.clone()));
+        let inner_sender_clone = {
+            let mut guard = self.cached_senders.write().unwrap();
+            guard.entry(address).or_insert(inner_sender).clone()
+        };
+
+        CachedSender {
+            inner_sender: inner_sender_clone,
+        }
+    }
+}
+
+impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
+    type Task = S::Task;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+        self.inner_sender.send(cmd_task)
     }
 }
