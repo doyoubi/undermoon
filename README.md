@@ -54,6 +54,7 @@ Connect to any node above and enable cluster mode by adding '-c':
 ```bash
 $ redis-cli -h server_proxy1 -p 6001 -a mydb -c
 
+Warning: Using a password with '-a' option on the command line interface may not be safe.
 127.0.0.1:6001> set a 1
 -> Redirected to slot [15495] located at server_proxy3:6003
 OK
@@ -63,6 +64,10 @@ OK
 server_proxy1:6001> set c 3
 -> Redirected to slot [7365] located at server_proxy2:6002
 OK
+server_proxy2:6002> cluster nodes
+mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 connected 5462-10922
+mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 1 connected 0-5461
+mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
 ```
 
 # Architecture

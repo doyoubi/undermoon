@@ -1,7 +1,7 @@
 use super::session::CmdCtxHandler;
 use super::session::{handle_conn, Session};
 use common::future_group::new_future_group;
-use common::utils::ThreadSafe;
+use common::utils::{ThreadSafe, revolve_first_address};
 use futures::{future, Future, Stream};
 use tokio::net::TcpListener;
 
@@ -29,10 +29,10 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
 
         let address = self.config.address.clone();
 
-        let address = match address.parse() {
-            Ok(a) => a,
-            Err(e) => {
-                error!("failed to parse address: {} {:?}", address, e);
+        let address = match revolve_first_address(&address) {
+            Some(a) => a,
+            None => {
+                error!("failed to resolve address: {}", address);
                 return Box::new(future::err(()));
             }
         };
