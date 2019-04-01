@@ -4,7 +4,7 @@ use super::command::get_key;
 use super::slot::SlotMap;
 use common::cluster::SlotRange;
 use common::db::HostDBMap;
-use protocol::Resp;
+use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -168,6 +168,29 @@ where
             .map_or("".to_string(), |db| db.gen_remote_cluster_nodes());
         format!("{}{}", local, remote)
     }
+
+    pub fn gen_cluster_slots(
+        &self,
+        dbname: String,
+        service_address: String,
+    ) -> Result<Resp, String> {
+        let mut local = self
+            .local_dbs
+            .read()
+            .unwrap()
+            .1
+            .get(&dbname)
+            .map_or(Ok(vec![]), |db| db.gen_local_cluster_slots(service_address))?;
+        let mut remote = self
+            .remote_dbs
+            .read()
+            .unwrap()
+            .1
+            .get(&dbname)
+            .map_or(Ok(vec![]), |db| db.gen_remote_cluster_slots())?;
+        local.append(&mut remote);
+        Ok(Resp::Arr(Array::Arr(local)))
+    }
 }
 
 struct LocalDB<S: CmdTaskSender> {
@@ -244,6 +267,18 @@ impl<F: CmdTaskSenderFactory> Database<F> {
         slot_ranges.insert(service_address, slots);
         gen_cluster_nodes_helper(&self.name, self.epoch, &slot_ranges)
     }
+
+    pub fn gen_local_cluster_slots(&self, service_address: String) -> Result<Vec<Resp>, String> {
+        let slots: Vec<SlotRange> = self
+            .slot_ranges
+            .values()
+            .cloned()
+            .flatten()
+            .collect::<Vec<SlotRange>>();
+        let mut slot_ranges = HashMap::new();
+        slot_ranges.insert(service_address, slots);
+        gen_cluster_slots_helper(&slot_ranges)
+    }
 }
 
 pub struct RemoteDB {
@@ -292,6 +327,10 @@ impl RemoteDB {
 
     pub fn gen_remote_cluster_nodes(&self) -> String {
         gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges)
+    }
+
+    pub fn gen_remote_cluster_slots(&self) -> Result<Vec<Resp>, String> {
+        gen_cluster_slots_helper(&self.slot_ranges)
     }
 }
 
@@ -359,4 +398,37 @@ fn gen_cluster_nodes_helper(
         cluster_nodes.push_str(&line);
     }
     cluster_nodes
+}
+
+fn gen_cluster_slots_helper(
+    slot_ranges: &HashMap<String, Vec<SlotRange>>,
+) -> Result<Vec<Resp>, String> {
+    let mut slot_range_element = Vec::new();
+    for (addr, ranges) in slot_ranges {
+        let mut segs = addr.split(':');
+        let host = segs
+            .next()
+            .ok_or_else(|| format!("invalid address {}", addr))?;
+        let port = segs
+            .next()
+            .ok_or_else(|| format!("invalid address {}", addr))?;
+
+        for slot_range in ranges {
+            let mut arr = if slot_range.start == slot_range.end {
+                vec![Resp::Integer(slot_range.start.to_string().into_bytes())]
+            } else {
+                vec![
+                    Resp::Integer(slot_range.start.to_string().into_bytes()),
+                    Resp::Integer(slot_range.end.to_string().into_bytes()),
+                ]
+            };
+            let ip_port_array = Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(host.as_bytes().to_vec())),
+                Resp::Bulk(BulkStr::Str(port.as_bytes().to_vec())),
+            ]));
+            arr.push(ip_port_array);
+            slot_range_element.push(Resp::Arr(Array::Arr(arr)))
+        }
+    }
+    Ok(slot_range_element)
 }

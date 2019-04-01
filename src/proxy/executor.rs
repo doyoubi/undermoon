@@ -82,6 +82,14 @@ impl ForwardHandler {
                 .db
                 .gen_cluster_nodes(cmd_ctx.get_db_name(), self.service_address.clone());
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
+        } else if caseless::canonical_caseless_match_str(&sub_cmd, "slots") {
+            let cluster_slots = self
+                .db
+                .gen_cluster_slots(cmd_ctx.get_db_name(), self.service_address.clone());
+            match cluster_slots {
+                Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
+                Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),
+            }
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Unsupported sub command").into_bytes(),

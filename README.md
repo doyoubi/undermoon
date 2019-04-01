@@ -242,11 +242,11 @@ There're two big features needed:
 - ~~Slot map and cluster map~~ (done)
 - ~~Implement AUTH command to select database~~ (done)
 - ~~Implement meta data manipulation api~~ (done)
-- Implement coordinator (in progress)
+- ~~Basic coordinator implementation~~ (done)
 - Implement Redis Replication Protocol
 - Support slot migration via replication
 - ~~Optimize RESP parsing~~ (done)
-- Implement CLUSTER SLOTS
+- ~~Implement CLUSTER SLOTS~~ (done)
 - Implement commands to get proxy meta
 - Track spawned futures
 - Simple script to push configuration to proxy for demonstration
