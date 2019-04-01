@@ -5,6 +5,77 @@ Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol su
 
 This proxy is not limit to Redis. Any storage system implementing redis protocol can work with undermoon.
 
+### Redis Cluster Client Protocol
+[Redis Cluster](https://redis.io/topics/cluster-tutorial) is the official Redis distributed solution supporting sharding and failover.
+Compared to using a single instance redis, clients connecting to `Redis Cluster` should implement the `Redis Cluster Client Protocol`.
+What it basically does is:
+- Do the redirection if we are requesting the wrong node.
+- Caching the cluster meta data by using one of the two commands, `CLUSTER NODES` and `CLUSTER SLOTS`.
+
+To be compatible with the existing Redis client,
+there're some `Redis Cluster Proxies` to adapt the protocol,
+like [corvus](https://github.com/eleme/corvus) and [aster](https://github.com/wayslog/aster).
+
+### Server-side Proxy
+##### A small bite of server-side proxy
+
+```bash
+# Run a redis-server first
+$ redis-server
+```
+
+```bash
+# Build and run the server_proxy
+> cargo build
+> target/debug/server_proxy  # runs on port 5299 and will forward commands to 127.0.0.1:6379
+```
+
+Note that how we use `AUTH [database]` command to do something like `USE [database]` in Mysql.
+```bash
+# Initialize Server-side Proxy
+> redis-cli -p 5299
+# Initialize the procy by `UMCTL` commands.
+127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 0-8000
+127.0.0.1:5299> UMCTL SETPEER 1 NOFLAGS mydb 127.0.0.1:7000 8001-16383
+
+# Now we still didn't select our database `mydb` we just set.
+# Then we are in the default `admin` database.
+# But nothing was set for `admin` yet so we get a error.
+127.0.0.1:5299> get a
+(error) db not found: admin
+
+# Now choose to use our `mydb`.
+127.0.0.1:5299> AUTH mydb
+OK
+
+# Done! We can use it like a Redis Cluster!
+127.0.0.1:5299> CLUSTER NODES
+mydb________________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 1 connected 0-8000
+mydb________________127.0.0.1:7000______ 127.0.0.1:7000 master - 0 0 1 connected 8001-16383
+127.0.0.1:5299> get a
+(error) MOVED 15495 127.0.0.1:7000
+127.0.0.1:5299> set b 1
+OK
+```
+
+##### Why another "Redis Cluster"?
+When I was in the last company, we maintained over 1000 Redis Clusters with different sizes from several nodes to hundreds of nodes.
+We spent most of the time building a complex deployment system dedicated for Redis Cluster to support:
+- Fast deployment
+- Serving different clusters for different services
+- Spreading the flood as evenly as possible to all the physical machines
+
+The cost of maintaining this kind of deployment system is high
+and we still can't scale the clusters fast.
+
+I build this project to test whether a server-side approach
+makes easier maintenance of both small and large, just several and a great amount of redis clusters.
+
+##### Why server-side proxy?
+A server-side proxy is able to migrate the data and scale in a super fast way
+by using the `Redis Replication Protocol`
+and make it possible to have a better control of full sync in replication.
+
 ## Quick Tour Examples
 Requirements:
 
@@ -92,13 +163,13 @@ Connect to `server_proxy2`.
 
 ```bash
 $ redis-cli -h server_proxy2 -p 6002 -a mydb
-  Warning: Using a password with '-a' option on the command line interface may not be safe.
-  server_proxy2:6002> cluster nodes
-  mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 connected 5462-10922
-  mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 1 connected 0-5461
-  mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
-  server_proxy2:6002> get b
-  (error) MOVED 3300 server_proxy1:6001
+Warning: Using a password with '-a' option on the command line interface may not be safe.
+server_proxy2:6002> cluster nodes
+mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 connected 5462-10922
+mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 1 connected 0-5461
+mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
+server_proxy2:6002> get b
+(error) MOVED 3300 server_proxy1:6001
 ```
 
 `server_proxy1` is responsible for key `b`. Now kill the `server_proxy1`:
@@ -124,30 +195,26 @@ What if we have multiple `checker.py` running, but they have different views abo
 
 Well, this checker script is only for those who just want a simple solution.
 For serious distributed systems, we should use some other robust solution.
-This is where the `coordinator` comes in.
+This is where the `Coordinator` comes in.
 
-# Architecture
+### (4) Coordinator and HTTP Broker
+Undermoon also provides a `Coordinator` to do something similar to the `checker.py` above in example (3).
+It will keep checking the server-side proxies and do failover.
+However, `Coordinator` itself does not store any data. It is a stateless service backed by a HTTP broker maintaining the meta data.
+You can implement this HTTP broker yourself and there's a working in progress [Golang implementation](https://github.com/doyoubi/overmoon).
+
 ![architecture](docs/architecture.svg)
 
-# Broker
-Since rust does not have a good etcd v3 client. We use a [proxy service](https://github.com/doyoubi/overmoon) written in Golang as a broker.
+## API
+### Server-side Proxy API
+### HTTP Broker API
 
-# Initialize Server-side Proxy
-```
-> ./server_proxy  # runs on port 5299 and forward commands to 127.0.0.1:6379
-> redis-cli -p 5299
-127.0.0.1:5299> umctl setdb 1 noflags mydb 127.0.0.1:6379 0-8000
-127.0.0.1:5299> umctl setpeer 1 noflags mydb 127.0.0.1:7000 8001-16383
-127.0.0.1:5299> auth mydb
-OK
-127.0.0.1:5299> cluster nodes
-mydb________________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 1 connected 0-8000
-mydb________________127.0.0.1:7000______ 127.0.0.1:7000 master - 0 0 1 connected 8001-16383
-127.0.0.1:5299> get a
-(error) MOVED 15495 127.0.0.1:7000
-127.0.0.1:5299> set b 1
-OK
-```
+## Current Status
+This project is now only for demonstration and has **NOT** been well tested in production environment yet.
+
+There're two big features needed:
+- Replication for better failover.
+- The HTTP broker project - overmoon.
 
 ## TODO
 - ~~Basic proxy implementation~~ (done)
