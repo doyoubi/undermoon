@@ -1,6 +1,7 @@
 import sys
 import time
 import logging
+from copy import deepcopy
 
 import redis
 
@@ -98,7 +99,7 @@ def run_checker(init_nodes_config, init_slots_config):
     while True:
         time.sleep(5)
         failed_nodes = check_all_nodes(init_nodes_config)
-        slot_config = gen_final_config(failed_nodes, init_slots_config)
+        slot_config = gen_final_config(failed_nodes, deepcopy(init_slots_config))
         send_all_config(slot_config, init_nodes_config)
 
 

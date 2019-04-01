@@ -3,6 +3,8 @@
 # Undermoon [![Build Status](https://travis-ci.com/doyoubi/undermoon.svg?branch=master)](https://travis-ci.com/doyoubi/undermoon)
 Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol supporting multiple tenants and easy scaling.
 
+This proxy is not limit to Redis. Any storage system implementing redis protocol can work with undermoon.
+
 ## Quick Tour Examples
 Requirements:
 
@@ -69,6 +71,60 @@ mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 conne
 mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 1 connected 0-5461
 mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
 ```
+
+### (3) Failover
+The server-side proxy itself does not support failure detection and failover.
+But this can be easy done by using the two meta data management commands:
+
+- UMCTL SETDB
+- UMCTL SETPEER
+
+See the api docs later for details.
+Here we will use a simple Python script utilizing these two commands to do the failover for us.
+This script locates in `examples/failover/checker.py`.
+Now lets run it with the Redis Cluster in section (2):
+
+```bash
+$ make docker-failover
+```
+
+Connect to `server_proxy2`.
+
+```bash
+$ redis-cli -h server_proxy2 -p 6002 -a mydb
+  Warning: Using a password with '-a' option on the command line interface may not be safe.
+  server_proxy2:6002> cluster nodes
+  mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 connected 5462-10922
+  mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 1 connected 0-5461
+  mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
+  server_proxy2:6002> get b
+  (error) MOVED 3300 server_proxy1:6001
+```
+
+`server_proxy1` is responsible for key `b`. Now kill the `server_proxy1`:
+
+```bash
+$ docker ps | grep server_proxy1 | awk '{print $1}' | xargs docker kill
+```
+
+5 seconds later, slots from `server_proxy1` was transferred to `server_proxy2`!
+
+```bash
+$ redis-cli -h server_proxy2 -p 6002 -a mydb
+Warning: Using a password with '-a' option on the command line interface may not be safe.
+server_proxy2:6002> cluster nodes
+mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 connected 5462-10922 0-5461
+mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
+server_proxy2:6002> get b
+(nil)
+```
+
+But what if the `checker.py` fails?
+What if we have multiple `checker.py` running, but they have different views about the liveness of nodes?
+
+Well, this checker script is only for those who just want a simple solution.
+For serious distributed systems, we should use some other robust solution.
+This is where the `coordinator` comes in.
 
 # Architecture
 ![architecture](docs/architecture.svg)
