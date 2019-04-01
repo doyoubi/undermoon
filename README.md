@@ -1,9 +1,9 @@
 ![undermoon logo](docs/undermoon-logo.png)
 
 # Undermoon [![Build Status](https://travis-ci.com/doyoubi/undermoon.svg?branch=master)](https://travis-ci.com/doyoubi/undermoon)
-Aims to provide a server-side Redis proxy implementing Redis Cluster Protocol supporting multiple tenants and easy scaling.
+Aims to provide a Redis cluster solution based on Redis Cluster Protocol supporting multiple tenants and easy scaling.
 
-This proxy is not limit to Redis. Any storage system implementing redis protocol can work with undermoon.
+This project is not limited to Redis. Any storage system implementing redis protocol can work with undermoon.
 
 ### Redis Cluster Client Protocol
 [Redis Cluster](https://redis.io/topics/cluster-tutorial) is the official Redis distributed solution supporting sharding and failover.
@@ -34,7 +34,7 @@ Note that how we use `AUTH [database]` command to do something like `USE [databa
 ```bash
 # Initialize Server-side Proxy
 > redis-cli -p 5299
-# Initialize the procy by `UMCTL` commands.
+# Initialize the proxy by `UMCTL` commands.
 127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 0-8000
 127.0.0.1:5299> UMCTL SETPEER 1 NOFLAGS mydb 127.0.0.1:7000 8001-16383
 
@@ -172,7 +172,9 @@ server_proxy2:6002> get b
 (error) MOVED 3300 server_proxy1:6001
 ```
 
-`server_proxy1` is responsible for key `b`. Now kill the `server_proxy1`:
+`server_proxy1` is responsible for key `b`.
+
+Now kill the `server_proxy1`:
 
 ```bash
 $ docker ps | grep server_proxy1 | awk '{print $1}' | xargs docker kill
@@ -193,7 +195,7 @@ server_proxy2:6002> get b
 But what if the `checker.py` fails?
 What if we have multiple `checker.py` running, but they have different views about the liveness of nodes?
 
-Well, this checker script is only for those who just want a simple solution.
+Well, this checker script is only for those who just wants a simple solution.
 For serious distributed systems, we should use some other robust solution.
 This is where the `Coordinator` comes in.
 
@@ -206,8 +208,26 @@ You can implement this HTTP broker yourself and there's a working in progress [G
 ![architecture](docs/architecture.svg)
 
 ## API
-### Server-side Proxy API
+### Server-side Proxy Commands
+#### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]
+
+- `epoch` is the logical time for this configuration used to decide which configuration is more up-to-date.
+- `flags` is reserved. Currently it may be NOFLAG or FORCE. In the future if we add more flags, separate them by ','.
+- `slot_range` can be
+    - 0-1000
+    - migrating dst_ip:dst_port 0-1000
+
+#### UMCTL SETPEER epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]
+
+- `epoch` is the logical time for this configuration used to decide which configuration is more up-to-date.
+- `flags` is reserved. Currently it may be NOFLAG or FORCE.
+- `slot_range` can be like `0-1000`.
+
+Note that both these two commands set all the `local` or `peer` meta data of the proxy.
+You can't add meta by sending them one by one.
+
 ### HTTP Broker API
+Refer to [HTTP API documentation](./docs/broker_http_api.md).
 
 ## Current Status
 This project is now only for demonstration and has **NOT** been well tested in production environment yet.
