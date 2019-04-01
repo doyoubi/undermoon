@@ -26,5 +26,8 @@ docker-multi-redis:
 docker-multi-shard:
 	docker-compose -f examples/docker-compose-multi-shard.yml up
 
+docker-failover:
+	docker-compose -f examples/docker-compose-multi-shard.yml -f examples/docker-compose-failover.yml up
+
 .PHONY: build server coord
 
