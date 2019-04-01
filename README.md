@@ -3,17 +3,17 @@
 # Undermoon [![Build Status](https://travis-ci.com/doyoubi/undermoon.svg?branch=master)](https://travis-ci.com/doyoubi/undermoon)
 Aims to provide a Redis cluster solution based on Redis Cluster Protocol supporting multiple tenants and easy scaling.
 
-This project is not limited to Redis. Any storage system implementing redis protocol can work with undermoon.
+Any storage system implementing redis protocol can also work with undermoon.
 
 ### Redis Cluster Client Protocol
 [Redis Cluster](https://redis.io/topics/cluster-tutorial) is the official Redis distributed solution supporting sharding and failover.
 Compared to using a single instance redis, clients connecting to `Redis Cluster` should implement the `Redis Cluster Client Protocol`.
 What it basically does is:
-- Do the redirection if we are requesting the wrong node.
-- Caching the cluster meta data by using one of the two commands, `CLUSTER NODES` and `CLUSTER SLOTS`.
+- Redirecting the requests if we are not sending commands to the right node.
+- Caching the cluster meta data from one of the two commands, `CLUSTER NODES` and `CLUSTER SLOTS`.
 
 To be compatible with the existing Redis client,
-there're some `Redis Cluster Proxies` to adapt the protocol,
+there're also some `Redis Cluster Proxies` to adapt the protocol,
 like [corvus](https://github.com/eleme/corvus) and [aster](https://github.com/wayslog/aster).
 
 ### Server-side Proxy
@@ -30,17 +30,16 @@ $ redis-server
 > target/debug/server_proxy  # runs on port 5299 and will forward commands to 127.0.0.1:6379
 ```
 
-Note that how we use `AUTH [database]` command to do something like `USE [database]` in Mysql.
+Note that how we use the `AUTH` command to do something like `USE [database]` in Mysql.
 ```bash
-# Initialize Server-side Proxy
 > redis-cli -p 5299
 # Initialize the proxy by `UMCTL` commands.
 127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 0-8000
 127.0.0.1:5299> UMCTL SETPEER 1 NOFLAGS mydb 127.0.0.1:7000 8001-16383
 
 # Now we still didn't select our database `mydb` we just set.
-# Then we are in the default `admin` database.
-# But nothing was set for `admin` yet so we get a error.
+# Then we are in the default `admin` database for our connection.
+# Since nothing was set for `admin` so we get a error.
 127.0.0.1:5299> get a
 (error) db not found: admin
 
@@ -69,7 +68,7 @@ The cost of maintaining this kind of deployment system is high
 and we still can't scale the clusters fast.
 
 I build this project to test whether a server-side approach
-makes easier maintenance of both small and large, just several and a great amount of redis clusters.
+makes easier maintenance of both small and large, just a few and a great amount of redis clusters.
 
 ##### Why server-side proxy?
 A server-side proxy is able to migrate the data and scale in a super fast way
@@ -211,20 +210,28 @@ You can implement this HTTP broker yourself and there's a working in progress [G
 ### Server-side Proxy Commands
 #### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]
 
-- `epoch` is the logical time for this configuration used to decide which configuration is more up-to-date.
-- `flags` is reserved. Currently it may be NOFLAG or FORCE. In the future if we add more flags, separate them by ','.
-- `slot_range` can be
+Sets the mapping relationship between the server-side proxy and its corresponding redis instances behind it.
+
+- `epoch` is the logical time of the configuration this command is sending used to decide which configuration is more up-to-date.
+Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETDB|SETPEER]` requests which don't have higher epoch.
+- `flags`: Currently it may be NOFLAG or FORCE. When it's `FORCE`, the server-side proxy will ignore the epoch rule above and will always accept the configuration
+- `slot_range` can be like
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
+- `ip:port` should be the addresses of redis instances.
 
 #### UMCTL SETPEER epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]
 
-- `epoch` is the logical time for this configuration used to decide which configuration is more up-to-date.
-- `flags` is reserved. Currently it may be NOFLAG or FORCE.
+Sets the addresses and slots of other server-side proxies serving databases in common.
+
+- `epoch`: same as `epoch` in UMCTL SETDB.
+- `flags`: same as `flags` in UMCTL SETDB.
 - `slot_range` can be like `0-1000`.
+- `ip:port` should be the addresses of other server-side proxies.
 
 Note that both these two commands set all the `local` or `peer` meta data of the proxy.
-You can't add meta by sending them one by one.
+For example, you can't add multiple backend redis instances one by one by sending multiple `UMCTL SETDB`.
+You should batch them in just one `UMCTL SETDB`.
 
 ### HTTP Broker API
 Refer to [HTTP API documentation](./docs/broker_http_api.md).
