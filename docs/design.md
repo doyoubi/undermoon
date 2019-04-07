@@ -36,6 +36,7 @@ Lets say we're migrating a range of slots 0-1000 from node A to node B.
     - pushing the message `Importing 0-1000 from A` to B.
     - pushing the message `Migrating 0-1000 to B` to A.
 - When A is still migrating data, it will return the normal message `OK`.
+    - `MasterService` should periodically check the status of replication.
 - When A is done with migrating data, it will:
     - add 0-1000 to node B and start redirecting clients.
     - remove 0-1000 from itself.
@@ -116,3 +117,12 @@ Basically it should contains:
 #### Implementation Details
 - Proxy should periodically send `SLAVEOF NO ONE` to master in case it was wrongly set.
 - For Redis, `MasterService` and `ReplicaService` should check the replication process by using the data in `INFO` of redis.
+
+### Redis Replicator
+`repl_port` is reserved. Later we need more consistency and might employ a more complex implementation.
+- For now, we just let the two Redis directly synchronize the data.
+- Later, we should let the synchronization flow get through the proxy so that we could know whether the synchronization finish all the commands.
+
+#### Migration for Redis
+- `MasterService` should check the status of `slaveXXX: id, IP address, port, state, offset, lag` from `INFO replication` to determine whether the replication completes.
+
