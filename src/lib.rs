@@ -18,8 +18,10 @@ extern crate log;
 extern crate scopeguard;
 extern crate btoi;
 extern crate itertools;
+extern crate chashmap;
 
 mod common;
 pub mod coordinator;
 pub mod protocol;
 pub mod proxy;
+pub mod replication;
