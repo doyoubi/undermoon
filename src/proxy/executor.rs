@@ -7,8 +7,9 @@ use super::session::{CmdCtx, CmdCtxHandler};
 use caseless;
 use common::db::HostDBMap;
 use common::utils::ThreadSafe;
-use replication::manager::ReplicatorManager;
 use protocol::{Array, BulkStr, Resp};
+use replication::manager::ReplicatorManager;
+use replication::replicator::{MasterMeta, ReplicaMeta};
 use std::str;
 use std::sync;
 
@@ -50,7 +51,7 @@ impl ForwardHandler {
         ForwardHandler {
             service_address,
             db,
-            replicator_manager: ReplicatorManager::new(),
+            replicator_manager: ReplicatorManager::default(),
         }
     }
 }
@@ -126,20 +127,26 @@ impl ForwardHandler {
             None => return,
         };
 
-        if caseless::canonical_caseless_match_str(&sub_cmd, "listdb") {
+        let sub_cmd = sub_cmd.to_uppercase();
+
+        if sub_cmd.eq("LISTDB") {
             let dbs = self.db.get_dbs();
             let resps = dbs
                 .into_iter()
                 .map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes())))
                 .collect();
             cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
-        } else if caseless::canonical_caseless_match_str(&sub_cmd, "cleardb") {
+        } else if sub_cmd.eq("CLEARDB") {
             self.db.clear();
             cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
-        } else if caseless::canonical_caseless_match_str(&sub_cmd, "setdb") {
+        } else if sub_cmd.eq("SETDB") {
             self.handle_umctl_setdb(cmd_ctx);
-        } else if caseless::canonical_caseless_match_str(&sub_cmd, "setpeer") {
+        } else if sub_cmd.eq("SETPEER") {
             self.handle_umctl_setpeer(cmd_ctx);
+        } else if sub_cmd.eq("SETMASTER") {
+            self.handle_umctl_setmaster(cmd_ctx);
+        } else if sub_cmd.eq("SETREPLICA") {
+            self.handle_umctl_setreplica(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -192,6 +199,36 @@ impl ForwardHandler {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }
+    }
+
+    fn handle_umctl_setmaster(&self, cmd_ctx: CmdCtx) {
+        let meta_array = match MasterMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(m) => m,
+            Err(_) => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    String::from("Invalid arguments").into_bytes(),
+                )));
+                return;
+            }
+        };
+
+        self.replicator_manager.update_masters(meta_array);
+        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+    }
+
+    fn handle_umctl_setreplica(&self, cmd_ctx: CmdCtx) {
+        let meta_array = match ReplicaMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(m) => m,
+            Err(_) => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    String::from("Invalid arguments").into_bytes(),
+                )));
+                return;
+            }
+        };
+
+        self.replicator_manager.update_replicas(meta_array);
+        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
     }
 }
 
