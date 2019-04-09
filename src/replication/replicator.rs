@@ -1,15 +1,17 @@
+use futures::Future;
+use protocol::RedisClientError;
+use std::error::Error;
 use std::fmt;
 use std::io;
-use std::error::Error;
-use futures::{Future};
-use protocol::RedisClientError;
 
+#[derive(Debug, PartialEq, Clone)]
 pub struct MasterMeta {
     pub master_node_address: String,
     pub replica_node_address: String,
     pub replica_proxy_address: String,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub struct ReplicaMeta {
     pub master_node_address: String,
     pub replica_node_address: String,
@@ -18,18 +20,20 @@ pub struct ReplicaMeta {
 
 // MasterReplicator and ReplicaReplicator work together remotely to manage the replication.
 
-pub trait MasterReplicator {
-    fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
-    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
-    fn start_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
-    fn commit_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
+pub trait MasterReplicator: Send + Sync {
+    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn start_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn commit_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn get_meta(&self) -> &MasterMeta;
 }
 
-pub trait ReplicaReplicator {
-    fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
-    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
-    fn start_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
-    fn commit_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError>>;
+pub trait ReplicaReplicator: Send + Sync {
+    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn start_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn commit_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn get_meta(&self) -> &ReplicaMeta;
 }
 
 #[derive(Debug)]

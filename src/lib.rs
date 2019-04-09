@@ -17,8 +17,8 @@ extern crate log;
 #[macro_use(defer)]
 extern crate scopeguard;
 extern crate btoi;
-extern crate itertools;
 extern crate chashmap;
+extern crate itertools;
 
 mod common;
 pub mod coordinator;

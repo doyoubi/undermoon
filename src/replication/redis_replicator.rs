@@ -1,36 +1,48 @@
-use futures::{Future, future, Stream, stream};
+use super::replicator::{
+    MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError,
+};
+use atomic_option::AtomicOption;
+use common::utils::revolve_first_address;
 use futures::sync::oneshot;
+use futures::{future, stream, Future, Stream};
 use futures_timer::Delay;
+use protocol::{RedisClient, RedisClientError, Resp, SimpleRedisClient};
 use std::iter;
 use std::str;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use atomic_option::AtomicOption;
-use protocol::{SimpleRedisClient, RedisClient, RedisClientError, Resp};
-use common::utils::revolve_first_address;
-use super::replicator::{MasterReplicator, ReplicaReplicator, ReplicatorError, MasterMeta, ReplicaMeta};
 
 pub struct RedisMasterReplicator {
     meta: MasterMeta,
 }
 
+impl RedisMasterReplicator {
+    pub fn new(meta: MasterMeta) -> Self {
+        Self { meta }
+    }
+}
+
 impl MasterReplicator for RedisMasterReplicator {
-    fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
+    fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         Box::new(future::ok(()))
     }
 
-    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
+    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         Box::new(future::ok(()))
     }
 
-    fn start_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
+    fn start_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         // TODO: implement migration
         Box::new(future::ok(()))
     }
 
-    fn commit_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
+    fn commit_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         // TODO: implement migration
         Box::new(future::ok(()))
+    }
+
+    fn get_meta(&self) -> &MasterMeta {
+        &self.meta
     }
 }
 
@@ -40,24 +52,34 @@ pub struct RedisReplicaReplicator {
 }
 
 impl RedisReplicaReplicator {
-    pub fn new(master_node_address: String, replica_node_address: String, master_proxy_address: String) -> Self {
-        let meta = ReplicaMeta{
-            master_node_address,
-            replica_node_address,
-            master_proxy_address,
-        };
-        Self{
+    pub fn new(meta: ReplicaMeta) -> Self {
+        Self {
             meta,
             stop_channel: AtomicOption::empty(),
+        }
+    }
+
+    fn send_stop_signal(&self) -> Result<(), ReplicatorError> {
+        if let Some(sender) = self.stop_channel.take(Ordering::SeqCst) {
+            sender.send(()).map_err(|()| {
+                error!("failed to send stop signal");
+                ReplicatorError::Canceled
+            })
+        } else {
+            Err(ReplicatorError::AlreadyEnded)
         }
     }
 }
 
 impl ReplicaReplicator for RedisReplicaReplicator {
-    fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
+    fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         let (sender, receiver) = oneshot::channel();
-        if let Some(_) = self.stop_channel.try_store(Box::new(sender), Ordering::SeqCst) {
-            return Box::new(future::err(ReplicatorError::AlreadyStarted))
+        if self
+            .stop_channel
+            .try_store(Box::new(sender), Ordering::SeqCst)
+            .is_some()
+        {
+            return Box::new(future::err(ReplicatorError::AlreadyStarted));
         }
 
         let address = match revolve_first_address(&self.meta.master_node_address) {
@@ -70,60 +92,78 @@ impl ReplicaReplicator for RedisReplicaReplicator {
         let client = SimpleRedisClient::new();
         let interval = Duration::new(5, 0);
         let cmd = vec!["SLAVEOF".to_string(), host, port];
-        let send_fut = keep_sending_cmd(client, self.meta.replica_node_address.clone(), cmd, interval);
+        let send_fut = keep_sending_cmd(
+            client,
+            self.meta.replica_node_address.clone(),
+            cmd,
+            interval,
+        );
+
+        let meta = self.meta.clone();
 
         Box::new(
             receiver
                 .map_err(|_| ReplicatorError::Canceled)
                 .select(send_fut.map_err(ReplicatorError::RedisError))
-                .then(|_| {
-                    warn!("RedisReplicaReplicator stopped");
+                .then(move |_| {
+                    warn!("RedisReplicaReplicator {:?} stopped", meta);
                     future::ok(())
-                })
+                }),
         )
     }
 
-    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
-        if let Some(sender) = self.stop_channel.take(Ordering::SeqCst) {
-            return Box::new(future::result(
-                sender.send(()).map_err(|()| {
-                    error!("failed to send stop signal");
-                    ReplicatorError::Canceled
-                })
-            ));
-        }
-        Box::new(future::err(ReplicatorError::AlreadyEnded))
+    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
+        Box::new(future::result(self.send_stop_signal()))
     }
 
-    fn start_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
+    fn start_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         // TODO: implement migration
         Box::new(future::ok(()))
     }
 
-    fn commit_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError>> {
+    fn commit_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         // TODO: implement migration
         Box::new(future::ok(()))
+    }
+
+    fn get_meta(&self) -> &ReplicaMeta {
+        &self.meta
     }
 }
 
-fn keep_sending_cmd<C: RedisClient>(client: C, address: String, cmd: Vec<String>, interval: Duration) -> impl Future<Item = (), Error = RedisClientError> {
+// Make sure the future will end.
+impl Drop for RedisReplicaReplicator {
+    fn drop(&mut self) {
+        self.send_stop_signal().unwrap_or(())
+    }
+}
+
+fn keep_sending_cmd<C: RedisClient>(
+    client: C,
+    address: String,
+    cmd: Vec<String>,
+    interval: Duration,
+) -> impl Future<Item = (), Error = RedisClientError> {
     let infinite_stream = stream::iter_ok(iter::repeat(()));
-    infinite_stream.fold(client, move |client, ()| {
-        let byte_cmd = cmd.iter().map(|s| s.clone().into_bytes()).collect();
-        let delay = Delay::new(interval).map_err(RedisClientError::Io);
-        let exec_fut = client.execute(address.clone(), byte_cmd)
-            .map_err(|e| {
-                error!("failed to send: {}", e);
-                e
-            })
-            .map(|response| {
-                if let Resp::Error(err) = response {
-                    let err_str = str::from_utf8(&err)
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|_| format!("{:?}", err));
-                    error!("error reply: {}", err_str);
-                }
-            });
-        exec_fut.join(delay).map(move |_| client)
-    }).map(|_| ())
+    infinite_stream
+        .fold(client, move |client, ()| {
+            let byte_cmd = cmd.iter().map(|s| s.clone().into_bytes()).collect();
+            let delay = Delay::new(interval).map_err(RedisClientError::Io);
+            let exec_fut = client
+                .execute(address.clone(), byte_cmd)
+                .map_err(|e| {
+                    error!("failed to send: {}", e);
+                    e
+                })
+                .map(|response| {
+                    if let Resp::Error(err) = response {
+                        let err_str = str::from_utf8(&err)
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|_| format!("{:?}", err));
+                        error!("error reply: {}", err_str);
+                    }
+                });
+            exec_fut.join(delay).map(move |_| client)
+        })
+        .map(|_| ())
 }

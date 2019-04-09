@@ -1,3 +1,3 @@
-mod replicator;
+pub mod manager;
 mod redis_replicator;
-mod manager;
+mod replicator;

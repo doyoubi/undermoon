@@ -7,6 +7,7 @@ use super::session::{CmdCtx, CmdCtxHandler};
 use caseless;
 use common::db::HostDBMap;
 use common::utils::ThreadSafe;
+use replication::manager::ReplicatorManager;
 use protocol::{Array, BulkStr, Resp};
 use std::str;
 use std::sync;
@@ -37,6 +38,7 @@ pub struct ForwardHandler {
     db: DatabaseMap<
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
+    replicator_manager: ReplicatorManager,
 }
 
 impl ForwardHandler {
@@ -48,6 +50,7 @@ impl ForwardHandler {
         ForwardHandler {
             service_address,
             db,
+            replicator_manager: ReplicatorManager::new(),
         }
     }
 }
