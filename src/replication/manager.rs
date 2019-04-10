@@ -3,10 +3,9 @@ use super::replicator::{MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplic
 use chashmap::CHashMap;
 use futures::Future;
 use itertools::Either;
-use std::sync::Arc;
 use tokio;
 
-type ReplicatorEnum = Either<Arc<MasterReplicator>, Arc<ReplicaReplicator>>;
+type ReplicatorEnum = Either<Box<MasterReplicator>, Box<ReplicaReplicator>>;
 
 pub struct ReplicatorManager {
     replicators: CHashMap<String, ReplicatorEnum>,
@@ -26,7 +25,7 @@ impl ReplicatorManager {
             let master_address = meta.master_node_address.clone();
             let replicator = match self.replicators.get(&master_address) {
                 Some(ref r) if r.as_ref().either(|m| m.get_meta().eq(&meta), |_| false) => continue,
-                _ => Arc::new(RedisMasterReplicator::new(meta)),
+                _ => Box::new(RedisMasterReplicator::new(meta)),
             };
             tokio::spawn(
                 replicator
@@ -43,7 +42,7 @@ impl ReplicatorManager {
             let replica_address = meta.replica_node_address.clone();
             let replicator = match self.replicators.get(&replica_address) {
                 Some(ref r) if r.as_ref().either(|_| false, |r| r.get_meta().eq(&meta)) => continue,
-                _ => Arc::new(RedisReplicaReplicator::new(meta)),
+                _ => Box::new(RedisReplicaReplicator::new(meta)),
             };
             tokio::spawn(
                 replicator
