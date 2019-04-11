@@ -9,7 +9,7 @@ use common::db::HostDBMap;
 use common::utils::ThreadSafe;
 use protocol::{Array, BulkStr, Resp};
 use replication::manager::ReplicatorManager;
-use replication::replicator::{MasterMeta, ReplicaMeta};
+use replication::replicator::ReplicatorMeta;
 use std::str;
 use std::sync;
 
@@ -143,10 +143,8 @@ impl ForwardHandler {
             self.handle_umctl_setdb(cmd_ctx);
         } else if sub_cmd.eq("SETPEER") {
             self.handle_umctl_setpeer(cmd_ctx);
-        } else if sub_cmd.eq("SETMASTER") {
-            self.handle_umctl_setmaster(cmd_ctx);
-        } else if sub_cmd.eq("SETREPLICA") {
-            self.handle_umctl_setreplica(cmd_ctx);
+        } else if sub_cmd.eq("SETREPL") {
+            self.handle_umctl_setrepl(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -201,8 +199,8 @@ impl ForwardHandler {
         }
     }
 
-    fn handle_umctl_setmaster(&self, cmd_ctx: CmdCtx) {
-        let meta_array = match MasterMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+    fn handle_umctl_setrepl(&self, cmd_ctx: CmdCtx) {
+        let meta = match ReplicatorMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
             Ok(m) => m,
             Err(_) => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
@@ -212,23 +210,16 @@ impl ForwardHandler {
             }
         };
 
-        self.replicator_manager.update_masters(meta_array);
-        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
-    }
-
-    fn handle_umctl_setreplica(&self, cmd_ctx: CmdCtx) {
-        let meta_array = match ReplicaMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
-            Ok(m) => m,
-            Err(_) => {
-                cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Invalid arguments").into_bytes(),
-                )));
-                return;
+        match self.replicator_manager.update_replicators(meta) {
+            Ok(()) => {
+                debug!("Successfully update replicator meta data");
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
-        };
-
-        self.replicator_manager.update_replicas(meta_array);
-        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+            Err(e) => {
+                debug!("Failed to update replicator meta data {:?}", e);
+                cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+            }
+        }
     }
 }
 

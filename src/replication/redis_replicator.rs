@@ -196,6 +196,7 @@ fn keep_sending_cmd<C: RedisClient>(
         .fold(client, move |client, ()| {
             let byte_cmd = cmd.iter().map(|s| s.clone().into_bytes()).collect();
             let delay = Delay::new(interval).map_err(RedisClientError::Io);
+            // debug!("sending {:?}", cmd);
             let exec_fut = client
                 .execute(address.clone(), byte_cmd)
                 .map_err(|e| {
@@ -203,6 +204,7 @@ fn keep_sending_cmd<C: RedisClient>(
                     e
                 })
                 .map(|response| {
+                    // debug!("replicator get response {:?}", response);
                     if let Resp::Error(err) = response {
                         let err_str = str::from_utf8(&err)
                             .map(|s| s.to_string())
