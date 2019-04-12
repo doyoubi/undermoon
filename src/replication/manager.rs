@@ -3,7 +3,7 @@ use super::replicator::{MasterReplicator, ReplicaReplicator, ReplicatorMeta};
 use futures::Future;
 use itertools::Either;
 use proxy::database::DBError;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{atomic, Arc, RwLock};
 use tokio;
 
@@ -45,18 +45,37 @@ impl ReplicatorManager {
         self.updating_epoch
             .store(epoch as usize, atomic::Ordering::SeqCst);
 
-        let mut key_set = HashSet::new();
+        let mut master_key_set = HashMap::new();
+        let mut replica_key_set = HashMap::new();
         for meta in masters.iter() {
-            key_set.insert((meta.db_name.clone(), meta.master_node_address.clone()));
+            master_key_set.insert(
+                (meta.db_name.clone(), meta.master_node_address.clone()),
+                meta.clone(),
+            );
         }
         for meta in replicas.iter() {
-            key_set.insert((meta.db_name.clone(), meta.replica_node_address.clone()));
+            replica_key_set.insert(
+                (meta.db_name.clone(), meta.replica_node_address.clone()),
+                meta.clone(),
+            );
         }
 
         let mut new_replicators = HashMap::new();
         for (key, replicator) in self.replicators.read().unwrap().1.iter() {
-            if key_set.contains(key) {
-                info!("reuse replicator {} {}", key.0, key.1);
+            if Some(true)
+                == master_key_set
+                    .get(key)
+                    .and_then(|meta| replicator.as_ref().left().map(|m| m.get_meta() == meta))
+            {
+                info!("reuse master replicator {} {}", key.0, key.1);
+                new_replicators.insert(key.clone(), replicator.clone());
+            }
+            if Some(true)
+                == replica_key_set
+                    .get(key)
+                    .and_then(|meta| replicator.as_ref().right().map(|m| m.get_meta() == meta))
+            {
+                info!("reuse replica replicator {} {}", key.0, key.1);
                 new_replicators.insert(key.clone(), replicator.clone());
             }
         }
