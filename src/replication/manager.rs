@@ -11,14 +11,14 @@ type ReplicatorRecord = Either<Arc<MasterReplicator>, Arc<ReplicaReplicator>>;
 type ReplicatorMap = HashMap<(String, String), ReplicatorRecord>;
 
 pub struct ReplicatorManager {
-    updating_epoch: atomic::AtomicUsize, // TODO: should use AtomicU64 when it's stable.
+    updating_epoch: atomic::AtomicU64,
     replicators: RwLock<(u64, ReplicatorMap)>,
 }
 
 impl Default for ReplicatorManager {
     fn default() -> Self {
         Self {
-            updating_epoch: atomic::AtomicUsize::new(0),
+            updating_epoch: atomic::AtomicU64::new(0),
             replicators: RwLock::new((0, HashMap::new())),
         }
     }
@@ -34,16 +34,17 @@ impl ReplicatorManager {
         } = meta;
 
         let force = flags.force;
-        if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) as u64 >= epoch {
+        if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) >= epoch {
             return Err(DBError::OldEpoch);
         }
-        // updating_epoch >= replicators.epoch
-        // No need to check replicators.epoch again
 
         // The computation below might take a long time.
         // Set epoch first to let later requests fail fast.
-        self.updating_epoch
-            .store(epoch as usize, atomic::Ordering::SeqCst);
+        // We can't update the epoch inside the lock here.
+        // Because when we get the info inside it, it may be partially updated and inconsistent.
+        self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
+        // After this, other threads might accidentally change `updating_epoch` to a lower epoch,
+        // we will correct his later.
 
         let mut master_key_set = HashMap::new();
         let mut replica_key_set = HashMap::new();
@@ -61,6 +62,7 @@ impl ReplicatorManager {
         }
 
         let mut new_replicators = HashMap::new();
+        // Add existing replicators
         for (key, replicator) in self.replicators.read().unwrap().1.iter() {
             if Some(true)
                 == master_key_set
@@ -80,42 +82,52 @@ impl ReplicatorManager {
             }
         }
 
-        // Add masters
+        let mut new_masters = HashMap::new();
+        let mut new_replicas = HashMap::new();
+
+        // Add new masters
         for meta in masters.into_iter() {
             let key = (meta.db_name.clone(), meta.master_node_address.clone());
             if new_replicators.contains_key(&key) {
                 continue;
             }
             let replicator = Arc::new(RedisMasterReplicator::new(meta));
-            debug!("spawn master {} {}", key.0, key.1);
-            tokio::spawn(
-                replicator
-                    .start()
-                    .map_err(|e| error!("master replicator exit {:?}", e)),
-            );
+            new_masters.insert(key.clone(), replicator.clone());
             new_replicators.insert(key, Either::Left(replicator));
         }
-        // Add replicas
+        // Add new replicas
         for meta in replicas.into_iter() {
             let key = (meta.db_name.clone(), meta.replica_node_address.clone());
             if new_replicators.contains_key(&key) {
                 continue;
             }
             let replicator = Arc::new(RedisReplicaReplicator::new(meta));
-            debug!("spawn replica {} {}", key.0, key.1);
-            tokio::spawn(
-                replicator
-                    .start()
-                    .map_err(|e| error!("replica replicator exit {:?}", e)),
-            );
+            new_replicas.insert(key.clone(), replicator.clone());
             new_replicators.insert(key, Either::Right(replicator));
         }
 
-        let mut replicators = self.replicators.write().unwrap();
-        if !force && epoch <= replicators.0 {
-            return Err(DBError::OldEpoch);
+        {
+            let mut replicators = self.replicators.write().unwrap();
+            if !force && epoch <= replicators.0 {
+                // We're fooled by the `updating_epoch`, update it.
+                self.updating_epoch
+                    .store(replicators.0, atomic::Ordering::SeqCst);
+                return Err(DBError::OldEpoch);
+            }
+            for (key, master) in new_masters.into_iter() {
+                debug!("spawn master {} {}", key.0, key.1);
+                tokio::spawn(master.start().map_err(move |e| {
+                    error!("master replicator {} {} exit {:?}", key.0, key.1, e)
+                }));
+            }
+            for (key, replica) in new_replicas.into_iter() {
+                debug!("spawn replica {} {}", key.0, key.1);
+                tokio::spawn(replica.start().map_err(move |e| {
+                    error!("replica replicator {} {} exit {:?}", key.0, key.1, e)
+                }));
+            }
+            *replicators = (epoch, new_replicators);
         }
-        *replicators = (epoch, new_replicators);
         Ok(())
     }
 }

@@ -207,7 +207,7 @@ fn keep_sending_cmd<C: RedisClient>(
                     // debug!("replicator get response {:?}", response);
                     if let Resp::Error(err) = response {
                         let err_str = str::from_utf8(&err)
-                            .map(|s| s.to_string())
+                            .map(ToString::to_string)
                             .unwrap_or_else(|_| format!("{:?}", err));
                         error!("error reply: {}", err_str);
                     }
