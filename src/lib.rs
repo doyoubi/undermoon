@@ -23,3 +23,4 @@ mod common;
 pub mod coordinator;
 pub mod protocol;
 pub mod proxy;
+pub mod replication;

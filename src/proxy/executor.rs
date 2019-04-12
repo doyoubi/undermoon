@@ -8,6 +8,8 @@ use caseless;
 use common::db::HostDBMap;
 use common::utils::ThreadSafe;
 use protocol::{Array, BulkStr, Resp};
+use replication::manager::ReplicatorManager;
+use replication::replicator::ReplicatorMeta;
 use std::str;
 use std::sync;
 
@@ -37,6 +39,7 @@ pub struct ForwardHandler {
     db: DatabaseMap<
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
+    replicator_manager: ReplicatorManager,
 }
 
 impl ForwardHandler {
@@ -48,6 +51,7 @@ impl ForwardHandler {
         ForwardHandler {
             service_address,
             db,
+            replicator_manager: ReplicatorManager::default(),
         }
     }
 }
@@ -123,20 +127,24 @@ impl ForwardHandler {
             None => return,
         };
 
-        if caseless::canonical_caseless_match_str(&sub_cmd, "listdb") {
+        let sub_cmd = sub_cmd.to_uppercase();
+
+        if sub_cmd.eq("LISTDB") {
             let dbs = self.db.get_dbs();
             let resps = dbs
                 .into_iter()
                 .map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes())))
                 .collect();
             cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
-        } else if caseless::canonical_caseless_match_str(&sub_cmd, "cleardb") {
+        } else if sub_cmd.eq("CLEARDB") {
             self.db.clear();
             cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
-        } else if caseless::canonical_caseless_match_str(&sub_cmd, "setdb") {
+        } else if sub_cmd.eq("SETDB") {
             self.handle_umctl_setdb(cmd_ctx);
-        } else if caseless::canonical_caseless_match_str(&sub_cmd, "setpeer") {
+        } else if sub_cmd.eq("SETPEER") {
             self.handle_umctl_setpeer(cmd_ctx);
+        } else if sub_cmd.eq("SETREPL") {
+            self.handle_umctl_setrepl(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -186,6 +194,29 @@ impl ForwardHandler {
             }
             Err(e) => {
                 debug!("Failed to update peer meta data {:?}", e);
+                cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+            }
+        }
+    }
+
+    fn handle_umctl_setrepl(&self, cmd_ctx: CmdCtx) {
+        let meta = match ReplicatorMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(m) => m,
+            Err(_) => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    String::from("Invalid arguments").into_bytes(),
+                )));
+                return;
+            }
+        };
+
+        match self.replicator_manager.update_replicators(meta) {
+            Ok(()) => {
+                debug!("Successfully update replicator meta data");
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+            }
+            Err(e) => {
+                debug!("Failed to update replicator meta data {:?}", e);
                 cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }

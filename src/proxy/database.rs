@@ -165,7 +165,7 @@ where
             .unwrap()
             .1
             .get(&dbname)
-            .map_or("".to_string(), |db| db.gen_remote_cluster_nodes());
+            .map_or("".to_string(), RemoteDB::gen_remote_cluster_nodes);
         format!("{}{}", local, remote)
     }
 
@@ -187,7 +187,7 @@ where
             .unwrap()
             .1
             .get(&dbname)
-            .map_or(Ok(vec![]), |db| db.gen_remote_cluster_slots())?;
+            .map_or(Ok(vec![]), RemoteDB::gen_remote_cluster_slots)?;
         local.append(&mut remote);
         Ok(Resp::Arr(Array::Arr(local)))
     }
