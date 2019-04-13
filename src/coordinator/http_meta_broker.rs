@@ -144,7 +144,9 @@ impl MetaDataBroker for HttpMetaBroker {
                 None => return Box::new(future::ok(None)),
                 Some(host) => (
                     host.get_epoch(),
-                    host.get_nodes().iter().map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
+                    host.get_nodes().iter()
+                        .filter(|node| node.get_role() == Role::Master)
+                        .map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
                 ),
             };
 
@@ -155,7 +157,9 @@ impl MetaDataBroker for HttpMetaBroker {
                 .map(|cluster| {
                     let cluster_name = cluster.get_name().clone();
                     // Ignore replicas
-                    cluster.into_nodes().into_iter().filter(|n| n.get_role() == Role::Master)
+                    cluster.into_nodes()
+                        .into_iter()
+                        .filter(|n| n.get_role() == Role::Master)
                         .group_by(|node| node.get_proxy_address().clone()).into_iter()
                         .map(|(proxy_address, nodes)| {
                             // Collect all slots from masters.

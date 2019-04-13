@@ -1,6 +1,6 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
-use common::cluster::{Host, SlotRange};
+use common::cluster::{Host, Role, SlotRange};
 use common::db::{DBMapFlags, HostDBMap};
 use futures::{future, Future};
 use protocol::{RedisClient, Resp};
@@ -18,9 +18,19 @@ impl<C: RedisClient> HostMetaRespSender<C> {
 
 impl<C: RedisClient> HostMetaSender for HostMetaRespSender<C> {
     fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+        let address = host.get_address().clone();
+        let epoch = host.get_epoch();
+        let masters = host
+            .into_nodes()
+            .into_iter()
+            .filter(|node| node.get_role() == Role::Master)
+            .collect();
+
+        let host_without_replicas = Host::new(address, epoch, masters);
+
         Box::new(send_meta(
             &self.client,
-            host,
+            host_without_replicas,
             "SETDB".to_string(),
             DBMapFlags { force: false },
         ))
