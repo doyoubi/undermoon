@@ -218,6 +218,7 @@ Every running server-side proxy will store its epoch and will reject all the `UM
 - `slot_range` can be like
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
+    - importing src_ip:src_port 0-1000
 - `ip:port` should be the addresses of redis instances.
 
 #### UMCTL SETPEER epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]

@@ -14,6 +14,9 @@ server:
 coord:
 	RUST_LOG=undermoon=debug,coordinator=debug target/debug/coordinator
 
+test_broker:
+	RUST_LOG=undermoon=debug,test_http_broker=debug target/debug/test_http_broker
+
 flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy
 

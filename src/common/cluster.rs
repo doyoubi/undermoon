@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone)]
 pub enum SlotRangeTag {
     Migrating(String),
+    Importing(String),
     None,
 }
 
@@ -14,6 +15,7 @@ impl Serialize for SlotRangeTag {
     {
         let tag = match self {
             SlotRangeTag::Migrating(dst) => format!("migrating {}", dst),
+            SlotRangeTag::Importing(src) => format!("importing {}", src),
             SlotRangeTag::None => String::new(),
         };
         serializer.serialize_str(&tag)
@@ -29,15 +31,18 @@ impl<'de> Deserialize<'de> for SlotRangeTag {
         let mut segs = s.split_terminator(' ');
         let flag = match segs.next() {
             None => return Ok(SlotRangeTag::None),
-            Some(flag) => flag,
+            Some(flag) => flag.to_lowercase(),
         };
-        if flag != "migrating" {
-            return Err(D::Error::custom("Invalid flag"));
-        }
-        let dst = segs
+        let peer = segs
             .next()
-            .ok_or_else(|| D::Error::custom("Missing destination address"))?;
-        Ok(SlotRangeTag::Migrating(dst.to_string()))
+            .ok_or_else(|| D::Error::custom("Missing peer address"))?;
+        if flag == "migrating" {
+            Ok(SlotRangeTag::Migrating(peer.to_string()))
+        } else if flag == "importing" {
+            Ok(SlotRangeTag::Importing(peer.to_string()))
+        } else {
+            Err(D::Error::custom("Invalid flag"))
+        }
     }
 }
 
@@ -48,12 +53,49 @@ pub struct SlotRange {
     pub tag: SlotRangeTag,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Role {
+    Master,
+    Replica,
+}
+
+impl Serialize for Role {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Role::Master => serializer.serialize_str("master"),
+            Role::Replica => serializer.serialize_str("replica"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Role {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?.to_uppercase();
+        match s.as_str() {
+            "MASTER" => Ok(Role::Master),
+            "REPLICA" => Ok(Role::Replica),
+            _ => Err(D::Error::custom(format!("invalid role {}", s))),
+        }
+    }
+}
+
+// (1) In proxy, all Node instances are masters.
+// Replica Node will only be used for replication.
+// (2) Coordinator will send the master Node metadata to proxies' database module
+// and the replica Node metadata to proxies' replication module.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Node {
     address: String,
     proxy_address: String,
     cluster_name: String,
     slots: Vec<SlotRange>,
+    role: Role,
 }
 
 impl Node {
@@ -62,12 +104,14 @@ impl Node {
         proxy_address: String,
         cluster_name: String,
         slots: Vec<SlotRange>,
+        role: Role,
     ) -> Self {
         Node {
             address,
             proxy_address,
             cluster_name,
             slots,
+            role,
         }
     }
     pub fn get_address(&self) -> &String {
@@ -84,6 +128,9 @@ impl Node {
     }
     pub fn into_slots(self) -> Vec<SlotRange> {
         self.slots
+    }
+    pub fn get_role(&self) -> Role {
+        self.role
     }
 }
 

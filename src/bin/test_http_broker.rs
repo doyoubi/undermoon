@@ -26,7 +26,7 @@ fn main() {
         test_get_host(broker.clone()),
         test_add_failure(broker.clone()),
     ])
-    .map(|_| ());
+    .map(|_| info!("Tests completed"));
     tokio::run(fut);
 }
 

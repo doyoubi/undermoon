@@ -47,7 +47,7 @@ Lets say we're migrating a range of slots 0-1000 from node A to node B.
 Note that (1) can employ a blocking or non-blocking method for the coming commands during switching slot owner.
 
 - Before A receive a `Migrating 0-1000 to B`, it should have set up the `MasterService`. If not, it will return `-MASTER NOT READY`.
-- `Migrating 0-1000 from A` will let B create a `ReplicaService` during the data migration.
+- `Importing 0-1000 from A` will let B create a `ReplicaService` during the data migration.
 
 ## Failure Recovery in Migration
 Coordinator is totally stateless. There's only one coordinator start the process. But all of them will keep pushing meta data to proxy.
@@ -72,6 +72,7 @@ If node B fails, the coordinators should create a new one and tell node A to cha
 - `slot_range` can be
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
+    - importing src_ip:src_port 0-1000
 
 ### nmctl setpeer
 
