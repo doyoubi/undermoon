@@ -6,6 +6,9 @@ extern crate config;
 extern crate env_logger;
 
 use std::env;
+use std::sync::Arc;
+use std::time::Duration;
+use undermoon::protocol::PooledRedisClientFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 
@@ -34,7 +37,13 @@ fn main() {
     env_logger::init();
 
     let config = gen_conf();
-    let forward_handler = SharedForwardHandler::new(config.address.clone());
+
+    let timeout = Duration::new(1, 0);
+    let pool_size = 1;
+    let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
+
+    let forward_handler =
+        SharedForwardHandler::new(config.address.clone(), Arc::new(client_factory));
     let server = ServerProxyService::new(config, forward_handler);
 
     tokio::run(server.run());

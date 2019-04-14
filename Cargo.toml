@@ -20,6 +20,7 @@ bytes = "0.4.12"
 tokio = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
+tokio-timer = "0.2.10"
 futures = "0.1.23"
 atomic-option = "0.1"
 crc16 = "0.4.0"
@@ -37,6 +38,8 @@ futures-timer = "0.1"
 config = "0.9"
 btoi = "0.4.0"
 crossbeam = "0.7.1"
+crossbeam-channel = "0.3"
+chashmap = "2.2.2"
 
 [profile.release]
 debug = true

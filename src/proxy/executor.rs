@@ -7,56 +7,63 @@ use super::session::{CmdCtx, CmdCtxHandler};
 use caseless;
 use common::db::HostDBMap;
 use common::utils::ThreadSafe;
-use protocol::{Array, BulkStr, Resp};
+use protocol::{Array, BulkStr, RedisClientFactory, Resp};
 use replication::manager::ReplicatorManager;
 use replication::replicator::ReplicatorMeta;
 use std::str;
-use std::sync;
+use std::sync::{self, Arc};
 
-#[derive(Clone)]
-pub struct SharedForwardHandler {
-    handler: sync::Arc<ForwardHandler>,
+pub struct SharedForwardHandler<F: RedisClientFactory> {
+    handler: sync::Arc<ForwardHandler<F>>,
 }
 
-impl SharedForwardHandler {
-    pub fn new(service_address: String) -> SharedForwardHandler {
-        SharedForwardHandler {
-            handler: sync::Arc::new(ForwardHandler::new(service_address)),
+impl<F: RedisClientFactory> ThreadSafe for SharedForwardHandler<F> {}
+
+impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
+    fn clone(&self) -> Self {
+        Self {
+            handler: self.handler.clone(),
         }
     }
 }
 
-impl ThreadSafe for SharedForwardHandler {}
+impl<F: RedisClientFactory> SharedForwardHandler<F> {
+    pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
+        Self {
+            handler: sync::Arc::new(ForwardHandler::new(service_address, client_factory)),
+        }
+    }
+}
 
-impl CmdCtxHandler for SharedForwardHandler {
+impl<F: RedisClientFactory> CmdCtxHandler for SharedForwardHandler<F> {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
         self.handler.handle_cmd_ctx(cmd_ctx)
     }
 }
 
-pub struct ForwardHandler {
+pub struct ForwardHandler<F: RedisClientFactory> {
     service_address: String,
     db: DatabaseMap<
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
-    replicator_manager: ReplicatorManager,
+    replicator_manager: ReplicatorManager<F>,
 }
 
-impl ForwardHandler {
-    pub fn new(service_address: String) -> ForwardHandler {
+impl<F: RedisClientFactory> ForwardHandler<F> {
+    pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
         let sender_facotry = CachedSenderFactory::new(RRSenderGroupFactory::new(
             RecoverableBackendNodeFactory::new(),
         ));
         let db = DatabaseMap::new(sender_facotry);
-        ForwardHandler {
+        Self {
             service_address,
             db,
-            replicator_manager: ReplicatorManager::default(),
+            replicator_manager: ReplicatorManager::new(client_factory),
         }
     }
 }
 
-impl ForwardHandler {
+impl<F: RedisClientFactory> ForwardHandler<F> {
     fn handle_auth(&self, cmd_ctx: CmdCtx) {
         let key = cmd_ctx.get_cmd().get_key();
         match key {
@@ -223,7 +230,7 @@ impl ForwardHandler {
     }
 }
 
-impl CmdCtxHandler for ForwardHandler {
+impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
         //        debug!("get command {:?}", cmd_ctx.get_cmd());
         let cmd_type = cmd_ctx.get_cmd().get_type();

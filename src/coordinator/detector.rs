@@ -1,7 +1,8 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, FailureChecker, FailureReporter, ProxiesRetriever};
 use futures::{future, Future, Stream};
-use protocol::RedisClient;
+use protocol::{RedisClient, RedisClientFactory};
+use std::sync::Arc;
 
 pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
     meta_data_broker: B,
@@ -23,28 +24,35 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
     }
 }
 
-pub struct PingFailureDetector<C: RedisClient + Sync + Send + 'static> {
-    client: C,
+pub struct PingFailureDetector<F: RedisClientFactory> {
+    client_factory: Arc<F>,
 }
 
-impl<C: RedisClient + Sync + Send + 'static> PingFailureDetector<C> {
-    pub fn new(client: C) -> Self {
-        Self { client }
+impl<F: RedisClientFactory> PingFailureDetector<F> {
+    pub fn new(client_factory: Arc<F>) -> Self {
+        Self { client_factory }
     }
 }
 
-impl<C: RedisClient + Sync + Send + 'static> FailureChecker for PingFailureDetector<C> {
+impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
     fn check(
         &self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send> {
-        let ping_command = vec!["ping".to_string().into_bytes()];
-        Box::new(self.client.execute(address.clone(), ping_command).then(
-            move |result| match result {
-                Ok(_) => future::ok(None),
-                Err(_) => future::ok(Some(address)),
-            },
-        ))
+    ) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send + 'static> {
+        let client_fut = self.client_factory.create_client(address.clone());
+        Box::new(
+            client_fut
+                .map_err(CoordinateError::Redis)
+                .and_then(|client| {
+                    let ping_command = vec!["ping".to_string().into_bytes()];
+                    client
+                        .execute(ping_command)
+                        .then(move |result| match result {
+                            Ok(_) => future::ok(None),
+                            Err(_) => future::ok(Some(address)),
+                        })
+                }),
+        )
     }
 }
 
@@ -89,22 +97,38 @@ mod tests {
     const NODE1: &'static str = "127.0.0.1:7000";
     const NODE2: &'static str = "127.0.0.1:7001";
 
-    #[derive(Clone)]
-    struct DummyClient;
+    #[derive(Debug)]
+    struct DummyClient {
+        address: String,
+    }
 
     impl ThreadSafe for DummyClient {}
 
     impl RedisClient for DummyClient {
         fn execute(
-            &self,
-            address: String,
+            self,
             _command: Vec<BinSafeStr>,
-        ) -> Box<dyn Future<Item = Resp, Error = RedisClientError> + Send> {
-            if address == NODE1 {
-                Box::new(future::ok(Resp::Arr(Array::Nil)))
+        ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send> {
+            if self.address == NODE1 {
+                Box::new(future::ok((self, Resp::Arr(Array::Nil))))
             } else {
                 Box::new(future::err(RedisClientError::InvalidReply))
             }
+        }
+    }
+
+    struct DummyClientFactory;
+
+    impl ThreadSafe for DummyClientFactory {}
+
+    impl RedisClientFactory for DummyClientFactory {
+        type Client = DummyClient;
+
+        fn create_client(
+            &self,
+            address: String,
+        ) -> Box<dyn Future<Item = Self::Client, Error = RedisClientError> + Send> {
+            Box::new(future::ok(DummyClient { address }))
         }
     }
 
@@ -171,7 +195,7 @@ mod tests {
     fn test_detector() {
         let broker = DummyMetaBroker::new();
         let retriever = BrokerProxiesRetriever::new(broker.clone());
-        let checker = PingFailureDetector::new(DummyClient {});
+        let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
         let detector = SeqFailureDetector::new(retriever, checker, reporter);
         let res = detector.run().into_future().wait();

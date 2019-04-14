@@ -2,26 +2,32 @@ use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError,
 };
 use atomic_option::AtomicOption;
-use common::utils::revolve_first_address;
+use common::utils::{revolve_first_address, ThreadSafe};
 use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_timer::Delay;
-use protocol::{RedisClient, RedisClientError, Resp, SimpleRedisClient};
+use protocol::RedisClientFactory;
+use protocol::{RedisClient, RedisClientError, Resp};
 use std::iter;
 use std::str;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
-pub struct RedisMasterReplicator {
+pub struct RedisMasterReplicator<F: RedisClientFactory> {
     meta: MasterMeta,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
+    client_factory: Arc<F>,
 }
 
-impl RedisMasterReplicator {
-    pub fn new(meta: MasterMeta) -> Self {
+impl<F: RedisClientFactory> ThreadSafe for RedisMasterReplicator<F> {}
+
+impl<F: RedisClientFactory> RedisMasterReplicator<F> {
+    pub fn new(meta: MasterMeta, client_factory: Arc<F>) -> Self {
         Self {
             meta,
             stop_signal: AtomicOption::empty(),
+            client_factory,
         }
     }
 
@@ -37,7 +43,7 @@ impl RedisMasterReplicator {
     }
 }
 
-impl MasterReplicator for RedisMasterReplicator {
+impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
     fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         let (sender, receiver) = oneshot::channel();
         if self
@@ -48,11 +54,12 @@ impl MasterReplicator for RedisMasterReplicator {
             return Box::new(future::err(ReplicatorError::AlreadyStarted));
         }
 
-        let client = SimpleRedisClient::new();
+        let client_fut = self
+            .client_factory
+            .create_client(self.meta.master_node_address.clone());
         let interval = Duration::new(5, 0);
         let cmd = vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()];
-        let send_fut =
-            keep_sending_cmd(client, self.meta.master_node_address.clone(), cmd, interval);
+        let send_fut = client_fut.and_then(move |client| keep_sending_cmd(client, cmd, interval));
 
         let meta = self.meta.clone();
 
@@ -87,22 +94,26 @@ impl MasterReplicator for RedisMasterReplicator {
 }
 
 // Make sure the future will end.
-impl Drop for RedisMasterReplicator {
+impl<F: RedisClientFactory> Drop for RedisMasterReplicator<F> {
     fn drop(&mut self) {
         self.send_stop_signal().unwrap_or(())
     }
 }
 
-pub struct RedisReplicaReplicator {
+pub struct RedisReplicaReplicator<F: RedisClientFactory> {
     meta: ReplicaMeta,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
+    client_factory: Arc<F>,
 }
 
-impl RedisReplicaReplicator {
-    pub fn new(meta: ReplicaMeta) -> Self {
+impl<F: RedisClientFactory> ThreadSafe for RedisReplicaReplicator<F> {}
+
+impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
+    pub fn new(meta: ReplicaMeta, client_factory: Arc<F>) -> Self {
         Self {
             meta,
             stop_signal: AtomicOption::empty(),
+            client_factory,
         }
     }
 
@@ -118,7 +129,7 @@ impl RedisReplicaReplicator {
     }
 }
 
-impl ReplicaReplicator for RedisReplicaReplicator {
+impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
     fn start(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         let (sender, receiver) = oneshot::channel();
         if self
@@ -136,15 +147,12 @@ impl ReplicaReplicator for RedisReplicaReplicator {
         let host = address.ip().to_string();
         let port = address.port().to_string();
 
-        let client = SimpleRedisClient::new();
+        let client_fut = self
+            .client_factory
+            .create_client(self.meta.master_node_address.clone());
         let interval = Duration::new(5, 0);
         let cmd = vec!["SLAVEOF".to_string(), host, port];
-        let send_fut = keep_sending_cmd(
-            client,
-            self.meta.replica_node_address.clone(),
-            cmd,
-            interval,
-        );
+        let send_fut = client_fut.and_then(move |client| keep_sending_cmd(client, cmd, interval));
 
         let meta = self.meta.clone();
 
@@ -179,7 +187,7 @@ impl ReplicaReplicator for RedisReplicaReplicator {
 }
 
 // Make sure the future will end.
-impl Drop for RedisReplicaReplicator {
+impl<F: RedisClientFactory> Drop for RedisReplicaReplicator<F> {
     fn drop(&mut self) {
         self.send_stop_signal().unwrap_or(())
     }
@@ -187,7 +195,6 @@ impl Drop for RedisReplicaReplicator {
 
 fn keep_sending_cmd<C: RedisClient>(
     client: C,
-    address: String,
     cmd: Vec<String>,
     interval: Duration,
 ) -> impl Future<Item = (), Error = RedisClientError> {
@@ -198,12 +205,12 @@ fn keep_sending_cmd<C: RedisClient>(
             let delay = Delay::new(interval).map_err(RedisClientError::Io);
             // debug!("sending {:?}", cmd);
             let exec_fut = client
-                .execute(address.clone(), byte_cmd)
+                .execute(byte_cmd)
                 .map_err(|e| {
                     error!("failed to send: {}", e);
                     e
                 })
-                .map(|response| {
+                .map(|(client, response)| {
                     // debug!("replicator get response {:?}", response);
                     if let Resp::Error(err) = response {
                         let err_str = str::from_utf8(&err)
@@ -211,8 +218,9 @@ fn keep_sending_cmd<C: RedisClient>(
                             .unwrap_or_else(|_| format!("{:?}", err));
                         error!("error reply: {}", err_str);
                     }
+                    client
                 });
-            exec_fut.join(delay).map(move |_| client)
+            exec_fut.join(delay).map(move |(client, ())| client)
         })
         .map(|_| ())
 }

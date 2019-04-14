@@ -1,5 +1,5 @@
 use common::db::DBMapFlags;
-use common::utils::CmdParseError;
+use common::utils::{CmdParseError, ThreadSafe};
 use futures::Future;
 use protocol::RedisClientError;
 use protocol::{Array, BulkStr, Resp};
@@ -98,7 +98,7 @@ fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
 
 // MasterReplicator and ReplicaReplicator work together remotely to manage the replication.
 
-pub trait MasterReplicator: Send + Sync {
+pub trait MasterReplicator: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn start_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
@@ -106,7 +106,7 @@ pub trait MasterReplicator: Send + Sync {
     fn get_meta(&self) -> &MasterMeta;
 }
 
-pub trait ReplicaReplicator: Send + Sync {
+pub trait ReplicaReplicator: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn start_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
