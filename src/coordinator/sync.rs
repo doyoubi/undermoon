@@ -19,19 +19,9 @@ impl<F: RedisClientFactory> HostMetaRespSender<F> {
 
 impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
     fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let address = host.get_address().clone();
-        let epoch = host.get_epoch();
-        let masters = host
-            .into_nodes()
-            .into_iter()
-            .filter(|node| node.get_role() == Role::Master)
-            .collect();
-
-        let host_without_replicas = Host::new(address, epoch, masters);
-
         Box::new(send_meta(
             &(*self.client_factory),
-            host_without_replicas,
+            host,
             "SETDB".to_string(),
             DBMapFlags { force: false },
         ))
@@ -67,6 +57,18 @@ impl<B: MetaDataBroker> LocalMetaRetriever<B> {
     pub fn new(broker: B) -> Self {
         Self { broker }
     }
+
+    fn filter_host_masters(host: Host) -> Host {
+        let address = host.get_address().clone();
+        let epoch = host.get_epoch();
+        let masters = host
+            .into_nodes()
+            .into_iter()
+            .filter(|node| node.get_role() == Role::Master)
+            .collect();
+
+        Host::new(address, epoch, masters)
+    }
 }
 
 impl<B: MetaDataBroker> HostMetaRetriever for LocalMetaRetriever<B> {
@@ -77,7 +79,8 @@ impl<B: MetaDataBroker> HostMetaRetriever for LocalMetaRetriever<B> {
         Box::new(
             self.broker
                 .get_host(address)
-                .map_err(CoordinateError::MetaData),
+                .map_err(CoordinateError::MetaData)
+                .map(|host| host.map(Self::filter_host_masters)),
         )
     }
 }

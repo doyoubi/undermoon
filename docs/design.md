@@ -99,7 +99,7 @@ The coordinators keep getting the meta data from brokers and push the meta data 
 - `MasterService` should keep sending `SLAVEOF NO ONE` to corresponding master.
 
 ## Interface
-#### UMCTL SETREPL epoch flags [master|replica dbname1 master_ip:master_port replica_ip:replica_port peer_proxy_ip:peer_proxy_port] ...
+#### UMCTL SETREPL epoch flags [master|replica dbname1 master_ip:master_port replica_num [replica_ip:replica_port peer_proxy_ip:peer_proxy_port]...] ...
 - `peer_proxy_ip:peer_proxy_port` is the proxy port of the corresponding master if we're sending this to a replica, and vice versa.
 It will create a `MasterService` and `ReplicaService`.
 

@@ -53,6 +53,12 @@ pub struct SlotRange {
     pub tag: SlotRangeTag,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ReplPeer {
+    pub node_address: String,
+    pub proxy_address: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Role {
     Master,
@@ -85,6 +91,18 @@ impl<'de> Deserialize<'de> for Role {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ReplMeta {
+    role: Role,
+    peers: Vec<ReplPeer>,
+}
+
+impl ReplMeta {
+    pub fn new(role: Role, peers: Vec<ReplPeer>) -> Self {
+        Self{ role, peers }
+    }
+}
+
 // (1) In proxy, all Node instances are masters.
 // Replica Node will only be used for replication.
 // (2) Coordinator will send the master Node metadata to proxies' database module
@@ -95,7 +113,7 @@ pub struct Node {
     proxy_address: String,
     cluster_name: String,
     slots: Vec<SlotRange>,
-    role: Role,
+    repl: ReplMeta,
 }
 
 impl Node {
@@ -104,14 +122,14 @@ impl Node {
         proxy_address: String,
         cluster_name: String,
         slots: Vec<SlotRange>,
-        role: Role,
+        repl: ReplMeta,
     ) -> Self {
         Node {
             address,
             proxy_address,
             cluster_name,
             slots,
-            role,
+            repl,
         }
     }
     pub fn get_address(&self) -> &String {
@@ -130,7 +148,7 @@ impl Node {
         self.slots
     }
     pub fn get_role(&self) -> Role {
-        self.role
+        self.repl.role
     }
 }
 
