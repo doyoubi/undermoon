@@ -5,7 +5,9 @@ mod encoder;
 mod resp;
 mod stateless;
 
-pub use self::client::{RedisClient, RedisClientError, SimpleRedisClient};
+pub use self::client::{
+    PooledRedisClient, PooledRedisClientFactory, RedisClient, RedisClientError, RedisClientFactory,
+};
 pub use self::codec::{RespCodec, RespPacket};
 pub use self::decoder::{decode_resp, DecodeError};
 pub use self::encoder::{encode_resp, resp_to_buf};

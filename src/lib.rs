@@ -9,6 +9,7 @@ extern crate reqwest;
 extern crate serde;
 extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_timer;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
@@ -17,6 +18,8 @@ extern crate log;
 #[macro_use(defer)]
 extern crate scopeguard;
 extern crate btoi;
+extern crate chashmap;
+extern crate crossbeam_channel;
 extern crate itertools;
 
 mod common;

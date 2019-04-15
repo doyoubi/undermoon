@@ -6,6 +6,7 @@ use std::iter::Peekable;
 use std::str;
 
 const MIGRATING_TAG: &str = "MIGRATING";
+const IMPORTING_TAG: &str = "IMPORTING";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DBMapFlags {
@@ -89,6 +90,10 @@ impl HostDBMap {
                             args.push("migrating".to_string());
                             args.push(dst.clone());
                         }
+                        SlotRangeTag::Importing(ref src) => {
+                            args.push("importing".to_string());
+                            args.push(src.clone());
+                        }
                         SlotRangeTag::None => (),
                     };
                     args.push(format!("{}-{}", slot_range.start, slot_range.end));
@@ -157,14 +162,21 @@ impl HostDBMap {
         It: Iterator<Item = String>,
     {
         let slot_range = try_get!(it.next());
-        if !caseless::canonical_caseless_match_str(&slot_range, MIGRATING_TAG) {
-            return Self::parse_slot_range(slot_range);
-        }
+        let slot_range_tag = slot_range.to_uppercase();
 
-        let dst = try_get!(it.next());
-        let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
-        slot_range.tag = SlotRangeTag::Migrating(dst);
-        Ok(slot_range)
+        if slot_range_tag == MIGRATING_TAG {
+            let dst = try_get!(it.next());
+            let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
+            slot_range.tag = SlotRangeTag::Migrating(dst);
+            Ok(slot_range)
+        } else if slot_range_tag == IMPORTING_TAG {
+            let src = try_get!(it.next());
+            let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
+            slot_range.tag = SlotRangeTag::Importing(src);
+            Ok(slot_range)
+        } else {
+            Self::parse_slot_range(slot_range)
+        }
     }
 
     fn parse_slot_range(s: String) -> Result<SlotRange, CmdParseError> {

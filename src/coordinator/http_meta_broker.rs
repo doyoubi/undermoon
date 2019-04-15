@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use common::cluster::{Cluster, Host, Node};
+use common::cluster::{Cluster, Host, Node, Role};
 use common::utils::ThreadSafe;
 use futures::{future, stream, Future, Stream};
 use itertools::Itertools;
@@ -144,7 +144,9 @@ impl MetaDataBroker for HttpMetaBroker {
                 None => return Box::new(future::ok(None)),
                 Some(host) => (
                     host.get_epoch(),
-                    host.get_nodes().iter().map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
+                    host.get_nodes().iter()
+                        .filter(|node| node.get_role() == Role::Master)
+                        .map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
                 ),
             };
 
@@ -154,12 +156,16 @@ impl MetaDataBroker for HttpMetaBroker {
                 .skip_while(|cluster| future::ok(cluster.is_none())).map(Option::unwrap)
                 .map(|cluster| {
                     let cluster_name = cluster.get_name().clone();
-                    cluster.into_nodes().into_iter()
+                    // Ignore replicas
+                    cluster.into_nodes()
+                        .into_iter()
+                        .filter(|n| n.get_role() == Role::Master)
                         .group_by(|node| node.get_proxy_address().clone()).into_iter()
                         .map(|(proxy_address, nodes)| {
+                            // Collect all slots from masters.
                             let slots = nodes.map(Node::into_slots).flatten().collect();
                             // proxy as node
-                            Node::new(proxy_address.clone(), proxy_address, cluster_name.clone(), slots)
+                            Node::new(proxy_address.clone(), proxy_address, cluster_name.clone(), slots, Role::Master)
                         })
                         .collect::<Vec<Node>>()
                 })

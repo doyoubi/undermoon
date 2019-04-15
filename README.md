@@ -104,7 +104,7 @@ $ redis-cli -a mydb -h 127.0.0.1 -p 5299 SET key value
 This example will run a sharding redis cluster with similar protocol as the [official Redis Cluster](https://redis.io/topics/cluster-tutorial).
 
 ```bash
-$ make docker-multi-redis
+$ make docker-multi-shard
 ```
 
 You also need to add the following records to the `/etc/hosts` to support the redirection.
@@ -218,6 +218,7 @@ Every running server-side proxy will store its epoch and will reject all the `UM
 - `slot_range` can be like
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
+    - importing src_ip:src_port 0-1000
 - `ip:port` should be the addresses of redis instances.
 
 #### UMCTL SETPEER epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]

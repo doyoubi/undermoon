@@ -10,10 +10,11 @@ extern crate env_logger;
 use futures::Future;
 use reqwest::r#async as request_async; // async is a keyword later
 use std::env;
+use std::time::Duration;
 use undermoon::coordinator::http_mani_broker::HttpMetaManipulationBroker;
 use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
 use undermoon::coordinator::service::{CoordinatorConfig, CoordinatorService};
-use undermoon::protocol::SimpleRedisClient;
+use undermoon::protocol::PooledRedisClientFactory;
 
 fn gen_conf() -> CoordinatorConfig {
     let conf_file_path = env::args()
@@ -51,8 +52,12 @@ fn main() {
     let http_client = request_async::ClientBuilder::new().build().unwrap();
     let data_broker = HttpMetaBroker::new(config.broker_address.clone(), http_client.clone());
     let mani_broker = HttpMetaManipulationBroker::new(config.broker_address.clone(), http_client);
-    let redis_client = SimpleRedisClient::new();
-    let service = CoordinatorService::new(config, data_broker, mani_broker, redis_client);
+
+    let timeout = Duration::new(2, 0);
+    let pool_size = 2;
+    let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
+
+    let service = CoordinatorService::new(config, data_broker, mani_broker, client_factory);
     tokio::run(service.run().map_err(|e| {
         error!("coordinator error {:?}", e);
     }));

@@ -1,46 +1,57 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
-use common::cluster::{Host, SlotRange};
+use common::cluster::{Host, Role, SlotRange};
 use common::db::{DBMapFlags, HostDBMap};
 use futures::{future, Future};
-use protocol::{RedisClient, Resp};
+use protocol::{RedisClient, RedisClientFactory, Resp};
 use std::collections::HashMap;
+use std::sync::Arc;
 
-pub struct HostMetaRespSender<C: RedisClient> {
-    client: C,
+pub struct HostMetaRespSender<F: RedisClientFactory> {
+    client_factory: Arc<F>,
 }
 
-impl<C: RedisClient> HostMetaRespSender<C> {
-    pub fn new(client: C) -> Self {
-        Self { client }
+impl<F: RedisClientFactory> HostMetaRespSender<F> {
+    pub fn new(client_factory: Arc<F>) -> Self {
+        Self { client_factory }
     }
 }
 
-impl<C: RedisClient> HostMetaSender for HostMetaRespSender<C> {
+impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
     fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+        let address = host.get_address().clone();
+        let epoch = host.get_epoch();
+        let masters = host
+            .into_nodes()
+            .into_iter()
+            .filter(|node| node.get_role() == Role::Master)
+            .collect();
+
+        let host_without_replicas = Host::new(address, epoch, masters);
+
         Box::new(send_meta(
-            &self.client,
-            host,
+            &(*self.client_factory),
+            host_without_replicas,
             "SETDB".to_string(),
             DBMapFlags { force: false },
         ))
     }
 }
 
-pub struct PeerMetaRespSender<C: RedisClient> {
-    client: C,
+pub struct PeerMetaRespSender<F: RedisClientFactory> {
+    client_factory: Arc<F>,
 }
 
-impl<C: RedisClient> PeerMetaRespSender<C> {
-    pub fn new(client: C) -> Self {
-        Self { client }
+impl<F: RedisClientFactory> PeerMetaRespSender<F> {
+    pub fn new(client_factory: Arc<F>) -> Self {
+        Self { client_factory }
     }
 }
 
-impl<C: RedisClient> HostMetaSender for PeerMetaRespSender<C> {
+impl<F: RedisClientFactory> HostMetaSender for PeerMetaRespSender<F> {
     fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
         Box::new(send_meta(
-            &self.client,
+            &(*self.client_factory),
             host,
             "SETPEER".to_string(),
             DBMapFlags { force: false },
@@ -95,12 +106,12 @@ impl<B: MetaDataBroker> HostMetaRetriever for PeerMetaRetriever<B> {
 }
 
 // sub_command should be SETDB or SETPEER
-fn send_meta<C: RedisClient>(
-    client: &C,
+fn send_meta<F: RedisClientFactory>(
+    client_factory: &F,
     host: Host,
     sub_command: String,
     flags: DBMapFlags,
-) -> impl Future<Item = (), Error = CoordinateError> + Send {
+) -> impl Future<Item = (), Error = CoordinateError> + Send + 'static {
     let address = host.get_address().clone();
     let epoch = host.get_epoch();
     let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
@@ -118,21 +129,27 @@ fn send_meta<C: RedisClient>(
         flags.to_arg(),
     ];
     cmd.extend(args.into_iter());
+
+    let client_fut = client_factory.create_client(address);
     debug!("sending meta {} {:?}", sub_command, cmd);
-    client
-        .execute(address, cmd.into_iter().map(String::into_bytes).collect())
-        .map_err(|e| {
-            error!("failed to send meta data of host {:?}", e);
-            CoordinateError::Redis(e)
-        })
-        .and_then(move |resp| match resp {
-            Resp::Error(err_str) => {
-                error!("failed to send meta, invalid reply {:?}", err_str);
-                future::err(CoordinateError::InvalidReply)
-            }
-            reply => {
-                debug!("Successfully set meta {} {:?}", sub_command, reply);
-                future::ok(())
-            }
+    client_fut
+        .map_err(CoordinateError::Redis)
+        .and_then(|client| {
+            client
+                .execute(cmd.into_iter().map(String::into_bytes).collect())
+                .map_err(|e| {
+                    error!("failed to send meta data of host {:?}", e);
+                    CoordinateError::Redis(e)
+                })
+                .and_then(move |(_, resp)| match resp {
+                    Resp::Error(err_str) => {
+                        error!("failed to send meta, invalid reply {:?}", err_str);
+                        future::err(CoordinateError::InvalidReply)
+                    }
+                    reply => {
+                        debug!("Successfully set meta {} {:?}", sub_command, reply);
+                        future::ok(())
+                    }
+                })
         })
 }

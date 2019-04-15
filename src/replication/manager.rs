@@ -2,6 +2,7 @@ use super::redis_replicator::{RedisMasterReplicator, RedisReplicaReplicator};
 use super::replicator::{MasterReplicator, ReplicaReplicator, ReplicatorMeta};
 use futures::Future;
 use itertools::Either;
+use protocol::RedisClientFactory;
 use proxy::database::DBError;
 use std::collections::HashMap;
 use std::sync::{atomic, Arc, RwLock};
@@ -10,21 +11,21 @@ use tokio;
 type ReplicatorRecord = Either<Arc<MasterReplicator>, Arc<ReplicaReplicator>>;
 type ReplicatorMap = HashMap<(String, String), ReplicatorRecord>;
 
-pub struct ReplicatorManager {
+pub struct ReplicatorManager<F: RedisClientFactory> {
     updating_epoch: atomic::AtomicU64,
     replicators: RwLock<(u64, ReplicatorMap)>,
+    client_factory: Arc<F>,
 }
 
-impl Default for ReplicatorManager {
-    fn default() -> Self {
+impl<F: RedisClientFactory> ReplicatorManager<F> {
+    pub fn new(client_factory: Arc<F>) -> Self {
         Self {
             updating_epoch: atomic::AtomicU64::new(0),
             replicators: RwLock::new((0, HashMap::new())),
+            client_factory,
         }
     }
-}
 
-impl ReplicatorManager {
     pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), DBError> {
         let ReplicatorMeta {
             epoch,
@@ -91,7 +92,10 @@ impl ReplicatorManager {
             if new_replicators.contains_key(&key) {
                 continue;
             }
-            let replicator = Arc::new(RedisMasterReplicator::new(meta));
+            let replicator = Arc::new(RedisMasterReplicator::new(
+                meta,
+                self.client_factory.clone(),
+            ));
             new_masters.insert(key.clone(), replicator.clone());
             new_replicators.insert(key, Either::Left(replicator));
         }
@@ -101,7 +105,10 @@ impl ReplicatorManager {
             if new_replicators.contains_key(&key) {
                 continue;
             }
-            let replicator = Arc::new(RedisReplicaReplicator::new(meta));
+            let replicator = Arc::new(RedisReplicaReplicator::new(
+                meta,
+                self.client_factory.clone(),
+            ));
             new_replicas.insert(key.clone(), replicator.clone());
             new_replicators.insert(key, Either::Right(replicator));
         }
