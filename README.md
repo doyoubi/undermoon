@@ -104,7 +104,7 @@ $ redis-cli -a mydb -h 127.0.0.1 -p 5299 SET key value
 This example will run a sharding redis cluster with similar protocol as the [official Redis Cluster](https://redis.io/topics/cluster-tutorial).
 
 ```bash
-$ make docker-multi-redis
+$ make docker-multi-shard
 ```
 
 You also need to add the following records to the `/etc/hosts` to support the redirection.
