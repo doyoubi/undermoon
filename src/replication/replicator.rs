@@ -1,4 +1,5 @@
 use common::db::DBMapFlags;
+use common::cluster::ReplPeer;
 use common::utils::{CmdParseError, ThreadSafe};
 use futures::Future;
 use protocol::RedisClientError;
@@ -26,16 +27,14 @@ impl ReplicatorMeta {
 pub struct MasterMeta {
     pub db_name: String,
     pub master_node_address: String,
-    pub replica_node_address: String,
-    pub replica_proxy_address: String,
+    pub replicas: Vec<ReplPeer>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ReplicaMeta {
     pub db_name: String,
-    pub master_node_address: String,
     pub replica_node_address: String,
-    pub master_proxy_address: String,
+    pub masters: Vec<ReplPeer>,
 }
 
 fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
@@ -63,24 +62,31 @@ fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
     let mut replica_meta_array = Vec::new();
 
     while it.peek().is_some() {
+        let mut peers = Vec::new();
+
         let role = it.next().ok_or(CmdParseError {})?;
         let db_name = it.next().ok_or(CmdParseError {})?;
-        let master_node_address = it.next().ok_or(CmdParseError {})?;
-        let replica_node_address = it.next().ok_or(CmdParseError {})?;
-        let peer_proxy_address = it.next().ok_or(CmdParseError {})?;
+        let node_address = it.next().ok_or(CmdParseError {})?;
+        let peer_num = it.next().ok_or(CmdParseError {})?.parse::<usize>().map_err(|_| CmdParseError{})?;
+        for _ in 0..peer_num {
+            let node_address = it.next().ok_or(CmdParseError {})?;
+            let proxy_address = it.next().ok_or(CmdParseError {})?;
+            peers.push(ReplPeer{
+                node_address, proxy_address,
+            })
+        }
+
         if role.to_uppercase() == "MASTER" {
             master_meta_array.push(MasterMeta {
                 db_name,
-                master_node_address,
-                replica_node_address,
-                replica_proxy_address: peer_proxy_address,
+                master_node_address: node_address,
+                replicas: peers,
             })
         } else if role.to_uppercase() == "REPLICA" {
             replica_meta_array.push(ReplicaMeta {
                 db_name,
-                master_node_address,
-                replica_node_address,
-                master_proxy_address: peer_proxy_address,
+                replica_node_address: node_address,
+                masters: peers,
             })
         } else {
             error!("invalid role {}", role);
@@ -151,7 +157,7 @@ mod tests {
     #[test]
     fn test_parse_single_replicator() {
         let arguments =
-            "UMCTL SETREPL 233 force master testdb localhost:6000 localhost:6001 localhost:5299"
+            "UMCTL SETREPL 233 force master testdb localhost:6000 1 localhost:6001 localhost:5299"
                 .split(' ')
                 .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
                 .collect();
@@ -167,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_parse_multi_replicators() {
-        let arguments = "UMCTL SETREPL 233 noflag master testdb localhost:6000 localhost:6001 localhost:5299 replica testdb localhost:6000 localhost:6001 localhost:5299"
+        let arguments = "UMCTL SETREPL 233 noflag master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299"
             .split(' ')
             .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
             .collect();
@@ -183,14 +189,16 @@ mod tests {
         let master = &meta.masters[0];
         assert_eq!(master.db_name, "testdb");
         assert_eq!(master.master_node_address, "localhost:6000");
-        assert_eq!(master.replica_node_address, "localhost:6001");
-        assert_eq!(master.replica_proxy_address, "localhost:5299");
+        assert_eq!(master.replicas.len(), 1);
+        assert_eq!(master.replicas[0].node_address, "localhost:6001");
+        assert_eq!(master.replicas[0].proxy_address, "localhost:5299");
 
         let replica = &meta.replicas[0];
         assert_eq!(replica.db_name, "testdb");
-        assert_eq!(replica.master_node_address, "localhost:6000");
         assert_eq!(replica.replica_node_address, "localhost:6001");
-        assert_eq!(replica.master_proxy_address, "localhost:5299");
+        assert_eq!(replica.masters.len(), 1);
+        assert_eq!(replica.masters[0].node_address, "localhost:6000");
+        assert_eq!(replica.masters[0].proxy_address, "localhost:5299");
     }
 
 }

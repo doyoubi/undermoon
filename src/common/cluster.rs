@@ -53,7 +53,7 @@ pub struct SlotRange {
     pub tag: SlotRangeTag,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ReplPeer {
     pub node_address: String,
     pub proxy_address: String,

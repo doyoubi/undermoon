@@ -140,7 +140,16 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
             return Box::new(future::err(ReplicatorError::AlreadyStarted));
         }
 
-        let address = match revolve_first_address(&self.meta.master_node_address) {
+        // Just get the first one.
+        let master_node_address = match self.meta.masters.get(0) {
+            Some(repl_meta) => &repl_meta.node_address,
+            None => {
+                error!("No master for replica {}", self.meta.replica_node_address);
+                return Box::new(future::ok(()))
+            }
+        };
+
+        let address = match revolve_first_address(master_node_address) {
             Some(address) => address,
             None => return Box::new(future::err(ReplicatorError::InvalidAddress)),
         };
@@ -149,7 +158,7 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
 
         let client_fut = self
             .client_factory
-            .create_client(self.meta.master_node_address.clone());
+            .create_client(master_node_address.clone());
         let interval = Duration::new(5, 0);
         let cmd = vec!["SLAVEOF".to_string(), host, port];
         let send_fut = client_fut.and_then(move |client| keep_sending_cmd(client, cmd, interval));
