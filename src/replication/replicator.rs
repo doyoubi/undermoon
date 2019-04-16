@@ -125,12 +125,19 @@ fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
     })
 }
 
-pub fn encode_repl_meta(meta: &ReplicatorMeta) -> Vec<String> {
-    let mut args = Vec::new();
-    args.push(meta.epoch.to_string());
-    args.push(meta.flags.to_arg());
+pub fn encode_repl_meta(meta: ReplicatorMeta) -> Vec<String> {
+    let ReplicatorMeta {
+        epoch,
+        flags,
+        masters,
+        replicas,
+    } = meta;
 
-    for master in meta.masters.iter() {
+    let mut args = Vec::new();
+    args.push(epoch.to_string());
+    args.push(flags.to_arg());
+
+    for master in masters.iter() {
         args.push("master".to_string());
         args.push(master.db_name.clone());
         args.push(master.master_node_address.clone());
@@ -140,7 +147,7 @@ pub fn encode_repl_meta(meta: &ReplicatorMeta) -> Vec<String> {
             args.push(replica.proxy_address.clone());
         }
     }
-    for replica in meta.replicas.iter() {
+    for replica in replicas.iter() {
         args.push("replica".to_string());
         args.push(replica.db_name.clone());
         args.push(replica.replica_node_address.clone());
@@ -189,7 +196,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse__and_encode_single_replicator() {
+    fn test_parse_and_encode_single_replicator() {
         let arguments =
             "UMCTL SETREPL 233 force master testdb localhost:6000 1 localhost:6001 localhost:5299"
                 .split(' ')
@@ -204,8 +211,11 @@ mod tests {
         assert_eq!(meta.masters.len(), 1);
         assert_eq!(meta.replicas.len(), 0);
 
-        let args = encode_repl_meta(&meta).join(" ");
-        assert_eq!(args, "233 FORCE master testdb localhost:6000 1 localhost:6001 localhost:5299");
+        let args = encode_repl_meta(meta.clone()).join(" ");
+        assert_eq!(
+            args,
+            "233 FORCE master testdb localhost:6000 1 localhost:6001 localhost:5299"
+        );
     }
 
     #[test]
@@ -237,7 +247,7 @@ mod tests {
         assert_eq!(replica.masters[0].node_address, "localhost:6000");
         assert_eq!(replica.masters[0].proxy_address, "localhost:5299");
 
-        let args = encode_repl_meta(&meta).join(" ");
+        let args = encode_repl_meta(meta.clone()).join(" ");
         assert_eq!(args, "233 NOFLAG master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299")
     }
 

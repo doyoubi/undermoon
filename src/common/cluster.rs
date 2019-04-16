@@ -91,7 +91,7 @@ impl<'de> Deserialize<'de> for Role {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReplMeta {
     role: Role,
     peers: Vec<ReplPeer>,
@@ -101,13 +101,21 @@ impl ReplMeta {
     pub fn new(role: Role, peers: Vec<ReplPeer>) -> Self {
         Self { role, peers }
     }
+
+    pub fn get_role(&self) -> Role {
+        self.role
+    }
+
+    pub fn get_peers(&self) -> &Vec<ReplPeer> {
+        &self.peers
+    }
 }
 
 // (1) In proxy, all Node instances are masters.
 // Replica Node will only be used for replication.
 // (2) Coordinator will send the master Node metadata to proxies' database module
 // and the replica Node metadata to proxies' replication module.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Node {
     address: String,
     proxy_address: String,
@@ -150,6 +158,9 @@ impl Node {
     pub fn get_role(&self) -> Role {
         self.repl.role
     }
+    pub fn get_repl_meta(&self) -> &ReplMeta {
+        &self.repl
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,7 +185,7 @@ impl Cluster {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Host {
     address: String,
     epoch: u64,
