@@ -99,7 +99,7 @@ pub struct ReplMeta {
 
 impl ReplMeta {
     pub fn new(role: Role, peers: Vec<ReplPeer>) -> Self {
-        Self{ role, peers }
+        Self { role, peers }
     }
 }
 

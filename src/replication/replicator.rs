@@ -1,5 +1,5 @@
-use common::db::DBMapFlags;
 use common::cluster::ReplPeer;
+use common::db::DBMapFlags;
 use common::utils::{CmdParseError, ThreadSafe};
 use futures::Future;
 use protocol::RedisClientError;
@@ -8,6 +8,24 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::str;
+
+// MasterReplicator and ReplicaReplicator work together remotely to manage the replication.
+
+pub trait MasterReplicator: ThreadSafe {
+    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn start_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn commit_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn get_meta(&self) -> &MasterMeta;
+}
+
+pub trait ReplicaReplicator: ThreadSafe {
+    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn start_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn commit_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn get_meta(&self) -> &ReplicaMeta;
+}
 
 #[derive(Debug, Clone)]
 pub struct ReplicatorMeta {
@@ -67,12 +85,17 @@ fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
         let role = it.next().ok_or(CmdParseError {})?;
         let db_name = it.next().ok_or(CmdParseError {})?;
         let node_address = it.next().ok_or(CmdParseError {})?;
-        let peer_num = it.next().ok_or(CmdParseError {})?.parse::<usize>().map_err(|_| CmdParseError{})?;
+        let peer_num = it
+            .next()
+            .ok_or(CmdParseError {})?
+            .parse::<usize>()
+            .map_err(|_| CmdParseError {})?;
         for _ in 0..peer_num {
             let node_address = it.next().ok_or(CmdParseError {})?;
             let proxy_address = it.next().ok_or(CmdParseError {})?;
-            peers.push(ReplPeer{
-                node_address, proxy_address,
+            peers.push(ReplPeer {
+                node_address,
+                proxy_address,
             })
         }
 
@@ -102,22 +125,33 @@ fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
     })
 }
 
-// MasterReplicator and ReplicaReplicator work together remotely to manage the replication.
+pub fn encode_repl_meta(meta: &ReplicatorMeta) -> Vec<String> {
+    let mut args = Vec::new();
+    args.push(meta.epoch.to_string());
+    args.push(meta.flags.to_arg());
 
-pub trait MasterReplicator: ThreadSafe {
-    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn start_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn commit_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn get_meta(&self) -> &MasterMeta;
-}
+    for master in meta.masters.iter() {
+        args.push("master".to_string());
+        args.push(master.db_name.clone());
+        args.push(master.master_node_address.clone());
+        args.push(master.replicas.len().to_string());
+        for replica in master.replicas.iter() {
+            args.push(replica.node_address.clone());
+            args.push(replica.proxy_address.clone());
+        }
+    }
+    for replica in meta.replicas.iter() {
+        args.push("replica".to_string());
+        args.push(replica.db_name.clone());
+        args.push(replica.replica_node_address.clone());
+        args.push(replica.masters.len().to_string());
+        for master in replica.masters.iter() {
+            args.push(master.node_address.clone());
+            args.push(master.proxy_address.clone());
+        }
+    }
 
-pub trait ReplicaReplicator: ThreadSafe {
-    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn start_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn commit_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn get_meta(&self) -> &ReplicaMeta;
+    args
 }
 
 #[derive(Debug)]
@@ -155,7 +189,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_single_replicator() {
+    fn test_parse__and_encode_single_replicator() {
         let arguments =
             "UMCTL SETREPL 233 force master testdb localhost:6000 1 localhost:6001 localhost:5299"
                 .split(' ')
@@ -169,10 +203,13 @@ mod tests {
         assert_eq!(meta.flags, DBMapFlags { force: true });
         assert_eq!(meta.masters.len(), 1);
         assert_eq!(meta.replicas.len(), 0);
+
+        let args = encode_repl_meta(&meta).join(" ");
+        assert_eq!(args, "233 FORCE master testdb localhost:6000 1 localhost:6001 localhost:5299");
     }
 
     #[test]
-    fn test_parse_multi_replicators() {
+    fn test_parse_and_encode_multi_replicators() {
         let arguments = "UMCTL SETREPL 233 noflag master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299"
             .split(' ')
             .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
@@ -199,6 +236,9 @@ mod tests {
         assert_eq!(replica.masters.len(), 1);
         assert_eq!(replica.masters[0].node_address, "localhost:6000");
         assert_eq!(replica.masters[0].proxy_address, "localhost:5299");
+
+        let args = encode_repl_meta(&meta).join(" ");
+        assert_eq!(args, "233 NOFLAG master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299")
     }
 
 }

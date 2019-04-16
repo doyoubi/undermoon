@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use common::cluster::{Cluster, Host, Node, Role, ReplMeta};
+use common::cluster::{Cluster, Host, Node, ReplMeta, Role};
 use common::utils::ThreadSafe;
 use futures::{future, stream, Future, Stream};
 use itertools::Itertools;

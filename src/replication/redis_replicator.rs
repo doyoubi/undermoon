@@ -145,7 +145,7 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
             Some(repl_meta) => &repl_meta.node_address,
             None => {
                 error!("No master for replica {}", self.meta.replica_node_address);
-                return Box::new(future::ok(()))
+                return Box::new(future::ok(()));
             }
         };
 
