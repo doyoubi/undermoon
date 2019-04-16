@@ -257,7 +257,7 @@ There're two big features needed:
 - ~~Implement CLUSTER SLOTS~~ (done)
 - Implement commands to get proxy meta
 - Track spawned futures
-- Simple script to push configuration to proxy for demonstration
+- ~~Simple script to push configuration to proxy for demonstration~~ (done)
 - Batch write operations with interval flushing
 - ~~Add configuration~~ (done)
 - Limit running commands, connections

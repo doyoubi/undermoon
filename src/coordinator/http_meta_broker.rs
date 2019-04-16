@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use common::cluster::{Cluster, Host, Node, Role};
+use common::cluster::{Cluster, Host, Node, ReplMeta, Role};
 use common::utils::ThreadSafe;
 use futures::{future, stream, Future, Stream};
 use itertools::Itertools;
@@ -165,7 +165,8 @@ impl MetaDataBroker for HttpMetaBroker {
                             // Collect all slots from masters.
                             let slots = nodes.map(Node::into_slots).flatten().collect();
                             // proxy as node
-                            Node::new(proxy_address.clone(), proxy_address, cluster_name.clone(), slots, Role::Master)
+                            let repl_meta = ReplMeta::new(Role::Master, vec![]);
+                            Node::new(proxy_address.clone(), proxy_address, cluster_name.clone(), slots, repl_meta)
                         })
                         .collect::<Vec<Node>>()
                 })

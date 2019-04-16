@@ -53,6 +53,12 @@ pub struct SlotRange {
     pub tag: SlotRangeTag,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ReplPeer {
+    pub node_address: String,
+    pub proxy_address: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Role {
     Master,
@@ -85,17 +91,37 @@ impl<'de> Deserialize<'de> for Role {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReplMeta {
+    role: Role,
+    peers: Vec<ReplPeer>,
+}
+
+impl ReplMeta {
+    pub fn new(role: Role, peers: Vec<ReplPeer>) -> Self {
+        Self { role, peers }
+    }
+
+    pub fn get_role(&self) -> Role {
+        self.role
+    }
+
+    pub fn get_peers(&self) -> &Vec<ReplPeer> {
+        &self.peers
+    }
+}
+
 // (1) In proxy, all Node instances are masters.
 // Replica Node will only be used for replication.
 // (2) Coordinator will send the master Node metadata to proxies' database module
 // and the replica Node metadata to proxies' replication module.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Node {
     address: String,
     proxy_address: String,
     cluster_name: String,
     slots: Vec<SlotRange>,
-    role: Role,
+    repl: ReplMeta,
 }
 
 impl Node {
@@ -104,14 +130,14 @@ impl Node {
         proxy_address: String,
         cluster_name: String,
         slots: Vec<SlotRange>,
-        role: Role,
+        repl: ReplMeta,
     ) -> Self {
         Node {
             address,
             proxy_address,
             cluster_name,
             slots,
-            role,
+            repl,
         }
     }
     pub fn get_address(&self) -> &String {
@@ -130,7 +156,10 @@ impl Node {
         self.slots
     }
     pub fn get_role(&self) -> Role {
-        self.role
+        self.repl.role
+    }
+    pub fn get_repl_meta(&self) -> &ReplMeta {
+        &self.repl
     }
 }
 
@@ -156,7 +185,7 @@ impl Cluster {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Host {
     address: String,
     epoch: u64,
