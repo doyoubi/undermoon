@@ -1,0 +1,98 @@
+version: '3'
+services:
+  server_proxy1:
+    container_name: server_proxy1
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/coordinator/server_proxy1.toml:/undermoon/config/server_proxy.toml
+    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    ports:
+    - "6001:6001"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    depends_on:
+    - "redis1"
+    - "redis4"
+  server_proxy2:
+    container_name: server_proxy2
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/coordinator/server_proxy2.toml:/undermoon/config/server_proxy.toml
+    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    ports:
+    - "6002:6002"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    depends_on:
+    - "redis2"
+    - "redis5"
+  server_proxy3:
+    container_name: server_proxy3
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/coordinator/server_proxy3.toml:/undermoon/config/server_proxy.toml
+    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    ports:
+    - "6003:6003"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    depends_on:
+    - "redis3"
+    - "redis6"
+
+  coordinator1:
+    container_name: coordinator1
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/coordinator/coordinator1.toml:/undermoon/config/coordinator.toml
+    command: /undermoon/target/debug/coordinator config/coordinator.toml
+    ports:
+    - "8001:8001"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    depends_on:
+    - "server_proxy1"
+    - "server_proxy2"
+    - "server_proxy3"
+    - "server_proxy4"
+    - "server_proxy5"
+    - "server_proxy6"
+
+  simple_broker:
+    image: python:3.7
+    volumes:
+    - ${PWD}/examples/coordinator/requirements.txt:/broker/requirements.txt
+    - ${PWD}/examples/coordinator/simple_broker.py:/broker/simple_broker.py
+    - ${PWD}/examples/coordinator/run_checker.sh:/broker/run_checker.sh
+    command: bash /broker/run_broker.sh 6699
+
+  redis1:
+    container_name: redis1
+    image: "redis"
+    ports:
+    - "7001:6379"
+  redis2:
+    container_name: redis2
+    image: "redis"
+    ports:
+    - "7002:6379"
+  redis3:
+    container_name: redis3
+    image: "redis"
+    ports:
+    - "7003:6379"
+  redis4:
+    container_name: redis4
+    image: "redis"
+    ports:
+    - "7004:6379"
+  redis5:
+    container_name: redis5
+    image: "redis"
+    ports:
+    - "7005:6379"
+  redis6:
+    container_name: redis6
+    image: "redis"
+    ports:
+    - "7006:6379"
