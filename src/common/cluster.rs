@@ -1,7 +1,7 @@
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SlotRangeTag {
     Migrating(String),
     Importing(String),
@@ -46,7 +46,7 @@ impl<'de> Deserialize<'de> for SlotRangeTag {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct SlotRange {
     pub start: usize,
     pub end: usize,
@@ -91,7 +91,7 @@ impl<'de> Deserialize<'de> for Role {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ReplMeta {
     role: Role,
     peers: Vec<ReplPeer>,
@@ -115,7 +115,7 @@ impl ReplMeta {
 // Replica Node will only be used for replication.
 // (2) Coordinator will send the master Node metadata to proxies' database module
 // and the replica Node metadata to proxies' replication module.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Node {
     address: String,
     proxy_address: String,
@@ -163,7 +163,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Cluster {
     name: String,
     epoch: u64,
@@ -185,7 +185,7 @@ impl Cluster {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Host {
     address: String,
     epoch: u64,
@@ -211,5 +211,129 @@ impl Host {
     }
     pub fn into_nodes(self) -> Vec<Node> {
         self.nodes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_deserialize_slot_range_tag() {
+        let importing_str = "\"importing 127.0.0.1:6379\"";
+        let slot_range: SlotRangeTag =
+            serde_json::from_str(importing_str).expect("unexpected string");
+        assert_eq!(
+            SlotRangeTag::Importing("127.0.0.1:6379".to_string()),
+            slot_range
+        );
+
+        let migrating_str = "\"migrating 127.0.0.1:6379\"";
+        let slot_range: SlotRangeTag =
+            serde_json::from_str(migrating_str).expect("unexpected string");
+        assert_eq!(
+            SlotRangeTag::Migrating("127.0.0.1:6379".to_string()),
+            slot_range
+        );
+
+        let none_str = "\"\"";
+        let slot_range: SlotRangeTag = serde_json::from_str(none_str).expect("unexpected string");
+        assert_eq!(SlotRangeTag::None, slot_range);
+    }
+
+    #[test]
+    fn test_deserialize_role() {
+        let master_str = "\"master\"";
+        let role: Role = serde_json::from_str(master_str).expect("unexpected string");
+        assert_eq!(Role::Master, role);
+
+        let replica_str = "\"replica\"";
+        let role: Role = serde_json::from_str(replica_str).expect("unexpected string");
+        assert_eq!(Role::Replica, role);
+    }
+
+    #[test]
+    fn test_deserialize_host() {
+        let host_str = r#"{
+            "address": "server_proxy1:6001",
+            "epoch": 1,
+            "nodes": [
+                {
+                    "address": "redis1:7001",
+                    "proxy_address": "server_proxy1:6001",
+                    "cluster_name": "mydb",
+                    "repl": {
+                        "role": "master",
+                        "peers": [
+                            {
+                                "node_address": "redis5:7005",
+                                "proxy_address": "server_proxy2:6002"
+                            }
+                        ]
+                    },
+                    "slots": [{"start": 0, "end": 5461, "tag": ""}]
+                },
+                {
+                    "address": "redis4:7004",
+                    "proxy_address": "server_proxy1:6001",
+                    "cluster_name": "mydb",
+                    "repl": {
+                        "role": "replica",
+                        "peers": [
+                            {
+                                "node_address": "redis3:7003",
+                                "proxy_address": "server_proxy3:6003"
+                            }
+                        ]
+                    },
+                    "slots": []
+                }
+            ]
+        }"#;
+        let host: Host = match serde_json::from_str(host_str) {
+            Ok(h) => h,
+            Err(e) => {
+                println!("### 4 {:?}", e);
+                panic!(e);
+            }
+        };
+        let expected_host = Host::new(
+            "server_proxy1:6001".to_string(),
+            1,
+            vec![
+                Node::new(
+                    "redis1:7001".to_string(),
+                    "server_proxy1:6001".to_string(),
+                    "mydb".to_string(),
+                    vec![SlotRange {
+                        start: 0,
+                        end: 5461,
+                        tag: SlotRangeTag::None,
+                    }],
+                    ReplMeta::new(
+                        Role::Master,
+                        vec![ReplPeer {
+                            node_address: "redis5:7005".to_string(),
+                            proxy_address: "server_proxy2:6002".to_string(),
+                        }],
+                    ),
+                ),
+                Node::new(
+                    "redis4:7004".to_string(),
+                    "server_proxy1:6001".to_string(),
+                    "mydb".to_string(),
+                    vec![],
+                    ReplMeta::new(
+                        Role::Replica,
+                        vec![ReplPeer {
+                            node_address: "redis3:7003".to_string(),
+                            proxy_address: "server_proxy3:6003".to_string(),
+                        }],
+                    ),
+                ),
+            ],
+        );
+        assert_eq!(expected_host, host);
     }
 }

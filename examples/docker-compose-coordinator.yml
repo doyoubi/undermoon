@@ -54,17 +54,17 @@ services:
     - "server_proxy1"
     - "server_proxy2"
     - "server_proxy3"
-    - "server_proxy4"
-    - "server_proxy5"
-    - "server_proxy6"
 
   simple_broker:
+    container_name: simple_broker
     image: python:3.7
     volumes:
     - ${PWD}/examples/coordinator/requirements.txt:/broker/requirements.txt
     - ${PWD}/examples/coordinator/simple_broker.py:/broker/simple_broker.py
-    - ${PWD}/examples/coordinator/run_checker.sh:/broker/run_checker.sh
+    - ${PWD}/examples/coordinator/run_broker.sh:/broker/run_broker.sh
     command: bash /broker/run_broker.sh 6699
+    ports:
+    - "6699:6699"
 
   redis1:
     container_name: redis1

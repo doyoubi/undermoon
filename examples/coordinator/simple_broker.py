@@ -77,8 +77,8 @@ class Node:
             'address': self.address,
             'proxy_address': self.proxy_address,
             'cluster_name': self.cluster_name,
+            'slots': [self.slots.to_dict()] if self.slots else [],
             'repl': self.repl.to_dict(),
-            'slots': [self.slots.to_dict()] if self.slots else None,
         }
 
 
@@ -127,8 +127,8 @@ def gen_meta_config(cluster_name):
         master_node = TOPO_CONFIG[master_proxy]['master']
         replica_repl = ReplMeta(REPLICA, [ReplPeer(master_node, master_proxy)])
 
-        master_slots = SlotRange(INIT_SLOTS_CONFIG[redis1][0],
-                                 INIT_SLOTS_CONFIG[redis1][1])
+        master_slots = SlotRange(INIT_SLOTS_CONFIG[master_address][0],
+                                 INIT_SLOTS_CONFIG[master_address][1])
         master = Node(master_address, proxy_address, cluster_name,
                       master_slots, master_repl)
         replica = Node(replica_address, proxy_address, cluster_name, None, replica_repl)
@@ -193,7 +193,7 @@ class MetaStore:
         return replica
 
     def get_proxies(self):
-        failed = self.get_failed_proxies().keys()
+        failed = list(self.get_failed_proxies().keys())
         if not failed:
             return self.proxies
 
@@ -230,7 +230,7 @@ class MetaStore:
 
     def get_proxy_addresses(self):
         return {
-            'addresses': self.get_proxies().keys(),
+            'addresses': list(self.get_proxies().keys()),
         }
 
     def get_proxy(self, address):
@@ -251,7 +251,7 @@ class MetaStore:
 
     def get_failures(self):
         return {
-            "addresses": self.get_failed_proxies().keys(),
+            "addresses": list(self.get_failed_proxies().keys()),
         }
 
     def replace_node(self, failed_node):
@@ -314,7 +314,10 @@ def get_proxies():
 
 @app.route('/api/hosts/address/<server_proxy_address>')
 def get_proxy(server_proxy_address):
-    return jsonify(meta_store.get_proxy(server_proxy_address))
+    proxy = meta_store.get_proxy(server_proxy_address)
+    import json
+    logger.info(json.dumps(proxy))
+    return jsonify(proxy)
 
 
 @app.route('/api/failures/<server_proxy_address>/<reporter_id>', methods=['POST'])
@@ -331,3 +334,8 @@ def get_failures():
 def replace_node():
     failed_node = request.get_json()
     return jsonify(meta_store.replace_node(failed_node))
+
+
+if __name__ == '__main__':
+    port = sys.argv[1]
+    app.run(host='0.0.0.0', port=int(port))

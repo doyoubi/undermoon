@@ -124,8 +124,8 @@ impl MetaDataBroker for HttpMetaBroker {
                         let HostPayload { host } = payload;
                         host
                     })
-                    .map_err(|e| {
-                        error!("failed to get host from json {:?}", e);
+                    .map_err(move |e| {
+                        error!("failed to get host {} from json {:?}", address, e);
                         MetaDataBrokerError::InvalidReply
                     })
             });
