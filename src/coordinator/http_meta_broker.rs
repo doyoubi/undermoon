@@ -153,7 +153,7 @@ impl MetaDataBroker for HttpMetaBroker {
             let s = stream::iter_ok(clusters);
             let f = s.map(move |cluster_name| self_clone.get_cluster(cluster_name))
                 .buffer_unordered(1000)  // try buffering all
-                .skip_while(|cluster| future::ok(cluster.is_none())).map(Option::unwrap)
+                .filter_map(|a| a)
                 .map(|cluster| {
                     let cluster_name = cluster.get_name().clone();
                     // Ignore replicas

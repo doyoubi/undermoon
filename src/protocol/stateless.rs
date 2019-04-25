@@ -205,13 +205,13 @@ mod tests {
     fn test_parse_len() {
         let r = parse_len("233\r\n".as_bytes());
         assert!(r.is_ok());
-        let (len, s) = r.unwrap();
+        let (len, s) = r.expect("test_parse_len");
         assert_eq!(s, 5);
         assert_eq!(len, 233);
 
         let r = parse_len("-233\r\n".as_bytes());
         assert!(r.is_ok());
-        let (len, s) = r.unwrap();
+        let (len, s) = r.expect("test_parse_len");
         assert_eq!(s, 6);
         assert_eq!(len, -233);
 
@@ -223,13 +223,13 @@ mod tests {
     fn test_parse_line() {
         let r = parse_line("233\r\n".as_bytes());
         assert!(r.is_ok());
-        let (b, l) = r.unwrap();
+        let (b, l) = r.expect("test_parse_line");
         assert_eq!(l, 5);
         assert_eq!(str::from_utf8(&b), Ok("233"));
 
         let r = parse_line("\r\n".as_bytes());
         assert!(r.is_ok());
-        let (b, l) = r.unwrap();
+        let (b, l) = r.expect("test_parse_line");
         assert_eq!(l, 2);
         assert_eq!(str::from_utf8(&b), Ok(""));
     }
@@ -238,13 +238,13 @@ mod tests {
     fn test_parse_bulk_str() {
         let r = parse_bulk_str("2\r\nab\r\n".as_bytes());
         assert!(r.is_ok());
-        let (content, s) = r.unwrap();
+        let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 7);
         assert_eq!(BulkStr::Str(String::from("ab").into_bytes()), content);
 
         let r = parse_bulk_str("-1\r\n".as_bytes());
         assert!(r.is_ok());
-        let (content, s) = r.unwrap();
+        let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 4);
         assert_eq!(BulkStr::Nil, content);
 
@@ -253,13 +253,13 @@ mod tests {
 
         let r = parse_bulk_str("0\r\n\r\n".as_bytes());
         assert!(r.is_ok());
-        let (content, s) = r.unwrap();
+        let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 5);
         assert_eq!(BulkStr::Str(String::from("").into_bytes()), content);
 
         let r = parse_bulk_str("1\r\na\r\n".as_bytes());
         assert!(r.is_ok());
-        let (content, s) = r.unwrap();
+        let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 6);
         assert_eq!(BulkStr::Str(String::from("a").into_bytes()), content);
 
@@ -275,7 +275,7 @@ mod tests {
     fn test_parse_array() {
         let r = parse_array("2\r\n$1\r\na\r\n$2\r\nbc\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_array");
         assert_eq!(s, 18);
         assert_eq!(
             Array::Arr(vec![
@@ -287,13 +287,13 @@ mod tests {
 
         let r = parse_array("-1\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_array");
         assert_eq!(s, 4);
         assert_eq!(Array::Nil, a);
 
         let r = parse_array("0\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_array");
         assert_eq!(s, 3);
         assert_eq!(Array::Arr(vec![]), a);
 
@@ -309,37 +309,37 @@ mod tests {
     fn test_parse_resp() {
         let r = parse_resp("*-1\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 5);
         assert_eq!(Resp::Arr(Array::Nil), a);
 
         let r = parse_resp("*0\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 4);
         assert_eq!(Resp::Arr(Array::Arr(vec![])), a);
 
         let r = parse_resp("-abc\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 6);
         assert_eq!(Resp::Error(String::from("abc").into_bytes()), a);
 
         let r = parse_resp(":233\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 6);
         assert_eq!(Resp::Integer(String::from("233").into_bytes()), a);
 
         let r = parse_resp("+233\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 6);
         assert_eq!(Resp::Simple(String::from("233").into_bytes()), a);
 
         let r = parse_resp("$3\r\nfoo\r\n".as_bytes());
         assert!(r.is_ok());
-        let (a, s) = r.unwrap();
+        let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 9);
         assert_eq!(
             Resp::Bulk(BulkStr::Str(String::from("foo").into_bytes())),

@@ -5,11 +5,16 @@ services:
     image: "undermoon"
     volumes:
     - ${PWD}/examples/coordinator/server_proxy1.toml:/undermoon/config/server_proxy.toml
-    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
+    - ${PWD}/src:/undermoon/src
+    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_proxy.sh
     ports:
     - "6001:6001"
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_BACKTRACE=full
     depends_on:
     - "redis1"
     - "redis4"
@@ -18,11 +23,16 @@ services:
     image: "undermoon"
     volumes:
     - ${PWD}/examples/coordinator/server_proxy2.toml:/undermoon/config/server_proxy.toml
-    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
+    - ${PWD}/src:/undermoon/src
+    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_proxy.sh
     ports:
     - "6002:6002"
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_BACKTRACE=full
     depends_on:
     - "redis2"
     - "redis5"
@@ -31,11 +41,16 @@ services:
     image: "undermoon"
     volumes:
     - ${PWD}/examples/coordinator/server_proxy3.toml:/undermoon/config/server_proxy.toml
-    command: /undermoon/target/debug/server_proxy config/server_proxy.toml
+    - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
+    - ${PWD}/src:/undermoon/src
+    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_proxy.sh
     ports:
     - "6003:6003"
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_BACKTRACE=full
     depends_on:
     - "redis3"
     - "redis6"
@@ -45,11 +60,16 @@ services:
     image: "undermoon"
     volumes:
     - ${PWD}/examples/coordinator/coordinator1.toml:/undermoon/config/coordinator.toml
-    command: /undermoon/target/debug/coordinator config/coordinator.toml
+    - ${PWD}/examples/run_coordinator.sh:/undermoon/run_coordinator.sh
+    - ${PWD}/src:/undermoon/src
+    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_coordinator.sh
     ports:
     - "8001:8001"
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_BACKTRACE=full
     depends_on:
     - "server_proxy1"
     - "server_proxy2"

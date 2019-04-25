@@ -185,8 +185,14 @@ mod tests {
 
     #[test]
     fn test_bytes_to_int() {
-        assert_eq!(233, bytes_to_int("233".as_bytes()).unwrap());
-        assert_eq!(-233, bytes_to_int("-233".as_bytes()).unwrap());
+        assert_eq!(
+            233,
+            bytes_to_int("233".as_bytes()).expect("test_bytes_to_int")
+        );
+        assert_eq!(
+            -233,
+            bytes_to_int("-233".as_bytes()).expect("test_bytes_to_int")
+        );
         assert!(bytes_to_int("233a".as_bytes()).is_err())
     }
 
@@ -195,13 +201,13 @@ mod tests {
         let c = io::Cursor::new("233\r\n".as_bytes());
         let r = decode_len(c).wait();
         assert!(r.is_ok());
-        let (_, l) = r.unwrap();
+        let (_, l) = r.expect("test_decode_len");
         assert_eq!(l, 233);
 
         let c = io::Cursor::new("-233\r\n".as_bytes());
         let r = decode_len(c).wait();
         assert!(r.is_ok());
-        let (_, l) = r.unwrap();
+        let (_, l) = r.expect("test_decode_len");
         assert_eq!(l, -233);
 
         let c = io::Cursor::new("2a3\r\n".as_bytes());
@@ -214,13 +220,13 @@ mod tests {
         let c = io::Cursor::new("2\r\nab\r\n".as_bytes());
         let r = decode_bulk_str(c).wait();
         assert!(r.is_ok());
-        let (_, s) = r.unwrap();
+        let (_, s) = r.expect("test_decode_bulk_str");
         assert_eq!(BulkStr::Str(String::from("ab").into_bytes()), s);
 
         let c = io::Cursor::new("-1\r\n".as_bytes());
         let r = decode_bulk_str(c).wait();
         assert!(r.is_ok());
-        let (_, s) = r.unwrap();
+        let (_, s) = r.expect("test_decode_bulk_str");
         assert_eq!(BulkStr::Nil, s);
 
         let c = io::Cursor::new("2a3\r\nab\r\n".as_bytes());
@@ -230,7 +236,7 @@ mod tests {
         let c = io::Cursor::new("0\r\n\r\n".as_bytes());
         let r = decode_bulk_str(c).wait();
         assert!(r.is_ok());
-        let (_, s) = r.unwrap();
+        let (_, s) = r.expect("test_decode_bulk_str");
         assert_eq!(BulkStr::Str(String::from("").into_bytes()), s);
 
         let c = io::Cursor::new("1\r\na\r\n".as_bytes());
@@ -251,13 +257,13 @@ mod tests {
         let c = io::Cursor::new("233\r\n".as_bytes());
         let r = decode_line(c).wait();
         assert!(r.is_ok());
-        let (_, l) = r.unwrap();
+        let (_, l) = r.expect("test_decode_line");
         assert_eq!(str::from_utf8(&l[..]), Ok("233"));
 
         let c = io::Cursor::new("-233\r\n".as_bytes());
         let r = decode_line(c).wait();
         assert!(r.is_ok());
-        let (_, l) = r.unwrap();
+        let (_, l) = r.expect("test_decode_line");
         assert_eq!(str::from_utf8(&l[..]), Ok("-233"));
     }
 
@@ -266,7 +272,7 @@ mod tests {
         let c = io::Cursor::new("2\r\n$1\r\na\r\n$2\r\nbc\r\n".as_bytes());
         let r = decode_array(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_array");
         assert_eq!(
             Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str(String::from("a").into_bytes())),
@@ -278,13 +284,13 @@ mod tests {
         let c = io::Cursor::new("-1\r\n".as_bytes());
         let r = decode_array(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_array");
         assert_eq!(Array::Nil, a);
 
         let c = io::Cursor::new("0\r\n".as_bytes());
         let r = decode_array(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_array");
         assert_eq!(Array::Arr(vec![]), a);
 
         let c = io::Cursor::new("1\r\n$2\r\na\r\n".as_bytes());
@@ -301,37 +307,37 @@ mod tests {
         let c = io::Cursor::new("*-1\r\n".as_bytes());
         let r = decode_resp(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_resp");
         assert_eq!(Resp::Arr(Array::Nil), a);
 
         let c = io::Cursor::new("*0\r\n".as_bytes());
         let r = decode_resp(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_resp");
         assert_eq!(Resp::Arr(Array::Arr(vec![])), a);
 
         let c = io::Cursor::new("-abc\r\n".as_bytes());
         let r = decode_resp(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_resp");
         assert_eq!(Resp::Error(String::from("abc").into_bytes()), a);
 
         let c = io::Cursor::new(":233\r\n".as_bytes());
         let r = decode_resp(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_resp");
         assert_eq!(Resp::Integer(String::from("233").into_bytes()), a);
 
         let c = io::Cursor::new("+233\r\n".as_bytes());
         let r = decode_resp(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_resp");
         assert_eq!(Resp::Simple(String::from("233").into_bytes()), a);
 
         let c = io::Cursor::new("$3\r\nfoo\r\n".as_bytes());
         let r = decode_resp(c).wait();
         assert!(r.is_ok());
-        let (_, a) = r.unwrap();
+        let (_, a) = r.expect("test_decode_resp");
         assert_eq!(
             Resp::Bulk(BulkStr::Str(String::from("foo").into_bytes())),
             a

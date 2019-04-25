@@ -83,12 +83,12 @@ class Node:
 
 
 def gen_meta_config(cluster_name):
-    redis1 = 'redis1:7001'
-    redis2 = 'redis2:7002'
-    redis3 = 'redis3:7003'
-    redis4 = 'redis4:7004'
-    redis5 = 'redis5:7005'
-    redis6 = 'redis6:7006'
+    redis1 = 'redis1:6379'
+    redis2 = 'redis2:6379'
+    redis3 = 'redis3:6379'
+    redis4 = 'redis4:6379'
+    redis5 = 'redis5:6379'
+    redis6 = 'redis6:6379'
     proxy1 = 'server_proxy1:6001'
     proxy2 = 'server_proxy2:6002'
     proxy3 = 'server_proxy3:6003'

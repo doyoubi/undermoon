@@ -49,7 +49,9 @@ fn main() {
 
     let config = gen_conf();
 
-    let http_client = request_async::ClientBuilder::new().build().unwrap();
+    let http_client = request_async::ClientBuilder::new()
+        .build()
+        .expect("request_async_client");
     let data_broker = HttpMetaBroker::new(config.broker_address.clone(), http_client.clone());
     let mani_broker = HttpMetaManipulationBroker::new(config.broker_address.clone(), http_client);
 

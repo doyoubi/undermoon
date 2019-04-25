@@ -11,7 +11,7 @@ pub fn command_to_buf(buf: &mut Vec<u8>, command: Vec<BinSafeStr>) {
 }
 
 pub fn resp_to_buf(buf: &mut Vec<u8>, resp: &Resp) {
-    encode_resp(buf, resp).unwrap();
+    encode_resp(buf, resp).expect("resp_to_buf"); // TODO: remove expect
 }
 
 pub fn encode_resp<W>(writer: &mut W, resp: &Resp) -> io::Result<usize>
