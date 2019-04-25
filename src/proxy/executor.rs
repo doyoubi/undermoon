@@ -2,11 +2,11 @@ use super::backend::{
     CachedSenderFactory, CmdTask, RRSenderGroupFactory, RecoverableBackendNodeFactory,
 };
 use super::command::CmdType;
-use super::database::{DBTag, DatabaseMap};
+use super::database::{DBError, DBTag, DatabaseMap};
 use super::session::{CmdCtx, CmdCtxHandler};
 use caseless;
 use common::db::HostDBMap;
-use common::utils::ThreadSafe;
+use common::utils::{ThreadSafe, OLD_EPOCH_REPLY};
 use protocol::{Array, BulkStr, RedisClientFactory, Resp};
 use replication::manager::ReplicatorManager;
 use replication::replicator::ReplicatorMeta;
@@ -152,6 +152,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_setpeer(cmd_ctx);
         } else if sub_cmd.eq("SETREPL") {
             self.handle_umctl_setrepl(cmd_ctx);
+        } else if sub_cmd.eq("INFOREPL") {
+            self.handle_umctl_info_repl(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -178,7 +180,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
             Err(e) => {
                 debug!("Failed to update local meta data {:?}", e);
-                cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+                match e {
+                    DBError::OldEpoch => cmd_ctx
+                        .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
+                }
             }
         }
     }
@@ -227,6 +232,11 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
             }
         }
+    }
+
+    fn handle_umctl_info_repl(&self, cmd_ctx: CmdCtx) {
+        let report = self.replicator_manager.get_metadata_report();
+        cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(report.into_bytes()))));
     }
 }
 

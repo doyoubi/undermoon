@@ -1,7 +1,7 @@
 import sys
 import time
-from copy import deepcopy
 import logging
+from copy import deepcopy
 
 import redis
 from flask import Flask, jsonify, request
@@ -194,8 +194,9 @@ class MetaStore:
 
     def get_proxies(self):
         failed = list(self.get_failed_proxies().keys())
-        if not failed:
-            return self.proxies
+        logger.info('failed {} replaced_master {}'.format(failed, self.replaced_master))
+        if not failed or not self.replaced_master:
+            return deepcopy(self.proxies)
 
         if len(failed) > 1:
             raise BrokerError('cluster is down')
@@ -238,11 +239,12 @@ class MetaStore:
         if proxy is None:
             return {'host': None}
 
+        logger.info('get_proxy epoch %d %s', self.epoch, self.replaced_master)
         return {
-            "host": {
-                "address": address,
-                "epoch": self.epoch,
-                "nodes": [proxy['master'].to_dict(), proxy['replica'].to_dict()]
+            'host': {
+                'address': address,
+                'epoch': self.epoch,
+                'nodes': [proxy['master'].to_dict(), proxy['replica'].to_dict()]
             }
         }
 
@@ -291,6 +293,7 @@ class MetaStore:
 
         self.replaced_master.add(node_address)
         self.epoch += 1
+        logger.info('successfully replace node %s', node_address)
         return self.get_replaced_node(proxy_address).to_dict()
 
 
@@ -315,8 +318,6 @@ def get_proxies():
 @app.route('/api/hosts/address/<server_proxy_address>')
 def get_proxy(server_proxy_address):
     proxy = meta_store.get_proxy(server_proxy_address)
-    import json
-    logger.info(json.dumps(proxy))
     return jsonify(proxy)
 
 
@@ -332,6 +333,7 @@ def get_failures():
 
 @app.route('/api/clusters/nodes', methods=['PUT'])
 def replace_node():
+    logger.info('replace_node %s', request.get_json())
     failed_node = request.get_json()
     return jsonify(meta_store.replace_node(failed_node))
 

@@ -1,6 +1,7 @@
 use super::decoder::{decode_resp, DecodeError};
 use super::encoder::command_to_buf;
 use super::resp::{BinSafeStr, Resp};
+use atomic_option::AtomicOption;
 use chashmap::CHashMap;
 use common::utils::{revolve_first_address, ThreadSafe};
 use crossbeam_channel;
@@ -8,6 +9,7 @@ use futures::{future, Future};
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{write_all, AsyncRead, ReadHalf, WriteHalf};
@@ -234,19 +236,27 @@ impl RedisClientFactory for PooledRedisClientFactory {
         address: String,
     ) -> Box<dyn Future<Item = Self::Client, Error = RedisClientError> + Send + 'static> {
         let mut existing_conn: Option<RedisClientConnectionHandle> = None;
-        let mut new_reclaim_sender: Option<Arc<_>> = None;
+        let new_reclaim_sender: AtomicOption<Arc<_>> = AtomicOption::empty();
 
         self.pool_map.upsert(
             address.clone(),
             || {
                 let pool = Pool::new(self.capacity);
-                new_reclaim_sender = Some(pool.get_reclaim_sender());
+                new_reclaim_sender
+                    .replace(Some(Box::new(pool.get_reclaim_sender())), Ordering::SeqCst);
                 pool
             },
-            |pool| match pool.get() {
-                Ok(Some(conn_handle)) => existing_conn = Some(conn_handle),
-                Ok(None) => (),
-                Err(()) => *pool = Pool::new(self.capacity),
+            |pool| {
+                match pool.get() {
+                    Ok(Some(conn_handle)) => {
+                        existing_conn = Some(conn_handle);
+                        return;
+                    }
+                    Ok(None) => (),
+                    Err(()) => *pool = Pool::new(self.capacity),
+                };
+                new_reclaim_sender
+                    .replace(Some(Box::new(pool.get_reclaim_sender())), Ordering::SeqCst);
             },
         );
 
@@ -259,11 +269,11 @@ impl RedisClientFactory for PooledRedisClientFactory {
 
         let timeout = self.timeout;
 
-        match new_reclaim_sender.take() {
+        match new_reclaim_sender.take(Ordering::SeqCst) {
             Some(reclaim_sender) => Box::new(self.create_conn(address).map(move |conn| {
                 let conn_handle = PoolItemHandle {
                     item: conn,
-                    reclaim_sender,
+                    reclaim_sender: *reclaim_sender,
                 };
                 PooledRedisClient::new(conn_handle, timeout)
             })),
