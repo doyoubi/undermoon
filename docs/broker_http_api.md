@@ -27,6 +27,13 @@ If the cluster exists:
             "address": "127.0.0.1:7001",
             "proxy_address": "127.0.0.1:6001",
             "cluster_name": "cluster_name1",
+            "repl": {
+                "role": "master",
+                "peers": [{
+                    "node_address": "127.0.0.1:7002",
+                    "proxy_address": "127.0.0.1:7003",
+                }...]
+            },
             "slots": [{
                 "start": 0,
                 "end": 5000,
@@ -62,6 +69,13 @@ If the host(or proxy) exists:
             "address": "127.0.0.1:7001",
             "proxy_address": "127.0.0.1:6001",
             "cluster_name": "cluster_name1",
+            "repl": {
+                "role": "master",
+                "peers": [{
+                    "node_address": "127.0.0.1:7002",
+                    "proxy_address": "127.0.0.1:7003",
+                }...]
+            },
             "slots": [{
                 "start": 0,
                 "end": 5000,
@@ -100,6 +114,13 @@ Request:
         "address": "127.0.0.1:7001",
         "proxy_address": "127.0.0.1:6001",
         "cluster_name": "cluster_name1",
+        "repl": {
+            "role": "master",
+            "peers": [{
+                "node_address": "127.0.0.1:7002",
+                "proxy_address": "127.0.0.1:7003",
+            }...]
+        },
         "slots": [{
             "start": 0,
             "end": 5000,

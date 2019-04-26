@@ -17,7 +17,9 @@ fn main() {
     env_logger::init();
 
     let proxy_address = "127.0.0.1:7799";
-    let client = request_async::ClientBuilder::new().build().unwrap();
+    let client = request_async::ClientBuilder::new()
+        .build()
+        .expect("test_http_broker");
     let broker = HttpMetaBroker::new(proxy_address.to_string(), client);
     let fut = join_all(vec![
         test_get_cluster_names(broker.clone()),

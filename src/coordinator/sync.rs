@@ -2,6 +2,7 @@ use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
 use common::cluster::{Host, Role, SlotRange};
 use common::db::{DBMapFlags, HostDBMap};
+use common::utils::OLD_EPOCH_REPLY;
 use futures::{future, Future};
 use protocol::{RedisClient, RedisClientFactory, Resp};
 use replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
@@ -25,26 +26,41 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
             .client_factory
             .create_client(address)
             .map_err(CoordinateError::Redis);
-        let host_clone = host.clone();
+        let host_with_only_masters = filter_host_masters(host.clone());
         Box::new(
             client_fut
                 .and_then(|client| {
                     send_meta(
                         client,
                         "SETDB".to_string(),
-                        generate_host_meta_cmd_args(host, DBMapFlags { force: false }),
+                        generate_host_meta_cmd_args(
+                            host_with_only_masters,
+                            DBMapFlags { force: false },
+                        ),
                     )
                     .and_then(move |client| {
                         send_meta(
                             client,
                             "SETREPL".to_string(),
-                            generate_repl_meta_cmd_args(host_clone, DBMapFlags { force: false }),
+                            generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
                         )
                     })
                 })
                 .map(|_| ()),
         )
     }
+}
+
+fn filter_host_masters(host: Host) -> Host {
+    let address = host.get_address().clone();
+    let epoch = host.get_epoch();
+    let masters = host
+        .into_nodes()
+        .into_iter()
+        .filter(|node| node.get_role() == Role::Master)
+        .collect();
+
+    Host::new(address, epoch, masters)
 }
 
 pub struct PeerMetaRespSender<F: RedisClientFactory> {
@@ -83,18 +99,6 @@ impl<B: MetaDataBroker> LocalMetaRetriever<B> {
     pub fn new(broker: B) -> Self {
         Self { broker }
     }
-
-    fn filter_host_masters(host: Host) -> Host {
-        let address = host.get_address().clone();
-        let epoch = host.get_epoch();
-        let masters = host
-            .into_nodes()
-            .into_iter()
-            .filter(|node| node.get_role() == Role::Master)
-            .collect();
-
-        Host::new(address, epoch, masters)
-    }
 }
 
 impl<B: MetaDataBroker> HostMetaRetriever for LocalMetaRetriever<B> {
@@ -105,8 +109,7 @@ impl<B: MetaDataBroker> HostMetaRetriever for LocalMetaRetriever<B> {
         Box::new(
             self.broker
                 .get_host(address)
-                .map_err(CoordinateError::MetaData)
-                .map(|host| host.map(Self::filter_host_masters)),
+                .map_err(CoordinateError::MetaData),
         )
     }
 }
@@ -166,8 +169,12 @@ fn send_meta<C: RedisClient>(
         })
         .and_then(move |(client, resp)| match resp {
             Resp::Error(err_str) => {
-                error!("failed to send meta, invalid reply {:?}", err_str);
-                future::err(CoordinateError::InvalidReply)
+                if err_str == OLD_EPOCH_REPLY.as_bytes() {
+                    future::ok(client)
+                } else {
+                    error!("failed to send meta, invalid reply {:?}", err_str);
+                    future::err(CoordinateError::InvalidReply)
+                }
             }
             reply => {
                 debug!("Successfully set meta {} {:?}", sub_command, reply);

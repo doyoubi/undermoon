@@ -206,6 +206,15 @@ You can implement this HTTP broker yourself and there's a working in progress [G
 
 ![architecture](docs/architecture.svg)
 
+Here's an example for Coordinator working with a simple [Python HTTP Broker](examples/coordinator/simple_broker.py).
+
+```bash
+$ make docker-coordinator
+```
+
+Note that this example also supports replica for backing up your data. For simplicity, `CLUSTER NODES` does not show you the replica nodes.
+You can find them via `UMCTL INFOREPL`.
+
 ## API
 ### Server-side Proxy Commands
 #### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]
@@ -234,6 +243,14 @@ Note that both these two commands set all the `local` or `peer` meta data of the
 For example, you can't add multiple backend redis instances one by one by sending multiple `UMCTL SETDB`.
 You should batch them in just one `UMCTL SETDB`.
 
+#### UMCTL SETREPL epoch flags [[master|replica] dbname1 node_ip:node_port peer_num [peer_node_ip:peer_node_port peer_proxy_ip:peer_proxy_port]...] ...
+
+Sets the replication metadata to server-side proxies. This API supports multiple replicas for a master and also multiple masters for a replica.
+
+- For master `node_ip:node_port` is the master node. For replica it's replica node.
+- `peer_node_ip:peer_node_port` is the node port of the corresponding master if we're sending this to a replica, and vice versa.
+- `peer_proxy_ip:peer_proxy_port` is similar.
+
 ### HTTP Broker API
 Refer to [HTTP API documentation](./docs/broker_http_api.md).
 
@@ -251,7 +268,7 @@ There're two big features needed:
 - ~~Implement AUTH command to select database~~ (done)
 - ~~Implement meta data manipulation api~~ (done)
 - ~~Basic coordinator implementation~~ (done)
-- Implement Redis Replication Protocol
+- ~~Implement Redis Replication Protocol~~ (just use redis replication directly)
 - Support slot migration via replication
 - ~~Optimize RESP parsing~~ (done)
 - ~~Implement CLUSTER SLOTS~~ (done)

@@ -27,3 +27,5 @@ pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
         }
     }
 }
+
+pub const OLD_EPOCH_REPLY: &str = "old_epoch";

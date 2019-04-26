@@ -158,7 +158,7 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
 
         let client_fut = self
             .client_factory
-            .create_client(master_node_address.clone());
+            .create_client(self.meta.replica_node_address.clone());
         let interval = Duration::new(5, 0);
         let cmd = vec!["SLAVEOF".to_string(), host, port];
         let send_fut = client_fut.and_then(move |client| keep_sending_cmd(client, cmd, interval));
@@ -212,7 +212,7 @@ fn keep_sending_cmd<C: RedisClient>(
         .fold(client, move |client, ()| {
             let byte_cmd = cmd.iter().map(|s| s.clone().into_bytes()).collect();
             let delay = Delay::new(interval).map_err(RedisClientError::Io);
-            // debug!("sending {:?}", cmd);
+            // debug!("sending repl cmd {:?}", cmd);
             let exec_fut = client
                 .execute(byte_cmd)
                 .map_err(|e| {

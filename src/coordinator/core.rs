@@ -67,8 +67,7 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
                 .retrieve_proxies()
                 .map(move |address| checker.check(address))
                 .buffer_unordered(10)
-                .skip_while(|address| future::ok(address.is_none()))
-                .map(Option::unwrap)
+                .filter_map(|a| a)
                 .and_then(move |address| {
                     reporter.report(address).then(|res| {
                         if let Err(e) = res {
@@ -218,8 +217,7 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynch
                 .retrieve_proxies()
                 .map(move |address| meta_retriever.get_host_meta(address))
                 .buffer_unordered(10)
-                .skip_while(|host| future::ok(host.is_none()))
-                .map(Option::unwrap)
+                .filter_map(|a| a)
                 .and_then(move |host| {
                     sender.send_meta(host).then(|res| {
                         if let Err(e) = res {
@@ -276,7 +274,10 @@ mod tests {
     }
 
     fn check<C: FailureChecker>(checker: C) {
-        checker.check("".to_string()).wait().unwrap();
+        checker
+            .check("".to_string())
+            .wait()
+            .expect("test_failure_checker");
     }
 
     #[test]

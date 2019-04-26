@@ -1,5 +1,7 @@
 use super::redis_replicator::{RedisMasterReplicator, RedisReplicaReplicator};
-use super::replicator::{MasterReplicator, ReplicaReplicator, ReplicatorMeta};
+use super::replicator::{
+    MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorMeta,
+};
 use futures::Future;
 use itertools::Either;
 use protocol::RedisClientFactory;
@@ -136,5 +138,69 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
             *replicators = (epoch, new_replicators);
         }
         Ok(())
+    }
+
+    pub fn get_metadata(&self) -> (Vec<MasterMeta>, Vec<ReplicaMeta>) {
+        let mut master_metadata = Vec::new();
+        let mut replica_metadata = Vec::new();
+
+        let replicators = self.replicators.read().unwrap();
+        for (_key, replicator) in replicators.1.iter() {
+            match replicator {
+                Either::Left(master) => {
+                    let meta = master.get_meta().clone();
+                    master_metadata.push(meta);
+                }
+                Either::Right(replica) => {
+                    let meta = replica.get_meta().clone();
+                    replica_metadata.push(meta);
+                }
+            }
+        }
+
+        (master_metadata, replica_metadata)
+    }
+
+    pub fn get_metadata_report(&self) -> String {
+        let (master_metadata, replica_metadata) = self.get_metadata();
+
+        let mut report = String::new();
+
+        for meta in master_metadata.into_iter() {
+            let MasterMeta {
+                db_name,
+                master_node_address,
+                replicas,
+            } = meta;
+            report.push_str(&format!("db:{}\n", db_name));
+            report.push_str("role:master\n");
+            report.push_str(&format!("node_address:{}\n", master_node_address));
+            for replica in replicas.into_iter() {
+                report.push_str(&format!(
+                    "replica:{}@{}\n",
+                    replica.node_address, replica.proxy_address
+                ));
+            }
+            report.push('\n');
+        }
+        for meta in replica_metadata.into_iter() {
+            let ReplicaMeta {
+                db_name,
+                replica_node_address,
+                masters,
+            } = meta;
+            report.push_str(&format!("db:{}\n", db_name));
+            report.push_str("role:replica\n");
+            report.push_str(&format!("node_address:{}\n", replica_node_address));
+            for master in masters.into_iter() {
+                report.push_str(&format!(
+                    "master:{}@{}\n",
+                    master.node_address, master.proxy_address
+                ));
+            }
+            report.push('\n');
+        }
+
+        report
     }
 }

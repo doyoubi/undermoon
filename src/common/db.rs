@@ -205,7 +205,7 @@ mod tests {
             .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let host_db_map = r.unwrap();
+        let host_db_map = r.expect("test_single_db");
         assert_eq!(host_db_map.epoch, 233);
         assert_eq!(host_db_map.flags, DBMapFlags { force: true });
         assert_eq!(host_db_map.db_map.len(), 1);
@@ -228,18 +228,25 @@ mod tests {
         .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let host_db_map = r.unwrap();
+        let host_db_map = r.expect("test_multiple_slots");
         assert_eq!(host_db_map.epoch, 233);
         assert_eq!(host_db_map.flags, DBMapFlags { force: false });
         assert_eq!(host_db_map.db_map.len(), 1);
-        assert_eq!(host_db_map.db_map.get("dbname").unwrap().len(), 1);
         assert_eq!(
             host_db_map
                 .db_map
                 .get("dbname")
-                .unwrap()
+                .expect("test_multiple_slots")
+                .len(),
+            1
+        );
+        assert_eq!(
+            host_db_map
+                .db_map
+                .get("dbname")
+                .expect("test_multiple_slots")
                 .get("127.0.0.1:6379")
-                .unwrap()
+                .expect("test_multiple_slots")
                 .len(),
             2
         );
@@ -262,18 +269,25 @@ mod tests {
         .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let host_db_map = r.unwrap();
+        let host_db_map = r.expect("test_multiple_nodes");
         assert_eq!(host_db_map.epoch, 233);
         assert_eq!(host_db_map.flags, DBMapFlags { force: false });
         assert_eq!(host_db_map.db_map.len(), 1);
-        assert_eq!(host_db_map.db_map.get("dbname").unwrap().len(), 2);
         assert_eq!(
             host_db_map
                 .db_map
                 .get("dbname")
-                .unwrap()
+                .expect("test_multiple_nodes")
+                .len(),
+            2
+        );
+        assert_eq!(
+            host_db_map
+                .db_map
+                .get("dbname")
+                .expect("test_multiple_nodes")
                 .get("127.0.0.1:7000")
-                .unwrap()
+                .expect("test_multiple_nodes")
                 .len(),
             1
         );
@@ -281,9 +295,9 @@ mod tests {
             host_db_map
                 .db_map
                 .get("dbname")
-                .unwrap()
+                .expect("test_multiple_nodes")
                 .get("127.0.0.1:7001")
-                .unwrap()
+                .expect("test_multiple_nodes")
                 .len(),
             1
         );
@@ -309,18 +323,25 @@ mod tests {
         .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let host_db_map = r.unwrap();
+        let host_db_map = r.expect("test_multiple_db");
         assert_eq!(host_db_map.epoch, 233);
         assert_eq!(host_db_map.flags, DBMapFlags { force: false });
         assert_eq!(host_db_map.db_map.len(), 2);
-        assert_eq!(host_db_map.db_map.get("dbname").unwrap().len(), 2);
         assert_eq!(
             host_db_map
                 .db_map
                 .get("dbname")
-                .unwrap()
+                .expect("test_multiple_db")
+                .len(),
+            2
+        );
+        assert_eq!(
+            host_db_map
+                .db_map
+                .get("dbname")
+                .expect("test_multiple_db")
                 .get("127.0.0.1:7000")
-                .unwrap()
+                .expect("test_multiple_db")
                 .len(),
             1
         );
@@ -328,20 +349,27 @@ mod tests {
             host_db_map
                 .db_map
                 .get("dbname")
-                .unwrap()
+                .expect("test_multiple_db")
                 .get("127.0.0.1:7001")
-                .unwrap()
+                .expect("test_multiple_db")
                 .len(),
             1
         );
-        assert_eq!(host_db_map.db_map.get("another_db").unwrap().len(), 1);
         assert_eq!(
             host_db_map
                 .db_map
                 .get("another_db")
-                .unwrap()
+                .expect("test_multiple_nodes")
+                .len(),
+            1
+        );
+        assert_eq!(
+            host_db_map
+                .db_map
+                .get("another_db")
+                .expect("test_multiple_db")
                 .get("127.0.0.1:7002")
-                .unwrap()
+                .expect("test_multiple_db")
                 .len(),
             1
         );
@@ -368,7 +396,7 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
         let r = HostDBMap::parse(&mut it);
-        let host_db_map = r.unwrap();
+        let host_db_map = r.expect("test_to_map");
 
         let db_map = HostDBMap::new(host_db_map.epoch, host_db_map.flags, host_db_map.db_map);
         let mut args = db_map.db_map_to_args();

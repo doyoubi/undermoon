@@ -284,12 +284,13 @@ where
                 error!("backend: unexpected read");
                 BackendError::Canceled
             })
-            .and_then(|(task_opt, rx)| {
-                // TODO: remove this unwrap
-                let task = task_opt.unwrap();
-                task.set_result(Ok(packet));
-                // TODO: call handler
-                future::ok((handler, rx.into_future()))
+            .and_then(|(task_opt, rx)| match task_opt {
+                Some(task) => {
+                    task.set_result(Ok(packet));
+                    // TODO: call handler
+                    future::ok((handler, rx.into_future()))
+                }
+                None => future::err(BackendError::Canceled),
             })
         })
         .map(|_| ())

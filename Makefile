@@ -1,6 +1,9 @@
 build:
 	cargo build
 
+test:
+	cargo test
+
 lint:
 	find src -name "*.rs" | xargs rustup run stable rustfmt
 	cargo clippy
@@ -32,5 +35,8 @@ docker-multi-shard:
 docker-failover:
 	docker-compose -f examples/docker-compose-multi-shard.yml -f examples/docker-compose-failover.yml up
 
-.PHONY: build server coord
+docker-coordinator:
+	docker-compose -f examples/docker-compose-coordinator.yml up
+
+.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-coordinator
 

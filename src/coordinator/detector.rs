@@ -181,7 +181,10 @@ mod tests {
             address: String,
             _reporter_id: String,
         ) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> {
-            self.reported_failures.lock().unwrap().push(address);
+            self.reported_failures
+                .lock()
+                .expect("dummy_add_failure")
+                .push(address);
             Box::new(future::ok(()))
         }
         fn get_failures(
@@ -200,7 +203,11 @@ mod tests {
         let detector = SeqFailureDetector::new(retriever, checker, reporter);
         let res = detector.run().into_future().wait();
         assert!(res.is_ok());
-        let failed_nodes = broker.reported_failures.lock().unwrap().clone();
+        let failed_nodes = broker
+            .reported_failures
+            .lock()
+            .expect("test_detector")
+            .clone();
         assert_eq!(1, failed_nodes.len());
         assert_eq!(NODE2, failed_nodes[0]);
     }
