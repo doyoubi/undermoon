@@ -65,8 +65,23 @@ services:
     - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
     - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
     command: bash /undermoon/run_coordinator.sh
-    ports:
-    - "8001:8001"
+    environment:
+    - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_BACKTRACE=full
+    depends_on:
+    - "server_proxy1"
+    - "server_proxy2"
+    - "server_proxy3"
+  coordinator2:
+    container_name: coordinator2
+    image: "undermoon"
+    volumes:
+    - ${PWD}/examples/coordinator/coordinator2.toml:/undermoon/config/coordinator.toml
+    - ${PWD}/examples/run_coordinator.sh:/undermoon/run_coordinator.sh
+    - ${PWD}/src:/undermoon/src
+    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_coordinator.sh
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
     - RUST_BACKTRACE=full

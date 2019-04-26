@@ -206,7 +206,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
             Err(e) => {
                 debug!("Failed to update peer meta data {:?}", e);
-                cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+                match e {
+                    DBError::OldEpoch => cmd_ctx
+                        .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
+                }
             }
         }
     }
@@ -229,7 +232,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
             Err(e) => {
                 debug!("Failed to update replicator meta data {:?}", e);
-                cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{}", e).into_bytes())))
+                match e {
+                    DBError::OldEpoch => cmd_ctx
+                        .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
+                }
             }
         }
     }

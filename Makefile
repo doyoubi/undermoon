@@ -38,5 +38,5 @@ docker-failover:
 docker-coordinator:
 	docker-compose -f examples/docker-compose-coordinator.yml up
 
-.PHONY: build test server coord
+.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-coordinator
 
