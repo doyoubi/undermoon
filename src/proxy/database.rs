@@ -193,6 +193,9 @@ where
     }
 }
 
+// We combine the nodes and slot_map to let them fit into
+// the same lock with a smaller critical section
+// compared to the one we need if splitting them.
 struct LocalDB<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
