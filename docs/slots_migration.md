@@ -46,3 +46,16 @@ Proxy A sets the new metadata and stop the migration process.
 
 ### (11) Proxy B cleanup the migration.
 Proxy B sets the new metadata and stop the replication.
+
+## Notices
+- When broker replace nodes with importing flags, it should also change the corresponding nodes with migration flags.
+- Every migration task should be associated with the epoch at which it starts. This epoch should also be stored inside the migrating and importing metadata transferred to proxies.
+- Migrating meta should contains
+  - epoch
+  - cluster(db name)
+  - src proxy address
+  - src node address
+  - dst proxy address
+  - dst node address
+  - slot ranges
+ 
