@@ -1,8 +1,7 @@
-use common::cluster::SlotRange;
+use ::common::cluster::SlotRange;
+use ::common::utils::SLOT_NUM;
 use crc16::{State, XMODEM};
 use std::collections::HashMap;
-
-pub const SLOT_NUM: usize = 16384;
 
 pub struct SlotMap {
     data: SlotMapData,

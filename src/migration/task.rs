@@ -7,27 +7,14 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct MigrationTaskKey {
-    db_name: String,
-    slot_range_start: usize,
-    slot_range_end: usize,
-}
-
-#[derive(Debug)]
 pub struct MigrationTaskMeta {
-    epoch: u64,
     db_name: String,
-    src_node_address: String,
-    src_proxy_address: String,
-    dst_node_address: String,
-    dst_proxy_address: String,
     slot_range: SlotRange,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MigrationState {
     TransferringData = 0,
     SwitchStarted = 1,

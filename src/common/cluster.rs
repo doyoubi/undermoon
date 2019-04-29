@@ -1,49 +1,20 @@
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct MigrationMeta {
+    pub epoch: u64, // The epoch migration starts
+    pub src_proxy_address: String,
+    pub src_node_address: String,
+    pub dst_proxy_address: String,
+    pub dst_node_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum SlotRangeTag {
-    Migrating(String),
-    Importing(String),
+    Migrating(MigrationMeta),
+    Importing(MigrationMeta),
     None,
-}
-
-impl Serialize for SlotRangeTag {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let tag = match self {
-            SlotRangeTag::Migrating(dst) => format!("migrating {}", dst),
-            SlotRangeTag::Importing(src) => format!("importing {}", src),
-            SlotRangeTag::None => String::new(),
-        };
-        serializer.serialize_str(&tag)
-    }
-}
-
-impl<'de> Deserialize<'de> for SlotRangeTag {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let mut segs = s.split_terminator(' ');
-        let flag = match segs.next() {
-            None => return Ok(SlotRangeTag::None),
-            Some(flag) => flag.to_lowercase(),
-        };
-        let peer = segs
-            .next()
-            .ok_or_else(|| D::Error::custom("Missing peer address"))?;
-        if flag == "migrating" {
-            Ok(SlotRangeTag::Migrating(peer.to_string()))
-        } else if flag == "importing" {
-            Ok(SlotRangeTag::Importing(peer.to_string()))
-        } else {
-            Err(D::Error::custom("Invalid flag"))
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

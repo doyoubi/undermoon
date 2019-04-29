@@ -1,9 +1,9 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
-use super::command::get_key;
 use super::slot::SlotMap;
 use common::cluster::SlotRange;
 use common::db::HostDBMap;
+use common::utils::get_key;
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::error::Error;
@@ -191,6 +191,8 @@ where
         local.append(&mut remote);
         Ok(Resp::Arr(Array::Arr(local)))
     }
+
+    pub fn add_redirection(&self) {}
 }
 
 // We combine the nodes and slot_map to let them fit into
@@ -344,6 +346,7 @@ pub enum DBSendError<T: CmdTask> {
     SlotNotFound(T),
     SlotNotCovered,
     Backend(BackendError),
+    MigrationQueueError,
 }
 
 impl<T: CmdTask> fmt::Display for DBSendError<T> {
@@ -360,6 +363,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
             DBSendError::SlotNotFound(_) => "slot not found",
             DBSendError::Backend(_) => "backend error",
             DBSendError::SlotNotCovered => "slot not covered",
+            DBSendError::MigrationQueueError => "migration queue error",
         }
     }
 
@@ -370,6 +374,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
             DBSendError::SlotNotFound(_) => None,
             DBSendError::Backend(err) => Some(err),
             DBSendError::SlotNotCovered => None,
+            DBSendError::MigrationQueueError => None,
         }
     }
 }

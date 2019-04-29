@@ -1,3 +1,4 @@
+use ::protocol::{Array, BinSafeStr, BulkStr, Resp};
 use caseless;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
@@ -28,4 +29,16 @@ pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
     }
 }
 
+pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => resps.get(1).and_then(|resp| match resp {
+            Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
+            Resp::Simple(ref s) => Some(s.clone()),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
 pub const OLD_EPOCH_REPLY: &str = "old_epoch";
+pub const SLOT_NUM: usize = 16384;

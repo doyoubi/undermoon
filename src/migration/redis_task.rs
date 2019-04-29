@@ -61,6 +61,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> MigratingTask
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
+        // TODO: implement it
         Box::new(future::ok(()))
     }
 
@@ -69,7 +70,16 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> MigratingTask
     }
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
-        Ok(())
+        if self.state.get_state() == MigrationState::TransferringData {
+            return Err(DBSendError::SlotNotFound(cmd_task));
+        }
+
+        self.cmd_task_sender
+            .unbounded_send(cmd_task)
+            .map_err(|err| {
+                error!("Failed to tmp queue {:?}", err);
+                DBSendError::MigrationQueueError
+            })
     }
 }
 
@@ -116,6 +126,7 @@ impl<RCF: RedisClientFactory> Drop for RedisImportingTask<RCF> {
 
 impl<RCF: RedisClientFactory> ImportingTask for RedisImportingTask<RCF> {
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
+        // TODO: implement it
         Box::new(future::ok(()))
     }
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {

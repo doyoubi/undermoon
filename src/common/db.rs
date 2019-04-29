@@ -28,7 +28,7 @@ impl DBMapFlags {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HostDBMap {
     epoch: u64,
     flags: DBMapFlags,
