@@ -3,7 +3,7 @@
 All the payload of request and response should be in JSON format
 and use the HTTP 200 to indicate success or failure.
 
-HTTP Broker should at least implement the folloing apis to work with Coordinator:
+HTTP Broker should at least implement the following apis to work with Coordinator:
 
 ##### (1) GET /api/clusters/names
 Get all the cluster names.
@@ -37,7 +37,7 @@ If the cluster exists:
             "slots": [{
                 "start": 0,
                 "end": 5000,
-                "tag": ""
+                "tag": "None"
             }, ...]
         }, ...]
     }
@@ -79,7 +79,7 @@ If the host(or proxy) exists:
             "slots": [{
                 "start": 0,
                 "end": 5000,
-                "tag": ""
+                "tag": "None"
             }, ...]
         }, ...]
     }
@@ -124,7 +124,7 @@ Request:
         "slots": [{
             "start": 0,
             "end": 5000,
-            "tag": ""
+            "tag": "None"
         }, ...]
     }
 }

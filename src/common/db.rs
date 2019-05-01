@@ -88,6 +88,7 @@ impl HostDBMap {
                     match &slot_range.tag {
                         SlotRangeTag::Migrating(ref meta) => {
                             args.push("migrating".to_string());
+                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
                             args.push(meta.epoch.to_string());
                             args.push(meta.src_proxy_address.clone());
                             args.push(meta.src_node_address.clone());
@@ -96,15 +97,17 @@ impl HostDBMap {
                         }
                         SlotRangeTag::Importing(ref meta) => {
                             args.push("importing".to_string());
+                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
                             args.push(meta.epoch.to_string());
                             args.push(meta.src_proxy_address.clone());
                             args.push(meta.src_node_address.clone());
                             args.push(meta.dst_proxy_address.clone());
                             args.push(meta.dst_node_address.clone());
                         }
-                        SlotRangeTag::None => (),
+                        SlotRangeTag::None => {
+                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
+                        },
                     };
-                    args.push(format!("{}-{}", slot_range.start, slot_range.end));
                 }
             }
         }
@@ -407,10 +410,22 @@ mod tests {
             "0-1000",
             "dbname",
             "127.0.0.1:7001",
+            "importing",
             "1001-2000",
+            "233",
+            "127.0.0.2:7001",
+            "127.0.0.2:6001",
+            "127.0.0.1:7001",
+            "127.0.0.1:6002",
             "another_db",
             "127.0.0.1:7002",
+            "migrating",
             "0-2000",
+            "666",
+            "127.0.0.2:7001",
+            "127.0.0.2:6001",
+            "127.0.0.1:7001",
+            "127.0.0.1:6002",
         ];
         let mut it = arguments
             .clone()

@@ -2,26 +2,26 @@ use super::redis_task::{RedisImportingTask, RedisMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationTaskMeta};
 use ::common::cluster::{SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
-use ::common::utils::{get_key, ThreadSafe, SLOT_NUM};
+use ::common::utils::{get_key, get_slot, ThreadSafe};
 use ::protocol::RedisClientFactory;
 use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
 use ::replication::manager::ReplicatorManager;
-use crc16::{State, XMODEM};
 use futures::Future;
 use itertools::Either;
 use std::collections::HashMap;
 use std::sync::atomic;
 use std::sync::{Arc, RwLock};
 
-type TaskRecord<T: CmdTask> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask>>;
-type DBTask<T: CmdTask> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
+type TaskRecord<T> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask>>;
+type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
 
 pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
 where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
+    empty: atomic::AtomicBool,
     updating_epoch: atomic::AtomicU64,
     dbs: RwLock<(
         u64,
@@ -39,6 +39,7 @@ where
     pub fn new(client_factory: Arc<RCF>, sender_factory: Arc<TSF>) -> Self {
         let client_factory_clone = client_factory.clone();
         Self {
+            empty: atomic::AtomicBool::new(true),
             updating_epoch: atomic::AtomicU64::new(0),
             dbs: RwLock::new((0, HashMap::new())),
             client_factory,
@@ -52,6 +53,11 @@ where
         cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
+        // Optimization for not having any migration.
+        if self.empty.load(atomic::Ordering::SeqCst) {
+            return Err(DBSendError::SlotNotFound(cmd_task))
+        }
+
         let db_name = cmd_task.get_db_name();
         match self
             .dbs
@@ -70,7 +76,7 @@ where
                     }
                 };
 
-                let slot = State::<XMODEM>::calculate(&key) as usize % SLOT_NUM;
+                let slot = get_slot(&key);
 
                 for (meta, record) in tasks.iter() {
                     let slot_range_start = meta.slot_range.start;
@@ -251,6 +257,8 @@ where
             }
         }
 
+        let empty = migration_dbs.len() == 0;
+
         {
             let mut dbs = self.dbs.write().unwrap();
             if !force && epoch <= dbs.0 {
@@ -283,6 +291,7 @@ where
                 }));
             }
             *dbs = (epoch, migration_dbs);
+            self.empty.store(empty, atomic::Ordering::SeqCst);
         }
 
         Ok(())

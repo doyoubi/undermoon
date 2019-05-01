@@ -187,8 +187,6 @@ where
         local.append(&mut remote);
         Ok(Resp::Arr(Array::Arr(local)))
     }
-
-    pub fn add_redirection(&self) {}
 }
 
 // We combine the nodes and slot_map to let them fit into
