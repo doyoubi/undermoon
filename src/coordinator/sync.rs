@@ -80,6 +80,7 @@ impl<F: RedisClientFactory> HostMetaSender for PeerMetaRespSender<F> {
             .client_factory
             .create_client(address)
             .map_err(CoordinateError::Redis);
+        // TODO: Remove MIGRATING and IMPORTING tags for peers.
         Box::new(client_fut.and_then(|client| {
             send_meta(
                 client,

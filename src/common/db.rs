@@ -74,6 +74,10 @@ impl HostDBMap {
         self.flags.clone()
     }
 
+    pub fn get_map(&self) -> &HashMap<String, HashMap<String, Vec<SlotRange>>> {
+        &self.db_map
+    }
+
     pub fn into_map(self) -> HashMap<String, HashMap<String, Vec<SlotRange>>> {
         self.db_map
     }
@@ -106,7 +110,7 @@ impl HostDBMap {
                         }
                         SlotRangeTag::None => {
                             args.push(format!("{}-{}", slot_range.start, slot_range.end));
-                        },
+                        }
                     };
                 }
             }

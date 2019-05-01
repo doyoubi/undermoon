@@ -58,8 +58,8 @@ pub struct RecoverableBackendNode<T: CmdTask> {
 
 pub struct RecoverableBackendNodeFactory<T: CmdTask>(PhantomData<T>);
 
-impl<T: CmdTask> RecoverableBackendNodeFactory<T> {
-    pub fn new() -> Self {
+impl<T: CmdTask> Default for RecoverableBackendNodeFactory<T> {
+    fn default() -> Self {
         Self(PhantomData)
     }
 }
@@ -447,8 +447,8 @@ pub struct DirectionSenderFactory<T: CmdTask>(PhantomData<T>);
 
 impl<T: CmdTask> ThreadSafe for DirectionSenderFactory<T> {}
 
-impl<T: CmdTask> DirectionSenderFactory<T> {
-    pub fn new() -> Self {
+impl<T: CmdTask> Default for DirectionSenderFactory<T> {
+    fn default() -> Self {
         Self(PhantomData)
     }
 }

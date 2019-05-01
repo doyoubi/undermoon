@@ -1,6 +1,6 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationTaskMeta};
-use ::common::cluster::{SlotRange, SlotRangeTag};
+use ::common::cluster::{ReplPeer, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
 use ::protocol::RedisClientFactory;
@@ -8,6 +8,7 @@ use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
 use ::replication::manager::ReplicatorManager;
+use ::replication::replicator::{MasterMeta, ReplicaMeta, ReplicatorMeta};
 use futures::Future;
 use itertools::Either;
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ use std::sync::{Arc, RwLock};
 
 type TaskRecord<T> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
+type TaskMap<T> = HashMap<String, DBTask<T>>;
 
 pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
 where
@@ -25,7 +27,7 @@ where
     updating_epoch: atomic::AtomicU64,
     dbs: RwLock<(
         u64,
-        HashMap<String, DBTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
+        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
     )>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
@@ -55,7 +57,7 @@ where
     {
         // Optimization for not having any migration.
         if self.empty.load(atomic::Ordering::SeqCst) {
-            return Err(DBSendError::SlotNotFound(cmd_task))
+            return Err(DBSendError::SlotNotFound(cmd_task));
         }
 
         let db_name = cmd_task.get_db_name();
@@ -99,12 +101,14 @@ where
     pub fn update(&self, host_map: HostDBMap) -> Result<(), DBError> {
         let epoch = host_map.get_epoch();
         let flags = host_map.get_flags();
-        let db_map = host_map.into_map();
 
         let force = flags.force;
         if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) >= epoch {
             return Err(DBError::OldEpoch);
         }
+
+        let replication_meta = Self::host_map_to_repl_meta(&host_map);
+        let db_map = host_map.into_map();
 
         // The computation below might take a long time.
         // Set epoch first to let later requests fail fast.
@@ -142,7 +146,7 @@ where
                             {
                                 let tasks = migration_dbs
                                     .entry(db_name.clone())
-                                    .or_insert(HashMap::new());
+                                    .or_insert_with(HashMap::new);
                                 tasks.insert(migration_meta, Either::Left(migrating_task.clone()));
                             }
                         }
@@ -161,7 +165,7 @@ where
                             {
                                 let tasks = migration_dbs
                                     .entry(db_name.clone())
-                                    .or_insert(HashMap::new());
+                                    .or_insert_with(HashMap::new);
                                 tasks.insert(migration_meta, Either::Right(importing_task.clone()));
                             }
                         }
@@ -213,7 +217,7 @@ where
                             ));
                             let tasks = migration_dbs
                                 .entry(db_name.clone())
-                                .or_insert(HashMap::new());
+                                .or_insert_with(HashMap::new);
                             tasks.insert(migration_meta, Either::Left(task));
                         }
                         SlotRangeTag::Importing(meta) => {
@@ -248,7 +252,7 @@ where
                             ));
                             let tasks = migration_dbs
                                 .entry(db_name.clone())
-                                .or_insert(HashMap::new());
+                                .or_insert_with(HashMap::new);
                             tasks.insert(migration_meta, Either::Right(task));
                         }
                         SlotRangeTag::None => continue,
@@ -257,7 +261,7 @@ where
             }
         }
 
-        let empty = migration_dbs.len() == 0;
+        let empty = migration_dbs.is_empty();
 
         {
             let mut dbs = self.dbs.write().unwrap();
@@ -294,6 +298,61 @@ where
             self.empty.store(empty, atomic::Ordering::SeqCst);
         }
 
-        Ok(())
+        match self.replicator_manager.update_replicators(replication_meta) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                error!(
+                    "replicator_manager for migration failed to update replicators {:?}",
+                    e
+                );
+                Err(e)
+            }
+        }
+    }
+
+    pub fn host_map_to_repl_meta(host_map: &HostDBMap) -> ReplicatorMeta {
+        let epoch = host_map.get_epoch();
+        let flags = host_map.get_flags();
+        let db_map = host_map.get_map();
+
+        let mut masters = Vec::new();
+        let mut replicas = Vec::new();
+        for (db_name, nodes) in db_map.iter() {
+            for (_node, slot_ranges) in nodes.iter() {
+                for slot_range in slot_ranges.iter() {
+                    match slot_range.tag {
+                        SlotRangeTag::Migrating(ref meta) => {
+                            let master_meta = MasterMeta {
+                                db_name: db_name.clone(),
+                                master_node_address: meta.src_node_address.clone(),
+                                replicas: vec![ReplPeer {
+                                    node_address: meta.dst_node_address.clone(),
+                                    proxy_address: meta.dst_proxy_address.clone(),
+                                }],
+                            };
+                            masters.push(master_meta);
+                        }
+                        SlotRangeTag::Importing(ref meta) => {
+                            let replica_meta = ReplicaMeta {
+                                db_name: db_name.clone(),
+                                replica_node_address: meta.dst_node_address.clone(),
+                                masters: vec![ReplPeer {
+                                    node_address: meta.src_node_address.clone(),
+                                    proxy_address: meta.src_proxy_address.clone(),
+                                }],
+                            };
+                            replicas.push(replica_meta);
+                        }
+                        SlotRangeTag::None => continue,
+                    }
+                }
+            }
+        }
+        ReplicatorMeta {
+            epoch,
+            flags,
+            masters,
+            replicas,
+        }
     }
 }

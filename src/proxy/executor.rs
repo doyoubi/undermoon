@@ -55,10 +55,10 @@ pub struct ForwardHandler<F: RedisClientFactory> {
 impl<F: RedisClientFactory> ForwardHandler<F> {
     pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
         let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
-            RecoverableBackendNodeFactory::new(),
+            RecoverableBackendNodeFactory::default(),
         ));
         let db = DatabaseMap::new(sender_factory);
-        let redirection_sender_factory = Arc::new(DirectionSenderFactory::new());
+        let redirection_sender_factory = Arc::new(DirectionSenderFactory::default());
         Self {
             service_address,
             db,
