@@ -3,7 +3,7 @@ use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
 use common::cluster::SlotRange;
 use common::db::HostDBMap;
-use common::utils::get_key;
+use common::utils::{gen_moved, get_key, get_slot};
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::error::Error;
@@ -12,10 +12,6 @@ use std::iter::Iterator;
 use std::sync;
 
 pub const DEFAULT_DB: &str = "admin";
-
-fn gen_moved(slot: usize, addr: String) -> String {
-    format!("MOVED {} {}", slot, addr)
-}
 
 #[derive(Debug)]
 pub enum DBError {
@@ -318,7 +314,7 @@ impl RemoteDB {
         };
         match self.slot_map.get_by_key(&key) {
             Some(addr) => {
-                let resp = Resp::Error(gen_moved(self.slot_map.get_slot(&key), addr).into_bytes());
+                let resp = Resp::Error(gen_moved(get_slot(&key), addr).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
                 Ok(())
             }

@@ -1,6 +1,5 @@
 use ::common::cluster::SlotRange;
-use ::common::utils::SLOT_NUM;
-use crc16::{State, XMODEM};
+use ::common::utils::{get_slot, SLOT_NUM};
 use std::collections::HashMap;
 
 pub struct SlotMap {
@@ -29,12 +28,8 @@ impl SlotMap {
         }
     }
 
-    pub fn get_slot(&self, key: &[u8]) -> usize {
-        State::<XMODEM>::calculate(key) as usize % SLOT_NUM
-    }
-
     pub fn get_by_key(&self, key: &[u8]) -> Option<String> {
-        let slot = self.get_slot(key);
+        let slot = get_slot(key);
         self.get(slot)
     }
 

@@ -1,17 +1,18 @@
-use ::common::cluster::{SlotRange, SlotRangeTag};
+use ::common::cluster::SlotRange;
+use ::common::utils::ThreadSafe;
 use ::proxy::backend::CmdTask;
 use ::proxy::database::DBSendError;
 use futures::Future;
-use protocol::{RedisClientError, RedisClientFactory};
+use protocol::RedisClientError;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MigrationTaskMeta {
-    db_name: String,
-    slot_range: SlotRange,
+    pub db_name: String,
+    pub slot_range: SlotRange,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -46,7 +47,7 @@ impl AtomicMigrationState {
     }
 }
 
-pub trait MigratingTask {
+pub trait MigratingTask: ThreadSafe {
     type Task: CmdTask;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
@@ -54,7 +55,7 @@ pub trait MigratingTask {
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
 }
 
-pub trait ImportingTask {
+pub trait ImportingTask: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
 }

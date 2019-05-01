@@ -2,6 +2,7 @@ use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationError, MigrationState,
     MigrationTaskMeta,
 };
+use ::common::utils::ThreadSafe;
 use ::protocol::RedisClientFactory;
 use ::proxy::database::DBSendError;
 use atomic_option::AtomicOption;
@@ -12,7 +13,7 @@ use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> {
+pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
     meta: MigrationTaskMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
@@ -25,7 +26,12 @@ pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     stop_signal: AtomicOption<oneshot::Sender<()>>,
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> RedisMigratingTask<RCF, TSF> {
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
+    for RedisMigratingTask<RCF, TSF>
+{
+}
+
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigratingTask<RCF, TSF> {
     pub fn new(
         meta: MigrationTaskMeta,
         client_factory: Arc<RCF>,
@@ -55,7 +61,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> RedisMigratingTask<RCF,
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> MigratingTask
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingTask
     for RedisMigratingTask<RCF, TSF>
 {
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
@@ -83,7 +89,9 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> MigratingTask
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory> Drop for RedisMigratingTask<RCF, TSF> {
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
+    for RedisMigratingTask<RCF, TSF>
+{
     fn drop(&mut self) {
         self.send_stop_signal().unwrap_or(())
     }
@@ -95,6 +103,8 @@ pub struct RedisImportingTask<RCF: RedisClientFactory> {
     client_factory: Arc<RCF>,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
 }
+
+impl<RCF: RedisClientFactory> ThreadSafe for RedisImportingTask<RCF> {}
 
 impl<RCF: RedisClientFactory> RedisImportingTask<RCF> {
     pub fn new(meta: MigrationTaskMeta, client_factory: Arc<RCF>) -> Self {

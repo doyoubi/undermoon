@@ -1,7 +1,7 @@
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationMeta {
     pub epoch: u64, // The epoch migration starts
     pub src_proxy_address: String,
@@ -10,14 +10,14 @@ pub struct MigrationMeta {
     pub dst_node_address: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum SlotRangeTag {
     Migrating(MigrationMeta),
     Importing(MigrationMeta),
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SlotRange {
     pub start: usize,
     pub end: usize,
@@ -192,23 +192,36 @@ mod tests {
 
     #[test]
     fn test_deserialize_slot_range_tag() {
-        let importing_str = "\"importing 127.0.0.1:6379\"";
+        let importing_str = r#"{"Importing": {
+                "epoch": 233,
+                "src_proxy_address": "127.0.0.1:7000",
+                "src_node_address": "127.0.0.1:6379",
+                "dst_proxy_address": "127.0.0.1:7001",
+                "dst_node_address": "127.0.0.1:6380"
+            }}"#;
         let slot_range: SlotRangeTag =
             serde_json::from_str(importing_str).expect("unexpected string");
-        assert_eq!(
-            SlotRangeTag::Importing("127.0.0.1:6379".to_string()),
-            slot_range
-        );
+        let meta = MigrationMeta {
+            epoch: 233,
+            src_proxy_address: "127.0.0.1:7000".to_string(),
+            src_node_address: "127.0.0.1:6379".to_string(),
+            dst_proxy_address: "127.0.0.1:7001".to_string(),
+            dst_node_address: "127.0.0.1:6380".to_string(),
+        };
+        assert_eq!(SlotRangeTag::Importing(meta.clone()), slot_range);
 
-        let migrating_str = "\"migrating 127.0.0.1:6379\"";
+        let migrating_str = r#"{"Migrating": {
+                "epoch": 233,
+                "src_proxy_address": "127.0.0.1:7000",
+                "src_node_address": "127.0.0.1:6379",
+                "dst_proxy_address": "127.0.0.1:7001",
+                "dst_node_address": "127.0.0.1:6380"
+            }}"#;
         let slot_range: SlotRangeTag =
             serde_json::from_str(migrating_str).expect("unexpected string");
-        assert_eq!(
-            SlotRangeTag::Migrating("127.0.0.1:6379".to_string()),
-            slot_range
-        );
+        assert_eq!(SlotRangeTag::Migrating(meta), slot_range);
 
-        let none_str = "\"\"";
+        let none_str = "\"None\"";
         let slot_range: SlotRangeTag = serde_json::from_str(none_str).expect("unexpected string");
         assert_eq!(SlotRangeTag::None, slot_range);
     }

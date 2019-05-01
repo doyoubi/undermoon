@@ -1,9 +1,11 @@
 use super::backend::{
-    CachedSenderFactory, CmdTask, RRSenderGroupFactory, RecoverableBackendNodeFactory,
+    CachedSenderFactory, CmdTask, DirectionSenderFactory, RRSenderGroupFactory,
+    RecoverableBackendNodeFactory,
 };
 use super::command::CmdType;
 use super::database::{DBError, DBTag, DatabaseMap};
 use super::session::{CmdCtx, CmdCtxHandler};
+use ::migration::manager::MigrationManager;
 use caseless;
 use common::db::HostDBMap;
 use common::utils::{ThreadSafe, OLD_EPOCH_REPLY};
@@ -47,18 +49,21 @@ pub struct ForwardHandler<F: RedisClientFactory> {
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
     replicator_manager: ReplicatorManager<F>,
+    migration_manager: MigrationManager<F, DirectionSenderFactory<CmdCtx>>,
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
     pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
-        let sender_facotry = CachedSenderFactory::new(RRSenderGroupFactory::new(
+        let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
             RecoverableBackendNodeFactory::new(),
         ));
-        let db = DatabaseMap::new(sender_facotry);
+        let db = DatabaseMap::new(sender_factory);
+        let redirection_sender_factory = Arc::new(DirectionSenderFactory::new());
         Self {
             service_address,
             db,
-            replicator_manager: ReplicatorManager::new(client_factory),
+            replicator_manager: ReplicatorManager::new(client_factory.clone()),
+            migration_manager: MigrationManager::new(client_factory, redirection_sender_factory),
         }
     }
 }
