@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::atomic;
 use std::sync::{Arc, RwLock};
 
-type TaskRecord<T> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask>>;
+type TaskRecord<T> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask<Task = T>>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
 type TaskMap<T> = HashMap<String, DBTask<T>>;
 
@@ -87,8 +87,9 @@ where
                         continue;
                     }
 
-                    if let Either::Left(migrating_task) = record {
-                        return migrating_task.send(cmd_task);
+                    match record {
+                        Either::Left(migrating_task) => return migrating_task.send(cmd_task),
+                        Either::Right(importing_task) => return importing_task.send(cmd_task),
                     }
                 }
 
@@ -191,7 +192,7 @@ where
                                 slot_range: SlotRange {
                                     start,
                                     end,
-                                    tag: SlotRangeTag::Migrating(meta),
+                                    tag: SlotRangeTag::Migrating(meta.clone()),
                                 },
                             };
 
@@ -204,7 +205,7 @@ where
                             }
 
                             let task = Arc::new(RedisMigratingTask::new(
-                                migration_meta.clone(),
+                                meta,
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),
                             ));
@@ -227,7 +228,7 @@ where
                                 slot_range: SlotRange {
                                     start,
                                     end,
-                                    tag: SlotRangeTag::Importing(meta),
+                                    tag: SlotRangeTag::Importing(meta.clone()),
                                 },
                             };
 
@@ -240,8 +241,9 @@ where
                             }
 
                             let task = Arc::new(RedisImportingTask::new(
-                                migration_meta.clone(),
+                                meta,
                                 self.client_factory.clone(),
+                                self.sender_factory.clone(),
                             ));
                             new_importing_tasks.push((
                                 db_name.clone(),
@@ -355,4 +357,6 @@ where
             replicas,
         }
     }
+
+    pub fn commit_importing<Task: CmdTask>(&self, cmd_task: Task) {}
 }

@@ -2,6 +2,7 @@ use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationError, MigrationState,
     MigrationTaskMeta,
 };
+use ::common::cluster::MigrationMeta;
 use ::common::utils::ThreadSafe;
 use ::protocol::RedisClientFactory;
 use ::proxy::database::DBSendError;
@@ -14,7 +15,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
-    meta: MigrationTaskMeta,
+    meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
@@ -32,11 +33,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigratingTask<RCF, TSF> {
-    pub fn new(
-        meta: MigrationTaskMeta,
-        client_factory: Arc<RCF>,
-        sender_factory: Arc<TSF>,
-    ) -> Self {
+    pub fn new(meta: MigrationMeta, client_factory: Arc<RCF>, sender_factory: Arc<TSF>) -> Self {
         let (sender, receiver) = mpsc::unbounded();
         Self {
             meta,
@@ -84,7 +81,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
             .unbounded_send(cmd_task)
             .map_err(|err| {
                 error!("Failed to tmp queue {:?}", err);
-                DBSendError::MigrationQueueError
+                DBSendError::MigrationError
             })
     }
 }
@@ -97,21 +94,26 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
     }
 }
 
-pub struct RedisImportingTask<RCF: RedisClientFactory> {
-    meta: MigrationTaskMeta,
+pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
+    meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
+    sender_factory: Arc<TSF>,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
 }
 
-impl<RCF: RedisClientFactory> ThreadSafe for RedisImportingTask<RCF> {}
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
+    for RedisImportingTask<RCF, TSF>
+{
+}
 
-impl<RCF: RedisClientFactory> RedisImportingTask<RCF> {
-    pub fn new(meta: MigrationTaskMeta, client_factory: Arc<RCF>) -> Self {
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImportingTask<RCF, TSF> {
+    pub fn new(meta: MigrationMeta, client_factory: Arc<RCF>, sender_factory: Arc<TSF>) -> Self {
         Self {
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
+            sender_factory,
             stop_signal: AtomicOption::empty(),
         }
     }
@@ -128,18 +130,43 @@ impl<RCF: RedisClientFactory> RedisImportingTask<RCF> {
     }
 }
 
-impl<RCF: RedisClientFactory> Drop for RedisImportingTask<RCF> {
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
+    for RedisImportingTask<RCF, TSF>
+{
     fn drop(&mut self) {
         self.send_stop_signal().unwrap_or(())
     }
 }
 
-impl<RCF: RedisClientFactory> ImportingTask for RedisImportingTask<RCF> {
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingTask
+    for RedisImportingTask<RCF, TSF>
+{
+    type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
+
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
         // TODO: implement it
         Box::new(future::ok(()))
     }
+
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
         Box::new(future::result(self.send_stop_signal()))
+    }
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
+        if self.state.get_state() != MigrationState::SwitchCommitted {
+            return Err(DBSendError::SlotNotFound(cmd_task));
+        }
+
+        let redirection_sender = self
+            .sender_factory
+            .create(self.meta.src_proxy_address.clone());
+        redirection_sender
+            .send(cmd_task)
+            .map_err(|_e| DBSendError::MigrationError)
+    }
+
+    fn commit(&self) -> Result<(), MigrationError> {
+        self.state.set_state(MigrationState::SwitchCommitted);
+        Ok(())
     }
 }

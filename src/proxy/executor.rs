@@ -179,16 +179,16 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
         let db_map_clone = db_map.clone();
 
-        debug!("local meta data: {:?}", db_map);
-        match self.db.set_dbs(db_map) {
+        match self.migration_manager.update(db_map_clone) {
             Ok(()) => {
-                debug!("Successfully update local meta data");
-                match self.migration_manager.update(db_map_clone) {
+                debug!("Successfully update migration meta data");
+                debug!("local meta data: {:?}", db_map);
+                match self.db.set_dbs(db_map) {
                     Ok(()) => {
                         cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
                     }
                     Err(e) => {
-                        debug!("Failed to update migration data {:?}", e);
+                        debug!("Failed to update local meta data {:?}", e);
                         match e {
                             DBError::OldEpoch => cmd_ctx.set_resp_result(Ok(Resp::Error(
                                 OLD_EPOCH_REPLY.to_string().into_bytes(),
@@ -198,7 +198,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 }
             }
             Err(e) => {
-                debug!("Failed to update local meta data {:?}", e);
+                debug!("Failed to update migration meta data {:?}", e);
                 match e {
                     DBError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),

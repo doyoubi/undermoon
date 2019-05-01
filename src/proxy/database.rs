@@ -340,7 +340,7 @@ pub enum DBSendError<T: CmdTask> {
     SlotNotFound(T),
     SlotNotCovered,
     Backend(BackendError),
-    MigrationQueueError,
+    MigrationError,
 }
 
 impl<T: CmdTask> fmt::Display for DBSendError<T> {
@@ -357,7 +357,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
             DBSendError::SlotNotFound(_) => "slot not found",
             DBSendError::Backend(_) => "backend error",
             DBSendError::SlotNotCovered => "slot not covered",
-            DBSendError::MigrationQueueError => "migration queue error",
+            DBSendError::MigrationError => "migration queue error",
         }
     }
 
@@ -368,7 +368,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
             DBSendError::SlotNotFound(_) => None,
             DBSendError::Backend(err) => Some(err),
             DBSendError::SlotNotCovered => None,
-            DBSendError::MigrationQueueError => None,
+            DBSendError::MigrationError => None,
         }
     }
 }
