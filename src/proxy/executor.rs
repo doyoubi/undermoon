@@ -3,7 +3,7 @@ use super::backend::{
     RecoverableBackendNodeFactory,
 };
 use super::command::CmdType;
-use super::database::{DBError, DBTag, DatabaseMap};
+use super::database::{DBError, DBSendError, DBTag, DatabaseMap};
 use super::session::{CmdCtx, CmdCtxHandler};
 use ::migration::manager::MigrationManager;
 use caseless;
@@ -177,11 +177,25 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
         };
 
+        let db_map_clone = db_map.clone();
+
         debug!("local meta data: {:?}", db_map);
         match self.db.set_dbs(db_map) {
             Ok(()) => {
                 debug!("Successfully update local meta data");
-                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+                match self.migration_manager.update(db_map_clone) {
+                    Ok(()) => {
+                        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+                    }
+                    Err(e) => {
+                        debug!("Failed to update migration data {:?}", e);
+                        match e {
+                            DBError::OldEpoch => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                                OLD_EPOCH_REPLY.to_string().into_bytes(),
+                            ))),
+                        }
+                    }
+                }
             }
             Err(e) => {
                 debug!("Failed to update local meta data {:?}", e);
@@ -274,6 +288,16 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Others => {
+                let cmd_ctx = match self.migration_manager.send(cmd_ctx) {
+                    Ok(()) => return,
+                    Err(e) => match e {
+                        DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
+                        err => {
+                            error!("migration send task failed: {:?}", err);
+                            return;
+                        }
+                    },
+                };
                 let res = self.db.send(cmd_ctx);
                 if let Err(e) = res {
                     error!("Failed to foward cmd_ctx: {:?}", e)

@@ -256,7 +256,7 @@ mod tests {
                             }
                         ]
                     },
-                    "slots": [{"start": 0, "end": 5461, "tag": ""}]
+                    "slots": [{"start": 0, "end": 5461, "tag": "None"}]
                 },
                 {
                     "address": "redis4:7004",

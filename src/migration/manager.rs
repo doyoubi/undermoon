@@ -4,6 +4,7 @@ use ::common::cluster::{SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, ThreadSafe, SLOT_NUM};
 use ::protocol::RedisClientFactory;
+use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
 use ::replication::manager::ReplicatorManager;
@@ -63,6 +64,8 @@ where
                 let key = match get_key(cmd_task.get_resp()) {
                     Some(key) => key,
                     None => {
+                        let resp = Resp::Error("missing key".to_string().into_bytes());
+                        cmd_task.set_resp_result(Ok(resp));
                         return Err(DBSendError::MissingKey);
                     }
                 };
