@@ -59,6 +59,7 @@ impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
             .create_client(self.meta.master_node_address.clone());
         let interval = Duration::new(5, 0);
         let cmd = vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()];
+        // TODO: implement reconnecting
         let send_fut = client_fut.and_then(move |client| keep_sending_cmd(client, cmd, interval));
 
         let meta = self.meta.clone();

@@ -1,18 +1,20 @@
 use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationError, MigrationState,
-    MigrationTaskMeta,
 };
 use ::common::cluster::MigrationMeta;
 use ::common::utils::ThreadSafe;
-use ::protocol::RedisClientFactory;
+use ::protocol::{RedisClient, RedisClientFactory, Resp};
 use ::proxy::database::DBSendError;
 use atomic_option::AtomicOption;
 use futures::sync::mpsc;
 use futures::sync::oneshot;
-use futures::{future, Future};
+use futures::{future, stream, Future, Stream};
+use futures_timer::Delay;
 use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
+use std::iter;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
     meta: MigrationMeta,
@@ -56,6 +58,55 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             Err(MigrationError::AlreadyEnded)
         }
     }
+
+    fn check_repl_state(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        future::ok(())
+    }
+
+    fn commit_switch(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        self.state.set_state(MigrationState::SwitchStarted);
+
+        let meta = self.meta.clone();
+        let state = self.state.clone();
+        let client_factory = self.client_factory.clone();
+        let s = stream::iter_ok(iter::repeat(()));
+        s.for_each(move |()| {
+            let meta_clone = meta.clone();
+            let state_clone = state.clone();
+            let client_fut = client_factory.create_client(meta.dst_proxy_address.clone());
+            client_fut
+                .map_err(MigrationError::RedisError)
+                .and_then(move |client| {
+                    let cmd = vec![
+                        "UMCTL".to_string(),
+                        "TMPSWITCH".to_string(),
+                        meta_clone.epoch.to_string(),
+                        meta_clone.src_node_address.clone(),
+                        meta_clone.src_proxy_address.clone(),
+                        meta_clone.dst_node_address.clone(),
+                        meta_clone.dst_node_address.clone(),
+                    ];
+                    debug!("try switching {:?}", cmd);
+                    let cmd_bin = cmd.into_iter().map(String::into_bytes).collect();
+                    let interval = Duration::new(1, 0);
+                    let delay = Delay::new(interval).map_err(MigrationError::Io);
+                    client
+                        .execute(cmd_bin)
+                        .map_err(MigrationError::RedisError)
+                        .map(move |(_client, response)| match response {
+                            Resp::Error(err_str) => {
+                                error!("failed to switch {:?} {:?}", meta_clone, err_str);
+                            }
+                            reply => {
+                                state_clone.set_state(MigrationState::SwitchCommitted);
+                                info!("Successfully switch {:?} {:?}", meta_clone, reply);
+                            }
+                        })
+                        .join(delay)
+                        .map(move |_| ())
+                })
+        })
+    }
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingTask
@@ -64,8 +115,30 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        // TODO: implement it
-        Box::new(future::ok(()))
+        let (sender, receiver) = oneshot::channel();
+        if self
+            .stop_signal
+            .try_store(Box::new(sender), Ordering::SeqCst)
+            .is_some()
+        {
+            return Box::new(future::err(MigrationError::AlreadyStarted));
+        }
+
+        let check_phase = self.check_repl_state();
+        let commit_phase = self.commit_switch();
+        let migration_fut = check_phase.and_then(|()| commit_phase);
+
+        let meta = self.meta.clone();
+
+        Box::new(
+            receiver
+                .map_err(|_| MigrationError::Canceled)
+                .select(migration_fut)
+                .then(move |_| {
+                    warn!("RedisMasterReplicator {:?} stopped", meta);
+                    future::ok(())
+                }),
+        )
     }
 
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
@@ -144,8 +217,28 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        // TODO: implement it
-        Box::new(future::ok(()))
+        let (sender, receiver) = oneshot::channel();
+        if self
+            .stop_signal
+            .try_store(Box::new(sender), Ordering::SeqCst)
+            .is_some()
+        {
+            return Box::new(future::err(MigrationError::AlreadyStarted));
+        }
+
+        let meta = self.meta.clone();
+
+        // Now it just does nothing.
+        // TODO: Add state monitoring and print them to logs.
+        Box::new(
+            receiver
+                .map_err(|_| MigrationError::Canceled)
+                .select(future::ok(()))
+                .then(move |_| {
+                    warn!("Importing tasks {:?} stopped", meta);
+                    future::ok(())
+                }),
+        )
     }
 
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {

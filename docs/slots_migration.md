@@ -24,11 +24,11 @@ Now the commands for slots `0-1000` is still owned by node A. Proxy B will redir
 Proxy A will
 - Set the `Tmp Tranferred Started Tag` for `0-1000`. Now all the commands on `0-1000` will be redirected to a queue.
 - These commands in the queue will wait for a short time to let the replication finish hopefully and start replying `MOVED` to proxy B.
-- Keep sending `UMCTL TMPTRANSFER db_name node_A_address node_B_address 0-1000` to proxy B.
+- Keep sending `UMCTL TMPSWITCH db_name node_A_address node_B_address 0-1000` to proxy B.
 - After gets the `OK` reply from proxy B, proxy A set the `Tmp Tranferred Commited Tag`.
 - Now proxy A will start to reply `Tmp Tranferred Commited Tag for node A to node B migration on 0-1000 of SomeDB` for `UMCTL SETDB`
 
-#### (6) Proxy B reacts to UMCTL TMPTRANSFER
+#### (6) Proxy B reacts to UMCTL TMPSWITCH
 Proxy B sets the `Tmp Tranferred Started Tag` and starts accepting commands on `0-1000` and returns `OK` to proxy A.
 Proxy B does not stop the replication now.
 
