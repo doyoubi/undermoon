@@ -2,16 +2,15 @@ use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationError, MigrationState,
 };
 use ::common::cluster::MigrationMeta;
+use ::common::resp_execution::keep_connecting_and_sending;
 use ::common::utils::ThreadSafe;
-use ::protocol::{RedisClient, RedisClientFactory, Resp};
+use ::protocol::{RedisClientFactory, Resp};
 use ::proxy::database::DBSendError;
 use atomic_option::AtomicOption;
 use futures::sync::mpsc;
 use futures::sync::oneshot;
-use futures::{future, stream, Future, Stream};
-use futures_timer::Delay;
+use futures::{future, Future};
 use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
-use std::iter;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -66,46 +65,42 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     fn commit_switch(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         self.state.set_state(MigrationState::SwitchStarted);
 
-        let meta = self.meta.clone();
         let state = self.state.clone();
         let client_factory = self.client_factory.clone();
-        let s = stream::iter_ok(iter::repeat(()));
-        s.for_each(move |()| {
-            let meta_clone = meta.clone();
-            let state_clone = state.clone();
-            let client_fut = client_factory.create_client(meta.dst_proxy_address.clone());
-            client_fut
-                .map_err(MigrationError::RedisError)
-                .and_then(move |client| {
-                    let cmd = vec![
-                        "UMCTL".to_string(),
-                        "TMPSWITCH".to_string(),
-                        meta_clone.epoch.to_string(),
-                        meta_clone.src_node_address.clone(),
-                        meta_clone.src_proxy_address.clone(),
-                        meta_clone.dst_node_address.clone(),
-                        meta_clone.dst_node_address.clone(),
-                    ];
-                    debug!("try switching {:?}", cmd);
-                    let cmd_bin = cmd.into_iter().map(String::into_bytes).collect();
-                    let interval = Duration::new(1, 0);
-                    let delay = Delay::new(interval).map_err(MigrationError::Io);
-                    client
-                        .execute(cmd_bin)
-                        .map_err(MigrationError::RedisError)
-                        .map(move |(_client, response)| match response {
-                            Resp::Error(err_str) => {
-                                error!("failed to switch {:?} {:?}", meta_clone, err_str);
-                            }
-                            reply => {
-                                state_clone.set_state(MigrationState::SwitchCommitted);
-                                info!("Successfully switch {:?} {:?}", meta_clone, reply);
-                            }
-                        })
-                        .join(delay)
-                        .map(move |_| ())
-                })
-        })
+
+        let cmd = vec![
+            "UMCTL".to_string(),
+            "TMPSWITCH".to_string(),
+            self.meta.epoch.to_string(),
+            self.meta.src_node_address.clone(),
+            self.meta.src_proxy_address.clone(),
+            self.meta.dst_node_address.clone(),
+            self.meta.dst_node_address.clone(),
+        ];
+        let interval = Duration::new(1, 0);
+        let meta = self.meta.clone();
+
+        let handle_func = move |response| match response {
+            Resp::Error(err_str) => {
+                error!("failed to switch {:?} {:?}", meta, err_str);
+                Ok(())
+            }
+            reply => {
+                state.set_state(MigrationState::SwitchCommitted);
+                info!("Successfully switch {:?} {:?}", meta, reply);
+                Ok(())
+            }
+        };
+
+        info!("try switching {:?}", cmd);
+        keep_connecting_and_sending(
+            client_factory,
+            self.meta.dst_proxy_address.clone(),
+            cmd,
+            interval,
+            handle_func,
+        )
+        .map_err(MigrationError::RedisError)
     }
 }
 

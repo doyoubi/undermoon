@@ -1,4 +1,4 @@
-use futures::{stream, Future, Stream};
+use futures::{future, stream, Future, Stream};
 use futures_timer::Delay;
 use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
 use std::iter;
@@ -23,59 +23,63 @@ pub fn keep_connecting_and_sending<F: RedisClientFactory, Func>(
     handle_result: Func,
 ) -> impl Future<Item = (), Error = RedisClientError>
 where
-    Func: Clone + Fn(Result<(), RedisClientError>) -> Result<(), RedisClientError>,
+    Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
 {
     let infinite_stream = stream::iter_ok(iter::repeat(()));
     infinite_stream.for_each(move |()| {
         let client_fut = client_factory.create_client(address.clone());
         let cmd_clone = cmd.clone();
         let interval_clone = interval;
+        let handle_result_clone = handle_result.clone();
         client_fut
-            .and_then(move |client| keep_sending_cmd(client, cmd_clone, interval_clone))
-            .then(handle_result.clone())
+            .and_then(move |client| {
+                keep_sending_cmd(client, cmd_clone, interval_clone, handle_result_clone)
+            })
+            .map_err(|e| {
+                error!("failed to keep sending commands {:?}", e);
+                e
+            })
     })
 }
 
-pub fn keep_sending_cmd<C: RedisClient>(
+pub fn keep_sending_cmd<C: RedisClient, Func>(
     client: C,
     cmd: Vec<String>,
     interval: Duration,
-) -> impl Future<Item = (), Error = RedisClientError> {
+    handle_result: Func,
+) -> impl Future<Item = (), Error = RedisClientError>
+where
+    Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
+{
     let infinite_stream = stream::iter_ok(iter::repeat(()));
     infinite_stream
         .fold(client, move |client, ()| {
             let byte_cmd = cmd.iter().map(|s| s.clone().into_bytes()).collect();
             let delay = Delay::new(interval).map_err(RedisClientError::Io);
-            // debug!("sending repl cmd {:?}", cmd);
+            // debug!("sending cmd {:?}", cmd);
+            let handle_result_clone = handle_result.clone();
             let exec_fut = client
                 .execute(byte_cmd)
                 .map_err(|e| {
                     error!("failed to send: {}", e);
                     e
                 })
-                .map(|(client, response)| {
-                    // debug!("replicator get response {:?}", response);
-                    if let Resp::Error(err) = response {
-                        let err_str = str::from_utf8(&err)
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|_| format!("{:?}", err));
-                        error!("error reply: {}", err_str);
-                    }
-                    client
+                .and_then(move |(client, response)| {
+                    future::result(handle_result_clone(response).map(|()| client))
                 });
             exec_fut.join(delay).map(move |(client, ())| client)
         })
         .map(|_| ())
 }
 
-fn retry_handle_func(result: Result<(), RedisClientError>) -> Result<(), RedisClientError> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            error!("failed to keep sending commands {:?}", e);
-            Ok(())
-        }
+fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
+    if let Resp::Error(err) = response {
+        let err_str = str::from_utf8(&err)
+            .map(ToString::to_string)
+            .unwrap_or_else(|_| format!("{:?}", err));
+        error!("error reply: {}", err_str);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -162,7 +166,13 @@ mod tests {
     fn test_keep_sending_cmd() {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
-        let res = keep_sending_cmd(DummyRedisClient::new(counter.clone()), vec![], interval).wait();
+        let res = keep_sending_cmd(
+            DummyRedisClient::new(counter.clone()),
+            vec![],
+            interval,
+            retry_handle_func,
+        )
+        .wait();
         assert!(res.is_err());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
     }
