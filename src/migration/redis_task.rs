@@ -11,6 +11,7 @@ use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::{future, Future};
 use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -256,5 +257,101 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
     fn commit(&self) -> Result<(), MigrationError> {
         self.state.set_state(MigrationState::SwitchCommitted);
         Ok(())
+    }
+}
+
+struct ReplicaState {
+    ip: String,
+    port: u64,
+    state: String,
+    offset: u64,
+    lag: u64,
+}
+
+impl ReplicaState {
+    fn parse_replica_meta(value: String) -> Result<Self, ()> {
+        let mut kv_map = HashMap::new();
+
+        let segs = value.split(',');
+        for kv in segs {
+            let mut kv_segs_iter = kv.split('=');
+            let key = kv_segs_iter.next().ok_or(())?;
+            let value = kv_segs_iter.next().ok_or(())?;
+            kv_map.insert(key, value);
+        }
+
+        Ok(ReplicaState {
+            ip: kv_map.get("ip").ok_or(())?.to_string(),
+            port: kv_map
+                .get("port")
+                .ok_or(())?
+                .parse::<u64>()
+                .map_err(|_| ())?,
+            state: kv_map.get("state").ok_or(())?.to_string(),
+            offset: kv_map
+                .get("offset")
+                .ok_or(())?
+                .parse::<u64>()
+                .map_err(|_| ())?,
+            lag: kv_map
+                .get("lag")
+                .ok_or(())?
+                .parse::<u64>()
+                .map_err(|_| ())?,
+        })
+    }
+}
+
+fn extract_replicas_from_replication_info(info: String) -> Result<Vec<ReplicaState>, ()> {
+    let mut states = Vec::new();
+    let lines = info.split("\r\n");
+    for line in lines {
+        if !line.starts_with("slave") {
+            continue;
+        }
+        let mut kv = line.split(':');
+        let slavex = kv.next().ok_or(())?;
+        let mut value = kv.next().ok_or(())?.to_string();
+        value.pop().ok_or(())?;
+        states.push(ReplicaState::parse_replica_meta(value)?);
+    }
+    Ok(states)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_slave_value() {
+        let value = "ip=127.0.0.1,port=6000,state=online,offset=233,lag=6699";
+        let state =
+            ReplicaState::parse_replica_meta(value.to_string()).expect("test_parse_slave_value");
+        assert_eq!(state.ip, "127.0.0.1");
+        assert_eq!(state.port, 6000);
+        assert_eq!(state.state, "online");
+        assert_eq!(state.offset, 233);
+        assert_eq!(state.lag, 6699);
+    }
+
+    #[test]
+    fn test_parse_replication() {
+        let replication_info = "Replication\r
+role:master\r
+connected_slaves:1\r
+slave0:ip=127.0.0.1,port=6000,state=online,offset=233,lag=6699\r
+slave1:ip=127.0.0.2,port=6001,state=online,offset=666,lag=7799\r
+master_replid:3934c1b1bce5d067567f7e263301879303e8f633\r
+master_replid2:0000000000000000000000000000000000000000\r
+master_repl_offset:56\r
+second_repl_offset:-1\r
+repl_backlog_active:1\r
+repl_backlog_size:1048576\r
+repl_backlog_first_byte_offset:1\r
+repl_backlog_histlen:56\r";
+        println!("{:?}", replication_info);
+        let states = extract_replicas_from_replication_info(replication_info.to_string())
+            .expect("test_parse_replication");
+        assert_eq!(states.len(), 2);
     }
 }

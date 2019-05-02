@@ -77,16 +77,6 @@ impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
         Box::new(future::result(self.send_stop_signal()))
     }
 
-    fn start_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
-        // TODO: implement migration
-        Box::new(future::ok(()))
-    }
-
-    fn commit_migrating(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
-        // TODO: implement migration
-        Box::new(future::ok(()))
-    }
-
     fn get_meta(&self) -> &MasterMeta {
         &self.meta
     }
@@ -179,16 +169,6 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
 
     fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
         Box::new(future::result(self.send_stop_signal()))
-    }
-
-    fn start_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
-        // TODO: implement migration
-        Box::new(future::ok(()))
-    }
-
-    fn commit_importing(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
-        // TODO: implement migration
-        Box::new(future::ok(()))
     }
 
     fn get_meta(&self) -> &ReplicaMeta {

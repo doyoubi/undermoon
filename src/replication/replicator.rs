@@ -14,16 +14,12 @@ use std::str;
 pub trait MasterReplicator: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn start_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn commit_migrating(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn get_meta(&self) -> &MasterMeta;
 }
 
 pub trait ReplicaReplicator: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn start_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn commit_importing(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
     fn get_meta(&self) -> &ReplicaMeta;
 }
 
