@@ -1,5 +1,5 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{ImportingTask, MigratingTask, MigrationTaskMeta};
+use super::task::{ImportingTask, MigratingTask, MigrationConfig, MigrationTaskMeta};
 use ::common::cluster::{ReplPeer, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
@@ -23,6 +23,7 @@ pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory +
 where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
+    config: Arc<MigrationConfig>,
     empty: atomic::AtomicBool,
     updating_epoch: atomic::AtomicU64,
     dbs: RwLock<(
@@ -38,9 +39,14 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigrationM
 where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
-    pub fn new(client_factory: Arc<RCF>, sender_factory: Arc<TSF>) -> Self {
+    pub fn new(
+        config: Arc<MigrationConfig>,
+        client_factory: Arc<RCF>,
+        sender_factory: Arc<TSF>,
+    ) -> Self {
         let client_factory_clone = client_factory.clone();
         Self {
+            config,
             empty: atomic::AtomicBool::new(true),
             updating_epoch: atomic::AtomicU64::new(0),
             dbs: RwLock::new((0, HashMap::new())),
@@ -205,6 +211,7 @@ where
                             }
 
                             let task = Arc::new(RedisMigratingTask::new(
+                                self.config.clone(),
                                 meta,
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),

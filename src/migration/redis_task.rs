@@ -1,5 +1,6 @@
 use super::task::{
-    AtomicMigrationState, ImportingTask, MigratingTask, MigrationError, MigrationState,
+    AtomicMigrationState, ImportingTask, MigratingTask, MigrationConfig, MigrationError,
+    MigrationState,
 };
 use ::common::cluster::MigrationMeta;
 use ::common::resp_execution::keep_connecting_and_sending;
@@ -7,24 +8,29 @@ use ::common::utils::ThreadSafe;
 use ::protocol::{RedisClientFactory, Resp};
 use ::proxy::database::DBSendError;
 use atomic_option::AtomicOption;
-use futures::sync::mpsc;
+use crossbeam_channel;
 use futures::sync::oneshot;
-use futures::{future, Future};
+use futures::{future, stream, Future, Stream};
+use futures_timer::Delay;
 use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
+use std::cmp;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::iter;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
+    config: Arc<MigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
+    blocking: Arc<AtomicBool>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     cmd_task_sender:
-        mpsc::UnboundedSender<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+        crossbeam_channel::Sender<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
     cmd_task_receiver: Arc<
-        mpsc::UnboundedReceiver<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+        crossbeam_channel::Receiver<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
     >,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
 }
@@ -35,11 +41,18 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigratingTask<RCF, TSF> {
-    pub fn new(meta: MigrationMeta, client_factory: Arc<RCF>, sender_factory: Arc<TSF>) -> Self {
-        let (sender, receiver) = mpsc::unbounded();
+    pub fn new(
+        config: Arc<MigrationConfig>,
+        meta: MigrationMeta,
+        client_factory: Arc<RCF>,
+        sender_factory: Arc<TSF>,
+    ) -> Self {
+        let (sender, receiver) = crossbeam_channel::unbounded();
         Self {
+            config,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
+            blocking: Arc::new(AtomicBool::new(true)),
             client_factory,
             sender_factory,
             cmd_task_sender: sender,
@@ -103,6 +116,74 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         )
         .map_err(MigrationError::RedisError)
     }
+
+    fn release_queue(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        let state = self.state.clone();
+        let blocking = self.blocking.clone();
+        let sender_factory = self.sender_factory.clone();
+        let dst_proxy_address = self.meta.dst_proxy_address.clone();
+        let cmd_task_receiver = self.cmd_task_receiver.clone();
+
+        let blocking_time = Duration::from_millis(self.config.get_block_time());
+
+        let s = stream::iter_ok(iter::repeat(()));
+        s.fold(
+            true,
+            move |queue_blocking, ()| -> Box<dyn Future<Item = bool, Error = ()> + Send> {
+                if queue_blocking {
+                    return Box::new(Delay::new(blocking_time).map(|_| false).map_err(|_| ()));
+                }
+
+                let delay_time = cmp::min(blocking_time, Duration::from_millis(5));
+
+                if state.get_state() != MigrationState::SwitchCommitted {
+                    return Box::new(Delay::new(delay_time).map(|_| false).map_err(|_| ()));
+                }
+
+                let blocking_clone = blocking.clone();
+                let sender_factory_clone = sender_factory.clone();
+                let dst_proxy_address_clone = dst_proxy_address.clone();
+                let cmd_task_receiver_clone = cmd_task_receiver.clone();
+
+                let delay = Delay::new(delay_time).map_err(MigrationError::Io);
+                Box::new(delay.then(move |result| {
+                    if let Err(err) = result {
+                        error!("delay blocking error {:?}", err);
+                    }
+                    info!("start to drain waiting queue");
+                    Self::drain_waiting_queue(
+                        blocking_clone,
+                        sender_factory_clone,
+                        dst_proxy_address_clone,
+                        cmd_task_receiver_clone,
+                    );
+                    info!("finished draining waiting queue");
+                    future::err(()) // stop
+                }))
+            },
+        )
+        .map(|_| ())
+        .or_else(|()| future::ok(()))
+    }
+
+    fn drain_waiting_queue(
+        blocking: Arc<AtomicBool>,
+        sender_factory: Arc<TSF>,
+        dst_proxy_address: String,
+        cmd_task_receiver: Arc<
+            crossbeam_channel::Receiver<
+                <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+            >,
+        >,
+    ) {
+        blocking.store(false, Ordering::SeqCst);
+        let sender = sender_factory.create(dst_proxy_address);
+        while let Ok(cmd_task) = cmd_task_receiver.try_recv() {
+            if let Err(err) = sender.send(cmd_task) {
+                error!("failed to drain task {:?}", err);
+            }
+        }
+    }
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingTask
@@ -122,7 +203,8 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
 
         let check_phase = self.check_repl_state();
         let commit_phase = self.commit_switch();
-        let migration_fut = check_phase.and_then(|()| commit_phase);
+        let release_queue = self.release_queue();
+        let migration_fut = check_phase.and_then(|()| commit_phase.join(release_queue).map(|_| ()));
 
         let meta = self.meta.clone();
 
@@ -146,12 +228,35 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
             return Err(DBSendError::SlotNotFound(cmd_task));
         }
 
-        self.cmd_task_sender
-            .unbounded_send(cmd_task)
-            .map_err(|err| {
-                error!("Failed to tmp queue {:?}", err);
-                DBSendError::MigrationError
-            })
+        let sender = self
+            .sender_factory
+            .create(self.meta.dst_proxy_address.clone());
+
+        if !self.blocking.load(Ordering::SeqCst) {
+            return sender
+                .send(cmd_task)
+                .map_err(|_e| DBSendError::MigrationError);
+        }
+
+        let res = self.cmd_task_sender.send(cmd_task).or_else(move |err| {
+            error!("Failed to tmp queue {:?}", err);
+            let cmd_task = err.into_inner();
+            sender
+                .send(cmd_task)
+                .map_err(|_e| DBSendError::MigrationError)
+        });
+
+        // This can make sure that waiting queue will always finally be cleaned up.
+        if !self.blocking.load(Ordering::SeqCst) {
+            Self::drain_waiting_queue(
+                self.blocking.clone(),
+                self.sender_factory.clone(),
+                self.meta.dst_proxy_address.clone(),
+                self.cmd_task_receiver.clone(),
+            );
+        }
+
+        res
     }
 }
 
@@ -242,7 +347,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
     }
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
-        if self.state.get_state() != MigrationState::SwitchCommitted {
+        if self.state.get_state() == MigrationState::SwitchCommitted {
             return Err(DBSendError::SlotNotFound(cmd_task));
         }
 
@@ -310,7 +415,7 @@ fn extract_replicas_from_replication_info(info: String) -> Result<Vec<ReplicaSta
             continue;
         }
         let mut kv = line.split(':');
-        let slavex = kv.next().ok_or(())?;
+        let _slavex = kv.next().ok_or(())?;
         let mut value = kv.next().ok_or(())?.to_string();
         value.pop().ok_or(())?;
         states.push(ReplicaState::parse_replica_meta(value)?);
@@ -349,7 +454,6 @@ repl_backlog_active:1\r
 repl_backlog_size:1048576\r
 repl_backlog_first_byte_offset:1\r
 repl_backlog_histlen:56\r";
-        println!("{:?}", replication_info);
         let states = extract_replicas_from_replication_info(replication_info.to_string())
             .expect("test_parse_replication");
         assert_eq!(states.len(), 2);

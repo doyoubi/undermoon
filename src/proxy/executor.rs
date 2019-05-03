@@ -6,6 +6,7 @@ use super::command::CmdType;
 use super::database::{DBError, DBSendError, DBTag, DatabaseMap};
 use super::session::{CmdCtx, CmdCtxHandler};
 use ::migration::manager::MigrationManager;
+use ::migration::task::MigrationConfig;
 use caseless;
 use common::db::HostDBMap;
 use common::utils::{ThreadSafe, OLD_EPOCH_REPLY};
@@ -59,11 +60,16 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         ));
         let db = DatabaseMap::new(sender_factory);
         let redirection_sender_factory = Arc::new(DirectionSenderFactory::default());
+        let migration_config = Arc::new(MigrationConfig::default());
         Self {
             service_address,
             db,
             replicator_manager: ReplicatorManager::new(client_factory.clone()),
-            migration_manager: MigrationManager::new(client_factory, redirection_sender_factory),
+            migration_manager: MigrationManager::new(
+                migration_config,
+                client_factory,
+                redirection_sender_factory,
+            ),
         }
     }
 }
