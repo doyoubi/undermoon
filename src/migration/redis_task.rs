@@ -1,6 +1,6 @@
 use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationConfig, MigrationError,
-    MigrationState,
+    MigrationState, SwitchArg,
 };
 use ::common::cluster::MigrationMeta;
 use ::common::resp_execution::keep_connecting_and_sending;
@@ -22,6 +22,7 @@ use std::time::Duration;
 
 pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
     config: Arc<MigrationConfig>,
+    db_name: String,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     blocking: Arc<AtomicBool>,
@@ -43,6 +44,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigratingTask<RCF, TSF> {
     pub fn new(
         config: Arc<MigrationConfig>,
+        db_name: String,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
@@ -51,6 +53,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         Self {
             config,
             meta,
+            db_name,
             state: Arc::new(AtomicMigrationState::new()),
             blocking: Arc::new(AtomicBool::new(true)),
             client_factory,
@@ -82,15 +85,15 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         let state = self.state.clone();
         let client_factory = self.client_factory.clone();
 
-        let cmd = vec![
-            "UMCTL".to_string(),
-            "TMPSWITCH".to_string(),
-            self.meta.epoch.to_string(),
-            self.meta.src_node_address.clone(),
-            self.meta.src_proxy_address.clone(),
-            self.meta.dst_node_address.clone(),
-            self.meta.dst_node_address.clone(),
-        ];
+        let mut cmd = vec!["UMCTL".to_string(), "TMPSWITCH".to_string()];
+        let arg = SwitchArg {
+            version: "dev_version".to_string(),
+            db_name: self.db_name.clone(),
+            migration_meta: self.meta.clone(),
+        }
+        .encode();
+        cmd.extend(arg.into_iter());
+
         let interval = Duration::new(1, 0);
         let meta = self.meta.clone();
 
@@ -124,20 +127,39 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         let dst_proxy_address = self.meta.dst_proxy_address.clone();
         let cmd_task_receiver = self.cmd_task_receiver.clone();
 
-        let blocking_time = Duration::from_millis(self.config.get_block_time());
+        let min_blocking_time = Duration::from_millis(self.config.get_min_blocking_time());
+        let max_blocking_time = self.config.get_max_blocking_time() as u128;
 
         let s = stream::iter_ok(iter::repeat(()));
         s.fold(
-            true,
-            move |queue_blocking, ()| -> Box<dyn Future<Item = bool, Error = ()> + Send> {
+            (true, 0),
+            move |(queue_blocking, lasting_time),
+                  ()|
+                  -> Box<dyn Future<Item = (bool, u128), Error = ()> + Send> {
                 if queue_blocking {
-                    return Box::new(Delay::new(blocking_time).map(|_| false).map_err(|_| ()));
+                    let acc_time = lasting_time + min_blocking_time.as_millis();
+                    return Box::new(
+                        Delay::new(min_blocking_time)
+                            .map(move |_| (false, acc_time))
+                            .map_err(|_| ()),
+                    );
                 }
 
-                let delay_time = cmp::min(blocking_time, Duration::from_millis(5));
+                let delay_time = if lasting_time > max_blocking_time {
+                    warn!("Commit status does not change for so long. Force commit.");
+                    state.set_state(MigrationState::SwitchCommitted);
+                    Duration::from_millis(0)
+                } else {
+                    cmp::min(min_blocking_time, Duration::from_millis(5))
+                };
 
                 if state.get_state() != MigrationState::SwitchCommitted {
-                    return Box::new(Delay::new(delay_time).map(|_| false).map_err(|_| ()));
+                    let acc_time = lasting_time + delay_time.as_millis();
+                    return Box::new(
+                        Delay::new(delay_time)
+                            .map(move |_| (false, acc_time))
+                            .map_err(|_| ()),
+                    );
                 }
 
                 let blocking_clone = blocking.clone();
@@ -269,6 +291,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
 }
 
 pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
+    config: Arc<MigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
@@ -282,14 +305,38 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImportingTask<RCF, TSF> {
-    pub fn new(meta: MigrationMeta, client_factory: Arc<RCF>, sender_factory: Arc<TSF>) -> Self {
+    pub fn new(
+        config: Arc<MigrationConfig>,
+        meta: MigrationMeta,
+        client_factory: Arc<RCF>,
+        sender_factory: Arc<TSF>,
+    ) -> Self {
         Self {
+            config,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
             sender_factory,
             stop_signal: AtomicOption::empty(),
         }
+    }
+
+    fn release_importing_for_timeout(
+        &self,
+    ) -> impl Future<Item = (), Error = MigrationError> + Send {
+        let state = self.state.clone();
+        let max_blocking_time = self.config.get_max_blocking_time();
+        let delay_time = Duration::from_millis(max_blocking_time);
+        let delay = Delay::new(delay_time).map_err(MigrationError::Io);
+        delay.then(move |result| {
+            if let Err(err) = result {
+                error!("importing timer error {:?}", err);
+            }
+
+            info!("Importing timeout. Release importing slots");
+            state.set_state(MigrationState::SwitchCommitted);
+            future::ok(())
+        })
     }
 
     fn send_stop_signal(&self) -> Result<(), MigrationError> {
@@ -329,12 +376,11 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
 
         let meta = self.meta.clone();
 
-        // Now it just does nothing.
-        // TODO: Add state monitoring and print them to logs.
+        let timeout_release = self.release_importing_for_timeout();
         Box::new(
             receiver
                 .map_err(|_| MigrationError::Canceled)
-                .select(future::ok(()))
+                .select(timeout_release)
                 .then(move |_| {
                     warn!("Importing tasks {:?} stopped", meta);
                     future::ok(())

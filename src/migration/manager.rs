@@ -1,5 +1,5 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{ImportingTask, MigratingTask, MigrationConfig, MigrationTaskMeta};
+use super::task::{ImportingTask, MigratingTask, MigrationConfig, MigrationTaskMeta, SwitchArg};
 use ::common::cluster::{ReplPeer, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
@@ -212,6 +212,7 @@ where
 
                             let task = Arc::new(RedisMigratingTask::new(
                                 self.config.clone(),
+                                db_name.clone(),
                                 meta,
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),
@@ -248,6 +249,7 @@ where
                             }
 
                             let task = Arc::new(RedisImportingTask::new(
+                                self.config.clone(),
                                 meta,
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),
@@ -365,5 +367,65 @@ where
         }
     }
 
-    pub fn commit_importing<Task: CmdTask>(&self, cmd_task: Task) {}
+    pub fn commit_importing<Task: CmdTask>(&self, cmd_task: Task) {
+        let switch_arg = match SwitchArg::decode(cmd_task.get_resp()) {
+            Some(switch_meta) => switch_meta,
+            None => {
+                cmd_task.set_resp_result(Ok(Resp::Error(
+                    "failed to parse TMPSWITCH".to_string().into_bytes(),
+                )));
+                return;
+            }
+        };
+        match self
+            .dbs
+            .read()
+            .expect("MigrationManager::commit_importing lock error")
+            .1
+            .get(&switch_arg.db_name)
+        {
+            Some(tasks) => {
+                for (meta, record) in tasks.iter() {
+                    match meta.slot_range.tag {
+                        SlotRangeTag::Importing(ref migration_meta)
+                            if migration_meta.eq(&switch_arg.migration_meta) => {}
+                        _ => continue,
+                    }
+
+                    match record {
+                        Either::Left(_migrating_task) => {
+                            error!("Received switch request when migrating {:?}", meta);
+                            cmd_task.set_resp_result(Ok(Resp::Error(
+                                "Peer migrating".to_string().into_bytes(),
+                            )));
+                            return;
+                        }
+                        Either::Right(importing_task) => {
+                            match importing_task.commit() {
+                                Ok(()) => {
+                                    cmd_task.set_resp_result(Ok(Resp::Simple(
+                                        "OK".to_string().into_bytes(),
+                                    )));
+                                }
+                                Err(err) => {
+                                    cmd_task.set_resp_result(Ok(Resp::Error(
+                                        format!("switch failed: {:?}", err).into_bytes(),
+                                    )));
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+                cmd_task.set_resp_result(Ok(Resp::Error(
+                    "No Corresponding task found".to_string().into_bytes(),
+                )));
+            }
+            None => {
+                cmd_task.set_resp_result(Ok(Resp::Error(
+                    "No Corresponding task found".to_string().into_bytes(),
+                )));
+            }
+        }
+    }
 }

@@ -41,6 +41,24 @@ pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
     }
 }
 
+pub fn get_commands(resp: &Resp) -> Option<Vec<String>> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => {
+            let mut commands = vec![];
+            for resp in resps.iter() {
+                match resp {
+                    Resp::Bulk(BulkStr::Str(s)) => {
+                        commands.push(str::from_utf8(s).ok()?.to_string())
+                    }
+                    _ => return None,
+                }
+            }
+            Some(commands)
+        }
+        _ => None,
+    }
+}
+
 pub fn gen_moved(slot: usize, addr: String) -> String {
     format!("MOVED {} {}", slot, addr)
 }
