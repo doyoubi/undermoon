@@ -293,6 +293,7 @@ pub enum RedisClientError {
     InvalidAddress,
     InitError,
     Closed,
+    Done,
 }
 
 impl fmt::Display for RedisClientError {

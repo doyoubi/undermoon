@@ -5,7 +5,8 @@ use super::task::{
 use ::common::cluster::MigrationMeta;
 use ::common::resp_execution::keep_connecting_and_sending;
 use ::common::utils::ThreadSafe;
-use ::protocol::{RedisClientFactory, Resp};
+use ::common::version::SERVER_PROXY_VERSION;
+use ::protocol::{BulkStr, RedisClientError, RedisClientFactory, Resp};
 use ::proxy::database::DBSendError;
 use atomic_option::AtomicOption;
 use crossbeam_channel;
@@ -16,6 +17,7 @@ use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
 use std::cmp;
 use std::collections::HashMap;
 use std::iter;
+use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,8 +77,70 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         }
     }
 
+    fn replica_state_ready(
+        states: &[ReplicaState],
+        meta: &MigrationMeta,
+        lag_threshold: u64,
+    ) -> bool {
+        for state in states.iter() {
+            if format!("{}:{}", state.ip, state.port) == meta.dst_node_address
+                && state.lag < lag_threshold
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     fn check_repl_state(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
-        future::ok(())
+        let config = self.config.clone();
+        let state = self.state.clone();
+        let client_factory = self.client_factory.clone();
+        let interval = Duration::new(1, 0);
+        let meta = self.meta.clone();
+
+        let handle_func = move |response| match response {
+            Resp::Bulk(BulkStr::Str(data)) => {
+                let info = match str::from_utf8(&data) {
+                    Ok(s) => s.to_string(),
+                    Err(e) => {
+                        error!("failed to parse INFO REPLICATION to utf8 string {:?}", e);
+                        return Ok(());
+                    }
+                };
+                match extract_replicas_from_replication_info(info) {
+                    Ok(states) => {
+                        // Put config inside this closure to make dynamically change possible.
+                        let lag_threshold = config.get_lag_threshold();
+                        if Self::replica_state_ready(&states, &meta, lag_threshold) {
+                            info!("replication for migration is done {:?}", state);
+                            Err(RedisClientError::Done)
+                        } else {
+                            debug!("replcation for migration is still not ready {:?}", meta);
+                            Ok(())
+                        }
+                    }
+                    Err(err) => {
+                        error!("failed to parse INFO REPLICATION {:?}", err);
+                        Ok(())
+                    }
+                }
+            }
+            reply => {
+                error!("failed to get replication info {:?} {:?}", meta, reply);
+                Ok(())
+            }
+        };
+
+        let cmd = vec!["INFO".to_string(), "REPLICATION".to_string()];
+        keep_connecting_and_sending(
+            client_factory,
+            self.meta.dst_proxy_address.clone(),
+            cmd,
+            interval,
+            handle_func,
+        )
+        .map_err(MigrationError::RedisError)
     }
 
     fn commit_switch(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
@@ -87,7 +151,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
 
         let mut cmd = vec!["UMCTL".to_string(), "TMPSWITCH".to_string()];
         let arg = SwitchArg {
-            version: "dev_version".to_string(),
+            version: SERVER_PROXY_VERSION.to_string(),
             db_name: self.db_name.clone(),
             migration_meta: self.meta.clone(),
         }
@@ -109,7 +173,6 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             }
         };
 
-        info!("try switching {:?}", cmd);
         keep_connecting_and_sending(
             client_factory,
             self.meta.dst_proxy_address.clone(),
@@ -128,19 +191,18 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         let cmd_task_receiver = self.cmd_task_receiver.clone();
 
         let min_blocking_time = Duration::from_millis(self.config.get_min_blocking_time());
-        let max_blocking_time = self.config.get_max_blocking_time() as u128;
+        let max_blocking_time = u128::from(self.config.get_max_blocking_time());
 
         let s = stream::iter_ok(iter::repeat(()));
         s.fold(
-            (true, 0),
-            move |(queue_blocking, lasting_time),
-                  ()|
-                  -> Box<dyn Future<Item = (bool, u128), Error = ()> + Send> {
-                if queue_blocking {
-                    let acc_time = lasting_time + min_blocking_time.as_millis();
+            0,
+            move |lasting_time, ()| -> Box<dyn Future<Item = u128, Error = ()> + Send> {
+                if lasting_time == 0 {
+                    // `+1` make sure it will be non-zero next time.
+                    let acc_time = lasting_time + min_blocking_time.as_millis() + 1;
                     return Box::new(
                         Delay::new(min_blocking_time)
-                            .map(move |_| (false, acc_time))
+                            .map(move |_| acc_time)
                             .map_err(|_| ()),
                     );
                 }
@@ -157,7 +219,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                     let acc_time = lasting_time + delay_time.as_millis();
                     return Box::new(
                         Delay::new(delay_time)
-                            .map(move |_| (false, acc_time))
+                            .map(move |_| acc_time)
                             .map_err(|_| ()),
                     );
                 }
@@ -294,7 +356,7 @@ pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     config: Arc<MigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
-    client_factory: Arc<RCF>,
+    _client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
 }
@@ -315,7 +377,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImpor
             config,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
-            client_factory,
+            _client_factory: client_factory,
             sender_factory,
             stop_signal: AtomicOption::empty(),
         }
@@ -405,12 +467,17 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
             .map_err(|_e| DBSendError::MigrationError)
     }
 
-    fn commit(&self) -> Result<(), MigrationError> {
-        self.state.set_state(MigrationState::SwitchCommitted);
-        Ok(())
+    fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError> {
+        if switch_arg.version != SERVER_PROXY_VERSION {
+            Err(MigrationError::IncompatibleVersion)
+        } else {
+            self.state.set_state(MigrationState::SwitchCommitted);
+            Ok(())
+        }
     }
 }
 
+#[derive(Debug)]
 struct ReplicaState {
     ip: String,
     port: u64,

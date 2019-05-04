@@ -62,7 +62,7 @@ pub trait ImportingTask: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
-    fn commit(&self) -> Result<(), MigrationError>;
+    fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError>;
 }
 
 pub struct MigrationConfig {
@@ -82,24 +82,16 @@ impl Default for MigrationConfig {
 }
 
 impl MigrationConfig {
-    pub fn new(lag_threshold: u64, replication_timeout: u64, block_time: u64) -> Self {
-        Self {
-            lag_threshold: AtomicU64::new(lag_threshold),
-            max_blocking_time: AtomicU64::new(replication_timeout),
-            min_blocking_time: AtomicU64::new(block_time),
-        }
-    }
-
-    pub fn set_lag_threshold(&self, lag_threshold: u64) {
-        self.lag_threshold.store(lag_threshold, Ordering::SeqCst)
-    }
-    pub fn set_max_blocking_time(&self, replication_timeout: u64) {
-        self.max_blocking_time
-            .store(replication_timeout, Ordering::SeqCst)
-    }
-    pub fn set_min_block_time(&self, block_time: u64) {
-        self.min_blocking_time.store(block_time, Ordering::SeqCst)
-    }
+    //    pub fn set_lag_threshold(&self, lag_threshold: u64) {
+    //        self.lag_threshold.store(lag_threshold, Ordering::SeqCst)
+    //    }
+    //    pub fn set_max_blocking_time(&self, replication_timeout: u64) {
+    //        self.max_blocking_time
+    //            .store(replication_timeout, Ordering::SeqCst)
+    //    }
+    //    pub fn set_min_block_time(&self, block_time: u64) {
+    //        self.min_blocking_time.store(block_time, Ordering::SeqCst)
+    //    }
     pub fn get_lag_threshold(&self) -> u64 {
         self.lag_threshold.load(Ordering::SeqCst)
     }
@@ -161,7 +153,6 @@ impl SwitchArg {
 #[derive(Debug)]
 pub enum MigrationError {
     IncompatibleVersion,
-    InvalidAddress,
     AlreadyStarted,
     AlreadyEnded,
     Canceled,

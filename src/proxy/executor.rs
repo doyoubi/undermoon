@@ -165,6 +165,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_setrepl(cmd_ctx);
         } else if sub_cmd.eq("INFOREPL") {
             self.handle_umctl_info_repl(cmd_ctx);
+        } else if sub_cmd.eq("TMPSWITCH") {
+            self.handle_umctl_tmp_switch(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -268,6 +270,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     fn handle_umctl_info_repl(&self, cmd_ctx: CmdCtx) {
         let report = self.replicator_manager.get_metadata_report();
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(report.into_bytes()))));
+    }
+
+    fn handle_umctl_tmp_switch(&self, cmd_ctx: CmdCtx) {
+        self.migration_manager.commit_importing(cmd_ctx);
     }
 }
 

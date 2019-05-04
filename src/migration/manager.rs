@@ -401,7 +401,7 @@ where
                             return;
                         }
                         Either::Right(importing_task) => {
-                            match importing_task.commit() {
+                            match importing_task.commit(switch_arg) {
                                 Ok(()) => {
                                     cmd_task.set_resp_result(Ok(Resp::Simple(
                                         "OK".to_string().into_bytes(),
