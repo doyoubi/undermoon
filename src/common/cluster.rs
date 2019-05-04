@@ -1,56 +1,126 @@
+use super::utils::{IMPORTING_TAG, MIGRATING_TAG};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct MigrationMeta {
+    pub epoch: u64, // The epoch migration starts
+    pub src_proxy_address: String,
+    pub src_node_address: String,
+    pub dst_proxy_address: String,
+    pub dst_node_address: String,
+}
+
+impl MigrationMeta {
+    pub fn into_strings(self) -> Vec<String> {
+        let MigrationMeta {
+            epoch,
+            src_proxy_address,
+            src_node_address,
+            dst_proxy_address,
+            dst_node_address,
+        } = self;
+        vec![
+            epoch.to_string(),
+            src_node_address.clone(),
+            src_proxy_address.clone(),
+            dst_node_address.clone(),
+            dst_proxy_address.clone(),
+        ]
+    }
+
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
+        let epoch_str = it.next()?;
+        Some(Self {
+            epoch: epoch_str.parse::<u64>().ok()?,
+            src_proxy_address: it.next()?,
+            src_node_address: it.next()?,
+            dst_proxy_address: it.next()?,
+            dst_node_address: it.next()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum SlotRangeTag {
-    Migrating(String),
-    Importing(String),
+    Migrating(MigrationMeta),
+    Importing(MigrationMeta),
     None,
 }
 
-impl Serialize for SlotRangeTag {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let tag = match self {
-            SlotRangeTag::Migrating(dst) => format!("migrating {}", dst),
-            SlotRangeTag::Importing(src) => format!("importing {}", src),
-            SlotRangeTag::None => String::new(),
-        };
-        serializer.serialize_str(&tag)
-    }
-}
-
-impl<'de> Deserialize<'de> for SlotRangeTag {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let mut segs = s.split_terminator(' ');
-        let flag = match segs.next() {
-            None => return Ok(SlotRangeTag::None),
-            Some(flag) => flag.to_lowercase(),
-        };
-        let peer = segs
-            .next()
-            .ok_or_else(|| D::Error::custom("Missing peer address"))?;
-        if flag == "migrating" {
-            Ok(SlotRangeTag::Migrating(peer.to_string()))
-        } else if flag == "importing" {
-            Ok(SlotRangeTag::Importing(peer.to_string()))
-        } else {
-            Err(D::Error::custom("Invalid flag"))
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SlotRange {
     pub start: usize,
     pub end: usize,
     pub tag: SlotRangeTag,
+}
+
+impl SlotRange {
+    pub fn into_strings(self) -> Vec<String> {
+        let SlotRange { start, end, tag } = self;
+        let mut strs = vec![];
+        match tag {
+            SlotRangeTag::Migrating(meta) => {
+                strs.push(MIGRATING_TAG.to_string());
+                strs.push(format!("{}-{}", start, end));
+                strs.extend(meta.into_strings());
+            }
+            SlotRangeTag::Importing(meta) => {
+                strs.push(IMPORTING_TAG.to_string());
+                strs.push(format!("{}-{}", start, end));
+                strs.extend(meta.into_strings());
+            }
+            SlotRangeTag::None => {
+                strs.push(format!("{}-{}", start, end));
+            }
+        }
+        strs
+    }
+
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
+        let slot_range = it.next()?;
+        let slot_range_tag = slot_range.to_uppercase();
+
+        if slot_range_tag == MIGRATING_TAG {
+            let (start, end) = Self::parse_slot_range(it.next()?)?;
+            let meta = MigrationMeta::from_strings(it)?;
+            Some(SlotRange {
+                start,
+                end,
+                tag: SlotRangeTag::Migrating(meta),
+            })
+        } else if slot_range_tag == IMPORTING_TAG {
+            let (start, end) = Self::parse_slot_range(it.next()?)?;
+            let meta = MigrationMeta::from_strings(it)?;
+            Some(SlotRange {
+                start,
+                end,
+                tag: SlotRangeTag::Importing(meta),
+            })
+        } else {
+            let (start, end) = Self::parse_slot_range(slot_range)?;
+            Some(SlotRange {
+                start,
+                end,
+                tag: SlotRangeTag::None,
+            })
+        }
+    }
+
+    fn parse_slot_range(s: String) -> Option<(usize, usize)> {
+        let mut slot_range = s.split('-');
+        let start_str = slot_range.next()?;
+        let end_str = slot_range.next()?;
+        let start = start_str.parse::<usize>().ok()?;
+        let end = end_str.parse::<usize>().ok()?;
+        Some((start, end))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -221,23 +291,36 @@ mod tests {
 
     #[test]
     fn test_deserialize_slot_range_tag() {
-        let importing_str = "\"importing 127.0.0.1:6379\"";
+        let importing_str = r#"{"Importing": {
+                "epoch": 233,
+                "src_proxy_address": "127.0.0.1:7000",
+                "src_node_address": "127.0.0.1:6379",
+                "dst_proxy_address": "127.0.0.1:7001",
+                "dst_node_address": "127.0.0.1:6380"
+            }}"#;
         let slot_range: SlotRangeTag =
             serde_json::from_str(importing_str).expect("unexpected string");
-        assert_eq!(
-            SlotRangeTag::Importing("127.0.0.1:6379".to_string()),
-            slot_range
-        );
+        let meta = MigrationMeta {
+            epoch: 233,
+            src_proxy_address: "127.0.0.1:7000".to_string(),
+            src_node_address: "127.0.0.1:6379".to_string(),
+            dst_proxy_address: "127.0.0.1:7001".to_string(),
+            dst_node_address: "127.0.0.1:6380".to_string(),
+        };
+        assert_eq!(SlotRangeTag::Importing(meta.clone()), slot_range);
 
-        let migrating_str = "\"migrating 127.0.0.1:6379\"";
+        let migrating_str = r#"{"Migrating": {
+                "epoch": 233,
+                "src_proxy_address": "127.0.0.1:7000",
+                "src_node_address": "127.0.0.1:6379",
+                "dst_proxy_address": "127.0.0.1:7001",
+                "dst_node_address": "127.0.0.1:6380"
+            }}"#;
         let slot_range: SlotRangeTag =
             serde_json::from_str(migrating_str).expect("unexpected string");
-        assert_eq!(
-            SlotRangeTag::Migrating("127.0.0.1:6379".to_string()),
-            slot_range
-        );
+        assert_eq!(SlotRangeTag::Migrating(meta), slot_range);
 
-        let none_str = "\"\"";
+        let none_str = "\"None\"";
         let slot_range: SlotRangeTag = serde_json::from_str(none_str).expect("unexpected string");
         assert_eq!(SlotRangeTag::None, slot_range);
     }
@@ -272,7 +355,7 @@ mod tests {
                             }
                         ]
                     },
-                    "slots": [{"start": 0, "end": 5461, "tag": ""}]
+                    "slots": [{"start": 0, "end": 5461, "tag": "None"}]
                 },
                 {
                     "address": "redis4:7004",

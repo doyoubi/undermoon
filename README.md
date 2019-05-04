@@ -281,3 +281,4 @@ There're two big features needed:
 - Slow log
 - Statistics
 - Support multi-key commands
+- Support dynamic configuration by CONFIG command

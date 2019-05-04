@@ -1,7 +1,7 @@
 use super::command::{CommandError, CommandResult};
 use bytes::BytesMut;
 use common::future_group::new_future_group;
-use common::utils::revolve_first_address;
+use common::utils::{gen_moved, get_key, get_slot, revolve_first_address, ThreadSafe};
 use futures::sync::mpsc;
 use futures::Sink;
 use futures::{future, Future, Stream};
@@ -25,7 +25,7 @@ pub trait ReplyHandler<T: CmdTask>: Send + 'static {
     fn handle_reply(&self, cmd_task: T, result: BackendResult);
 }
 
-pub trait CmdTask: Send + 'static + fmt::Debug {
+pub trait CmdTask: ThreadSafe + fmt::Debug {
     fn get_resp(&self) -> &Resp;
     fn set_result(self, result: CommandResult);
     fn drain_packet_data(&self) -> Option<BytesMut>;
@@ -58,8 +58,8 @@ pub struct RecoverableBackendNode<T: CmdTask> {
 
 pub struct RecoverableBackendNodeFactory<T: CmdTask>(PhantomData<T>);
 
-impl<T: CmdTask> RecoverableBackendNodeFactory<T> {
-    pub fn new() -> Self {
+impl<T: CmdTask> Default for RecoverableBackendNodeFactory<T> {
+    fn default() -> Self {
         Self(PhantomData)
     }
 }
@@ -416,5 +416,50 @@ impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         self.inner_sender.send(cmd_task)
+    }
+}
+
+pub struct DirectionSender<T: CmdTask> {
+    redirection_address: String,
+    phantom: PhantomData<T>,
+}
+
+impl<T: CmdTask> CmdTaskSender for DirectionSender<T> {
+    type Task = T;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+        let key = match get_key(cmd_task.get_resp()) {
+            Some(key) => key,
+            None => {
+                let resp = Resp::Error("missing key".to_string().into_bytes());
+                cmd_task.set_resp_result(Ok(resp));
+                return Ok(());
+            }
+        };
+        let resp =
+            Resp::Error(gen_moved(get_slot(&key), self.redirection_address.clone()).into_bytes());
+        cmd_task.set_resp_result(Ok(resp));
+        Ok(())
+    }
+}
+
+pub struct DirectionSenderFactory<T: CmdTask>(PhantomData<T>);
+
+impl<T: CmdTask> ThreadSafe for DirectionSenderFactory<T> {}
+
+impl<T: CmdTask> Default for DirectionSenderFactory<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: CmdTask> CmdTaskSenderFactory for DirectionSenderFactory<T> {
+    type Sender = DirectionSender<T>;
+
+    fn create(&self, address: String) -> Self::Sender {
+        DirectionSender {
+            redirection_address: address,
+            phantom: PhantomData,
+        }
     }
 }

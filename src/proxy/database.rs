@@ -1,9 +1,9 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
-use super::command::get_key;
 use super::slot::SlotMap;
 use common::cluster::SlotRange;
 use common::db::HostDBMap;
+use common::utils::{gen_moved, get_key, get_slot};
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::error::Error;
@@ -12,10 +12,6 @@ use std::iter::Iterator;
 use std::sync;
 
 pub const DEFAULT_DB: &str = "admin";
-
-fn gen_moved(slot: usize, addr: String) -> String {
-    format!("MOVED {} {}", slot, addr)
-}
 
 #[derive(Debug)]
 pub enum DBError {
@@ -193,6 +189,9 @@ where
     }
 }
 
+// We combine the nodes and slot_map to let them fit into
+// the same lock with a smaller critical section
+// compared to the one we need if splitting them.
 struct LocalDB<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
@@ -313,7 +312,7 @@ impl RemoteDB {
         };
         match self.slot_map.get_by_key(&key) {
             Some(addr) => {
-                let resp = Resp::Error(gen_moved(self.slot_map.get_slot(&key), addr).into_bytes());
+                let resp = Resp::Error(gen_moved(get_slot(&key), addr).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
                 Ok(())
             }
@@ -341,6 +340,7 @@ pub enum DBSendError<T: CmdTask> {
     SlotNotFound(T),
     SlotNotCovered,
     Backend(BackendError),
+    MigrationError,
 }
 
 impl<T: CmdTask> fmt::Display for DBSendError<T> {
@@ -357,6 +357,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
             DBSendError::SlotNotFound(_) => "slot not found",
             DBSendError::Backend(_) => "backend error",
             DBSendError::SlotNotCovered => "slot not covered",
+            DBSendError::MigrationError => "migration queue error",
         }
     }
 
@@ -367,6 +368,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
             DBSendError::SlotNotFound(_) => None,
             DBSendError::Backend(err) => Some(err),
             DBSendError::SlotNotCovered => None,
+            DBSendError::MigrationError => None,
         }
     }
 }

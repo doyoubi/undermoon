@@ -3,6 +3,7 @@ use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, Command, CommandError, CommandResult,
 };
 use super::database::{DBTag, DEFAULT_DB};
+use ::common::utils::ThreadSafe;
 use bytes::BytesMut;
 use futures::sync::mpsc;
 use futures::{Future, Sink, Stream};
@@ -28,6 +29,8 @@ pub struct CmdCtx {
     db: sync::Arc<sync::RwLock<String>>,
     reply_sender: CmdReplySender,
 }
+
+impl ThreadSafe for CmdCtx {}
 
 impl CmdCtx {
     fn new(db: sync::Arc<sync::RwLock<String>>, reply_sender: CmdReplySender) -> CmdCtx {

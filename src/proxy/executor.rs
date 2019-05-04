@@ -1,9 +1,12 @@
 use super::backend::{
-    CachedSenderFactory, CmdTask, RRSenderGroupFactory, RecoverableBackendNodeFactory,
+    CachedSenderFactory, CmdTask, DirectionSenderFactory, RRSenderGroupFactory,
+    RecoverableBackendNodeFactory,
 };
 use super::command::CmdType;
-use super::database::{DBError, DBTag, DatabaseMap};
+use super::database::{DBError, DBSendError, DBTag, DatabaseMap};
 use super::session::{CmdCtx, CmdCtxHandler};
+use ::migration::manager::MigrationManager;
+use ::migration::task::MigrationConfig;
 use caseless;
 use common::db::HostDBMap;
 use common::utils::{ThreadSafe, OLD_EPOCH_REPLY};
@@ -47,18 +50,26 @@ pub struct ForwardHandler<F: RedisClientFactory> {
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
     replicator_manager: ReplicatorManager<F>,
+    migration_manager: MigrationManager<F, DirectionSenderFactory<CmdCtx>>,
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
     pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
-        let sender_facotry = CachedSenderFactory::new(RRSenderGroupFactory::new(
-            RecoverableBackendNodeFactory::new(),
+        let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
+            RecoverableBackendNodeFactory::default(),
         ));
-        let db = DatabaseMap::new(sender_facotry);
+        let db = DatabaseMap::new(sender_factory);
+        let redirection_sender_factory = Arc::new(DirectionSenderFactory::default());
+        let migration_config = Arc::new(MigrationConfig::default());
         Self {
             service_address,
             db,
-            replicator_manager: ReplicatorManager::new(client_factory),
+            replicator_manager: ReplicatorManager::new(client_factory.clone()),
+            migration_manager: MigrationManager::new(
+                migration_config,
+                client_factory,
+                redirection_sender_factory,
+            ),
         }
     }
 }
@@ -154,6 +165,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_setrepl(cmd_ctx);
         } else if sub_cmd.eq("INFOREPL") {
             self.handle_umctl_info_repl(cmd_ctx);
+        } else if sub_cmd.eq("TMPSWITCH") {
+            self.handle_umctl_tmp_switch(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -172,14 +185,28 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
         };
 
-        debug!("local meta data: {:?}", db_map);
-        match self.db.set_dbs(db_map) {
+        let db_map_clone = db_map.clone();
+
+        match self.migration_manager.update(db_map_clone) {
             Ok(()) => {
-                debug!("Successfully update local meta data");
-                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+                debug!("Successfully update migration meta data");
+                debug!("local meta data: {:?}", db_map);
+                match self.db.set_dbs(db_map) {
+                    Ok(()) => {
+                        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+                    }
+                    Err(e) => {
+                        debug!("Failed to update local meta data {:?}", e);
+                        match e {
+                            DBError::OldEpoch => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                                OLD_EPOCH_REPLY.to_string().into_bytes(),
+                            ))),
+                        }
+                    }
+                }
             }
             Err(e) => {
-                debug!("Failed to update local meta data {:?}", e);
+                debug!("Failed to update migration meta data {:?}", e);
                 match e {
                     DBError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
@@ -244,6 +271,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         let report = self.replicator_manager.get_metadata_report();
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(report.into_bytes()))));
     }
+
+    fn handle_umctl_tmp_switch(&self, cmd_ctx: CmdCtx) {
+        self.migration_manager.commit_importing(cmd_ctx);
+    }
 }
 
 impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
@@ -269,6 +300,16 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Others => {
+                let cmd_ctx = match self.migration_manager.send(cmd_ctx) {
+                    Ok(()) => return,
+                    Err(e) => match e {
+                        DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
+                        err => {
+                            error!("migration send task failed: {:?}", err);
+                            return;
+                        }
+                    },
+                };
                 let res = self.db.send(cmd_ctx);
                 if let Err(e) = res {
                     error!("Failed to foward cmd_ctx: {:?}", e)

@@ -49,7 +49,7 @@ class SlotRange:
         self.end = end
 
     def to_dict(self):
-        return {'start': self.start, 'end': self.end, 'tag': ''}
+        return {'start': self.start, 'end': self.end, 'tag': 'None'}
 
 
 class ReplMeta:
@@ -275,7 +275,7 @@ class MetaStore:
                 "slots": [{
                     "start": 0,
                     "end": 5000,
-                    "tag": ""
+                    "tag": "None"
                 }, ...]
             }
         }

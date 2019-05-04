@@ -5,9 +5,6 @@ use std::collections::HashMap;
 use std::iter::Peekable;
 use std::str;
 
-const MIGRATING_TAG: &str = "MIGRATING";
-const IMPORTING_TAG: &str = "IMPORTING";
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct DBMapFlags {
     pub force: bool,
@@ -28,7 +25,7 @@ impl DBMapFlags {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HostDBMap {
     epoch: u64,
     flags: DBMapFlags,
@@ -74,6 +71,10 @@ impl HostDBMap {
         self.flags.clone()
     }
 
+    pub fn get_map(&self) -> &HashMap<String, HashMap<String, Vec<SlotRange>>> {
+        &self.db_map
+    }
+
     pub fn into_map(self) -> HashMap<String, HashMap<String, Vec<SlotRange>>> {
         self.db_map
     }
@@ -86,17 +87,28 @@ impl HostDBMap {
                     args.push(db_name.clone());
                     args.push(node.clone());
                     match &slot_range.tag {
-                        SlotRangeTag::Migrating(ref dst) => {
+                        SlotRangeTag::Migrating(ref meta) => {
                             args.push("migrating".to_string());
-                            args.push(dst.clone());
+                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
+                            args.push(meta.epoch.to_string());
+                            args.push(meta.src_proxy_address.clone());
+                            args.push(meta.src_node_address.clone());
+                            args.push(meta.dst_proxy_address.clone());
+                            args.push(meta.dst_node_address.clone());
                         }
-                        SlotRangeTag::Importing(ref src) => {
+                        SlotRangeTag::Importing(ref meta) => {
                             args.push("importing".to_string());
-                            args.push(src.clone());
+                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
+                            args.push(meta.epoch.to_string());
+                            args.push(meta.src_proxy_address.clone());
+                            args.push(meta.src_node_address.clone());
+                            args.push(meta.dst_proxy_address.clone());
+                            args.push(meta.dst_node_address.clone());
                         }
-                        SlotRangeTag::None => (),
+                        SlotRangeTag::None => {
+                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
+                        }
                     };
-                    args.push(format!("{}-{}", slot_range.start, slot_range.end));
                 }
             }
         }
@@ -161,35 +173,7 @@ impl HostDBMap {
     where
         It: Iterator<Item = String>,
     {
-        let slot_range = try_get!(it.next());
-        let slot_range_tag = slot_range.to_uppercase();
-
-        if slot_range_tag == MIGRATING_TAG {
-            let dst = try_get!(it.next());
-            let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
-            slot_range.tag = SlotRangeTag::Migrating(dst);
-            Ok(slot_range)
-        } else if slot_range_tag == IMPORTING_TAG {
-            let src = try_get!(it.next());
-            let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
-            slot_range.tag = SlotRangeTag::Importing(src);
-            Ok(slot_range)
-        } else {
-            Self::parse_slot_range(slot_range)
-        }
-    }
-
-    fn parse_slot_range(s: String) -> Result<SlotRange, CmdParseError> {
-        let mut slot_range = s.split('-');
-        let start_str = try_get!(slot_range.next());
-        let end_str = try_get!(slot_range.next());
-        let start = try_parse!(start_str.parse::<usize>());
-        let end = try_parse!(end_str.parse::<usize>());
-        Ok(SlotRange {
-            start,
-            end,
-            tag: SlotRangeTag::None,
-        })
+        SlotRange::from_strings(it).ok_or_else(|| CmdParseError {})
     }
 }
 
@@ -385,10 +369,22 @@ mod tests {
             "0-1000",
             "dbname",
             "127.0.0.1:7001",
+            "importing",
             "1001-2000",
+            "233",
+            "127.0.0.2:7001",
+            "127.0.0.2:6001",
+            "127.0.0.1:7001",
+            "127.0.0.1:6002",
             "another_db",
             "127.0.0.1:7002",
+            "migrating",
             "0-2000",
+            "666",
+            "127.0.0.2:7001",
+            "127.0.0.2:6001",
+            "127.0.0.1:7001",
+            "127.0.0.1:6002",
         ];
         let mut it = arguments
             .clone()

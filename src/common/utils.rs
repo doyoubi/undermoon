@@ -1,4 +1,6 @@
+use ::protocol::{Array, BinSafeStr, BulkStr, Resp};
 use caseless;
+use crc16::{State, XMODEM};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
 
@@ -28,4 +30,45 @@ pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
     }
 }
 
+pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => resps.get(1).and_then(|resp| match resp {
+            Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
+            Resp::Simple(ref s) => Some(s.clone()),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+pub fn get_commands(resp: &Resp) -> Option<Vec<String>> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => {
+            let mut commands = vec![];
+            for resp in resps.iter() {
+                match resp {
+                    Resp::Bulk(BulkStr::Str(s)) => {
+                        commands.push(str::from_utf8(s).ok()?.to_string())
+                    }
+                    _ => return None,
+                }
+            }
+            Some(commands)
+        }
+        _ => None,
+    }
+}
+
+pub fn gen_moved(slot: usize, addr: String) -> String {
+    format!("MOVED {} {}", slot, addr)
+}
+
+pub fn get_slot(key: &[u8]) -> usize {
+    State::<XMODEM>::calculate(key) as usize % SLOT_NUM
+}
+
 pub const OLD_EPOCH_REPLY: &str = "old_epoch";
+pub const SLOT_NUM: usize = 16384;
+
+pub const MIGRATING_TAG: &str = "MIGRATING";
+pub const IMPORTING_TAG: &str = "IMPORTING";

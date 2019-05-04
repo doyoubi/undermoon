@@ -1,3 +1,4 @@
+use ::common::utils::get_key;
 use atomic_option::AtomicOption;
 use bytes::BytesMut;
 use futures::sync::oneshot;
@@ -87,17 +88,6 @@ impl Command {
 
     pub fn get_key(&self) -> Option<BinSafeStr> {
         get_key(self.get_resp())
-    }
-}
-
-pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
-    match resp {
-        Resp::Arr(Array::Arr(ref resps)) => resps.get(1).and_then(|resp| match resp {
-            Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
-            Resp::Simple(ref s) => Some(s.clone()),
-            _ => None,
-        }),
-        _ => None,
     }
 }
 
