@@ -28,6 +28,7 @@ pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     slot_range: (usize, usize),
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
+    redirection_stopped: Arc<AtomicBool>,
     blocking: Arc<AtomicBool>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
@@ -60,6 +61,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             db_name,
             slot_range,
             state: Arc::new(AtomicMigrationState::new()),
+            redirection_stopped: Arc::new(AtomicBool::new(false)),
             blocking: Arc::new(AtomicBool::new(true)),
             client_factory,
             sender_factory,
@@ -241,7 +243,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                 let delay = Delay::new(delay_time).map_err(MigrationError::Io);
                 Box::new(delay.then(move |result| {
                     if let Err(err) = result {
-                        error!("delay blocking error {:?}", err);
+                        error!("delay blocking timber error {:?}", err);
                     }
                     info!("start to drain waiting queue");
                     Self::drain_waiting_queue(
@@ -257,6 +259,23 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         )
         .map(|_| ())
         .or_else(|()| future::ok(()))
+    }
+
+    fn stop_redirection(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        let redirection_stopped = self.redirection_stopped.clone();
+        let redirection_timeout = self.config.get_max_redirection_time();
+        let delay_time = Duration::from_millis(redirection_timeout);
+        let delay = Delay::new(delay_time).map_err(MigrationError::Io);
+        delay
+            .then(move |result| {
+                if let Err(err) = result {
+                    error!("stop direction timer error {:?}", err);
+                }
+                info!("Redirecting for too long. Stop it.");
+                redirection_stopped.store(true, Ordering::SeqCst);
+                future::ok(())
+            })
+            .map_err(MigrationError::Io)
     }
 
     fn drain_waiting_queue(
@@ -297,7 +316,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
         let check_phase = self.check_repl_state();
         let commit_phase = self.commit_switch();
         let release_queue = self.release_queue();
-        let migration_fut = check_phase.and_then(|()| commit_phase.join(release_queue).map(|_| ()));
+        let stop_redirection = self.stop_redirection();
+        let release_queue_or_timeout = release_queue.and_then(move |()| stop_redirection);
+        let migration_fut =
+            check_phase.and_then(|()| commit_phase.join(release_queue_or_timeout).map(|_| ()));
 
         let meta = self.meta.clone();
 
@@ -317,7 +339,9 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
     }
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
-        if self.state.get_state() == MigrationState::TransferringData {
+        if self.state.get_state() == MigrationState::TransferringData
+            || self.redirection_stopped.load(Ordering::SeqCst)
+        {
             return Err(DBSendError::SlotNotFound(cmd_task));
         }
 

@@ -92,7 +92,7 @@ pub struct MigrationConfig {
     lag_threshold: AtomicU64,
     max_blocking_time: AtomicU64, // milliseconds
     min_blocking_time: AtomicU64, // in milliseconds
-    max_moved_time: AtomicU64,
+    max_redirection_time: AtomicU64,
 }
 
 impl Default for MigrationConfig {
@@ -101,7 +101,7 @@ impl Default for MigrationConfig {
             lag_threshold: AtomicU64::new(50000),
             max_blocking_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes
             min_blocking_time: AtomicU64::new(10),             // 10ms
-            max_moved_time: AtomicU64::new(5000),              // 10 seconds
+            max_redirection_time: AtomicU64::new(5000),        // 10 seconds
         }
     }
 }
@@ -126,8 +126,8 @@ impl MigrationConfig {
     pub fn get_min_blocking_time(&self) -> u64 {
         self.min_blocking_time.load(Ordering::SeqCst)
     }
-    pub fn get_max_moved_time(&self) -> u64 {
-        self.max_moved_time.load(Ordering::SeqCst)
+    pub fn get_max_redirection_time(&self) -> u64 {
+        self.max_redirection_time.load(Ordering::SeqCst)
     }
 }
 
