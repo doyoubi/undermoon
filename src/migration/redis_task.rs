@@ -1,8 +1,8 @@
 use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationConfig, MigrationError,
-    MigrationState, SwitchArg,
+    MigrationState, MigrationTaskMeta, SwitchArg,
 };
-use ::common::cluster::MigrationMeta;
+use ::common::cluster::{MigrationMeta, SlotRange, SlotRangeTag};
 use ::common::resp_execution::keep_connecting_and_sending;
 use ::common::utils::ThreadSafe;
 use ::common::version::SERVER_PROXY_VERSION;
@@ -25,6 +25,7 @@ use std::time::Duration;
 pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
     config: Arc<MigrationConfig>,
     db_name: String,
+    slot_range: (usize, usize),
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     blocking: Arc<AtomicBool>,
@@ -47,6 +48,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     pub fn new(
         config: Arc<MigrationConfig>,
         db_name: String,
+        slot_range: (usize, usize),
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
@@ -56,6 +58,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             config,
             meta,
             db_name,
+            slot_range,
             state: Arc::new(AtomicMigrationState::new()),
             blocking: Arc::new(AtomicBool::new(true)),
             client_factory,
@@ -152,10 +155,16 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         let mut cmd = vec!["UMCTL".to_string(), "TMPSWITCH".to_string()];
         let arg = SwitchArg {
             version: SERVER_PROXY_VERSION.to_string(),
-            db_name: self.db_name.clone(),
-            migration_meta: self.meta.clone(),
+            meta: MigrationTaskMeta {
+                db_name: self.db_name.clone(),
+                slot_range: SlotRange {
+                    start: self.slot_range.0,
+                    end: self.slot_range.1,
+                    tag: SlotRangeTag::Migrating(self.meta.clone()),
+                },
+            },
         }
-        .encode();
+        .into_strings();
         cmd.extend(arg.into_iter());
 
         let interval = Duration::new(1, 0);

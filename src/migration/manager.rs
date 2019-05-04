@@ -1,5 +1,7 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{ImportingTask, MigratingTask, MigrationConfig, MigrationTaskMeta, SwitchArg};
+use super::task::{
+    parse_tmp_switch_command, ImportingTask, MigratingTask, MigrationConfig, MigrationTaskMeta,
+};
 use ::common::cluster::{ReplPeer, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
@@ -213,6 +215,7 @@ where
                             let task = Arc::new(RedisMigratingTask::new(
                                 self.config.clone(),
                                 db_name.clone(),
+                                (slot_range.start, slot_range.end),
                                 meta,
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),
@@ -368,11 +371,13 @@ where
     }
 
     pub fn commit_importing<Task: CmdTask>(&self, cmd_task: Task) {
-        let switch_arg = match SwitchArg::decode(cmd_task.get_resp()) {
+        let switch_arg = match parse_tmp_switch_command(cmd_task.get_resp()) {
             Some(switch_meta) => switch_meta,
             None => {
                 cmd_task.set_resp_result(Ok(Resp::Error(
-                    "failed to parse TMPSWITCH".to_string().into_bytes(),
+                    "failed to parse TMPSWITCH arguments"
+                        .to_string()
+                        .into_bytes(),
                 )));
                 return;
             }
@@ -382,14 +387,12 @@ where
             .read()
             .expect("MigrationManager::commit_importing lock error")
             .1
-            .get(&switch_arg.db_name)
+            .get(&switch_arg.meta.db_name)
         {
             Some(tasks) => {
                 for (meta, record) in tasks.iter() {
-                    match meta.slot_range.tag {
-                        SlotRangeTag::Importing(ref migration_meta)
-                            if migration_meta.eq(&switch_arg.migration_meta) => {}
-                        _ => continue,
+                    if meta != &switch_arg.meta {
+                        continue;
                     }
 
                     match record {

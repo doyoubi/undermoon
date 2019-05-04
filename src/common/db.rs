@@ -1,12 +1,9 @@
-use super::cluster::{MigrationMeta, SlotRange, SlotRangeTag};
+use super::cluster::{SlotRange, SlotRangeTag};
 use super::utils::{has_flags, CmdParseError};
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::str;
-
-const MIGRATING_TAG: &str = "MIGRATING";
-const IMPORTING_TAG: &str = "IMPORTING";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DBMapFlags {
@@ -176,49 +173,7 @@ impl HostDBMap {
     where
         It: Iterator<Item = String>,
     {
-        let slot_range = try_get!(it.next());
-        let slot_range_tag = slot_range.to_uppercase();
-
-        if slot_range_tag == MIGRATING_TAG {
-            let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
-            let meta = Self::parse_migration_meta(it)?;
-            slot_range.tag = SlotRangeTag::Migrating(meta);
-            Ok(slot_range)
-        } else if slot_range_tag == IMPORTING_TAG {
-            let mut slot_range = try_parse!(Self::parse_slot_range(try_get!(it.next())));
-            let meta = Self::parse_migration_meta(it)?;
-            slot_range.tag = SlotRangeTag::Importing(meta);
-            Ok(slot_range)
-        } else {
-            Self::parse_slot_range(slot_range)
-        }
-    }
-
-    fn parse_migration_meta<It>(it: &mut It) -> Result<MigrationMeta, CmdParseError>
-    where
-        It: Iterator<Item = String>,
-    {
-        let epoch_str = try_get!(it.next());
-        Ok(MigrationMeta {
-            epoch: try_parse!(epoch_str.parse::<u64>()),
-            src_proxy_address: try_get!(it.next()),
-            src_node_address: try_get!(it.next()),
-            dst_proxy_address: try_get!(it.next()),
-            dst_node_address: try_get!(it.next()),
-        })
-    }
-
-    fn parse_slot_range(s: String) -> Result<SlotRange, CmdParseError> {
-        let mut slot_range = s.split('-');
-        let start_str = try_get!(slot_range.next());
-        let end_str = try_get!(slot_range.next());
-        let start = try_parse!(start_str.parse::<usize>());
-        let end = try_parse!(end_str.parse::<usize>());
-        Ok(SlotRange {
-            start,
-            end,
-            tag: SlotRangeTag::None,
-        })
+        SlotRange::from_strings(it).ok_or_else(|| CmdParseError {})
     }
 }
 

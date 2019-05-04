@@ -69,3 +69,6 @@ pub fn get_slot(key: &[u8]) -> usize {
 
 pub const OLD_EPOCH_REPLY: &str = "old_epoch";
 pub const SLOT_NUM: usize = 16384;
+
+pub const MIGRATING_TAG: &str = "MIGRATING";
+pub const IMPORTING_TAG: &str = "IMPORTING";

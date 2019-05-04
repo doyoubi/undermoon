@@ -1,3 +1,4 @@
+use super::utils::{IMPORTING_TAG, MIGRATING_TAG};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -8,6 +9,39 @@ pub struct MigrationMeta {
     pub src_node_address: String,
     pub dst_proxy_address: String,
     pub dst_node_address: String,
+}
+
+impl MigrationMeta {
+    pub fn into_strings(self) -> Vec<String> {
+        let MigrationMeta {
+            epoch,
+            src_proxy_address,
+            src_node_address,
+            dst_proxy_address,
+            dst_node_address,
+        } = self;
+        vec![
+            epoch.to_string(),
+            src_node_address.clone(),
+            src_proxy_address.clone(),
+            dst_node_address.clone(),
+            dst_proxy_address.clone(),
+        ]
+    }
+
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
+        let epoch_str = it.next()?;
+        Some(Self {
+            epoch: epoch_str.parse::<u64>().ok()?,
+            src_proxy_address: it.next()?,
+            src_node_address: it.next()?,
+            dst_proxy_address: it.next()?,
+            dst_node_address: it.next()?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -22,6 +56,71 @@ pub struct SlotRange {
     pub start: usize,
     pub end: usize,
     pub tag: SlotRangeTag,
+}
+
+impl SlotRange {
+    pub fn into_strings(self) -> Vec<String> {
+        let SlotRange { start, end, tag } = self;
+        let mut strs = vec![];
+        match tag {
+            SlotRangeTag::Migrating(meta) => {
+                strs.push(MIGRATING_TAG.to_string());
+                strs.push(format!("{}-{}", start, end));
+                strs.extend(meta.into_strings());
+            }
+            SlotRangeTag::Importing(meta) => {
+                strs.push(IMPORTING_TAG.to_string());
+                strs.push(format!("{}-{}", start, end));
+                strs.extend(meta.into_strings());
+            }
+            SlotRangeTag::None => {
+                strs.push(format!("{}-{}", start, end));
+            }
+        }
+        strs
+    }
+
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
+        let slot_range = it.next()?;
+        let slot_range_tag = slot_range.to_uppercase();
+
+        if slot_range_tag == MIGRATING_TAG {
+            let (start, end) = Self::parse_slot_range(it.next()?)?;
+            let meta = MigrationMeta::from_strings(it)?;
+            Some(SlotRange {
+                start,
+                end,
+                tag: SlotRangeTag::Migrating(meta),
+            })
+        } else if slot_range_tag == IMPORTING_TAG {
+            let (start, end) = Self::parse_slot_range(it.next()?)?;
+            let meta = MigrationMeta::from_strings(it)?;
+            Some(SlotRange {
+                start,
+                end,
+                tag: SlotRangeTag::Importing(meta),
+            })
+        } else {
+            let (start, end) = Self::parse_slot_range(slot_range)?;
+            Some(SlotRange {
+                start,
+                end,
+                tag: SlotRangeTag::None,
+            })
+        }
+    }
+
+    fn parse_slot_range(s: String) -> Option<(usize, usize)> {
+        let mut slot_range = s.split('-');
+        let start_str = slot_range.next()?;
+        let end_str = slot_range.next()?;
+        let start = start_str.parse::<usize>().ok()?;
+        let end = end_str.parse::<usize>().ok()?;
+        Some((start, end))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

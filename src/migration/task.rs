@@ -1,4 +1,4 @@
-use ::common::cluster::{MigrationMeta, SlotRange};
+use ::common::cluster::SlotRange;
 use ::common::utils::{get_commands, ThreadSafe};
 use ::protocol::Resp;
 use ::proxy::backend::CmdTask;
@@ -14,6 +14,29 @@ use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 pub struct MigrationTaskMeta {
     pub db_name: String,
     pub slot_range: SlotRange,
+}
+
+impl MigrationTaskMeta {
+    pub fn into_strings(self) -> Vec<String> {
+        let MigrationTaskMeta {
+            db_name,
+            slot_range,
+        } = self;
+        let mut strs = vec![db_name];
+        strs.extend(slot_range.into_strings());
+        strs
+    }
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
+        let db_name = it.next()?;
+        let slot_range = SlotRange::from_strings(it)?;
+        Some(Self {
+            db_name,
+            slot_range,
+        })
+    }
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -69,6 +92,7 @@ pub struct MigrationConfig {
     lag_threshold: AtomicU64,
     max_blocking_time: AtomicU64, // milliseconds
     min_blocking_time: AtomicU64, // in milliseconds
+    max_moved_time: AtomicU64,
 }
 
 impl Default for MigrationConfig {
@@ -77,6 +101,7 @@ impl Default for MigrationConfig {
             lag_threshold: AtomicU64::new(50000),
             max_blocking_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes
             min_blocking_time: AtomicU64::new(10),             // 10ms
+            max_moved_time: AtomicU64::new(5000),              // 10 seconds
         }
     }
 }
@@ -101,53 +126,41 @@ impl MigrationConfig {
     pub fn get_min_blocking_time(&self) -> u64 {
         self.min_blocking_time.load(Ordering::SeqCst)
     }
+    pub fn get_max_moved_time(&self) -> u64 {
+        self.max_moved_time.load(Ordering::SeqCst)
+    }
 }
 
 pub struct SwitchArg {
     pub version: String,
-    pub db_name: String,
-    pub migration_meta: MigrationMeta,
+    pub meta: MigrationTaskMeta,
 }
 
 impl SwitchArg {
-    pub fn encode(self) -> Vec<String> {
-        let SwitchArg {
-            version,
-            db_name,
-            migration_meta,
-        } = self;
-        return vec![
-            version,
-            db_name,
-            migration_meta.epoch.to_string(),
-            migration_meta.src_node_address.clone(),
-            migration_meta.src_proxy_address.clone(),
-            migration_meta.dst_node_address.clone(),
-            migration_meta.dst_node_address.clone(),
-        ];
+    pub fn into_strings(self) -> Vec<String> {
+        let SwitchArg { version, meta } = self;
+        let mut strs = vec![version];
+        strs.extend(meta.into_strings().into_iter());
+        strs
     }
 
-    pub fn decode(resp: &Resp) -> Option<Self> {
-        let commands = get_commands(resp)?;
-        // Skip UMCTL TMPSWITCH
-        let mut it = commands.into_iter();
-        it.next()?;
-        it.next()?;
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
         let version = it.next()?;
-        let db_name = it.next()?;
-        let migration_meta = MigrationMeta {
-            epoch: it.next()?.parse::<u64>().ok()?,
-            src_proxy_address: it.next()?,
-            src_node_address: it.next()?,
-            dst_proxy_address: it.next()?,
-            dst_node_address: it.next()?,
-        };
-        Some(Self {
-            version,
-            db_name,
-            migration_meta,
-        })
+        let meta = MigrationTaskMeta::from_strings(it)?;
+        Some(Self { version, meta })
     }
+}
+
+pub fn parse_tmp_switch_command(resp: &Resp) -> Option<SwitchArg> {
+    let command = get_commands(resp)?;
+    let mut it = command.into_iter();
+    // Skip UMCTL TMPSWITCH
+    it.next()?;
+    it.next()?;
+    SwitchArg::from_strings(&mut it)
 }
 
 #[derive(Debug)]
