@@ -115,9 +115,17 @@ impl<
         client_factory: Arc<F>,
     ) -> impl MigrationStateSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
-        let checker = MigrationStateRespChecker::new(client_factory);
+        let checker = MigrationStateRespChecker::new(client_factory.clone());
         let committer = BrokerMigrationCommitter::new(mani_broker);
-        SeqMigrationStateSynchronizer::new(proxy_retriever, checker, committer)
+        let meta_retriever = PeerMetaRetriever::new(data_broker);
+        let sender = PeerMetaRespSender::new(client_factory);
+        SeqMigrationStateSynchronizer::new(
+            proxy_retriever,
+            checker,
+            committer,
+            meta_retriever,
+            sender,
+        )
     }
 
     fn loop_detect(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {

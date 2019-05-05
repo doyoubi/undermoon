@@ -51,6 +51,16 @@ pub enum SlotRangeTag {
     None,
 }
 
+impl SlotRangeTag {
+    pub fn get_migration_meta(&self) -> Option<&MigrationMeta> {
+        match self {
+            SlotRangeTag::Migrating(ref meta) => Some(meta),
+            SlotRangeTag::Importing(ref meta) => Some(meta),
+            SlotRangeTag::None => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SlotRange {
     pub start: usize,

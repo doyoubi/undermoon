@@ -245,14 +245,18 @@ pub trait MigrationCommitter: Sync + Send + 'static {
 }
 
 pub trait MigrationStateSynchronizer: Sync + Send + 'static {
-    type Retriever: ProxiesRetriever;
+    type PRetriever: ProxiesRetriever;
     type Checker: MigrationStateChecker;
     type Committer: MigrationCommitter;
+    type MRetriever: HostMetaRetriever;
+    type Sender: HostMetaSender;
 
     fn new(
-        proxy_retriever: Self::Retriever,
+        proxy_retriever: Self::PRetriever,
         checker: Self::Checker,
         committer: Self::Committer,
+        meta_retriever: Self::MRetriever,
+        sender: Self::Sender,
     ) -> Self;
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
 }
@@ -261,47 +265,128 @@ pub struct SeqMigrationStateSynchronizer<
     PR: ProxiesRetriever,
     SC: MigrationStateChecker,
     MC: MigrationCommitter,
+    MR: HostMetaRetriever,
+    S: HostMetaSender,
 > {
     proxy_retriever: PR,
     checker: Arc<SC>,
     committer: Arc<MC>,
+    meta_retriever: Arc<MR>,
+    sender: Arc<S>,
 }
 
-impl<PR: ProxiesRetriever, SC: MigrationStateChecker, MC: MigrationCommitter>
-    MigrationStateSynchronizer for SeqMigrationStateSynchronizer<PR, SC, MC>
+impl<
+        PR: ProxiesRetriever,
+        SC: MigrationStateChecker,
+        MC: MigrationCommitter,
+        MR: HostMetaRetriever,
+        S: HostMetaSender,
+    > SeqMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
-    type Retriever = PR;
+    fn set_db_meta(
+        address: String,
+        meta_retriever: Arc<MR>,
+        sender: Arc<S>,
+    ) -> impl Future<Item = (), Error = CoordinateError> + Send + 'static {
+        meta_retriever.get_host_meta(address.clone()).and_then(move |host_opt| -> Box<dyn Future<Item=(), Error=CoordinateError> + Send + 'static> {
+            let host = match host_opt {
+                Some(host) => host,
+                None => {
+                    error!("host can't be found after committing migration {}", address);
+                    return Box::new(future::ok(()))
+                }
+            };
+            info!("sending meta after committing migration {}", address);
+            sender.send_meta(host)
+        })
+    }
+}
+
+impl<
+        PR: ProxiesRetriever,
+        SC: MigrationStateChecker,
+        MC: MigrationCommitter,
+        MR: HostMetaRetriever,
+        S: HostMetaSender,
+    > MigrationStateSynchronizer for SeqMigrationStateSynchronizer<PR, SC, MC, MR, S>
+{
+    type PRetriever = PR;
     type Checker = SC;
     type Committer = MC;
+    type MRetriever = MR;
+    type Sender = S;
 
     fn new(
-        proxy_retriever: Self::Retriever,
+        proxy_retriever: Self::PRetriever,
         checker: Self::Checker,
         committer: Self::Committer,
+        meta_retriever: Self::MRetriever,
+        sender: Self::Sender,
     ) -> Self {
         Self {
             proxy_retriever,
             checker: Arc::new(checker),
             committer: Arc::new(committer),
+            meta_retriever: Arc::new(meta_retriever),
+            sender: Arc::new(sender),
         }
     }
 
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
         let checker = self.checker.clone();
         let committer = self.committer.clone();
+        let meta_retriever = self.meta_retriever.clone();
+        let sender = self.sender.clone();
         Box::new(
             self.proxy_retriever
                 .retrieve_proxies()
                 .map(move |address| checker.check(address))
                 .flatten()
-                .and_then(move |meta| {
-                    committer.commit(meta).then(|res| {
-                        if let Err(e) = res {
-                            error!("failed to commit migration state: {:?}", e);
-                        }
-                        future::ok(())
-                    })
-                }),
+                .and_then(
+                    move |meta| -> Box<
+                        dyn Future<Item = (), Error = CoordinateError> + Send + 'static,
+                    > {
+                        let (src_address, dst_address) =
+                            match meta.slot_range.tag.get_migration_meta() {
+                                Some(migration_meta) => (
+                                    migration_meta.src_proxy_address.clone(),
+                                    migration_meta.dst_proxy_address.clone(),
+                                ),
+                                None => {
+                                    error!("invalid migration task meta {:?}, skip it.", meta);
+                                    return Box::new(future::ok(()));
+                                }
+                            };
+
+                        let meta_retriever_clone1 = meta_retriever.clone();
+                        let sender_clone1 = sender.clone();
+                        let meta_retriever_clone2 = meta_retriever.clone();
+                        let sender_clone2 = sender.clone();
+                        Box::new(
+                            committer
+                                .commit(meta)
+                                .map_err(|e| {
+                                    error!("failed to commit migration state: {:?}", e);
+                                    e
+                                })
+                                .and_then(move |()| {
+                                    // Send to dst first to make sure the slots will always have owner.
+                                    Self::set_db_meta(
+                                        dst_address,
+                                        meta_retriever_clone1.clone(),
+                                        sender_clone1.clone(),
+                                    )
+                                })
+                                .and_then(move |()| {
+                                    Self::set_db_meta(
+                                        src_address,
+                                        meta_retriever_clone2.clone(),
+                                        sender_clone2.clone(),
+                                    )
+                                }),
+                        )
+                    },
+                ),
         )
     }
 }
