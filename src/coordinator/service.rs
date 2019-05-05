@@ -1,9 +1,11 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{
     CoordinateError, FailureDetector, FailureHandler, HostMetaRespSynchronizer,
-    HostMetaSynchronizer, SeqFailureDetector, SeqFailureHandler,
+    HostMetaSynchronizer, MigrationStateSynchronizer, SeqFailureDetector, SeqFailureHandler,
+    SeqMigrationStateSynchronizer,
 };
 use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailureDetector};
+use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
 use super::recover::{BrokerNodeFailureRetriever, BrokerProxyFailureRetriever, ReplaceNodeHandler};
 use super::sync::{HostMetaRespSender, LocalMetaRetriever, PeerMetaRespSender, PeerMetaRetriever};
 use common::utils::ThreadSafe;
@@ -22,13 +24,13 @@ pub struct CoordinatorConfig {
 }
 
 pub struct CoordinatorService<
-    DB: MetaDataBroker + ThreadSafe + Clone,
-    MB: MetaManipulationBroker + Clone,
+    DB: MetaDataBroker + ThreadSafe,
+    MB: MetaManipulationBroker,
     F: RedisClientFactory,
 > {
     config: CoordinatorConfig,
-    data_broker: DB,
-    mani_broker: MB,
+    data_broker: Arc<DB>,
+    mani_broker: Arc<MB>,
     client_factory: Arc<F>,
 }
 
@@ -40,8 +42,8 @@ impl<
 {
     pub fn new(
         config: CoordinatorConfig,
-        data_broker: DB,
-        mani_broker: MB,
+        data_broker: Arc<DB>,
+        mani_broker: Arc<MB>,
         client_factory: F,
     ) -> Self {
         Self {
@@ -60,6 +62,7 @@ impl<
             self.loop_local_sync(),
             self.loop_peer_sync(),
             self.loop_failure_handler(),
+            self.loop_migration_sync(),
         ])
         .map(|_| error!("service stopped"))
         .map_err(|(e, _idx, _others)| {
@@ -70,7 +73,7 @@ impl<
 
     fn gen_detector(
         reporter_id: String,
-        data_broker: DB,
+        data_broker: Arc<DB>,
         client_factory: Arc<F>,
     ) -> impl FailureDetector {
         let retriever = BrokerProxiesRetriever::new(data_broker.clone());
@@ -80,7 +83,7 @@ impl<
     }
 
     fn gen_local_meta_synchronizer(
-        data_broker: DB,
+        data_broker: Arc<DB>,
         client_factory: Arc<F>,
     ) -> impl HostMetaSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
@@ -90,7 +93,7 @@ impl<
     }
 
     fn gen_peer_meta_synchronizer(
-        data_broker: DB,
+        data_broker: Arc<DB>,
         client_factory: Arc<F>,
     ) -> impl HostMetaSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
@@ -99,11 +102,22 @@ impl<
         HostMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)
     }
 
-    fn gen_failure_handler(data_broker: DB, mani_broker: MB) -> impl FailureHandler {
+    fn gen_failure_handler(data_broker: Arc<DB>, mani_broker: Arc<MB>) -> impl FailureHandler {
         let proxy_retriever = BrokerProxyFailureRetriever::new(data_broker.clone());
         let node_retriever = BrokerNodeFailureRetriever::new(data_broker.clone());
         let handler = ReplaceNodeHandler::new(data_broker, mani_broker);
         SeqFailureHandler::new(proxy_retriever, node_retriever, handler)
+    }
+
+    fn gen_migration_state_synchronizer(
+        data_broker: Arc<DB>,
+        mani_broker: Arc<MB>,
+        client_factory: Arc<F>,
+    ) -> impl MigrationStateSynchronizer {
+        let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
+        let checker = MigrationStateRespChecker::new(client_factory);
+        let committer = BrokerMigrationCommitter::new(mani_broker);
+        SeqMigrationStateSynchronizer::new(proxy_retriever, checker, committer)
     }
 
     fn loop_detect(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
@@ -204,7 +218,7 @@ impl<
                 (data_broker, mani_broker),
                 |(data_broker, mani_broker), ()| {
                     debug!("start handling failures");
-                    defer!(debug!("handling finished a round"));
+                    defer!(debug!("handling failures finished a round"));
                     let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
                     Self::gen_failure_handler(data_broker.clone(), mani_broker.clone())
                         .run()
@@ -220,6 +234,39 @@ impl<
                 },
             )
             .map(|_| debug!("loop_failure_handler stopped")),
+        )
+    }
+
+    fn loop_migration_sync(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+        let s = stream::iter_ok(iter::repeat(()));
+        let data_broker = self.data_broker.clone();
+        let mani_broker = self.mani_broker.clone();
+        let client_factory = self.client_factory.clone();
+        Box::new(
+            s.fold(
+                (data_broker, mani_broker, client_factory),
+                |(data_broker, mani_broker, client_factory), ()| {
+                    debug!("start handling migration sync");
+                    defer!(debug!("handling migration finished a round"));
+                    let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
+                    Self::gen_migration_state_synchronizer(
+                        data_broker.clone(),
+                        mani_broker.clone(),
+                        client_factory.clone(),
+                    )
+                    .run()
+                    .collect()
+                    .then(|res| {
+                        if let Err(e) = res {
+                            error!("migration sync stream err {:?}", e)
+                        }
+                        future::ok(())
+                    })
+                    .join(delay)
+                    .then(move |_| future::ok((data_broker, mani_broker, client_factory)))
+                },
+            )
+            .map(|_| debug!("loop_migration_sync stopped")),
         )
     }
 }

@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBrokerError, MetaManipulationBrokerError};
-use common::cluster::{Host, Node};
+use common::cluster::{Host, MigrationTaskMeta, Node};
 use futures::{future, Future, Stream};
 use protocol::RedisClientError;
 use std::error::Error;
@@ -222,6 +222,82 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynch
                     sender.send_meta(host).then(|res| {
                         if let Err(e) = res {
                             error!("failed to set meta: {:?}", e);
+                        }
+                        future::ok(())
+                    })
+                }),
+        )
+    }
+}
+
+pub trait MigrationStateChecker: Sync + Send + 'static {
+    fn check(
+        &self,
+        address: String,
+    ) -> Box<dyn Stream<Item = MigrationTaskMeta, Error = CoordinateError> + Send>;
+}
+
+pub trait MigrationCommitter: Sync + Send + 'static {
+    fn commit(
+        &self,
+        meta: MigrationTaskMeta,
+    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+}
+
+pub trait MigrationStateSynchronizer: Sync + Send + 'static {
+    type Retriever: ProxiesRetriever;
+    type Checker: MigrationStateChecker;
+    type Committer: MigrationCommitter;
+
+    fn new(
+        proxy_retriever: Self::Retriever,
+        checker: Self::Checker,
+        committer: Self::Committer,
+    ) -> Self;
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
+}
+
+pub struct SeqMigrationStateSynchronizer<
+    PR: ProxiesRetriever,
+    SC: MigrationStateChecker,
+    MC: MigrationCommitter,
+> {
+    proxy_retriever: PR,
+    checker: Arc<SC>,
+    committer: Arc<MC>,
+}
+
+impl<PR: ProxiesRetriever, SC: MigrationStateChecker, MC: MigrationCommitter>
+    MigrationStateSynchronizer for SeqMigrationStateSynchronizer<PR, SC, MC>
+{
+    type Retriever = PR;
+    type Checker = SC;
+    type Committer = MC;
+
+    fn new(
+        proxy_retriever: Self::Retriever,
+        checker: Self::Checker,
+        committer: Self::Committer,
+    ) -> Self {
+        Self {
+            proxy_retriever,
+            checker: Arc::new(checker),
+            committer: Arc::new(committer),
+        }
+    }
+
+    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+        let checker = self.checker.clone();
+        let committer = self.committer.clone();
+        Box::new(
+            self.proxy_retriever
+                .retrieve_proxies()
+                .map(move |address| checker.check(address))
+                .flatten()
+                .and_then(move |meta| {
+                    committer.commit(meta).then(|res| {
+                        if let Err(e) = res {
+                            error!("failed to commit migration state: {:?}", e);
                         }
                         future::ok(())
                     })

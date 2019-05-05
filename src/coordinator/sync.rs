@@ -80,7 +80,6 @@ impl<F: RedisClientFactory> HostMetaSender for PeerMetaRespSender<F> {
             .client_factory
             .create_client(address)
             .map_err(CoordinateError::Redis);
-        // TODO: Remove MIGRATING and IMPORTING tags for peers.
         Box::new(client_fut.and_then(|client| {
             send_meta(
                 client,
@@ -93,11 +92,11 @@ impl<F: RedisClientFactory> HostMetaSender for PeerMetaRespSender<F> {
 }
 
 pub struct LocalMetaRetriever<B: MetaDataBroker> {
-    broker: B,
+    broker: Arc<B>,
 }
 
 impl<B: MetaDataBroker> LocalMetaRetriever<B> {
-    pub fn new(broker: B) -> Self {
+    pub fn new(broker: Arc<B>) -> Self {
         Self { broker }
     }
 }
@@ -116,11 +115,11 @@ impl<B: MetaDataBroker> HostMetaRetriever for LocalMetaRetriever<B> {
 }
 
 pub struct PeerMetaRetriever<B: MetaDataBroker> {
-    broker: B,
+    broker: Arc<B>,
 }
 
 impl<B: MetaDataBroker> PeerMetaRetriever<B> {
-    pub fn new(broker: B) -> Self {
+    pub fn new(broker: Arc<B>) -> Self {
         Self { broker }
     }
 }

@@ -189,6 +189,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
         let db_map_clone = db_map.clone();
 
+        // Put db meta and migration meta together for consistency.
+        // We can make sure that IMPORTING slots will not be handled directly
+        // before the migration succeed. This is also why we should store the
+        // new metadata to `migration_manager` first.
         match self.migration_manager.update(db_map_clone) {
             Ok(()) => {
                 debug!("Successfully update migration meta data");

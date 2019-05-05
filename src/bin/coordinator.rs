@@ -10,6 +10,7 @@ extern crate env_logger;
 use futures::Future;
 use reqwest::r#async as request_async; // async is a keyword later
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
 use undermoon::coordinator::http_mani_broker::HttpMetaManipulationBroker;
 use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
@@ -52,8 +53,14 @@ fn main() {
     let http_client = request_async::ClientBuilder::new()
         .build()
         .expect("request_async_client");
-    let data_broker = HttpMetaBroker::new(config.broker_address.clone(), http_client.clone());
-    let mani_broker = HttpMetaManipulationBroker::new(config.broker_address.clone(), http_client);
+    let data_broker = Arc::new(HttpMetaBroker::new(
+        config.broker_address.clone(),
+        http_client.clone(),
+    ));
+    let mani_broker = Arc::new(HttpMetaManipulationBroker::new(
+        config.broker_address.clone(),
+        http_client,
+    ));
 
     let timeout = Duration::new(2, 0);
     let pool_size = 2;
