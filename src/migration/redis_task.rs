@@ -1,8 +1,8 @@
 use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationConfig, MigrationError,
-    MigrationState, MigrationTaskMeta, SwitchArg,
+    MigrationState, SwitchArg,
 };
-use ::common::cluster::{MigrationMeta, SlotRange, SlotRangeTag};
+use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::resp_execution::keep_connecting_and_sending;
 use ::common::utils::ThreadSafe;
 use ::common::version::SERVER_PROXY_VERSION;

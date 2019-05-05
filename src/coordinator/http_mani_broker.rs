@@ -1,5 +1,5 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
-use common::cluster::Node;
+use common::cluster::{MigrationTaskMeta, Node};
 use common::utils::ThreadSafe;
 use futures::{future, Future, Stream};
 use reqwest::r#async as request_async; // async is a keyword later
@@ -57,6 +57,43 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
                             }
                             Err(e) => {
                                 error!("Failed to get body: {:?}", e);
+                                future::err(MetaManipulationBrokerError::InvalidReply)
+                            }
+                        });
+                        Box::new(body_fut)
+                    };
+                fut
+            });
+        Box::new(fut)
+    }
+
+    fn commit_migration(
+        &self,
+        meta: MigrationTaskMeta,
+    ) -> Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send> {
+        let url = format!("http://{}/api/clusters/migration", self.broker_address);
+        let request_payload = meta.clone();
+
+        let request = self.client.put(&url).json(&request_payload).send();
+        let fut = request
+            .map_err(|e| {
+                error!("Failed to commit migration {:?}", e);
+                MetaManipulationBrokerError::InvalidReply
+            })
+            .and_then(|response| {
+                let status = response.status();
+                let fut: Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send> =
+                    if status.is_success() {
+                        Box::new(future::ok(()))
+                    } else {
+                        error!("Failed to commit migration status code {:?}", status);
+                        let body_fut = response.into_body().collect().then(|result| match result {
+                            Ok(body) => {
+                                error!("HttpMetaManipulationBroker::commit_migration Error body: {:?}", body);
+                                future::err(MetaManipulationBrokerError::InvalidReply)
+                            }
+                            Err(e) => {
+                                error!("HttpMetaManipulationBroker::commit_migration Failed to get body: {:?}", e);
                                 future::err(MetaManipulationBrokerError::InvalidReply)
                             }
                         });

@@ -123,6 +123,12 @@ impl SlotRange {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct MigrationTaskMeta {
+    pub db_name: String,
+    pub slot_range: SlotRange,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ReplPeer {
     pub node_address: String,

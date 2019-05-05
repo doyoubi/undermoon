@@ -1,4 +1,4 @@
-use ::common::cluster::SlotRange;
+use ::common::cluster::{MigrationTaskMeta, SlotRange};
 use ::common::utils::{get_commands, ThreadSafe};
 use ::protocol::Resp;
 use ::proxy::backend::CmdTask;
@@ -9,12 +9,6 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MigrationTaskMeta {
-    pub db_name: String,
-    pub slot_range: SlotRange,
-}
 
 impl MigrationTaskMeta {
     pub fn into_strings(self) -> Vec<String> {

@@ -1,8 +1,6 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{
-    parse_tmp_switch_command, ImportingTask, MigratingTask, MigrationConfig, MigrationTaskMeta,
-};
-use ::common::cluster::{ReplPeer, SlotRange, SlotRangeTag};
+use super::task::{parse_tmp_switch_command, ImportingTask, MigratingTask, MigrationConfig};
+use ::common::cluster::{MigrationTaskMeta, ReplPeer, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
 use ::protocol::RedisClientFactory;

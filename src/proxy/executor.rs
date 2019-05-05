@@ -165,6 +165,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_setrepl(cmd_ctx);
         } else if sub_cmd.eq("INFOREPL") {
             self.handle_umctl_info_repl(cmd_ctx);
+        } else if sub_cmd.eq("INFOMGR") {
+            self.handle_umctl_info_migration(cmd_ctx);
         } else if sub_cmd.eq("TMPSWITCH") {
             self.handle_umctl_tmp_switch(cmd_ctx);
         } else {
@@ -193,13 +195,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 debug!("local meta data: {:?}", db_map);
                 match self.db.set_dbs(db_map) {
                     Ok(()) => {
-                        let finished_tasks = self.migration_manager.get_finished_tasks();
-                        let packet: Vec<Resp> = finished_tasks
-                            .into_iter()
-                            .map(|task| task.into_strings().join(" "))
-                            .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
-                            .collect();
-                        cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(packet))));
+                        cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
                     }
                     Err(e) => {
                         debug!("Failed to update local meta data {:?}", e);
@@ -280,6 +276,16 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
     fn handle_umctl_tmp_switch(&self, cmd_ctx: CmdCtx) {
         self.migration_manager.commit_importing(cmd_ctx);
+    }
+
+    fn handle_umctl_info_migration(&self, cmd_ctx: CmdCtx) {
+        let finished_tasks = self.migration_manager.get_finished_tasks();
+        let packet: Vec<Resp> = finished_tasks
+            .into_iter()
+            .map(|task| task.into_strings().join(" "))
+            .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+            .collect();
+        cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(packet))))
     }
 }
 
