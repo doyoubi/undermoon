@@ -132,3 +132,30 @@ Request:
 Response:
 empty payload
 ```
+
+##### (7) PUT /api/clusters/migration
+Try to do the failover for the specified node.
+```
+Request:
+{
+    "db_name": "mydb",
+    "slot_range": {
+        "start": 0,
+        "end": 5000,
+        "tag": {
+            "Migrating": {
+                "epoch": 233,
+                "src_proxy_address": "127.0.0.1:7000",
+                "src_node_address": "127.0.0.1:7001",
+                "dst_proxy_address": "127.0.0.2:7000",
+                "dst_node_address": "127.0.0.2:7001"
+            }
+        }
+    }
+}
+
+Response:
+{
+    "addresses": ["server_proxy_address1", ...],
+}
+```

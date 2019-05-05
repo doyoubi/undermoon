@@ -51,6 +51,16 @@ pub enum SlotRangeTag {
     None,
 }
 
+impl SlotRangeTag {
+    pub fn get_migration_meta(&self) -> Option<&MigrationMeta> {
+        match self {
+            SlotRangeTag::Migrating(ref meta) => Some(meta),
+            SlotRangeTag::Importing(ref meta) => Some(meta),
+            SlotRangeTag::None => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SlotRange {
     pub start: usize,
@@ -121,6 +131,12 @@ impl SlotRange {
         let end = end_str.parse::<usize>().ok()?;
         Some((start, end))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct MigrationTaskMeta {
+    pub db_name: String,
+    pub slot_range: SlotRange,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

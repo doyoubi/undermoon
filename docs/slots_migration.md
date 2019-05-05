@@ -35,7 +35,7 @@ Proxy B does not stop the replication now.
 If proxy B waits for too long, it will directly change to the final state.
 
 #### (7) Coordinator Reacts to the Done Flag from proxy A.
-Coordinator finds out the migration is done from the reply of `UMCTL SETDB` and writes that to the broker.
+Coordinator finds out the migration is done from the reply of `UMCTL INFOMGR` and writes that to the broker.
 
 #### (8) Broker sets the new metadata.
 Broker cleans up `MIGRATING` and `IMPORTING` flags and bumps the epoch.
@@ -60,4 +60,4 @@ Proxy B sets the new metadata and stop the replication.
   - dst proxy address
   - dst node address
   - slot ranges
- 
+- Migration metadata are bounded to nodes, not cluster.

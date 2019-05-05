@@ -5,11 +5,11 @@ use protocol::{RedisClient, RedisClientFactory};
 use std::sync::Arc;
 
 pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
-    meta_data_broker: B,
+    meta_data_broker: Arc<B>,
 }
 
 impl<B: MetaDataBroker> BrokerProxiesRetriever<B> {
-    pub fn new(meta_data_broker: B) -> Self {
+    pub fn new(meta_data_broker: Arc<B>) -> Self {
         Self { meta_data_broker }
     }
 }
@@ -58,11 +58,11 @@ impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
 
 pub struct BrokerFailureReporter<B: MetaDataBroker> {
     reporter_id: String,
-    meta_data_broker: B,
+    meta_data_broker: Arc<B>,
 }
 
 impl<B: MetaDataBroker> BrokerFailureReporter<B> {
-    pub fn new(reporter_id: String, meta_data_broker: B) -> Self {
+    pub fn new(reporter_id: String, meta_data_broker: Arc<B>) -> Self {
         Self {
             reporter_id,
             meta_data_broker,
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_detector() {
-        let broker = DummyMetaBroker::new();
+        let broker = Arc::new(DummyMetaBroker::new());
         let retriever = BrokerProxiesRetriever::new(broker.clone());
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());

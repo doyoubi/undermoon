@@ -1,4 +1,4 @@
-use common::cluster::{Cluster, Host, Node};
+use common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
 use common::utils::ThreadSafe;
 use futures::{Future, Stream};
 use std::error::Error;
@@ -40,6 +40,10 @@ pub trait MetaManipulationBroker: ThreadSafe {
         cluster_epoch: u64,
         failed_node: Node,
     ) -> Box<dyn Future<Item = Node, Error = MetaManipulationBrokerError> + Send>;
+    fn commit_migration(
+        &self,
+        meta: MigrationTaskMeta,
+    ) -> Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send>;
 }
 
 #[derive(Debug)]

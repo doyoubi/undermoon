@@ -3,13 +3,14 @@ use super::core::{
     CoordinateError, NodeFailure, NodeFailureHandler, NodeFailureRetriever, ProxyFailureRetriever,
 };
 use futures::{future, stream, Future, Stream};
+use std::sync::Arc;
 
 pub struct BrokerProxyFailureRetriever<B: MetaDataBroker> {
-    broker: B,
+    broker: Arc<B>,
 }
 
 impl<B: MetaDataBroker> BrokerProxyFailureRetriever<B> {
-    pub fn new(broker: B) -> Self {
+    pub fn new(broker: Arc<B>) -> Self {
         Self { broker }
     }
 }
@@ -27,11 +28,11 @@ impl<B: MetaDataBroker> ProxyFailureRetriever for BrokerProxyFailureRetriever<B>
 }
 
 pub struct BrokerNodeFailureRetriever<B: MetaDataBroker> {
-    broker: B,
+    broker: Arc<B>,
 }
 
 impl<B: MetaDataBroker> BrokerNodeFailureRetriever<B> {
-    pub fn new(broker: B) -> Self {
+    pub fn new(broker: Arc<B>) -> Self {
         Self { broker }
     }
 }
@@ -61,12 +62,12 @@ impl<B: MetaDataBroker> NodeFailureRetriever for BrokerNodeFailureRetriever<B> {
 }
 
 pub struct ReplaceNodeHandler<DB: MetaDataBroker, MB: MetaManipulationBroker + Clone> {
-    data_broker: DB,
-    mani_broker: MB,
+    data_broker: Arc<DB>,
+    mani_broker: Arc<MB>,
 }
 
 impl<DB: MetaDataBroker, MB: MetaManipulationBroker + Clone> ReplaceNodeHandler<DB, MB> {
-    pub fn new(data_broker: DB, mani_broker: MB) -> Self {
+    pub fn new(data_broker: Arc<DB>, mani_broker: Arc<MB>) -> Self {
         Self {
             data_broker,
             mani_broker,
