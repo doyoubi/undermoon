@@ -193,7 +193,13 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 debug!("local meta data: {:?}", db_map);
                 match self.db.set_dbs(db_map) {
                     Ok(()) => {
-                        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+                        let finished_tasks = self.migration_manager.get_finished_tasks();
+                        let packet: Vec<Resp> = finished_tasks
+                            .into_iter()
+                            .map(|task| task.into_strings().join(" "))
+                            .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+                            .collect();
+                        cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(packet))));
                     }
                     Err(e) => {
                         debug!("Failed to update local meta data {:?}", e);

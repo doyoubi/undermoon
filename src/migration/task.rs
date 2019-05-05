@@ -77,6 +77,7 @@ pub trait MigratingTask: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
+    fn get_state(&self) -> MigrationState;
 }
 
 pub trait ImportingTask: ThreadSafe {

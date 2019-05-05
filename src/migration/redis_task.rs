@@ -375,6 +375,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
 
         res
     }
+
+    fn get_state(&self) -> MigrationState {
+        self.state.get_state()
+    }
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop

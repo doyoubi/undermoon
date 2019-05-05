@@ -13,6 +13,7 @@ use ::replication::manager::ReplicatorManager;
 use ::replication::replicator::{MasterMeta, ReplicaMeta, ReplicatorMeta};
 use futures::Future;
 use itertools::Either;
+use migration::task::MigrationState;
 use std::collections::HashMap;
 use std::sync::atomic;
 use std::sync::{Arc, RwLock};
@@ -382,53 +383,67 @@ where
                 return;
             }
         };
-        match self
+        if let Some(tasks) = self
             .dbs
             .read()
             .expect("MigrationManager::commit_importing lock error")
             .1
             .get(&switch_arg.meta.db_name)
         {
-            Some(tasks) => {
-                for (meta, record) in tasks.iter() {
-                    if meta != &switch_arg.meta {
-                        continue;
+            if let Some(record) = tasks.get(&switch_arg.meta) {
+                match record {
+                    Either::Left(_migrating_task) => {
+                        error!(
+                            "Received switch request when migrating {:?}",
+                            switch_arg.meta
+                        );
+                        cmd_task.set_resp_result(Ok(Resp::Error(
+                            "Peer migrating".to_string().into_bytes(),
+                        )));
+                        return;
                     }
-
-                    match record {
-                        Either::Left(_migrating_task) => {
-                            error!("Received switch request when migrating {:?}", meta);
-                            cmd_task.set_resp_result(Ok(Resp::Error(
-                                "Peer migrating".to_string().into_bytes(),
-                            )));
-                            return;
-                        }
-                        Either::Right(importing_task) => {
-                            match importing_task.commit(switch_arg) {
-                                Ok(()) => {
-                                    cmd_task.set_resp_result(Ok(Resp::Simple(
-                                        "OK".to_string().into_bytes(),
-                                    )));
-                                }
-                                Err(err) => {
-                                    cmd_task.set_resp_result(Ok(Resp::Error(
-                                        format!("switch failed: {:?}", err).into_bytes(),
-                                    )));
-                                }
+                    Either::Right(importing_task) => {
+                        match importing_task.commit(switch_arg) {
+                            Ok(()) => {
+                                cmd_task.set_resp_result(Ok(Resp::Simple(
+                                    "OK".to_string().into_bytes(),
+                                )));
                             }
-                            return;
+                            Err(err) => {
+                                cmd_task.set_resp_result(Ok(Resp::Error(
+                                    format!("switch failed: {:?}", err).into_bytes(),
+                                )));
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        cmd_task.set_resp_result(Ok(Resp::Error(
+            "No Corresponding task found".to_string().into_bytes(),
+        )));
+    }
+
+    pub fn get_finished_tasks(&self) -> Vec<MigrationTaskMeta> {
+        let mut metadata = vec![];
+        {
+            for (_db_name, tasks) in self
+                .dbs
+                .read()
+                .expect("Migration::get_finished_tasks")
+                .1
+                .iter()
+            {
+                for (meta, task) in tasks.iter() {
+                    if let Either::Left(migrating_task) = task {
+                        if migrating_task.get_state() == MigrationState::SwitchCommitted {
+                            metadata.push(meta.clone());
                         }
                     }
                 }
-                cmd_task.set_resp_result(Ok(Resp::Error(
-                    "No Corresponding task found".to_string().into_bytes(),
-                )));
-            }
-            None => {
-                cmd_task.set_resp_result(Ok(Resp::Error(
-                    "No Corresponding task found".to_string().into_bytes(),
-                )));
             }
         }
+        metadata
     }
 }
