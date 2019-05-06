@@ -14,7 +14,6 @@ use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_timer::Delay;
 use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
-use std::cmp;
 use std::collections::HashMap;
 use std::iter;
 use std::str;
@@ -29,7 +28,6 @@ pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     redirection_stopped: Arc<AtomicBool>,
-    blocking: Arc<AtomicBool>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     cmd_task_sender:
@@ -62,7 +60,6 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             slot_range,
             state: Arc::new(AtomicMigrationState::new()),
             redirection_stopped: Arc::new(AtomicBool::new(false)),
-            blocking: Arc::new(AtomicBool::new(true)),
             client_factory,
             sender_factory,
             cmd_task_sender: sender,
@@ -148,6 +145,17 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         .map_err(MigrationError::RedisError)
     }
 
+    fn block_request(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        let min_blocking_time = Duration::from_millis(self.config.get_min_blocking_time());
+        let state = self.state.clone();
+        let delay = Delay::new(min_blocking_time).map_err(MigrationError::Io);
+        future::ok(())
+            .map(move |()| {
+                state.set_state(MigrationState::Blocking);
+            })
+            .and_then(|()| delay)
+    }
+
     fn commit_switch(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         self.state.set_state(MigrationState::SwitchStarted);
 
@@ -196,34 +204,22 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
 
     fn release_queue(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         let state = self.state.clone();
-        let blocking = self.blocking.clone();
         let sender_factory = self.sender_factory.clone();
         let dst_proxy_address = self.meta.dst_proxy_address.clone();
         let cmd_task_receiver = self.cmd_task_receiver.clone();
 
-        let min_blocking_time = Duration::from_millis(self.config.get_min_blocking_time());
         let max_blocking_time = u128::from(self.config.get_max_blocking_time());
 
         let s = stream::iter_ok(iter::repeat(()));
         s.fold(
             0,
             move |lasting_time, ()| -> Box<dyn Future<Item = u128, Error = ()> + Send> {
-                if lasting_time == 0 {
-                    // `+1` make sure it will be non-zero next time.
-                    let acc_time = lasting_time + min_blocking_time.as_millis() + 1;
-                    return Box::new(
-                        Delay::new(min_blocking_time)
-                            .map(move |_| acc_time)
-                            .map_err(|_| ()),
-                    );
-                }
-
                 let delay_time = if lasting_time > max_blocking_time {
                     warn!("Commit status does not change for so long. Force commit.");
                     state.set_state(MigrationState::SwitchCommitted);
                     Duration::from_millis(0)
                 } else {
-                    cmp::min(min_blocking_time, Duration::from_millis(5))
+                    Duration::from_millis(5)
                 };
 
                 if state.get_state() != MigrationState::SwitchCommitted {
@@ -235,26 +231,17 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                     );
                 }
 
-                let blocking_clone = blocking.clone();
-                let sender_factory_clone = sender_factory.clone();
-                let dst_proxy_address_clone = dst_proxy_address.clone();
-                let cmd_task_receiver_clone = cmd_task_receiver.clone();
+                info!("start to drain waiting queue");
+                Self::drain_waiting_queue(
+                    sender_factory.clone(),
+                    dst_proxy_address.clone(),
+                    cmd_task_receiver.clone(),
+                );
+                info!("finished draining waiting queue");
 
-                let delay = Delay::new(delay_time).map_err(MigrationError::Io);
-                Box::new(delay.then(move |result| {
-                    if let Err(err) = result {
-                        error!("delay blocking timber error {:?}", err);
-                    }
-                    info!("start to drain waiting queue");
-                    Self::drain_waiting_queue(
-                        blocking_clone,
-                        sender_factory_clone,
-                        dst_proxy_address_clone,
-                        cmd_task_receiver_clone,
-                    );
-                    info!("finished draining waiting queue");
-                    future::err(()) // stop
-                }))
+                Box::new(
+                    future::err(()), // stop
+                )
             },
         )
         .map(|_| ())
@@ -279,7 +266,6 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     }
 
     fn drain_waiting_queue(
-        blocking: Arc<AtomicBool>,
         sender_factory: Arc<TSF>,
         dst_proxy_address: String,
         cmd_task_receiver: Arc<
@@ -288,7 +274,6 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             >,
         >,
     ) {
-        blocking.store(false, Ordering::SeqCst);
         let sender = sender_factory.create(dst_proxy_address);
         while let Ok(cmd_task) = cmd_task_receiver.try_recv() {
             if let Err(err) = sender.send(cmd_task) {
@@ -314,12 +299,14 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
         }
 
         let check_phase = self.check_repl_state();
+        let block_request = self.block_request();
         let commit_phase = self.commit_switch();
         let release_queue = self.release_queue();
         let stop_redirection = self.stop_redirection();
         let release_queue_or_timeout = release_queue.and_then(move |()| stop_redirection);
-        let migration_fut =
-            check_phase.and_then(|()| commit_phase.join(release_queue_or_timeout).map(|_| ()));
+        let migration_fut = check_phase
+            .and_then(|()| block_request)
+            .and_then(|()| commit_phase.join(release_queue_or_timeout).map(|_| ()));
 
         let meta = self.meta.clone();
 
@@ -345,12 +332,12 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
             return Err(DBSendError::SlotNotFound(cmd_task));
         }
 
-        let sender = self
+        let redirection_sender = self
             .sender_factory
             .create(self.meta.dst_proxy_address.clone());
 
-        if !self.blocking.load(Ordering::SeqCst) {
-            return sender
+        if self.state.get_state() == MigrationState::SwitchCommitted {
+            return redirection_sender
                 .send(cmd_task)
                 .map_err(|_e| DBSendError::MigrationError);
         }
@@ -358,15 +345,14 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
         let res = self.cmd_task_sender.send(cmd_task).or_else(move |err| {
             error!("Failed to tmp queue {:?}", err);
             let cmd_task = err.into_inner();
-            sender
+            redirection_sender
                 .send(cmd_task)
                 .map_err(|_e| DBSendError::MigrationError)
         });
 
         // This can make sure that waiting queue will always finally be cleaned up.
-        if !self.blocking.load(Ordering::SeqCst) {
+        if self.state.get_state() == MigrationState::SwitchCommitted {
             Self::drain_waiting_queue(
-                self.blocking.clone(),
                 self.sender_factory.clone(),
                 self.meta.dst_proxy_address.clone(),
                 self.cmd_task_receiver.clone(),
@@ -492,6 +478,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
     }
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
+        // Already checked slot range in manager.
         if self.state.get_state() == MigrationState::SwitchCommitted {
             return Err(DBSendError::SlotNotFound(cmd_task));
         }

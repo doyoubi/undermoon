@@ -283,3 +283,4 @@ There're two big features needed:
 - Support multi-key commands
 - Support dynamic configuration by CONFIG command
 - Implement a simple rust HTTP broker before we have the Golang broker based on etcd.
+- Recover peer meta to after reboot support direction.
