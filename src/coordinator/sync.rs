@@ -1,5 +1,5 @@
 use super::broker::MetaDataBroker;
-use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
+use super::core::{CoordinateError, HostMeta, HostMetaRetriever, HostMetaSender};
 use common::cluster::{Host, Role, SlotRange};
 use common::db::{DBMapFlags, HostDBMap};
 use common::utils::OLD_EPOCH_REPLY;
@@ -20,31 +20,46 @@ impl<F: RedisClientFactory> HostMetaRespSender<F> {
 }
 
 impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
-    fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let address = host.get_address().clone();
+    fn send_meta(
+        &self,
+        host: HostMeta,
+    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+        // If a proxy receives a SETDB before SETPEER, the migrating slots will be cleared
+        // and we can't find the owner of this slot range. Thus we need to always send SETPEER first.
+        let HostMeta { local, peer } = host;
+        let address = local.get_address().clone();
+
         let client_fut = self
             .client_factory
             .create_client(address)
             .map_err(CoordinateError::Redis);
-        let host_with_only_masters = filter_host_masters(host.clone());
+
+        let local_host_with_only_masters = filter_host_masters(local.clone());
         Box::new(
             client_fut
                 .and_then(|client| {
                     send_meta(
                         client,
+                        "SETPEER".to_string(),
+                        generate_host_meta_cmd_args(peer, DBMapFlags { force: false }),
+                    )
+                })
+                .and_then(|client| {
+                    send_meta(
+                        client,
                         "SETDB".to_string(),
                         generate_host_meta_cmd_args(
-                            host_with_only_masters,
+                            local_host_with_only_masters,
                             DBMapFlags { force: false },
                         ),
                     )
-                    .and_then(move |client| {
-                        send_meta(
-                            client,
-                            "SETREPL".to_string(),
-                            generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
-                        )
-                    })
+                })
+                .and_then(move |client| {
+                    send_meta(
+                        client,
+                        "SETREPL".to_string(),
+                        generate_repl_meta_cmd_args(local, DBMapFlags { force: false }),
+                    )
                 })
                 .map(|_| ()),
         )
@@ -63,77 +78,37 @@ fn filter_host_masters(host: Host) -> Host {
     Host::new(address, epoch, masters)
 }
 
-pub struct PeerMetaRespSender<F: RedisClientFactory> {
-    client_factory: Arc<F>,
+pub struct BrokerMetaRetriever<B: MetaDataBroker> {
+    broker: Arc<B>,
 }
 
-impl<F: RedisClientFactory> PeerMetaRespSender<F> {
-    pub fn new(client_factory: Arc<F>) -> Self {
-        Self { client_factory }
+impl<B: MetaDataBroker> BrokerMetaRetriever<B> {
+    pub fn new(broker: Arc<B>) -> Self {
+        Self { broker }
     }
 }
 
-impl<F: RedisClientFactory> HostMetaSender for PeerMetaRespSender<F> {
-    fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let address = host.get_address().clone();
-        let client_fut = self
-            .client_factory
-            .create_client(address)
-            .map_err(CoordinateError::Redis);
-        Box::new(client_fut.and_then(|client| {
-            send_meta(
-                client,
-                "SETPEER".to_string(),
-                generate_host_meta_cmd_args(host, DBMapFlags { force: false }),
-            )
-            .map(|_| ())
+impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
+    fn get_host_meta(
+        &self,
+        address: String,
+    ) -> Box<dyn Future<Item = Option<HostMeta>, Error = CoordinateError> + Send> {
+        // We should get local first but send the peer first for consistency for migration,
+        // so that we have local.epoch >= peer.epoch,
+        // which means if proxy received a SETDB clearing the migrated slot range,
+        // there should have been a SETPEER
+        // with higher epoch including the migrated out slot range.
+        let get_local = self
+            .broker
+            .get_host(address.clone())
+            .map_err(CoordinateError::MetaData);
+        let get_peer = self
+            .broker
+            .get_peer(address)
+            .map_err(CoordinateError::MetaData);
+        Box::new(get_local.and_then(|l| {
+            get_peer.map(move |p| p.and_then(|peer| l.map(|local| HostMeta { local, peer })))
         }))
-    }
-}
-
-pub struct LocalMetaRetriever<B: MetaDataBroker> {
-    broker: Arc<B>,
-}
-
-impl<B: MetaDataBroker> LocalMetaRetriever<B> {
-    pub fn new(broker: Arc<B>) -> Self {
-        Self { broker }
-    }
-}
-
-impl<B: MetaDataBroker> HostMetaRetriever for LocalMetaRetriever<B> {
-    fn get_host_meta(
-        &self,
-        address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send> {
-        Box::new(
-            self.broker
-                .get_host(address)
-                .map_err(CoordinateError::MetaData),
-        )
-    }
-}
-
-pub struct PeerMetaRetriever<B: MetaDataBroker> {
-    broker: Arc<B>,
-}
-
-impl<B: MetaDataBroker> PeerMetaRetriever<B> {
-    pub fn new(broker: Arc<B>) -> Self {
-        Self { broker }
-    }
-}
-
-impl<B: MetaDataBroker> HostMetaRetriever for PeerMetaRetriever<B> {
-    fn get_host_meta(
-        &self,
-        address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send> {
-        Box::new(
-            self.broker
-                .get_peer(address)
-                .map_err(CoordinateError::MetaData),
-        )
     }
 }
 
