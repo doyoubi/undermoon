@@ -55,6 +55,58 @@ services:
     - "redis3"
     - "redis6"
 
+  server_proxy4:
+    container_name: server_proxy4
+    image: "undermoon"
+    volumes:
+      - ${PWD}/examples/coordinator/server_proxy4.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
+      - ${PWD}/src:/undermoon/src
+      - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+      - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_proxy.sh
+    ports:
+      - "6004:6004"
+    environment:
+      - RUST_LOG=undermoon=debug,server_proxy=debug
+      - RUST_BACKTRACE=full
+    depends_on:
+      - "redis7"
+  server_proxy5:
+    container_name: server_proxy5
+    image: "undermoon"
+    volumes:
+      - ${PWD}/examples/coordinator/server_proxy5.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
+      - ${PWD}/src:/undermoon/src
+      - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+      - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_proxy.sh
+    ports:
+      - "6005:6005"
+    environment:
+      - RUST_LOG=undermoon=debug,server_proxy=debug
+      - RUST_BACKTRACE=full
+    depends_on:
+      - "redis8"
+  server_proxy6:
+    container_name: server_proxy6
+    image: "undermoon"
+    volumes:
+      - ${PWD}/examples/coordinator/server_proxy6.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
+      - ${PWD}/src:/undermoon/src
+      - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
+      - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    command: bash /undermoon/run_proxy.sh
+    ports:
+      - "6006:6006"
+    environment:
+      - RUST_LOG=undermoon=debug,server_proxy=debug
+      - RUST_BACKTRACE=full
+    depends_on:
+      - "redis9"
+
   coordinator1:
     container_name: coordinator1
     image: "undermoon"
@@ -131,3 +183,18 @@ services:
     image: "redis"
     ports:
     - "7006:6379"
+  redis7:
+    container_name: redis7
+    image: "redis"
+    ports:
+      - "7007:6379"
+  redis8:
+    container_name: redis8
+    image: "redis"
+    ports:
+      - "7008:6379"
+  redis9:
+    container_name: redis9
+    image: "redis"
+    ports:
+      - "7009:6379"

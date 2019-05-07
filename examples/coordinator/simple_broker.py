@@ -43,13 +43,51 @@ class ReplPeer:
         }
 
 
+class MigrationMeta:
+    def __init__(self, epoch, src_proxy_address, src_node_address,
+            dst_proxy_address, dst_node_address):
+        self.epoch = epoch
+        self.src_proxy_address = src_proxy_address
+        self.src_node_address = src_node_address
+        self.dst_proxy_address = dst_proxy_address
+        self.dst_node_address = dst_node_address
+
+    def to_dict(self):
+        return {
+            'epoch': self.epoch,
+            'src_proxy_address': self.src_proxy_address,
+            'src_node_address': self.src_node_address,
+            'dst_proxy_address': self.dst_proxy_address,
+            'dst_node_address': self.dst_node_address,
+        }
+
+
+class SlotRangeTag:
+    MIGRATING = 'Migrating'
+    IMPORTING = 'Importing'
+    NoneTag = 'None'
+    def __init__(self, migration_tag, meta):
+        self.migration_tag = migration_tag
+        self.meta = meta
+
+
 class SlotRange:
     def __init__(self, start, end):
         self.start = start
         self.end = end
+        self.tag = SlotRangeTag(SlotRangeTag.NoneTag, None)
 
     def to_dict(self):
-        return {'start': self.start, 'end': self.end, 'tag': 'None'}
+        if self.tag.migration_tag == SlotRangeTag.NoneTag:
+            tag = 'None'
+        else:
+            assert self.tag.migration_tag in [SlotRangeTag.IMPORTING, SlotRangeTag.MIGRATING]
+            tag = {self.tag.migration_tag: self.tag.meta.to_dict()}
+        return {
+            'start': self.start,
+            'end': self.end,
+            'tag': tag,
+        }
 
 
 class ReplMeta:
@@ -69,6 +107,7 @@ class Node:
         self.address = address
         self.proxy_address = proxy_address
         self.cluster_name = cluster_name
+        assert isinstance(slots, list)
         self.slots = slots
         self.repl = repl
 
@@ -77,7 +116,7 @@ class Node:
             'address': self.address,
             'proxy_address': self.proxy_address,
             'cluster_name': self.cluster_name,
-            'slots': [self.slots.to_dict()] if self.slots else [],
+            'slots': [slot_range.to_dict() for slot_range in self.slots],
             'repl': self.repl.to_dict(),
         }
 
@@ -93,6 +132,13 @@ def gen_meta_config(cluster_name):
     proxy2 = 'server_proxy2:6002'
     proxy3 = 'server_proxy3:6003'
 
+    redis7 = 'redis7:6379'
+    redis8 = 'redis8:6379'
+    redis9 = 'redis9:6379'
+    proxy4 = 'server_proxy4:6004'
+    proxy5 = 'server_proxy5:6005'
+    proxy6 = 'server_proxy6:6006'
+
     INIT_SLOTS_CONFIG = {
         redis1: [0, 5461],
         redis2: [5462, 10922],
@@ -100,16 +146,16 @@ def gen_meta_config(cluster_name):
     }
     TOPO_CONFIG = {
         proxy1: {
-            'master': redis1,
-            'replica': redis4,
+            MASTER: redis1,
+            REPLICA: redis4,
         },
         proxy2: {
-            'master': redis2,
-            'replica': redis5,
+            MASTER: redis2,
+            REPLICA: redis5,
         },
         proxy3: {
-            'master': redis3,
-            'replica': redis6,
+            MASTER: redis3,
+            REPLICA: redis6,
         },
     }
 
@@ -130,15 +176,43 @@ def gen_meta_config(cluster_name):
         master_slots = SlotRange(INIT_SLOTS_CONFIG[master_address][0],
                                  INIT_SLOTS_CONFIG[master_address][1])
         master = Node(master_address, proxy_address, cluster_name,
-                      master_slots, master_repl)
-        replica = Node(replica_address, proxy_address, cluster_name, None, replica_repl)
+                      [master_slots], master_repl)
+        replica = Node(replica_address, proxy_address, cluster_name, [], replica_repl)
 
         meta_config[proxy_address] = {
             'master': master,
             'replica': replica,
         }
 
-    return meta_config
+    extended_meta_config = {}
+    extended_proxies = {
+        proxy4: {
+            MASTER: redis7,
+        },
+        proxy5: {
+            MASTER: redis8,
+        },
+        proxy6: {
+            MASTER: redis9,
+        },
+    }
+    for i, (proxy_address, nodes) in enumerate(extended_proxies.items()):
+        i += 3
+        master_address = nodes['master']
+        master_repl = ReplMeta(MASTER, [])
+        master = Node(master_address, proxy_address, cluster_name,
+                      [], master_repl)
+        extended_meta_config[proxy_address] = {
+            MASTER: master,
+        }
+
+    migrating_map = {
+        proxy1: proxy4,
+        proxy2: proxy5,
+        proxy3: proxy6,
+    }
+
+    return meta_config, extended_meta_config, migrating_map
 
 
 class Failure:
@@ -149,7 +223,6 @@ class Failure:
 
 
 def check_alive(address):
-    print(address)
     host, port = address.split(':')
     try:
         redis.StrictRedis(host, port, socket_timeout=0.1).ping()
@@ -159,14 +232,96 @@ def check_alive(address):
         return False
 
 
+def split_slots(slots):
+    assert len(slots) == 1
+    slot_range = slots[0]
+    start = slot_range.start
+    end = slot_range.end
+    middle = int((start + end) / 2)
+    assert start <= middle < end
+    return SlotRange(start, middle), SlotRange(middle+1, end)
+
+
 class MetaStore:
     def __init__(self, cluster_name):
         self.epoch = 1
         self.cluster_name = cluster_name
-        self.proxies = gen_meta_config(cluster_name)
+        self.proxies, self.extended_proxies, self.migrating_map = gen_meta_config(cluster_name)
 
         self.failed_proxies = {}
         self.replaced_master = set()
+
+        self.migration_epoch = None
+        self.importing_proxies = set()
+        self.imported_proxies = set()
+
+    def gen_src_slots(self, proxy, epoch):
+        assert proxy in self.migrating_map
+        src_master = self.proxies[proxy][MASTER]
+        slots = src_master.slots
+
+        src = proxy
+        dst = self.migrating_map[src]
+        dst_master = self.extended_proxies[dst][MASTER]
+        unchanged_slots, new_slots = split_slots(slots)
+
+        if dst not in self.importing_proxies and dst not in self.imported_proxies:
+            return self.proxies[proxy][MASTER].slots
+
+        if dst in self.importing_proxies:
+            meta = MigrationMeta(
+                epoch,
+                src,
+                src_master.address,
+                dst,
+                dst_master.address,
+            )
+            new_slots.tag = SlotRangeTag(SlotRangeTag.MIGRATING, meta)
+            return [unchanged_slots, new_slots]
+
+        assert dst in self.imported_proxies
+        return [unchanged_slots]
+
+    def gen_dst_slots(self, proxy, epoch):
+        importing_map = {v: k for k, v in self.migrating_map.items()}
+        assert proxy in importing_map
+
+        dst = proxy
+        src = importing_map[dst]
+        src_master = self.proxies[src][MASTER]
+        dst_master = self.extended_proxies[dst][MASTER]
+        slots = src_master.slots
+        unchanged_slots, new_slots = split_slots(slots)
+
+        if dst not in self.importing_proxies and dst not in self.imported_proxies:
+            return []
+
+        if dst in self.importing_proxies:
+            meta = MigrationMeta(
+                epoch,
+                src,
+                src_master.address,
+                dst,
+                dst_master.address,
+            )
+            new_slots.tag = SlotRangeTag(SlotRangeTag.IMPORTING, meta)
+
+        return [new_slots]
+
+    def gen_slots(self, proxy, epoch):
+        if proxy in self.migrating_map:
+            return self.gen_src_slots(proxy, epoch)
+        return self.gen_dst_slots(proxy, epoch)
+
+    def get_origin_proxies(self):
+        proxies = deepcopy(self.proxies)
+        for proxy, nodes in self.extended_proxies.items():
+            if proxy in self.importing_proxies or proxy in self.imported_proxies:
+                proxies[proxy] = deepcopy(nodes)
+        for proxy, nodes in proxies.items():
+            master = nodes[MASTER]
+            master.slots = self.gen_slots(proxy, self.migration_epoch)
+        return proxies
 
     def get_failed_proxies(self):
         new_failed_proxies = {}
@@ -196,20 +351,21 @@ class MetaStore:
         failed = list(self.get_failed_proxies().keys())
         logger.info('failed {} replaced_master {}'.format(failed, self.replaced_master))
         if not failed or not self.replaced_master:
-            return deepcopy(self.proxies)
+            return deepcopy(self.get_origin_proxies())
 
         if len(failed) > 1:
             raise BrokerError('cluster is down')
 
         new_master = self.get_replaced_node(failed[0])
-        proxies = {a: deepcopy(p) for a, p in self.proxies.items() if a not in failed}
+        proxies = {a: deepcopy(p) for a, p in self.get_origin_proxies().items() if a not in failed}
         proxies[new_master.proxy_address][REPLICA] = new_master
+
         return proxies
 
     def get_nodes(self):
         proxies = self.get_proxies()
         return sum(
-            [[p['master'], p['replica']] for p in proxies.values()],
+            [list(p.values()) for p in proxies.values()],
             [])
 
     def get_cluster_names(self):
@@ -240,11 +396,12 @@ class MetaStore:
             return {'host': None}
 
         logger.info('get_proxy epoch %d %s', self.epoch, self.replaced_master)
+        nodes = [p.to_dict() for p in proxy.values()]
         return {
             'host': {
                 'address': address,
                 'epoch': self.epoch,
-                'nodes': [proxy['master'].to_dict(), proxy['replica'].to_dict()]
+                'nodes': nodes,
             }
         }
 
@@ -288,13 +445,58 @@ class MetaStore:
         node_address = failed_node['node']['address']
         proxy_address = failed_node['node']['proxy_address']
 
-        if self.proxies[proxy_address][MASTER].address != node_address:
+        if self.get_origin_proxies()[proxy_address][MASTER].address != node_address:
             raise BrokerError('Can not create new replica')
 
         self.replaced_master.add(node_address)
         self.epoch += 1
         logger.info('successfully replace node %s', node_address)
         return self.get_replaced_node(proxy_address).to_dict()
+
+    def commit_migration(self, migration_task_meta):
+        '''
+        {
+            "db_name": "mydb",
+            "slot_range": {
+                "start": 0,
+                "end": 5000,
+                "tag": {
+                    "Migrating": {
+                        "epoch": 233,
+                        "src_proxy_address": "127.0.0.1:7000",
+                        "src_node_address": "127.0.0.1:7001",
+                        "dst_proxy_address": "127.0.0.2:7000",
+                        "dst_node_address": "127.0.0.2:7001"
+                    }
+                }
+            }
+        }
+        '''
+        meta = migration_task_meta['slot_range']['tag']['Migrating']
+        epoch = meta['epoch']
+        # src_proxy_address = meta['src_proxy_address']
+        # src_node_address = meta['src_node_address']
+        dst_proxy_address = meta['dst_proxy_address']
+        # dst_node_address = meta['dst_node_address']
+
+        if epoch != self.migration_epoch:
+            raise Exception('invalid epoch {} != {}'.format(epoch, self.migrating_map))
+
+        if dst_proxy_address not in self.importing_proxies:
+            raise Exception('{} is not migrating'.format(dst_proxy_address))
+
+        self.migration_epoch = None
+        self.epoch += 1
+        self.imported_proxies.add(dst_proxy_address)
+        self.importing_proxies.remove(dst_proxy_address)
+        return {'epoch': self.epoch}
+
+    def trigger_scaling(self):
+        self.epoch += 1
+        self.migration_epoch = self.epoch
+        for proxy, nodes in self.extended_proxies.items():
+            self.importing_proxies.add(proxy)
+            return {'start_epoch': self.epoch}
 
 
 meta_store = MetaStore(DB_NAME)
@@ -336,6 +538,19 @@ def replace_node():
     logger.info('replace_node %s', request.get_json())
     failed_node = request.get_json()
     return jsonify(meta_store.replace_node(failed_node))
+
+
+@app.route('/api/clusters/migration', methods=['PUT'])
+def commit_migration():
+    logger.info('migration %s', request.get_json())
+    migration_task_meta = request.get_json()
+    return jsonify(meta_store.commit_migration(migration_task_meta))
+
+
+@app.route('/api/test/migration', methods=['POST'])
+def trigger_migration():
+    logger.info('start migration')
+    return jsonify(meta_store.trigger_scaling())
 
 
 if __name__ == '__main__':
