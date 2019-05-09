@@ -25,8 +25,7 @@ echo 'start to migrate'
 echo '############################'
 curl -XPOST localhost:6699/api/test/migration
 
-for i in {0..6}; do
+for i in {0..10}; do
     redis-cli -h server_proxy2 -p 6002 -a mydb -c cluster nodes
     test_value
-    sleep 1
 done
