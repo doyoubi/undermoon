@@ -1,7 +1,7 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
-use common::cluster::SlotRange;
+use common::cluster::{SlotRange, SlotRangeTag};
 use common::db::HostDBMap;
 use common::utils::{gen_moved, get_key, get_slot};
 use protocol::{Array, BulkStr, Resp};
@@ -386,20 +386,33 @@ fn gen_cluster_nodes_helper(
         let id = format!("{}{}", name_seg, addr_seg);
         addr_seg.truncate(20);
 
+        let mut slot_range_str = String::new();
         let slot_range = ranges
             .iter()
-            .map(|range| format!("{}-{}", range.start, range.end))
+            .map(gen_slot_range_helper)
+            .filter_map(|s| s)
             .collect::<Vec<String>>()
             .join(" ");
+        if !slot_range.is_empty() {
+            slot_range_str.push(' ');
+            slot_range_str.push_str(&slot_range);
+        }
 
         let line = format!(
-            "{id} {addr} {flags} {master} {ping_sent} {pong_recv} {epoch} {link_state} {slot_range}\n",
+            "{id} {addr} {flags} {master} {ping_sent} {pong_recv} {epoch} {link_state}{slot_range}\n",
             id=id, addr=addr, flags="master", master="-", ping_sent=0, pong_recv=0, epoch=epoch,
-            link_state="connected", slot_range=slot_range,
+            link_state="connected", slot_range=slot_range_str,
         );
         cluster_nodes.push_str(&line);
     }
     cluster_nodes
+}
+
+fn gen_slot_range_helper(range: &SlotRange) -> Option<String> {
+    match range.tag {
+        SlotRangeTag::Importing(ref _meta) => None,
+        _ => Some(format!("{}-{}", range.start, range.end)),
+    }
 }
 
 fn gen_cluster_slots_helper(
@@ -433,4 +446,56 @@ fn gen_cluster_slots_helper(
         }
     }
     Ok(slot_range_element)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::common::cluster::MigrationMeta;
+
+    #[test]
+    fn test_gen_cluster_nodes() {
+        let mut slot_ranges = HashMap::new();
+        slot_ranges.insert(
+            "127.0.0.1:5299".to_string(),
+            vec![
+                SlotRange {
+                    start: 0,
+                    end: 100,
+                    tag: SlotRangeTag::None,
+                },
+                SlotRange {
+                    start: 200,
+                    end: 300,
+                    tag: SlotRangeTag::None,
+                },
+            ],
+        );
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        assert_eq!(output, "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected 0-100 200-300\n");
+    }
+
+    #[test]
+    fn test_gen_importing_cluster_nodes() {
+        let mut slot_ranges = HashMap::new();
+        slot_ranges.insert(
+            "127.0.0.1:5299".to_string(),
+            vec![SlotRange {
+                start: 0,
+                end: 1000,
+                tag: SlotRangeTag::Importing(MigrationMeta {
+                    epoch: 200,
+                    src_proxy_address: "127.0.0.1:7000".to_string(),
+                    src_node_address: "127.0.0.1:6379".to_string(),
+                    dst_proxy_address: "127.0.0.1:7001".to_string(),
+                    dst_node_address: "127.0.0.1:6380".to_string(),
+                }),
+            }],
+        );
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        assert_eq!(
+            output,
+            "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected\n"
+        );
+    }
 }
