@@ -7,7 +7,7 @@ use super::core::{
 use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailureDetector};
 use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
 use super::recover::{BrokerNodeFailureRetriever, BrokerProxyFailureRetriever, ReplaceNodeHandler};
-use super::sync::{HostMetaRespSender, LocalMetaRetriever, PeerMetaRespSender, PeerMetaRetriever};
+use super::sync::{BrokerMetaRetriever, HostMetaRespSender};
 use common::utils::ThreadSafe;
 use futures::future::select_all;
 use futures::{future, stream, Future, Stream};
@@ -59,8 +59,7 @@ impl<
 
         select_all(vec![
             self.loop_detect(),
-            self.loop_local_sync(),
-            self.loop_peer_sync(),
+            self.loop_host_sync(),
             self.loop_failure_handler(),
             self.loop_migration_sync(),
         ])
@@ -82,23 +81,13 @@ impl<
         SeqFailureDetector::new(retriever, checker, reporter)
     }
 
-    fn gen_local_meta_synchronizer(
+    fn gen_host_meta_synchronizer(
         data_broker: Arc<DB>,
         client_factory: Arc<F>,
     ) -> impl HostMetaSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
-        let meta_retriever = LocalMetaRetriever::new(data_broker);
+        let meta_retriever = BrokerMetaRetriever::new(data_broker);
         let sender = HostMetaRespSender::new(client_factory);
-        HostMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)
-    }
-
-    fn gen_peer_meta_synchronizer(
-        data_broker: Arc<DB>,
-        client_factory: Arc<F>,
-    ) -> impl HostMetaSynchronizer {
-        let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
-        let meta_retriever = PeerMetaRetriever::new(data_broker);
-        let sender = PeerMetaRespSender::new(client_factory);
         HostMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)
     }
 
@@ -117,8 +106,8 @@ impl<
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
         let checker = MigrationStateRespChecker::new(client_factory.clone());
         let committer = BrokerMigrationCommitter::new(mani_broker);
-        let meta_retriever = PeerMetaRetriever::new(data_broker);
-        let sender = PeerMetaRespSender::new(client_factory);
+        let meta_retriever = BrokerMetaRetriever::new(data_broker);
+        let sender = HostMetaRespSender::new(client_factory);
         SeqMigrationStateSynchronizer::new(
             proxy_retriever,
             checker,
@@ -161,7 +150,7 @@ impl<
         )
     }
 
-    fn loop_local_sync(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+    fn loop_host_sync(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
         let s = stream::iter_ok(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
@@ -169,43 +158,15 @@ impl<
             s.fold(
                 (data_broker, client_factory),
                 |(data_broker, client_factory), ()| {
-                    debug!("start sync local meta data");
-                    defer!(debug!("local sync finished a round"));
+                    debug!("start sync host meta data");
+                    defer!(debug!("host meta sync finished a round"));
                     let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
-                    Self::gen_local_meta_synchronizer(data_broker.clone(), client_factory.clone())
+                    Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone())
                         .run()
                         .collect()
                         .then(move |res| {
                             if let Err(e) = res {
                                 error!("sync stream err {:?}", e)
-                            }
-                            future::ok(())
-                        })
-                        .join(delay)
-                        .then(move |_| future::ok((data_broker, client_factory)))
-                },
-            )
-            .map(|_| debug!("loop_sync stopped")),
-        )
-    }
-
-    fn loop_peer_sync(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let s = stream::iter_ok(iter::repeat(()));
-        let data_broker = self.data_broker.clone();
-        let client_factory = self.client_factory.clone();
-        Box::new(
-            s.fold(
-                (data_broker, client_factory),
-                |(data_broker, client_factory), ()| {
-                    debug!("start sync peer meta data");
-                    defer!(debug!("peer sync finished a round"));
-                    let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
-                    Self::gen_peer_meta_synchronizer(data_broker.clone(), client_factory.clone())
-                        .run()
-                        .collect()
-                        .then(|res| {
-                            if let Err(e) = res {
-                                error!("peer sync stream err {:?}", e)
                             }
                             future::ok(())
                         })

@@ -4,7 +4,6 @@ use ::protocol::Resp;
 use ::proxy::backend::CmdTask;
 use ::proxy::database::DBSendError;
 use futures::Future;
-use protocol::RedisClientError;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -36,8 +35,9 @@ impl MigrationTaskMeta {
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MigrationState {
     TransferringData = 0,
-    SwitchStarted = 1,
-    SwitchCommitted = 2,
+    Blocking = 1,
+    SwitchStarted = 2,
+    SwitchCommitted = 3,
 }
 
 #[derive(Debug)]
@@ -59,7 +59,8 @@ impl AtomicMigrationState {
     pub fn get_state(&self) -> MigrationState {
         match self.inner.load(Ordering::SeqCst) {
             0 => MigrationState::TransferringData,
-            1 => MigrationState::SwitchStarted,
+            1 => MigrationState::Blocking,
+            2 => MigrationState::SwitchStarted,
             _ => MigrationState::SwitchCommitted,
         }
     }
@@ -164,7 +165,6 @@ pub enum MigrationError {
     AlreadyStarted,
     AlreadyEnded,
     Canceled,
-    RedisError(RedisClientError),
     Io(io::Error),
 }
 

@@ -39,16 +39,16 @@ impl<F: RedisClientFactory> MigrationStateChecker for MigrationStateRespChecker<
         &self,
         address: String,
     ) -> Box<dyn Stream<Item = MigrationTaskMeta, Error = CoordinateError> + Send> {
-        let address_clone = address.clone();
-
         let client_fut = self
             .client_factory
-            .create_client(address)
+            .create_client(address.clone())
             .map_err(CoordinateError::Redis);
         Box::new(
             client_fut
-                .and_then(|client| {
+                .and_then(move |client| {
                     let cmd = vec!["UMCTL".to_string(), "INFOMGR".to_string()];
+                    debug!("sending UMCTL INFOMGR to {}", address);
+                    let address_clone = address.clone();
                     client
                         .execute(cmd.into_iter().map(String::into_bytes).collect())
                         .map_err(move |e| {

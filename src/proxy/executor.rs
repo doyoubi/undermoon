@@ -202,7 +202,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                         cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
                     }
                     Err(e) => {
-                        debug!("Failed to update local meta data {:?}", e);
+                        //                        debug!("Failed to update local meta data {:?}", e);
                         match e {
                             DBError::OldEpoch => cmd_ctx.set_resp_result(Ok(Resp::Error(
                                 OLD_EPOCH_REPLY.to_string().into_bytes(),
@@ -212,7 +212,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 }
             }
             Err(e) => {
-                debug!("Failed to update migration meta data {:?}", e);
+                //                debug!("Failed to update migration meta data {:?}", e);
                 match e {
                     DBError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
@@ -234,11 +234,11 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
         match self.db.set_peers(db_map) {
             Ok(()) => {
-                debug!("Successfully update peer meta data");
+                info!("Successfully update peer meta data");
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {
-                debug!("Failed to update peer meta data {:?}", e);
+                //                debug!("Failed to update peer meta data {:?}", e);
                 match e {
                     DBError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
@@ -264,7 +264,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             Err(e) => {
-                debug!("Failed to update replicator meta data {:?}", e);
+                //                debug!("Failed to update replicator meta data {:?}", e);
                 match e {
                     DBError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),

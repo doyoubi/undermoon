@@ -34,6 +34,11 @@ echo '############################'
 test_value
 
 docker-compose -f examples/docker-compose-coordinator.yml start server_proxy1
+echo '############################'
+echo 'waiting for recover'
+echo '############################'
+sleep 6
+redis-cli -h server_proxy2 -p 6002 -a mydb -c cluster nodes
 
 echo '############################'
 echo 'testing after restarting proxy1'

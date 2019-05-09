@@ -212,8 +212,44 @@ Here's an example for Coordinator working with a simple [Python HTTP Broker](exa
 $ make docker-coordinator
 ```
 
-Note that this example also supports replica for backing up your data. For simplicity, `CLUSTER NODES` does not show you the replica nodes.
+Note that this example also supports replica for backing up your data for `serverproxy1-3`. For simplicity, `CLUSTER NODES` does not show you the replica nodes.
 You can find them via `UMCTL INFOREPL`.
+
+It also supports scaling. Before run this example, you need to add these hosts to you `/etc/hosts`:
+```
+# /etc/hosts
+127.0.0.1 server_proxy1
+127.0.0.1 server_proxy2
+127.0.0.1 server_proxy3
+127.0.0.1 server_proxy4
+127.0.0.1 server_proxy5
+127.0.0.1 server_proxy6
+```
+Now we have:
+```bash
+$ redis-cli -h server_proxy2 -p 6002 -a mydb -c
+Warning: Using a password with '-a' or '-u' option on the command line interface may not be safe.
+server_proxy2:6002> cluster nodes
+mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 connected 5462-10922
+mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 1 connected 0-5461
+mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
+```
+
+Then run:
+```bash
+$ curl -XPOST localhost:6699/api/test/migration
+```
+It will start the migration. About 3 seconds later you can see we have scaled from 3 to 6 nodes!
+```bash
+server_proxy2:6002> cluster nodes
+mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 5 connected 5462-8192
+mydb________________server_proxy4:6004__ server_proxy4:6004 master - 0 0 5 connected 2731-5461
+mydb________________server_proxy6:6006__ server_proxy6:6006 master - 0 0 5 connected 13654-16383
+mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 5 connected 0-2730
+mydb________________server_proxy5:6005__ server_proxy5:6005 master - 0 0 5 connected 8193-10922
+mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 5 connected 10923-13653
+```
+
 
 ## API
 ### Server-side Proxy Commands
@@ -283,3 +319,4 @@ There're two big features needed:
 - Support multi-key commands
 - Support dynamic configuration by CONFIG command
 - Implement a simple rust HTTP broker before we have the Golang broker based on etcd.
+- Recover peer meta to after reboot support direction.

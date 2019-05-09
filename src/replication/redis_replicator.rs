@@ -161,7 +161,7 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
                 .map_err(|_| ReplicatorError::Canceled)
                 .select(send_fut.map_err(ReplicatorError::RedisError))
                 .then(move |_| {
-                    warn!("RedisReplicaReplicator {:?} stopped", meta);
+                    warn!("RedisReplicaReplicator stopped {:?}", meta);
                     future::ok(())
                 }),
         )

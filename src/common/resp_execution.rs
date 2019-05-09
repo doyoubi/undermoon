@@ -29,14 +29,20 @@ where
     infinite_stream.for_each(move |()| {
         let client_fut = client_factory.create_client(address.clone());
         let cmd_clone = cmd.clone();
+        let cmd_clone2 = cmd.clone();
         let interval_clone = interval;
         let handle_result_clone = handle_result.clone();
         client_fut
             .and_then(move |client| {
                 keep_sending_cmd(client, cmd_clone, interval_clone, handle_result_clone)
             })
-            .map_err(|e| {
-                error!("failed to keep sending commands {:?}", e);
+            .map_err(move |e| {
+                match e {
+                    RedisClientError::Done => {
+                        info!("stop keep sending commands {:?} {:?}", e, cmd_clone2)
+                    }
+                    _ => error!("failed to keep sending commands {:?} {:?}", e, cmd_clone2),
+                }
                 e
             })
     })

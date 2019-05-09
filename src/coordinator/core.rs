@@ -156,15 +156,24 @@ impl<P: ProxyFailureRetriever, N: NodeFailureRetriever, H: NodeFailureHandler> F
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct HostMeta {
+    pub local: Host,
+    pub peer: Host,
+}
+
 pub trait HostMetaSender: Sync + Send + 'static {
-    fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+    fn send_meta(
+        &self,
+        host: HostMeta,
+    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
 }
 
 pub trait HostMetaRetriever: Sync + Send + 'static {
     fn get_host_meta(
         &self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send>;
+    ) -> Box<dyn Future<Item = Option<HostMeta>, Error = CoordinateError> + Send>;
 }
 
 pub trait HostMetaSynchronizer {
