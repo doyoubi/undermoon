@@ -1,6 +1,6 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMeta, HostMetaRetriever, HostMetaSender};
-use common::cluster::{Host, Role, SlotRange};
+use common::cluster::{Host, ReplPeer, Role, SlotRange, SlotRangeTag};
 use common::db::{DBMapFlags, HostDBMap};
 use common::utils::OLD_EPOCH_REPLY;
 use futures::{future, Future};
@@ -44,6 +44,14 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
                         generate_host_meta_cmd_args(peer, DBMapFlags { force: false }),
                     )
                 })
+                .and_then(move |client| {
+                    // SETREPL should be sent before SETDB to avoid sending to replica while handling slots.
+                    send_meta(
+                        client,
+                        "SETREPL".to_string(),
+                        generate_repl_meta_cmd_args(local, DBMapFlags { force: false }),
+                    )
+                })
                 .and_then(|client| {
                     send_meta(
                         client,
@@ -52,13 +60,6 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
                             local_host_with_only_masters,
                             DBMapFlags { force: false },
                         ),
-                    )
-                })
-                .and_then(move |client| {
-                    send_meta(
-                        client,
-                        "SETREPL".to_string(),
-                        generate_repl_meta_cmd_args(local, DBMapFlags { force: false }),
                     )
                 })
                 .map(|_| ()),
@@ -170,6 +171,19 @@ fn generate_repl_meta_cmd_args(host: Host, flags: DBMapFlags) -> Vec<String> {
         let db_name = node.get_cluster_name().clone();
         match role {
             Role::Master => {
+                let importing_peer = get_importing_peer(node.get_slots());
+                if let Some(repl_peer) = importing_peer {
+                    let replica_node_address = node.get_address().clone();
+                    let masters = vec![repl_peer];
+                    let replica_meta = ReplicaMeta {
+                        db_name,
+                        replica_node_address,
+                        masters,
+                    };
+                    replicas.push(replica_meta);
+                    continue;
+                }
+
                 let master_node_address = node.get_address().clone();
                 let replicas = meta.get_peers().clone();
                 let master_meta = MasterMeta {
@@ -200,4 +214,19 @@ fn generate_repl_meta_cmd_args(host: Host, flags: DBMapFlags) -> Vec<String> {
     };
 
     encode_repl_meta(repl_meta)
+}
+
+fn get_importing_peer(slot_ranges: &[SlotRange]) -> Option<ReplPeer> {
+    for slot_range in slot_ranges.iter() {
+        match slot_range.tag {
+            SlotRangeTag::Importing(ref meta) => {
+                return Some(ReplPeer {
+                    node_address: meta.src_node_address.clone(),
+                    proxy_address: meta.src_proxy_address.clone(),
+                })
+            }
+            _ => continue,
+        }
+    }
+    None
 }

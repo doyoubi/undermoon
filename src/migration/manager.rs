@@ -1,14 +1,12 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
 use super::task::{parse_tmp_switch_command, ImportingTask, MigratingTask, MigrationConfig};
-use ::common::cluster::{MigrationTaskMeta, ReplPeer, SlotRange, SlotRangeTag};
+use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
 use ::protocol::RedisClientFactory;
 use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
-use ::replication::manager::ReplicatorManager;
-use ::replication::replicator::{MasterMeta, ReplicaMeta, ReplicatorMeta};
 use futures::Future;
 use itertools::Either;
 use migration::task::MigrationState;
@@ -33,7 +31,6 @@ where
     )>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
-    replicator_manager: ReplicatorManager<RCF>,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigrationManager<RCF, TSF>
@@ -45,7 +42,6 @@ where
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
     ) -> Self {
-        let client_factory_clone = client_factory.clone();
         Self {
             config,
             empty: atomic::AtomicBool::new(true),
@@ -53,7 +49,6 @@ where
             dbs: RwLock::new((0, HashMap::new())),
             client_factory,
             sender_factory,
-            replicator_manager: ReplicatorManager::new(client_factory_clone),
         }
     }
 
@@ -115,7 +110,6 @@ where
             return Err(DBError::OldEpoch);
         }
 
-        let replication_meta = Self::host_map_to_repl_meta(&host_map);
         let db_map = host_map.into_map();
 
         // The computation below might take a long time.
@@ -311,62 +305,7 @@ where
             self.empty.store(empty, atomic::Ordering::SeqCst);
         }
 
-        match self.replicator_manager.update_replicators(replication_meta) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                error!(
-                    "replicator_manager for migration failed to update replicators {:?}",
-                    e
-                );
-                Err(e)
-            }
-        }
-    }
-
-    pub fn host_map_to_repl_meta(host_map: &HostDBMap) -> ReplicatorMeta {
-        let epoch = host_map.get_epoch();
-        let flags = host_map.get_flags();
-        let db_map = host_map.get_map();
-
-        let mut masters = Vec::new();
-        let mut replicas = Vec::new();
-        for (db_name, nodes) in db_map.iter() {
-            for (_node, slot_ranges) in nodes.iter() {
-                for slot_range in slot_ranges.iter() {
-                    match slot_range.tag {
-                        SlotRangeTag::Migrating(ref meta) => {
-                            let master_meta = MasterMeta {
-                                db_name: db_name.clone(),
-                                master_node_address: meta.src_node_address.clone(),
-                                replicas: vec![ReplPeer {
-                                    node_address: meta.dst_node_address.clone(),
-                                    proxy_address: meta.dst_proxy_address.clone(),
-                                }],
-                            };
-                            masters.push(master_meta);
-                        }
-                        SlotRangeTag::Importing(ref meta) => {
-                            let replica_meta = ReplicaMeta {
-                                db_name: db_name.clone(),
-                                replica_node_address: meta.dst_node_address.clone(),
-                                masters: vec![ReplPeer {
-                                    node_address: meta.src_node_address.clone(),
-                                    proxy_address: meta.src_proxy_address.clone(),
-                                }],
-                            };
-                            replicas.push(replica_meta);
-                        }
-                        SlotRangeTag::None => continue,
-                    }
-                }
-            }
-        }
-        ReplicatorMeta {
-            epoch,
-            flags,
-            masters,
-            replicas,
-        }
+        Ok(())
     }
 
     pub fn commit_importing<Task: CmdTask>(&self, cmd_task: Task) {
@@ -381,6 +320,7 @@ where
                 return;
             }
         };
+
         if let Some(tasks) = self
             .dbs
             .read()
@@ -388,7 +328,18 @@ where
             .1
             .get(&switch_arg.meta.db_name)
         {
-            if let Some(record) = tasks.get(&switch_arg.meta) {
+            debug!(
+                "found tasks for db {} {}",
+                switch_arg.meta.db_name,
+                tasks.len()
+            );
+            let mut task_meta = switch_arg.meta.clone();
+            if let SlotRangeTag::Migrating(meta) = task_meta.slot_range.tag {
+                task_meta.slot_range.tag = SlotRangeTag::Importing(meta);
+            }
+
+            if let Some(record) = tasks.get(&task_meta) {
+                debug!("found record for db {}", switch_arg.meta.db_name);
                 match record {
                     Either::Left(_migrating_task) => {
                         error!(
@@ -418,8 +369,9 @@ where
                 }
             }
         }
+        warn!("No corresponding task found {:?}", switch_arg.meta);
         cmd_task.set_resp_result(Ok(Resp::Error(
-            "No Corresponding task found".to_string().into_bytes(),
+            "No Corresponding Task Found".to_string().into_bytes(),
         )));
     }
 

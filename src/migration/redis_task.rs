@@ -96,7 +96,6 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
 
     fn check_repl_state(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         let config = self.config.clone();
-        let state = self.state.clone();
         let client_factory = self.client_factory.clone();
         let interval = Duration::new(1, 0);
         let meta = self.meta.clone();
@@ -115,15 +114,18 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                         // Put config inside this closure to make dynamically change possible.
                         let lag_threshold = config.get_lag_threshold();
                         if Self::replica_state_ready(&states, &meta, lag_threshold) {
-                            info!("replication for migration is done {:?}", state);
+                            info!("replication for migration is done {:?}", states);
                             Err(RedisClientError::Done)
                         } else {
-                            debug!("replcation for migration is still not ready {:?}", meta);
+                            debug!(
+                                "replcation for migration is still not ready {:?} {:?}",
+                                meta, states
+                            );
                             Ok(())
                         }
                     }
-                    Err(err) => {
-                        error!("failed to parse INFO REPLICATION {:?}", err);
+                    Err(()) => {
+                        error!("failed to parse INFO REPLICATION {:?}", meta);
                         Ok(())
                     }
                 }
@@ -137,23 +139,32 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         let cmd = vec!["INFO".to_string(), "REPLICATION".to_string()];
         keep_connecting_and_sending(
             client_factory,
-            self.meta.dst_proxy_address.clone(),
+            self.meta.src_node_address.clone(),
             cmd,
             interval,
             handle_func,
         )
-        .map_err(MigrationError::RedisError)
+        .then(|result| {
+            info!("check_repl_state done {:?}", result);
+            Ok(())
+        })
     }
 
     fn block_request(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         let min_blocking_time = Duration::from_millis(self.config.get_min_blocking_time());
         let state = self.state.clone();
         let delay = Delay::new(min_blocking_time).map_err(MigrationError::Io);
+        let meta = self.meta.clone();
         future::ok(())
             .map(move |()| {
+                info!("start to block request {:?}", meta);
                 state.set_state(MigrationState::Blocking);
             })
             .and_then(|()| delay)
+            .then(|result| {
+                info!("blocking request done {:?}", result);
+                Ok(())
+            })
     }
 
     fn commit_switch(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
@@ -199,7 +210,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             interval,
             handle_func,
         )
-        .map_err(MigrationError::RedisError)
+        .then(|result| {
+            error!("commit_switch failed {:?}", result);
+            Ok(())
+        })
     }
 
     fn release_queue(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
@@ -244,8 +258,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                 )
             },
         )
-        .map(|_| ())
-        .or_else(|()| future::ok(()))
+        .then(|result: Result<u128, ()>| {
+            info!("release_queue done {:?}", result);
+            future::ok(())
+        })
     }
 
     fn stop_redirection(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
@@ -298,15 +314,20 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
             return Box::new(future::err(MigrationError::AlreadyStarted));
         }
 
+        let meta = self.meta.clone();
+
         let check_phase = self.check_repl_state();
         let block_request = self.block_request();
-        let commit_phase = self.commit_switch();
+        let commit_switch = self.commit_switch();
         let release_queue = self.release_queue();
         let stop_redirection = self.stop_redirection();
         let release_queue_or_timeout = release_queue.and_then(move |()| stop_redirection);
         let migration_fut = check_phase
             .and_then(|()| block_request)
-            .and_then(|()| commit_phase.join(release_queue_or_timeout).map(|_| ()));
+            .and_then(move |()| {
+                info!("start to commit {:?}", meta);
+                commit_switch.join(release_queue_or_timeout).map(|_| ())
+            });
 
         let meta = self.meta.clone();
 
@@ -314,8 +335,13 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
             receiver
                 .map_err(|_| MigrationError::Canceled)
                 .select(migration_fut)
-                .then(move |_| {
-                    warn!("RedisMasterReplicator {:?} stopped", meta);
+                .then(move |result| {
+                    match result {
+                        Ok(_) => warn!("RedisMigratingTask stopped {:?}", meta),
+                        Err((err, _other)) => {
+                            error!("RedisMigratingTask stopped with error {:?} {:?}", err, meta)
+                        }
+                    }
                     future::ok(())
                 }),
         )
@@ -495,6 +521,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
         if switch_arg.version != SERVER_PROXY_VERSION {
             Err(MigrationError::IncompatibleVersion)
         } else {
+            info!("importing node commit switch {:?}", self.meta);
             self.state.set_state(MigrationState::SwitchCommitted);
             Ok(())
         }
@@ -554,7 +581,6 @@ fn extract_replicas_from_replication_info(info: String) -> Result<Vec<ReplicaSta
         let mut kv = line.split(':');
         let _slavex = kv.next().ok_or(())?;
         let mut value = kv.next().ok_or(())?.to_string();
-        value.pop().ok_or(())?;
         states.push(ReplicaState::parse_replica_meta(value)?);
     }
     Ok(states)
@@ -578,6 +604,15 @@ mod tests {
 
     #[test]
     fn test_parse_replication() {
+        let value = "ip=redis5,port=6379,state=online,offset=28,lag=1";
+        let meta =
+            ReplicaState::parse_replica_meta(value.to_string()).expect("test_parse_replication");
+        assert_eq!(meta.ip, "redis5");
+        assert_eq!(meta.port, 6379);
+        assert_eq!(meta.state, "online");
+        assert_eq!(meta.offset, 28);
+        assert_eq!(meta.lag, 1);
+
         let replication_info = "Replication\r
 role:master\r
 connected_slaves:1\r

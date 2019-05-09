@@ -156,45 +156,54 @@ services:
   redis1:
     container_name: redis1
     image: "redis"
+    command: redis-server --slave-announce-ip redis1
     ports:
     - "7001:6379"
   redis2:
     container_name: redis2
     image: "redis"
+    command: redis-server --slave-announce-ip redis2
     ports:
     - "7002:6379"
   redis3:
     container_name: redis3
     image: "redis"
+    command: redis-server --slave-announce-ip redis3
     ports:
     - "7003:6379"
   redis4:
     container_name: redis4
     image: "redis"
+    command: redis-server --slave-announce-ip redis4
     ports:
     - "7004:6379"
   redis5:
     container_name: redis5
     image: "redis"
+    command: redis-server --slave-announce-ip redis5
     ports:
     - "7005:6379"
   redis6:
     container_name: redis6
     image: "redis"
+    command: redis-server --slave-announce-ip redis6
     ports:
     - "7006:6379"
   redis7:
     container_name: redis7
     image: "redis"
+    command: redis-server --slave-announce-ip redis7
     ports:
       - "7007:6379"
   redis8:
     container_name: redis8
     image: "redis"
+    command: redis-server --slave-announce-ip redis8
     ports:
       - "7008:6379"
   redis9:
     container_name: redis9
     image: "redis"
+    command: redis-server --slave-announce-ip redis9
     ports:
       - "7009:6379"

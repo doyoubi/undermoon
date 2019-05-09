@@ -349,7 +349,7 @@ class MetaStore:
 
     def get_proxies(self):
         failed = list(self.get_failed_proxies().keys())
-        logger.info('failed {} replaced_master {}'.format(failed, self.replaced_master))
+        # logger.info('failed {} replaced_master {}'.format(failed, self.replaced_master))
         if not failed or not self.replaced_master:
             return deepcopy(self.get_origin_proxies())
 
@@ -395,7 +395,7 @@ class MetaStore:
         if proxy is None:
             return {'host': None}
 
-        logger.info('get_proxy epoch %d %s', self.epoch, self.replaced_master)
+        # logger.info('get_proxy epoch %d %s', self.epoch, self.replaced_master)
         nodes = [p.to_dict() for p in proxy.values()]
         return {
             'host': {
