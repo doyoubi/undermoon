@@ -278,7 +278,7 @@ where
                 return Err(DBError::OldEpoch);
             }
             for (db_name, epoch, start, end, migrating_task) in new_migrating_tasks.into_iter() {
-                debug!(
+                info!(
                     "spawn slot migrating task {} {} {} {}",
                     db_name, epoch, start, end
                 );
@@ -290,13 +290,13 @@ where
                 }));
             }
             for (db_name, epoch, start, end, importing_task) in new_importing_tasks.into_iter() {
-                debug!(
-                    "spawn slot importing replica {} {} {} {}",
+                info!(
+                    "spawn slot importing replica {} {} {}-{}",
                     db_name, epoch, start, end
                 );
                 tokio::spawn(importing_task.start().map_err(move |e| {
                     error!(
-                        "replica slot task {} {} {} {} exit {:?}",
+                        "replica slot task {} {} {}-{} exit {:?}",
                         db_name, epoch, start, end, e
                     )
                 }));

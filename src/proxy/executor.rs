@@ -234,7 +234,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
         match self.db.set_peers(db_map) {
             Ok(()) => {
-                debug!("Successfully update peer meta data");
+                info!("Successfully update peer meta data");
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
             }
             Err(e) => {

@@ -480,12 +480,11 @@ class MetaStore:
         # dst_node_address = meta['dst_node_address']
 
         if epoch != self.migration_epoch:
-            raise Exception('invalid epoch {} != {}'.format(epoch, self.migrating_map))
+            raise Exception('invalid epoch {} != {}'.format(epoch, self.migration_epoch))
 
         if dst_proxy_address not in self.importing_proxies:
             raise Exception('{} is not migrating'.format(dst_proxy_address))
 
-        self.migration_epoch = None
         self.epoch += 1
         self.imported_proxies.add(dst_proxy_address)
         self.importing_proxies.remove(dst_proxy_address)
@@ -496,7 +495,7 @@ class MetaStore:
         self.migration_epoch = self.epoch
         for proxy, nodes in self.extended_proxies.items():
             self.importing_proxies.add(proxy)
-            return {'start_epoch': self.epoch}
+        return {'start_epoch': self.epoch}
 
 
 meta_store = MetaStore(DB_NAME)

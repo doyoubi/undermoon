@@ -493,7 +493,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
                 .map_err(|_| MigrationError::Canceled)
                 .select(timeout_release)
                 .then(move |_| {
-                    warn!("Importing tasks {:?} stopped", meta);
+                    warn!("Importing tasks stopped {:?}", meta);
                     future::ok(())
                 }),
         )

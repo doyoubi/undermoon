@@ -114,6 +114,9 @@ You also need to add the following records to the `/etc/hosts` to support the re
 127.0.0.1 server_proxy1
 127.0.0.1 server_proxy2
 127.0.0.1 server_proxy3
+127.0.0.1 server_proxy4
+127.0.0.1 server_proxy5
+127.0.0.1 server_proxy6
 ```
 
 Now you have a Redis Cluster with 3 nodes!
