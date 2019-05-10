@@ -389,7 +389,11 @@ fn gen_cluster_nodes_helper(
         let mut slot_range_str = String::new();
         let slot_range = ranges
             .iter()
-            .map(gen_slot_range_helper)
+            .map(|range| match range.tag {
+                SlotRangeTag::Importing(ref _meta) => None,
+                _ if range.start == range.end => Some(range.start.to_string()),
+                _ => Some(format!("{}-{}", range.start, range.end)),
+            })
             .filter_map(|s| s)
             .collect::<Vec<String>>()
             .join(" ");
@@ -408,13 +412,6 @@ fn gen_cluster_nodes_helper(
     cluster_nodes
 }
 
-fn gen_slot_range_helper(range: &SlotRange) -> Option<String> {
-    match range.tag {
-        SlotRangeTag::Importing(ref _meta) => None,
-        _ => Some(format!("{}-{}", range.start, range.end)),
-    }
-}
-
 fn gen_cluster_slots_helper(
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
 ) -> Result<Vec<Resp>, String> {
@@ -429,17 +426,17 @@ fn gen_cluster_slots_helper(
             .ok_or_else(|| format!("invalid address {}", addr))?;
 
         for slot_range in ranges {
-            let mut arr = if slot_range.start == slot_range.end {
-                vec![Resp::Integer(slot_range.start.to_string().into_bytes())]
-            } else {
-                vec![
-                    Resp::Integer(slot_range.start.to_string().into_bytes()),
-                    Resp::Integer(slot_range.end.to_string().into_bytes()),
-                ]
-            };
+            if let SlotRangeTag::Importing(_) = slot_range.tag {
+                continue;
+            }
+
+            let mut arr = vec![
+                Resp::Integer(slot_range.start.to_string().into_bytes()),
+                Resp::Integer(slot_range.end.to_string().into_bytes()),
+            ];
             let ip_port_array = Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str(host.as_bytes().to_vec())),
-                Resp::Bulk(BulkStr::Str(port.as_bytes().to_vec())),
+                Resp::Integer(port.as_bytes().to_vec()),
             ]));
             arr.push(ip_port_array);
             slot_range_element.push(Resp::Arr(Array::Arr(arr)))
@@ -453,8 +450,7 @@ mod tests {
     use super::*;
     use ::common::cluster::MigrationMeta;
 
-    #[test]
-    fn test_gen_cluster_nodes() {
+    fn gen_testing_slot_ranges() -> HashMap<String, Vec<SlotRange>> {
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(
             "127.0.0.1:5299".to_string(),
@@ -465,18 +461,16 @@ mod tests {
                     tag: SlotRangeTag::None,
                 },
                 SlotRange {
-                    start: 200,
+                    start: 300,
                     end: 300,
                     tag: SlotRangeTag::None,
                 },
             ],
         );
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
-        assert_eq!(output, "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected 0-100 200-300\n");
+        slot_ranges
     }
 
-    #[test]
-    fn test_gen_importing_cluster_nodes() {
+    fn gen_testing_impporting_slot_ranges() -> HashMap<String, Vec<SlotRange>> {
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(
             "127.0.0.1:5299".to_string(),
@@ -492,10 +486,55 @@ mod tests {
                 }),
             }],
         );
+        slot_ranges
+    }
+
+    #[test]
+    fn test_gen_cluster_nodes() {
+        let slot_ranges = gen_testing_slot_ranges();
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        assert_eq!(output, "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
+    }
+
+    #[test]
+    fn test_gen_importing_cluster_nodes() {
+        let slot_ranges = gen_testing_impporting_slot_ranges();
         let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
         assert_eq!(
             output,
             "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected\n"
         );
+    }
+
+    #[test]
+    fn test_gen_cluster_slots() {
+        let slot_ranges = gen_testing_slot_ranges();
+        let output = gen_cluster_slots_helper(&slot_ranges).expect("test_gen_cluster_slots");
+        let slot_range1 = Resp::Arr(Array::Arr(vec![
+            Resp::Integer(0.to_string().into_bytes()),
+            Resp::Integer(100.to_string().into_bytes()),
+            Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
+                Resp::Integer(5299.to_string().into_bytes()),
+            ])),
+        ]));
+        let slot_range2 = Resp::Arr(Array::Arr(vec![
+            Resp::Integer(300.to_string().into_bytes()),
+            Resp::Integer(300.to_string().into_bytes()),
+            Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
+                Resp::Integer(5299.to_string().into_bytes()),
+            ])),
+        ]));
+        if output != vec![slot_range2.clone(), slot_range1.clone()] {
+            assert_eq!(output, vec![slot_range1, slot_range2]);
+        }
+    }
+
+    #[test]
+    fn test_gen_importing_cluster_slots() {
+        let slot_ranges = gen_testing_impporting_slot_ranges();
+        let output = gen_cluster_slots_helper(&slot_ranges).expect("test_gen_cluster_slots");
+        assert_eq!(output, vec![]);
     }
 }
