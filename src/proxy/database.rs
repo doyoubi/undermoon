@@ -83,6 +83,7 @@ where
                     cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::SlotNotCovered)
                 } else {
+                    debug!("db not found: {}", db_name);
                     let resp =
                         Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes());
                     cmd_task.set_resp_result(Ok(resp));
