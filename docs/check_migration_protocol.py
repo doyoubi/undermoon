@@ -54,7 +54,8 @@ assert MetaState.state_eq(MetaState.Any, MetaState.End)
 
 def check_redirecting(states_tpl):
     m, l, r = states_tpl
-    if m in [MetaState.RedirectToPeer]:
+    # The latter Queue state is for postpone_redirection_cases
+    if m in [MetaState.RedirectToPeer, MetaState.Queue]:
         return True
     if l in [MetaState.Slot, MetaState.MgrSlot, MetaState.IptSlot]:
         return False
@@ -126,16 +127,6 @@ def gen_path_order_map():
     m[(MetaStore.Rd, MetaState.End)][(MetaStore.Md, MetaState.End)] = True
     m[(MetaStore.Md, MetaState.End)][(MetaStore.Ld, MetaState.Slot)] = True
 
-
-    # guaranteed by the order of SETPEER, SETDB-MIGRATION, SETDB-LOCAL
-    # m[(MetaStore.Rs, MetaState.IptSlot)][(MetaStore.Ms, MetaState.MgrSet)] = True
-    # m[(MetaStore.Ms, MetaState.MgrSet)][(MetaStore.Ls, MetaState.MgrSlot)] = True
-    # m[(MetaStore.Rd, MetaState.MgrSlot)][(MetaStore.Md, MetaState.RedirectToPeer)] = True
-    # m[(MetaStore.Md, MetaState.RedirectToPeer)][(MetaStore.Ld, MetaState.IptSlot)] = True
-
-    # by the process of migration
-    # m[(MetaStore.Md, MetaState.RedirectToSelf)][(MetaStore.Ms, MetaState.RedirectToPeer)] = True
-
     return m
 
 
@@ -151,74 +142,40 @@ def need_to_set_Ld_before_commit_cases():
             MetaState.Start,
             MetaState.MgrSlot,
         ),
+    ]
+
+
+def postpone_redirection_cases():
+    return [
         (
-            MetaState.RedirectToPeer,
+            MetaState.Queue,
             MetaState.Slot,
-            MetaState.Slot,
+            MetaState.IptSlot,
             MetaState.RedirectToSelf,
-            # Same as above
-            MetaState.Start,
+            MetaState.IptSlot,
             MetaState.MgrSlot,
         ),
-        (
-            MetaState.RedirectToPeer,
-            MetaState.Slot,
-            MetaState.Slot,
-            MetaState.RedirectToSelf,
-            # Same as above
-            MetaState.Start,
-            MetaState.End,
-        ),
+    ]
+
+
+def migration_and_local_meta_not_updated_atomically():
+    return [
         (
             MetaState.End,
             MetaState.Slot,
             MetaState.Slot,
             MetaState.RedirectToSelf,
-            # Same as above
-            MetaState.Start,
-            MetaState.End,
-        ),
-        (
-            MetaState.End,
-            MetaState.Slot,
-            MetaState.Slot,
-            MetaState.End,
-            # Same as above
-            MetaState.Start,
-            MetaState.End,
-        ),
-        (
-            MetaState.RedirectToPeer,
-            MetaState.Slot,
-            MetaState.Slot,
-            MetaState.End,
-            # Same as above
-            MetaState.Start,
-            MetaState.End,
-        ),
-        (
-            MetaState.RedirectToPeer,
-            MetaState.Slot,
             MetaState.IptSlot,
-            MetaState.RedirectToSelf,
-            # Same as above
-            MetaState.Start,
-            MetaState.End,
-        ),
-        (
-            MetaState.RedirectToPeer,
-            MetaState.Slot,
-            MetaState.IptSlot,
-            MetaState.End,
-            # Same as above
-            MetaState.Start,
-            MetaState.End,
+            MetaState.MgrSlot,
         ),
     ]
 
 
 def validate_states(states):
-    valid_states = need_to_set_Ld_before_commit_cases()
+    # valid_states = need_to_set_Ld_before_commit_cases()
+    # valid_states.extend(postpone_redirection_cases())
+    # valid_states.extend(migration_and_local_meta_not_updated_atomically())
+    valid_states = []
     for s in valid_states:
         if MetaState.equal_tuple(states, s):
             return True
@@ -261,6 +218,12 @@ def recur_check(curr_states, orderred_states, m):
         sts = deepcopy(curr_states)
 
         sts[next_store] = next_state
+        # TODO: need to implement these two rules in the proxy.
+        if next_store == MetaStore.Md and next_state == MetaState.RedirectToSelf:
+            sts[MetaStore.Ld] = MetaState.IptSlot
+        if next_store == MetaStore.Ms and next_state == MetaState.End:
+            sts[MetaStore.Ls] = MetaState.End
+
         if not validate_states(sts):
             print('Invalid States:', next_store, next_state)
             pretty_print_states(sts)
