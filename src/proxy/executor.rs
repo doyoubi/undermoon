@@ -199,6 +199,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 debug!("local meta data: {:?}", db_map);
                 match self.db.set_dbs(db_map) {
                     Ok(()) => {
+                        debug!("Successfully update local meta data");
                         cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
                     }
                     Err(e) => {
