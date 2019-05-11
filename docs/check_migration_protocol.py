@@ -1,5 +1,8 @@
+import sys
 from enum import Enum
 from collections import defaultdict
+from copy import deepcopy
+from itertools import permutations
 
 
 class MetaStore(Enum):
@@ -48,6 +51,24 @@ class MetaState(Enum):
 assert MetaState.state_eq(MetaState.Start, MetaState.Start)
 assert not MetaState.state_eq(MetaState.Start, MetaState.End)
 assert MetaState.state_eq(MetaState.Any, MetaState.End)
+
+
+def check_redirecting(states_tpl):
+    m, l, r = states_tpl
+    if m in [MetaState.RedirectToPeer]:
+        return True
+    if l in [MetaState.Slot, MetaState.MgrSlot, MetaState.IptSlot]:
+        return False
+    return r in [MetaState.Slot, MetaState.MgrSlot, MetaState.IptSlot]
+
+
+def check_processing(states_tpl):
+    m, l, r = states_tpl
+    if m in [MetaState.RedirectToPeer]:
+        return False
+    if m in [MetaState.Queue]:
+        return True
+    return l in [MetaState.Slot, MetaState.MgrSlot, MetaState.IptSlot]
 
 
 def get_all_states(states):
@@ -151,18 +172,76 @@ def validate_states(states):
     for s in valid_states:
         if MetaState.equal_tuple(states, s):
             return True
+
+    mgr_states = (states[MetaStore.Ms], states[MetaStore.Ls], states[MetaStore.Rs])
+    ipt_states = (states[MetaStore.Md], states[MetaStore.Ld], states[MetaStore.Rd])
+    if check_processing(mgr_states) and check_redirecting(ipt_states):
+        return True
+    if check_redirecting(mgr_states) and check_processing(ipt_states):
+        return True
     return False
 
 
-def validate_order(states):
-    pass
+def check_order(curr_states, new_store, new_state, m):
+    for store, state in curr_states.items():
+        if m[(store, state)][(new_store, new_state)]:
+            return True
+    return False
+
+
+def get_next_state(orderred_states, store, curr_state):
+    states = orderred_states[store]
+    for i, state in enumerate(states):
+        if state == curr_state:
+            if len(states) == i+1:
+                return None
+            return states[i+1]
+
+
+def recur_check(curr_states, next_stores, orderred_states, m):
+    if not next_stores:
+        return
+
+    next_stores_perm = permutations(next_stores)
+    for stores in next_stores_perm:
+        stores = list(stores)
+        next_store = stores.pop(0)
+        next_state = get_next_state(orderred_states, next_store, curr_states[next_store])
+        if next_state is None:
+            continue
+
+        if not check_order(curr_states, next_store, next_state, m):
+            continue
+
+        sts = deepcopy(curr_states)
+
+        sts[next_store] = next_state
+        if not validate_states(sts):
+            print('Invalid States:', next_store, next_state)
+            pretty_print_states(sts)
+            sys.exit(1)
+
+        recur_check(sts, deepcopy(stores), orderred_states, m)
 
 
 def check():
     partial_order_map = gen_partially_ordered_map()
     # for row, cols in partial_order_map.items():
     #     print(' '.join(list(map(lambda t: 'x' if t else ' ', cols.values()))))
+
+    orderred_states = gen_store_order()
+
     states = {s: MetaState.Start for s in MetaStore}
-    print(states)
+    states[MetaStore.Ls] = MetaState.Slot
+    states[MetaStore.Rd] = MetaState.Slot
+
+    next_stores = list(states.keys())
+    recur_check(deepcopy(states), next_stores, orderred_states, partial_order_map)
+
+
+def pretty_print_states(states):
+    for store, state in states.items():
+        print(store, state)
+
 
 check()
