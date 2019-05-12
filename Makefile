@@ -25,7 +25,7 @@ flame:
 
 docker-build-image:
 	docker image build -f examples/Dockerfile-builder -t undermoon_builder .
-	sh scripts/rebuild_bin.sh
+	sh scripts/dkrebuild.sh
 	docker image build -f examples/Dockerfile-undermoon -t undermoon .
 
 docker-multi-redis:

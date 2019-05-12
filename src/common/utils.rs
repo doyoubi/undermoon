@@ -64,6 +64,7 @@ pub fn gen_moved(slot: usize, addr: String) -> String {
 }
 
 pub fn get_slot(key: &[u8]) -> usize {
+    // TODO: support hash tag.
     State::<XMODEM>::calculate(key) as usize % SLOT_NUM
 }
 

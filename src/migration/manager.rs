@@ -31,6 +31,7 @@ where
     )>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
+    local_meta_epoch: atomic::AtomicU64,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigrationManager<RCF, TSF>
@@ -49,6 +50,7 @@ where
             dbs: RwLock::new((0, HashMap::new())),
             client_factory,
             sender_factory,
+            local_meta_epoch: atomic::AtomicU64::new(0),
         }
     }
 
@@ -309,6 +311,21 @@ where
     }
 
     pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
+        let mut task_meta = switch_arg.meta.clone();
+
+        let arg_epoch = match switch_arg.meta.slot_range.tag {
+            SlotRangeTag::None => return Err(SwitchError::InvalidArg),
+            SlotRangeTag::Migrating(ref meta) => {
+                let epoch = meta.epoch;
+                task_meta.slot_range.tag = SlotRangeTag::Importing(meta.clone());
+                epoch
+            }
+            SlotRangeTag::Importing(ref meta) => meta.epoch,
+        };
+        if self.local_meta_epoch.load(atomic::Ordering::SeqCst) < arg_epoch {
+            return Err(SwitchError::NotReady);
+        }
+
         if let Some(tasks) = self
             .dbs
             .read()
@@ -321,10 +338,6 @@ where
                 switch_arg.meta.db_name,
                 tasks.len()
             );
-            let mut task_meta = switch_arg.meta.clone();
-            if let SlotRangeTag::Migrating(meta) = task_meta.slot_range.tag {
-                task_meta.slot_range.tag = SlotRangeTag::Importing(meta);
-            }
 
             if let Some(record) = tasks.get(&task_meta) {
                 debug!("found record for db {}", switch_arg.meta.db_name);
@@ -369,10 +382,23 @@ where
         }
         metadata
     }
+
+    pub fn update_local_meta_epoch(&self, epoch: u64) {
+        loop {
+            let current = self.local_meta_epoch.load(atomic::Ordering::SeqCst);
+            if current >= epoch {
+                break;
+            }
+            self.local_meta_epoch
+                .compare_and_swap(current, epoch, atomic::Ordering::SeqCst);
+        }
+        debug!("Successfully update local meta epoch in migration manager");
+    }
 }
 
 #[derive(Debug)]
 pub enum SwitchError {
+    InvalidArg,
     TaskNotFound,
     PeerMigrating,
     NotReady,

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-TARGET_VOLUMES="${PWD}/examples/target_volume:/undermoon/shared/target"
-TOML_VOLUMES="${PWD}/Cargo.toml:/undermoon/Cargo.toml"
-LOCK_VOLUMES="${PWD}/Cargo.lock:/undermoon/Cargo.lock"
-SRC_VOLUMES="${PWD}/src:/undermoon/src"
+TARGET_VOLUME="${PWD}/examples/target_volume:/undermoon/shared/target"
+TOML_VOLUME="${PWD}/Cargo.toml:/undermoon/Cargo.toml"
+LOCK_VOLUME="${PWD}/Cargo.lock:/undermoon/Cargo.lock"
+SRC_VOLUME="${PWD}/src:/undermoon/src"
+COPY_SCRIPT_VOLUME="${PWD}/examples/copy_target.sh:/undermoon/copy_target.sh"
 
-docker run --name undermoon_builder_cp_bin --rm -v "${TARGET_VOLUMES}" -v "${TOML_VOLUMES}" -v "${LOCK_VOLUMES}" -v "${SRC_VOLUMES}" undermoon_builder cargo build
-docker run --name undermoon_builder_cp_bin --rm -v "${TARGET_VOLUMES}" -v "${TOML_VOLUMES}" -v "${LOCK_VOLUMES}" -v "${SRC_VOLUMES}" undermoon_builder sh /undermoon/copy_target.sh
+docker run --rm -v "${TARGET_VOLUME}" -v "${TOML_VOLUME}" -v "${LOCK_VOLUME}" -v "${SRC_VOLUME}" -v "${COPY_SCRIPT_VOLUME}" undermoon_builder sh /undermoon/copy_target.sh

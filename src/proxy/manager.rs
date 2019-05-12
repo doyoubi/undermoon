@@ -71,7 +71,14 @@ impl<F: RedisClientFactory> MetaManager<F> {
             Ok(()) => {
                 debug!("Successfully update migration meta data");
                 debug!("local meta data: {:?}", db_map);
-                self.db.set_dbs(db_map)
+                let epoch = db_map.get_epoch();
+                match self.db.set_dbs(db_map) {
+                    Ok(()) => {
+                        self.migration_manager.update_local_meta_epoch(epoch);
+                        Ok(())
+                    }
+                    err => err,
+                }
             }
             err => err,
         }

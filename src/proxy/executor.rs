@@ -249,6 +249,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
             Err(err) => {
                 let err_str = match err {
+                    SwitchError::InvalidArg => "Invalid Arg".to_string(),
                     SwitchError::TaskNotFound => "No Corresponding Task Found".to_string(),
                     SwitchError::PeerMigrating => "Peer Not Migrating".to_string(),
                     SwitchError::NotReady => "Not Ready For Switching".to_string(),
