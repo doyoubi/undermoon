@@ -63,8 +63,20 @@ pub fn gen_moved(slot: usize, addr: String) -> String {
     format!("MOVED {} {}", slot, addr)
 }
 
+pub fn get_hash_tag(key: &[u8]) -> &[u8] {
+    if let Some(begin) = key.iter().position(|x| *x as char == '{') {
+        if let Some(end_offset) = key[begin + 1..].iter().position(|x| *x as char == '}') {
+            if end_offset == 0 {
+                return key;
+            }
+            return &key[begin + 1..begin + 1 + end_offset];
+        }
+    }
+    key
+}
+
 pub fn get_slot(key: &[u8]) -> usize {
-    State::<XMODEM>::calculate(key) as usize % SLOT_NUM
+    State::<XMODEM>::calculate(get_hash_tag(key)) as usize % SLOT_NUM
 }
 
 pub const OLD_EPOCH_REPLY: &str = "old_epoch";
@@ -72,3 +84,23 @@ pub const SLOT_NUM: usize = 16384;
 
 pub const MIGRATING_TAG: &str = "MIGRATING";
 pub const IMPORTING_TAG: &str = "IMPORTING";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_hash_tag() {
+        assert_eq!(
+            get_hash_tag("{user1000}.following".as_bytes()),
+            "user1000".as_bytes()
+        );
+        assert_eq!(
+            get_hash_tag("foo{}{bar}".as_bytes()),
+            "foo{}{bar}".as_bytes()
+        );
+        assert_eq!(get_hash_tag("foo{{bar}}".as_bytes()), "{bar".as_bytes());
+        assert_eq!(get_hash_tag("foo{bar}{zap}".as_bytes()), "bar".as_bytes());
+        assert_eq!(get_hash_tag("{}xxxxx".as_bytes()), "{}xxxxx".as_bytes());
+    }
+}

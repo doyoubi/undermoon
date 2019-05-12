@@ -12,14 +12,7 @@ impl SlotMap {
         for (addr, slot_ranges) in slot_map {
             let mut slots = Vec::new();
             for range in slot_ranges {
-                if range.end < range.start {
-                    continue;
-                }
-                let mut slot = range.start;
-                while slot < range.end && slot < SLOT_NUM {
-                    slots.push(slot);
-                    slot += 1;
-                }
+                slots.push((range.start, range.end));
             }
             map.insert(addr, slots);
         }
@@ -44,7 +37,7 @@ pub struct SlotMapData {
 }
 
 impl SlotMapData {
-    pub fn new(slot_map: HashMap<String, Vec<usize>>) -> SlotMapData {
+    pub fn new(slot_map: HashMap<String, Vec<(usize, usize)>>) -> SlotMapData {
         let mut slot_arr = Vec::with_capacity(SLOT_NUM);
         let mut addrs = Vec::with_capacity(slot_map.len());
         for _ in 0..SLOT_NUM {
@@ -52,9 +45,18 @@ impl SlotMapData {
         }
         for (addr, slots) in slot_map.into_iter() {
             addrs.push(addr);
-            for s in slots.into_iter() {
-                if let Some(opt) = slot_arr.get_mut(s) {
-                    *opt = Some(addrs.len() - 1);
+            for range in slots {
+                let (start, end) = range;
+                if start > end {
+                    continue;
+                }
+                for s in start..=end {
+                    if s >= SLOT_NUM {
+                        break;
+                    }
+                    if let Some(opt) = slot_arr.get_mut(s) {
+                        *opt = Some(addrs.len() - 1);
+                    }
                 }
             }
         }
@@ -80,7 +82,7 @@ mod tests {
             backend.clone(),
             vec![SlotRange {
                 start: 0,
-                end: SLOT_NUM,
+                end: SLOT_NUM - 1,
                 tag: SlotRangeTag::None,
             }],
         );

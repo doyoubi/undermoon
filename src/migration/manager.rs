@@ -1,5 +1,5 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{parse_tmp_switch_command, ImportingTask, MigratingTask, MigrationConfig};
+use super::task::{ImportingTask, MigratingTask, MigrationConfig};
 use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
@@ -9,7 +9,7 @@ use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
 use futures::Future;
 use itertools::Either;
-use migration::task::MigrationState;
+use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
 use std::sync::atomic;
 use std::sync::{Arc, RwLock};
@@ -31,6 +31,7 @@ where
     )>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
+    local_meta_epoch: atomic::AtomicU64,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigrationManager<RCF, TSF>
@@ -49,6 +50,7 @@ where
             dbs: RwLock::new((0, HashMap::new())),
             client_factory,
             sender_factory,
+            local_meta_epoch: atomic::AtomicU64::new(0),
         }
     }
 
@@ -308,18 +310,21 @@ where
         Ok(())
     }
 
-    pub fn commit_importing<Task: CmdTask>(&self, cmd_task: Task) {
-        let switch_arg = match parse_tmp_switch_command(cmd_task.get_resp()) {
-            Some(switch_meta) => switch_meta,
-            None => {
-                cmd_task.set_resp_result(Ok(Resp::Error(
-                    "failed to parse TMPSWITCH arguments"
-                        .to_string()
-                        .into_bytes(),
-                )));
-                return;
+    pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
+        let mut task_meta = switch_arg.meta.clone();
+
+        let arg_epoch = match switch_arg.meta.slot_range.tag {
+            SlotRangeTag::None => return Err(SwitchError::InvalidArg),
+            SlotRangeTag::Migrating(ref meta) => {
+                let epoch = meta.epoch;
+                task_meta.slot_range.tag = SlotRangeTag::Importing(meta.clone());
+                epoch
             }
+            SlotRangeTag::Importing(ref meta) => meta.epoch,
         };
+        if self.local_meta_epoch.load(atomic::Ordering::SeqCst) < arg_epoch {
+            return Err(SwitchError::NotReady);
+        }
 
         if let Some(tasks) = self
             .dbs
@@ -333,10 +338,6 @@ where
                 switch_arg.meta.db_name,
                 tasks.len()
             );
-            let mut task_meta = switch_arg.meta.clone();
-            if let SlotRangeTag::Migrating(meta) = task_meta.slot_range.tag {
-                task_meta.slot_range.tag = SlotRangeTag::Importing(meta);
-            }
 
             if let Some(record) = tasks.get(&task_meta) {
                 debug!("found record for db {}", switch_arg.meta.db_name);
@@ -346,33 +347,18 @@ where
                             "Received switch request when migrating {:?}",
                             switch_arg.meta
                         );
-                        cmd_task.set_resp_result(Ok(Resp::Error(
-                            "Peer migrating".to_string().into_bytes(),
-                        )));
-                        return;
+                        return Err(SwitchError::PeerMigrating);
                     }
                     Either::Right(importing_task) => {
-                        match importing_task.commit(switch_arg) {
-                            Ok(()) => {
-                                cmd_task.set_resp_result(Ok(Resp::Simple(
-                                    "OK".to_string().into_bytes(),
-                                )));
-                            }
-                            Err(err) => {
-                                cmd_task.set_resp_result(Ok(Resp::Error(
-                                    format!("switch failed: {:?}", err).into_bytes(),
-                                )));
-                            }
-                        }
-                        return;
+                        return importing_task
+                            .commit(switch_arg)
+                            .map_err(SwitchError::MgrErr);
                     }
                 }
             }
         }
         warn!("No corresponding task found {:?}", switch_arg.meta);
-        cmd_task.set_resp_result(Ok(Resp::Error(
-            "No Corresponding Task Found".to_string().into_bytes(),
-        )));
+        Err(SwitchError::TaskNotFound)
     }
 
     pub fn get_finished_tasks(&self) -> Vec<MigrationTaskMeta> {
@@ -396,4 +382,25 @@ where
         }
         metadata
     }
+
+    pub fn update_local_meta_epoch(&self, epoch: u64) {
+        loop {
+            let current = self.local_meta_epoch.load(atomic::Ordering::SeqCst);
+            if current >= epoch {
+                break;
+            }
+            self.local_meta_epoch
+                .compare_and_swap(current, epoch, atomic::Ordering::SeqCst);
+        }
+        debug!("Successfully update local meta epoch in migration manager");
+    }
+}
+
+#[derive(Debug)]
+pub enum SwitchError {
+    InvalidArg,
+    TaskNotFound,
+    PeerMigrating,
+    NotReady,
+    MgrErr(MigrationError),
 }

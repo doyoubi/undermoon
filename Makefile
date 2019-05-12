@@ -24,6 +24,8 @@ flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy
 
 docker-build-image:
+	docker image build -f examples/Dockerfile-builder -t undermoon_builder .
+	sh scripts/dkrebuild.sh
 	docker image build -f examples/Dockerfile-undermoon -t undermoon .
 
 docker-multi-redis:
