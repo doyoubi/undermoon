@@ -1,5 +1,5 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{parse_tmp_switch_command, ImportingTask, MigratingTask, MigrationConfig};
+use super::task::{ImportingTask, MigratingTask, MigrationConfig};
 use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
@@ -9,7 +9,7 @@ use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
 use futures::Future;
 use itertools::Either;
-use migration::task::MigrationState;
+use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
 use std::sync::atomic;
 use std::sync::{Arc, RwLock};
@@ -308,19 +308,7 @@ where
         Ok(())
     }
 
-    pub fn commit_importing<Task: CmdTask>(&self, cmd_task: Task) {
-        let switch_arg = match parse_tmp_switch_command(cmd_task.get_resp()) {
-            Some(switch_meta) => switch_meta,
-            None => {
-                cmd_task.set_resp_result(Ok(Resp::Error(
-                    "failed to parse TMPSWITCH arguments"
-                        .to_string()
-                        .into_bytes(),
-                )));
-                return;
-            }
-        };
-
+    pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
         if let Some(tasks) = self
             .dbs
             .read()
@@ -346,33 +334,18 @@ where
                             "Received switch request when migrating {:?}",
                             switch_arg.meta
                         );
-                        cmd_task.set_resp_result(Ok(Resp::Error(
-                            "Peer migrating".to_string().into_bytes(),
-                        )));
-                        return;
+                        return Err(SwitchError::PeerMigrating);
                     }
                     Either::Right(importing_task) => {
-                        match importing_task.commit(switch_arg) {
-                            Ok(()) => {
-                                cmd_task.set_resp_result(Ok(Resp::Simple(
-                                    "OK".to_string().into_bytes(),
-                                )));
-                            }
-                            Err(err) => {
-                                cmd_task.set_resp_result(Ok(Resp::Error(
-                                    format!("switch failed: {:?}", err).into_bytes(),
-                                )));
-                            }
-                        }
-                        return;
+                        return importing_task
+                            .commit(switch_arg)
+                            .map_err(SwitchError::MgrErr);
                     }
                 }
             }
         }
         warn!("No corresponding task found {:?}", switch_arg.meta);
-        cmd_task.set_resp_result(Ok(Resp::Error(
-            "No Corresponding Task Found".to_string().into_bytes(),
-        )));
+        Err(SwitchError::TaskNotFound)
     }
 
     pub fn get_finished_tasks(&self) -> Vec<MigrationTaskMeta> {
@@ -396,4 +369,12 @@ where
         }
         metadata
     }
+}
+
+#[derive(Debug)]
+pub enum SwitchError {
+    TaskNotFound,
+    PeerMigrating,
+    NotReady,
+    MgrErr(MigrationError),
 }

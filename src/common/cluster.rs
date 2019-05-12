@@ -139,6 +139,29 @@ pub struct MigrationTaskMeta {
     pub slot_range: SlotRange,
 }
 
+impl MigrationTaskMeta {
+    pub fn into_strings(self) -> Vec<String> {
+        let MigrationTaskMeta {
+            db_name,
+            slot_range,
+        } = self;
+        let mut strs = vec![db_name];
+        strs.extend(slot_range.into_strings());
+        strs
+    }
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
+        let db_name = it.next()?;
+        let slot_range = SlotRange::from_strings(it)?;
+        Some(Self {
+            db_name,
+            slot_range,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ReplPeer {
     pub node_address: String,
