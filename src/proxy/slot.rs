@@ -48,11 +48,11 @@ impl SlotMapData {
             for range in slots {
                 let (start, end) = range;
                 if start > end {
-                    continue
+                    continue;
                 }
-                for s in start..end+1 {
+                for s in start..=end {
                     if s >= SLOT_NUM {
-                        break
+                        break;
                     }
                     if let Some(opt) = slot_arr.get_mut(s) {
                         *opt = Some(addrs.len() - 1);
@@ -82,7 +82,7 @@ mod tests {
             backend.clone(),
             vec![SlotRange {
                 start: 0,
-                end: SLOT_NUM-1,
+                end: SLOT_NUM - 1,
                 tag: SlotRangeTag::None,
             }],
         );
