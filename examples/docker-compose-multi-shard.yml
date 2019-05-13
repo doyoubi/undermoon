@@ -6,9 +6,7 @@ services:
     volumes:
     - ${PWD}/examples/multi-shard/server_proxy1.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
-    - ${PWD}/src:/undermoon/src
-    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
-    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6001:6001"
@@ -22,9 +20,7 @@ services:
     volumes:
     - ${PWD}/examples/multi-shard/server_proxy2.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
-    - ${PWD}/src:/undermoon/src
-    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
-    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6002:6002"
@@ -38,9 +34,7 @@ services:
     volumes:
     - ${PWD}/examples/multi-shard/server_proxy3.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
-    - ${PWD}/src:/undermoon/src
-    - ${PWD}/Cargo.toml:/undermoon/Cargo.toml
-    - ${PWD}/Cargo.lock:/undermoon/Cargo.lock
+    - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6003:6003"

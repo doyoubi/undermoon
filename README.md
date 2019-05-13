@@ -305,7 +305,7 @@ There're two big features needed:
 - ~~Implement meta data manipulation api~~ (done)
 - ~~Basic coordinator implementation~~ (done)
 - ~~Implement Redis Replication Protocol~~ (just use redis replication directly)
-- Support slot migration via replication
+- ~~Support slot migration via replication~~ (done)
 - ~~Optimize RESP parsing~~ (done)
 - ~~Implement CLUSTER SLOTS~~ (done)
 - Implement commands to get proxy meta
