@@ -95,10 +95,10 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
         address: String,
     ) -> Box<dyn Future<Item = Option<HostMeta>, Error = CoordinateError> + Send> {
         // We should get local first but send the peer first for consistency for migration,
-        // so that we have local.epoch >= peer.epoch,
+        // so that we have local.epoch <= peer.epoch,
         // which means if proxy received a SETDB clearing the migrated slot range,
         // there should have been a SETPEER
-        // with higher epoch including the migrated out slot range.
+        // with higher or the same epoch including the migrated out slot range.
         let get_local = self
             .broker
             .get_host(address.clone())
@@ -108,7 +108,18 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
             .get_peer(address)
             .map_err(CoordinateError::MetaData);
         Box::new(get_local.and_then(|l| {
-            get_peer.map(move |p| p.and_then(|peer| l.map(|local| HostMeta { local, peer })))
+            get_peer.map(move |p| {
+                if let (Some(local), Some(peer)) = (l, p) {
+                    // If requesting two read operation from different stateless broker proxy,
+                    // we might still have a stale SETDB.
+                    // Check this explicitly.
+                    if local.get_epoch() <= peer.get_epoch() {
+                        return Some(HostMeta { local, peer });
+                    }
+                    debug!("local.epoch > peer.epoch. Drop it.")
+                }
+                None
+            })
         }))
     }
 }
