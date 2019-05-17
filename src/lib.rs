@@ -22,6 +22,7 @@ extern crate chashmap;
 extern crate crossbeam_channel;
 extern crate itertools;
 
+pub mod broker;
 mod common;
 pub mod coordinator;
 mod migration;

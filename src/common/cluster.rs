@@ -280,6 +280,9 @@ pub struct Cluster {
 }
 
 impl Cluster {
+    pub fn new(name: String, epoch: u64, nodes: Vec<Node>) -> Self {
+        Self { name, epoch, nodes }
+    }
     pub fn get_name(&self) -> &String {
         &self.name
     }
@@ -291,6 +294,25 @@ impl Cluster {
     }
     pub fn into_nodes(self) -> Vec<Node> {
         self.nodes
+    }
+
+    pub fn add_node(&mut self, node: Node) {
+        self.nodes.push(node);
+    }
+    pub fn bump_epoch(&mut self) {
+        self.epoch += 1;
+    }
+    pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
+        let node = match self
+            .nodes
+            .iter()
+            .find(|node| node.get_address() == node_address)
+        {
+            Some(node) => node.clone(),
+            None => return None,
+        };
+        self.nodes.retain(|node| node.get_address() != node_address);
+        Some(node)
     }
 }
 
@@ -320,6 +342,25 @@ impl Host {
     }
     pub fn into_nodes(self) -> Vec<Node> {
         self.nodes
+    }
+
+    pub fn add_node(&mut self, node: Node) {
+        self.nodes.push(node);
+    }
+    pub fn bump_epoch(&mut self) {
+        self.epoch += 1;
+    }
+    pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
+        let node = match self
+            .nodes
+            .iter()
+            .find(|node| node.get_address() == node_address)
+        {
+            Some(node) => node.clone(),
+            None => return None,
+        };
+        self.nodes.retain(|node| node.get_address() != node_address);
+        Some(node)
     }
 }
 
