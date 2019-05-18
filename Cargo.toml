@@ -40,6 +40,7 @@ btoi = "0.4.0"
 crossbeam = "0.7.1"
 crossbeam-channel = "0.3"
 chashmap = "2.2.2"
+actix-web = "0.7"
 
 [profile.release]
 debug = true
