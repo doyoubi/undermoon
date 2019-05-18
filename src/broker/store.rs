@@ -1,6 +1,6 @@
-use ::common::cluster::{Cluster, Host, Node, ReplMeta, SlotRange, SlotRangeTag};
+use ::common::cluster::{Cluster, Host, Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
 use ::common::utils::SLOT_NUM;
-use common::cluster::Role;
+use common::cluster::{MigrationMeta, Role};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -11,7 +11,14 @@ pub struct NodeSlot {
     node_address: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum MigrationType {
+    All,
+    Half,
+}
+
 pub struct MetaStore {
+    epoch: u64,
     clusters: HashMap<String, Cluster>,
     hosts: HashMap<String, Host>,
     // proxy_address => node_address => free
@@ -21,6 +28,7 @@ pub struct MetaStore {
 impl Default for MetaStore {
     fn default() -> Self {
         Self {
+            epoch: 0,
             clusters: HashMap::new(),
             hosts: HashMap::new(),
             all_nodes: HashMap::new(),
@@ -83,18 +91,17 @@ impl MetaStore {
             .ok_or(MetaStoreError::NotFound)?;
 
         for node in cluster.into_nodes().iter() {
-            if None
-                == self
-                    .all_nodes
-                    .get_mut(node.get_proxy_address())
-                    .and_then(|nodes| nodes.get_mut(node.get_address()))
-                    .map(|free| *free = true)
+            match self
+                .all_nodes
+                .get_mut(node.get_proxy_address())
+                .and_then(|nodes| nodes.get_mut(node.get_address()))
             {
-                error!(
+                Some(free) => *free = true,
+                None => error!(
                     "Invalid meta: cannot find {} {} in all_hosts",
                     cluster_name,
                     node.get_proxy_address()
-                );
+                ),
             }
             if None
                 == self
@@ -124,7 +131,7 @@ impl MetaStore {
 
         let repl = ReplMeta::new(Role::Master, vec![]);
         let new_node = Node::new(
-            node_address,
+            node_address.clone(),
             proxy_address.clone(),
             cluster_name.clone(),
             vec![],
@@ -135,6 +142,14 @@ impl MetaStore {
             Some(cluster) => cluster,
             None => {
                 error!("Invalid state: cannot find cluster {}", cluster_name);
+                match self
+                    .all_nodes
+                    .get_mut(&proxy_address)
+                    .and_then(|nodes| nodes.get_mut(&node_address))
+                {
+                    Some(free) => *free = true,
+                    None => error!("Invalid state: failed to reset free tag"),
+                }
                 return Err(MetaStoreError::NotFound);
             }
         };
@@ -163,7 +178,7 @@ impl MetaStore {
             proxy_address,
             node_address,
         } = node_slot.clone();
-        if None == cluster.remove_node(&node_address) {
+        if cluster.remove_node(&node_address).is_none() {
             error!(
                 "Invalid state: cannot find {} {:?} in cluster",
                 cluster_name, node_slot
@@ -173,7 +188,7 @@ impl MetaStore {
             .hosts
             .get_mut(&proxy_address)
             .ok_or(MetaStoreError::NotFound)?;
-        if None == host.remove_node(&node_address) {
+        if host.remove_node(&node_address).is_none() {
             error!(
                 "Invalid state: cannot find {} {:?} in hosts",
                 cluster_name, node_slot
@@ -199,10 +214,147 @@ impl MetaStore {
         Ok(())
     }
 
-//    pub fn migrate_slots(&mut self, cluster_name: String, src_node: String, dst_node: String) -> Result<(), MetaStoreError> {}
-    //
-    //    pub fn assign_replica() {}
-    //
+    pub fn migrate_slots(
+        &mut self,
+        cluster_name: String,
+        src_node_address: String,
+        dst_node_address: String,
+        migration_type: MigrationType,
+    ) -> Result<(), MetaStoreError> {
+        let cluster = self
+            .clusters
+            .get_mut(&cluster_name)
+            .ok_or(MetaStoreError::NotFound)?;
+
+        let (slot_ranges, src_proxy_address) = cluster
+            .get_node(&src_node_address)
+            .ok_or(MetaStoreError::NotFound)
+            .and_then(
+                |node| match (node.get_role(), node.get_slots().is_empty()) {
+                    (Role::Master, false) => {
+                        Ok((node.get_slots().clone(), node.get_proxy_address().clone()))
+                    }
+                    (Role::Replica, _) => Err(MetaStoreError::InvalidRole),
+                    (_, true) => Err(MetaStoreError::SlotEmpty),
+                },
+            )?;
+        let dst_proxy_address = cluster
+            .get_node(&dst_node_address)
+            .ok_or(MetaStoreError::NotFound)
+            .and_then(|node| {
+                if node.get_role() == Role::Master {
+                    Ok(node.get_proxy_address().clone())
+                } else {
+                    Err(MetaStoreError::InvalidRole)
+                }
+            })?;
+
+        self.epoch += 1;
+
+        let (src_slot_ranges, dst_slot_ranges) = match migration_type {
+            MigrationType::All => Self::move_slot_ranges(slot_ranges),
+            MigrationType::Half => {
+                let (mut src_slot_ranges, mut dst_slot_ranges, migrating_slot_ranges) =
+                    Self::split_slot_ranges(slot_ranges);
+                let migration_meta = MigrationMeta {
+                    epoch: self.epoch,
+                    src_proxy_address,
+                    src_node_address: src_node_address.clone(),
+                    dst_proxy_address,
+                    dst_node_address: dst_node_address.clone(),
+                };
+
+                for slot_range in src_slot_ranges.iter_mut() {
+                    slot_range.tag = SlotRangeTag::Migrating(migration_meta.clone());
+                }
+                for slot_range in dst_slot_ranges.iter_mut() {
+                    slot_range.tag = SlotRangeTag::Importing(migration_meta.clone());
+                }
+                src_slot_ranges.extend_from_slice(&migrating_slot_ranges);
+                (src_slot_ranges, dst_slot_ranges)
+            }
+        };
+
+        {
+            let src_node = cluster
+                .get_mut_node(&src_node_address)
+                .ok_or(MetaStoreError::NotFound)?;
+            *src_node.get_mut_slots() = src_slot_ranges;
+        }
+        {
+            let dst_node = cluster.get_mut_node(&dst_node_address).ok_or_else(|| {
+                error!("Invalid state: cannot find dst node");
+                MetaStoreError::NotFound
+            })?;
+            *dst_node.get_mut_slots() = dst_slot_ranges;
+        }
+
+        Ok(())
+    }
+
+    pub fn assign_replica(
+        &mut self,
+        cluster_name: String,
+        master_node_address: String,
+        replica_node_address: String,
+    ) -> Result<(), MetaStoreError> {
+        let cluster = self
+            .clusters
+            .get_mut(&cluster_name)
+            .ok_or(MetaStoreError::NotFound)?;
+
+        let master_proxy_address = cluster
+            .get_node(&master_node_address)
+            .ok_or(MetaStoreError::NotFound)
+            .and_then(|node| {
+                if node.get_role() == Role::Master {
+                    Ok(node)
+                } else {
+                    Err(MetaStoreError::InvalidRole)
+                }
+            })
+            .map(|node| node.get_proxy_address().clone())?;
+
+        let replica_proxy_address = cluster
+            .get_node(&replica_node_address)
+            .ok_or(MetaStoreError::NotFound)
+            .and_then(
+                |node| match (node.get_role() == Role::Master, node.get_slots().is_empty()) {
+                    (false, _) => Err(MetaStoreError::InvalidRole),
+                    (_, false) => Err(MetaStoreError::SlotNotEmpty),
+                    (true, true) => Ok(node),
+                },
+            )
+            .map(|node| node.get_proxy_address().clone())?;
+
+        {
+            let master = cluster
+                .get_mut_node(&master_node_address)
+                .ok_or(MetaStoreError::NotFound)?;
+            master.get_mut_repl().add_peer(ReplPeer {
+                node_address: replica_node_address.clone(),
+                proxy_address: replica_proxy_address.clone(),
+            });
+        }
+
+        {
+            let replica = match cluster.get_mut_node(&replica_node_address) {
+                Some(replica) => replica,
+                None => {
+                    error!("Invalid state: cannot find replica. Data corrupt.");
+                    return Err(MetaStoreError::NotFound);
+                }
+            };
+            replica.get_mut_repl().add_peer(ReplPeer {
+                node_address: master_node_address.clone(),
+                proxy_address: master_proxy_address.clone(),
+            });
+            replica.get_mut_repl().set_role(Role::Replica);
+        }
+
+        Ok(())
+    }
+
     //    pub fn validate(&self) {}
 
     fn consume_node_slot(&mut self) -> Result<NodeSlot, MetaStoreError> {
@@ -219,6 +371,71 @@ impl MetaStore {
         }
         Err(MetaStoreError::NoAvailableResource)
     }
+
+    fn move_slot_ranges(slot_ranges: Vec<SlotRange>) -> (Vec<SlotRange>, Vec<SlotRange>) {
+        let migrating_slot_ranges = slot_ranges
+            .iter()
+            .filter(|slot_range| slot_range.tag != SlotRangeTag::None)
+            .cloned()
+            .collect();
+        let free_slot_ranges = slot_ranges
+            .into_iter()
+            .filter(|slot_range| slot_range.tag == SlotRangeTag::None)
+            .collect();
+        (migrating_slot_ranges, free_slot_ranges)
+    }
+
+    fn split_slot_ranges(
+        slot_ranges: Vec<SlotRange>,
+    ) -> (Vec<SlotRange>, Vec<SlotRange>, Vec<SlotRange>) {
+        let migrating_slot_ranges: Vec<SlotRange> = slot_ranges
+            .iter()
+            .filter(|slot_range| slot_range.tag != SlotRangeTag::None)
+            .cloned()
+            .collect();
+
+        let free_slot_ranges: Vec<SlotRange> = slot_ranges
+            .into_iter()
+            .filter(|slot_range| slot_range.tag == SlotRangeTag::None)
+            .collect();
+
+        let slot_num: usize = free_slot_ranges
+            .iter()
+            .map(|slot_range| slot_range.end - slot_range.start + 1)
+            .sum();
+        let half_slot_sum = slot_num / 2;
+        let mut src_slot_ranges = vec![];
+        let mut dst_slot_ranges = vec![];
+
+        let mut src_slot_num = 0;
+        for slot_range in free_slot_ranges.into_iter() {
+            if src_slot_num >= half_slot_sum {
+                dst_slot_ranges.push(slot_range);
+                continue;
+            }
+
+            let num = slot_range.end - slot_range.start + 1;
+            if src_slot_num + num <= half_slot_sum {
+                src_slot_num += num;
+                src_slot_ranges.push(slot_range);
+            } else {
+                let src_num = half_slot_sum - src_slot_num;
+                // assert num > src_num > 0
+                src_slot_ranges.push(SlotRange {
+                    start: slot_range.start,
+                    end: slot_range.start + src_num - 1,
+                    tag: SlotRangeTag::None,
+                });
+                // assert start + src_num < start + num = end
+                dst_slot_ranges.push(SlotRange {
+                    start: slot_range.start + src_num,
+                    end: slot_range.end,
+                    tag: SlotRangeTag::None,
+                })
+            }
+        }
+        (src_slot_ranges, dst_slot_ranges, migrating_slot_ranges)
+    }
 }
 
 #[derive(Debug)]
@@ -227,6 +444,9 @@ pub enum MetaStoreError {
     NoAvailableResource,
     NotFound,
     InvalidState,
+    InvalidRole,
+    SlotNotEmpty,
+    SlotEmpty,
 }
 
 impl fmt::Display for MetaStoreError {
