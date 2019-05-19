@@ -17,6 +17,7 @@ extern crate serde_json;
 extern crate log;
 #[macro_use(defer)]
 extern crate scopeguard;
+extern crate actix_web;
 extern crate btoi;
 extern crate chashmap;
 extern crate crossbeam_channel;

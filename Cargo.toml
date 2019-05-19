@@ -12,6 +12,10 @@ name="coordinator"
 path="src/bin/coordinator.rs"
 
 [[bin]]
+name="mem_broker"
+path="src/bin/mem_broker.rs"
+
+[[bin]]
 name="test_http_broker"
 path="src/bin/test_http_broker.rs"
 

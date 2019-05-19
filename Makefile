@@ -17,6 +17,9 @@ server:
 coord:
 	RUST_LOG=undermoon=debug,coordinator=debug target/debug/coordinator
 
+broker:
+	RUST_LOG=undermoon=debug,mem_broker=debug target/debug/mem_broker
+
 test_broker:
 	RUST_LOG=undermoon=debug,test_http_broker=debug target/debug/test_http_broker
 

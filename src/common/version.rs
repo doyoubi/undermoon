@@ -1,1 +1,1 @@
-pub const SERVER_PROXY_VERSION: &str = "dev";
+pub const UNDERMOON_VERSION: &str = "dev";

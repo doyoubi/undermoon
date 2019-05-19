@@ -35,21 +35,21 @@ impl Default for MetaStore {
 }
 
 impl MetaStore {
+    pub fn get_hosts(&self) -> Vec<String> {
+        self.hosts.keys().cloned().collect()
+    }
+
     pub fn add_hosts(
         &mut self,
         proxy_address: String,
         nodes: Vec<String>,
     ) -> Result<(), MetaStoreError> {
-        if self.hosts.contains_key(&proxy_address) {
-            return Err(MetaStoreError::InUse);
-        }
-
+        let node_map = self
+            .all_nodes
+            .entry(proxy_address.clone())
+            .or_insert_with(HashMap::new);
         for node in nodes.into_iter() {
-            let nodes = self
-                .all_nodes
-                .entry(node.clone())
-                .or_insert_with(HashMap::new);
-            nodes.insert(node, true);
+            node_map.entry(node).or_insert(true);
         }
         Ok(())
     }
@@ -489,7 +489,15 @@ impl fmt::Display for MetaStoreError {
 
 impl Error for MetaStoreError {
     fn description(&self) -> &str {
-        "meta store error"
+        match self {
+            MetaStoreError::InUse => "IN_USE",
+            MetaStoreError::NoAvailableResource => "NO_AVAILABLE_RESOURCE",
+            MetaStoreError::NotFound => "NOT_FOUND",
+            MetaStoreError::InvalidState => "INVALID_STATE",
+            MetaStoreError::InvalidRole => "INVALID_ROLE",
+            MetaStoreError::SlotNotEmpty => "SLOT_NOT_EMPTY",
+            MetaStoreError::SlotEmpty => "SLOT_EMPTY",
+        }
     }
 
     fn cause(&self) -> Option<&Error> {
