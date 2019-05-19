@@ -292,7 +292,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cluster {
     name: String,
     epoch: u64,

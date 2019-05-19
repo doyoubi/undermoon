@@ -7,8 +7,8 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct NodeSlot {
-    proxy_address: String,
-    node_address: String,
+    pub proxy_address: String,
+    pub node_address: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -17,6 +17,7 @@ pub enum MigrationType {
     Half,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
 pub struct MetaStore {
     clusters: HashMap<String, Cluster>,
     hosts: HashMap<String, Host>,
@@ -112,7 +113,7 @@ impl MetaStore {
                     host.bump_epoch();
                     host.remove_node(node.get_address())
                 })
-                .is_none();
+                .is_some();
             if !found {
                 error!(
                     "Invalid meta: cannot find {} {} in hosts",
@@ -206,7 +207,8 @@ impl MetaStore {
 
         cluster.bump_epoch();
         host.bump_epoch();
-        Ok(())
+
+        Self::set_node_free(&mut self.all_nodes, NodeSlot{proxy_address, node_address})
     }
 
     pub fn remove_node(&mut self, node_slot: NodeSlot) -> Result<(), MetaStoreError> {
@@ -214,13 +216,29 @@ impl MetaStore {
             proxy_address,
             node_address,
         } = node_slot;
-        let free = self
+        self
             .all_nodes
+            .get_mut(&proxy_address)
+            .ok_or_else(|| MetaStoreError::NotFound)
+            .and_then(|nodes| {
+                nodes.get(&node_address)
+                    .ok_or_else(|| MetaStoreError::NotFound)
+                    .and_then(|free| if *free {Ok(())} else {Err(MetaStoreError::InUse)})?;
+                nodes.remove(&node_address).map(|_| ()).ok_or_else(|| MetaStoreError::NotFound)
+            })
+    }
+
+    fn set_node_free(all_nodes: &mut HashMap<String, HashMap<String, bool>>, node_slot: NodeSlot) -> Result<(), MetaStoreError> {
+        let NodeSlot {
+            proxy_address,
+            node_address,
+        } = node_slot;
+        let free = all_nodes
             .get_mut(&proxy_address)
             .and_then(|nodes| nodes.get_mut(&node_address))
             .ok_or_else(|| MetaStoreError::NotFound)?;
-        if !(*free) {
-            return Err(MetaStoreError::InUse);
+        if *free {
+            return Err(MetaStoreError::NotInUse);
         }
         *free = true;
         Ok(())
@@ -473,6 +491,7 @@ impl MetaStore {
 #[derive(Debug)]
 pub enum MetaStoreError {
     InUse,
+    NotInUse,
     NoAvailableResource,
     NotFound,
     InvalidState,
@@ -491,6 +510,7 @@ impl Error for MetaStoreError {
     fn description(&self) -> &str {
         match self {
             MetaStoreError::InUse => "IN_USE",
+            MetaStoreError::NotInUse => "NOT_IN_USE",
             MetaStoreError::NoAvailableResource => "NO_AVAILABLE_RESOURCE",
             MetaStoreError::NotFound => "NOT_FOUND",
             MetaStoreError::InvalidState => "INVALID_STATE",
