@@ -22,6 +22,16 @@ def test_adding_host(add_all=False):
     res.raise_for_status()
 
 
+def test_adding_another_host():
+    payload = {
+        'proxy_address': '127.0.0.2:7000',
+        'nodes': ['127.0.0.2:6002']
+    }
+    res = requests.put('http://localhost:7799/api/hosts/nodes', json=payload)
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
 def test_removing_node():
     proxy_address = '127.0.0.1:7000'
     node_address = '127.0.0.1:6001'
@@ -87,6 +97,41 @@ def stop_migrations():
     res.raise_for_status()
 
 
+def assign_replica():
+    cluster_name = 'testdb'
+    master_address = '127.0.0.1:6000'
+    replica_address = '127.0.0.2:6002'
+    res = requests.post('http://localhost:7799/api/replications/{}/{}/{}'.format(cluster_name, master_address, replica_address))
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
+def get_cluster_names():
+    res = requests.get('http://localhost:7799/api/clusters/names')
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
+def get_cluster_by_name():
+    cluster_name = 'testdb'
+    res = requests.get('http://localhost:7799/api/clusters/names/{}'.format(cluster_name))
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
+def get_host_addresses():
+    res = requests.get('http://localhost:7799/api/hosts/addresses')
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
+def get_host_by_address():
+    address = '127.0.0.1:7000'
+    res = requests.get('http://localhost:7799/api/hosts/address/{}'.format(address))
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
 print('add_host')
 test_adding_host()
 print('add_cluster')
@@ -114,8 +159,21 @@ get_all_meta()
 print('migrate_all')
 migrate_all()
 get_all_meta()
-# print('stop_migrations')
-# stop_migrations()
-# get_all_meta()
+print('stop_migrations')
+stop_migrations()
+get_all_meta()
+print('assign_replica')
+test_adding_another_host()
+test_adding_node()
+assign_replica()
+get_all_meta()
+print('get_cluster_names')
+get_cluster_names()
+print('get_cluster_by_name')
+get_cluster_by_name()
+print('get_host_addresses')
+get_host_addresses()
+print('get_host_by_address')
+get_host_by_address()
 print('remove cluster')
 test_removing_cluster()

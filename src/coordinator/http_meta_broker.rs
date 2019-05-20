@@ -250,7 +250,7 @@ impl MetaDataBroker for HttpMetaBroker {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct ClusterNamesPayload {
     pub names: Vec<String>,
 }

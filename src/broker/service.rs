@@ -1,7 +1,9 @@
 use super::store::{MetaStore, MetaStoreError, MigrationType, NodeSlot};
-use ::common::cluster::Node;
+use ::common::cluster::{Cluster, Host, Node};
 use ::common::version::UNDERMOON_VERSION;
-use ::coordinator::http_meta_broker::HostAddressesPayload;
+use ::coordinator::http_meta_broker::{
+    ClusterNamesPayload, ClusterPayload, HostAddressesPayload, HostPayload,
+};
 use actix_web::{error, http, App, HttpRequest, HttpResponse, Json, Path, Responder, State};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -13,8 +15,17 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/metadata", |r| {
             r.method(http::Method::GET).f(get_all_metadata)
         })
+        .resource("/hosts/address/{address}", |r| {
+            r.method(http::Method::GET).with(get_host_by_address)
+        })
         .resource("/hosts/addresses", |r| {
             r.method(http::Method::GET).f(get_host_addresses)
+        })
+        .resource("/clusters/names/{name}", |r| {
+            r.method(http::Method::GET).with(get_cluster_by_name)
+        })
+        .resource("/clusters/names", |r| {
+            r.method(http::Method::GET).f(get_cluster_names)
         })
         .resource("/hosts/nodes/{proxy_address}/{node_address}", |r| {
             r.method(http::Method::DELETE).with(remove_node)
@@ -48,6 +59,10 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/migrations/{cluster_name}/{src_node}/{dst_node}", |r| {
             r.method(http::Method::DELETE).with(stop_migrations)
         })
+        .resource(
+            "/replications/{cluster_name}/{master_node}/{replica_node}",
+            |r| r.method(http::Method::POST).with(assign_replica),
+        )
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +95,27 @@ impl MemBrokerService {
             .read()
             .expect("MemBrokerService::get_host_addresses")
             .get_hosts()
+    }
+
+    pub fn get_host_by_address(&self, address: &str) -> Option<Host> {
+        self.store
+            .read()
+            .expect("MemBrokerService::get_host_by_address")
+            .get_host_by_address(address)
+    }
+
+    pub fn get_cluster_names(&self) -> Vec<String> {
+        self.store
+            .read()
+            .expect("MemBrokerService::get_cluster_names")
+            .get_cluster_names()
+    }
+
+    pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
+        self.store
+            .read()
+            .expect("MemBrokerService::get_cluster_by_name")
+            .get_cluster_by_name(name)
     }
 
     pub fn add_hosts(&self, host_resource: HostResource) -> Result<(), MetaStoreError> {
@@ -190,6 +226,18 @@ impl MemBrokerService {
             .expect("MemBrokerService::stop_migrations")
             .stop_migrations(cluster_name, src_node_address, dst_node_address)
     }
+
+    pub fn assign_replica(
+        &self,
+        cluster_name: String,
+        master_node_address: String,
+        replica_node_address: String,
+    ) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::assign_replica")
+            .assign_replica(cluster_name, master_node_address, replica_node_address)
+    }
 }
 
 fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
@@ -204,6 +252,23 @@ fn get_all_metadata(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Respon
 fn get_host_addresses(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
     let addresses = request.state().get_host_addresses();
     Json(HostAddressesPayload { addresses })
+}
+
+fn get_host_by_address((path, state): (Path<(String,)>, ServiceState)) -> impl Responder {
+    let name = path.into_inner().0;
+    let host = state.get_host_by_address(&name);
+    Json(HostPayload { host })
+}
+
+fn get_cluster_names(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
+    let names = request.state().get_cluster_names();
+    Json(ClusterNamesPayload { names })
+}
+
+fn get_cluster_by_name((path, state): (Path<(String,)>, ServiceState)) -> impl Responder {
+    let name = path.into_inner().0;
+    let cluster = state.get_cluster_by_name(&name);
+    Json(ClusterPayload { cluster })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -300,6 +365,15 @@ fn stop_migrations(
     let (cluster_name, src_node_address, dst_node_address) = path.into_inner();
     state
         .stop_migrations(cluster_name, src_node_address, dst_node_address)
+        .map(|()| "")
+}
+
+fn assign_replica(
+    (path, state): (Path<(String, String, String)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    let (cluster_name, master_node_address, replica_node_address) = path.into_inner();
+    state
+        .assign_replica(cluster_name, master_node_address, replica_node_address)
         .map(|()| "")
 }
 

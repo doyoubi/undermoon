@@ -40,6 +40,18 @@ impl MetaStore {
         self.hosts.keys().cloned().collect()
     }
 
+    pub fn get_host_by_address(&self, address: &str) -> Option<Host> {
+        self.hosts.get(address).cloned()
+    }
+
+    pub fn get_cluster_names(&self) -> Vec<String> {
+        self.clusters.keys().cloned().collect()
+    }
+
+    pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
+        self.clusters.get(name).cloned()
+    }
+
     pub fn add_hosts(
         &mut self,
         proxy_address: String,
@@ -309,7 +321,8 @@ impl MetaStore {
 
         let (src_slot_ranges, dst_slot_ranges) = match migration_type {
             MigrationType::All => {
-                let (mut migrating_slot_ranges, mut free_slot_ranges) = Self::move_slot_ranges(slot_ranges);
+                let (mut migrating_slot_ranges, mut free_slot_ranges) =
+                    Self::move_slot_ranges(slot_ranges);
                 let mut src_new_migrating_slots = free_slot_ranges.clone();
                 for slot_range in src_new_migrating_slots.iter_mut() {
                     slot_range.tag = SlotRangeTag::Migrating(migration_meta.clone());
@@ -319,7 +332,7 @@ impl MetaStore {
                 }
                 migrating_slot_ranges.extend_from_slice(&src_new_migrating_slots);
                 (migrating_slot_ranges, free_slot_ranges)
-            },
+            }
             MigrationType::Half => {
                 let (mut src_slot_ranges, mut dst_slot_ranges, migrating_slot_ranges) =
                     Self::split_slot_ranges(slot_ranges);
@@ -483,6 +496,10 @@ impl MetaStore {
             )
             .map(|node| node.get_proxy_address().clone())?;
 
+        if master_proxy_address == replica_proxy_address {
+            return Err(MetaStoreError::SameHost);
+        }
+
         {
             let master = cluster
                 .get_mut_node(&master_node_address)
@@ -605,6 +622,7 @@ pub enum MetaStoreError {
     InvalidRole,
     SlotNotEmpty,
     SlotEmpty,
+    SameHost,
 }
 
 impl fmt::Display for MetaStoreError {
@@ -624,6 +642,7 @@ impl Error for MetaStoreError {
             MetaStoreError::InvalidRole => "INVALID_ROLE",
             MetaStoreError::SlotNotEmpty => "SLOT_NOT_EMPTY",
             MetaStoreError::SlotEmpty => "SLOT_EMPTY",
+            MetaStoreError::SameHost => "SAME_HOST",
         }
     }
 
