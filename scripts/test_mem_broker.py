@@ -132,6 +132,20 @@ def get_host_by_address():
     res.raise_for_status()
 
 
+def test_adding_failures():
+    proxy_address = '127.0.0.1:7000'
+    node_address = '127.0.0.1:6000'
+    res = requests.post('http://localhost:7799/api/failures/{}/{}'.format(proxy_address, node_address))
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
+def test_getting_failures():
+    res = requests.get('http://localhost:7799/api/failures')
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
 print('add_host')
 test_adding_host()
 print('add_cluster')
@@ -175,5 +189,11 @@ print('get_host_addresses')
 get_host_addresses()
 print('get_host_by_address')
 get_host_by_address()
+print('test_add_failures')
+test_adding_failures()
+get_all_meta()
+print('test_getting_failures')
+test_getting_failures()
+get_all_meta()
 print('remove cluster')
 test_removing_cluster()
