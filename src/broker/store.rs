@@ -1,5 +1,6 @@
 use ::common::cluster::{Cluster, Host, Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
 use ::common::utils::SLOT_NUM;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use common::cluster::{MigrationMeta, Role};
 use std::collections::HashMap;
 use std::error::Error;
@@ -23,6 +24,7 @@ pub struct MetaStore {
     hosts: HashMap<String, Host>,
     // proxy_address => node_address => free
     all_nodes: HashMap<String, HashMap<String, bool>>,
+    failures: HashMap<String, i64>,
 }
 
 impl Default for MetaStore {
@@ -31,6 +33,7 @@ impl Default for MetaStore {
             clusters: HashMap::new(),
             hosts: HashMap::new(),
             all_nodes: HashMap::new(),
+            failures: HashMap::new(),
         }
     }
 }
@@ -50,6 +53,20 @@ impl MetaStore {
 
     pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
         self.clusters.get(name).cloned()
+    }
+
+    pub fn add_failure(&mut self, address: String, _reporter_id: String) {
+        let now = Utc::now();
+        self.failures.insert(address, now.timestamp());
+    }
+
+    pub fn get_failures(&mut self, falure_ttl: chrono::Duration) -> Vec<String> {
+        let now = Utc::now();
+        self.failures.retain(|_, report_time| {
+            now - DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(*report_time, 0), Utc)
+                < falure_ttl
+        });
+        self.failures.keys().cloned().collect()
     }
 
     pub fn add_hosts(

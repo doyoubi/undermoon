@@ -2,9 +2,10 @@ use super::store::{MetaStore, MetaStoreError, MigrationType, NodeSlot};
 use ::common::cluster::{Cluster, Host, Node};
 use ::common::version::UNDERMOON_VERSION;
 use ::coordinator::http_meta_broker::{
-    ClusterNamesPayload, ClusterPayload, HostAddressesPayload, HostPayload,
+    ClusterNamesPayload, ClusterPayload, FailuresPayload, HostAddressesPayload, HostPayload,
 };
 use actix_web::{error, http, App, HttpRequest, HttpResponse, Json, Path, Responder, State};
+use chrono;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 
@@ -48,6 +49,10 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
             r.method(http::Method::POST).with(add_cluster);
             r.method(http::Method::DELETE).with(remove_cluster);
         })
+        .resource("/failures/{server_proxy_address}/{reporter_id}", |r| {
+            r.method(http::Method::POST).with(add_failure)
+        })
+        .resource("/failures", |r| r.method(http::Method::GET).f(get_failures))
         .resource(
             "/migrations/half/{cluster_name}/{src_node}/{dst_node}",
             |r| r.method(http::Method::POST).with(migrate_half_slots),
@@ -68,17 +73,18 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
 #[derive(Debug, Clone)]
 pub struct MemBrokerConfig {
     pub address: String,
+    pub failure_ttl: u64, // in seconds
 }
 
 pub struct MemBrokerService {
-    _config: MemBrokerConfig,
+    config: MemBrokerConfig,
     store: Arc<RwLock<MetaStore>>,
 }
 
 impl MemBrokerService {
-    pub fn new(_config: MemBrokerConfig) -> Self {
+    pub fn new(config: MemBrokerConfig) -> Self {
         Self {
-            _config,
+            config,
             store: Arc::new(RwLock::new(MetaStore::default())),
         }
     }
@@ -238,6 +244,21 @@ impl MemBrokerService {
             .expect("MemBrokerService::assign_replica")
             .assign_replica(cluster_name, master_node_address, replica_node_address)
     }
+
+    pub fn get_failures(&self) -> Vec<String> {
+        let failure_ttl = chrono::Duration::seconds(self.config.failure_ttl as i64);
+        self.store
+            .write()
+            .expect("MemBrokerService::get_failures")
+            .get_failures(failure_ttl)
+    }
+
+    pub fn add_failure(&self, address: String, reporter_id: String) {
+        self.store
+            .write()
+            .expect("MemBrokerService::add_failure")
+            .add_failure(address, reporter_id)
+    }
 }
 
 fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
@@ -269,6 +290,11 @@ fn get_cluster_by_name((path, state): (Path<(String,)>, ServiceState)) -> impl R
     let name = path.into_inner().0;
     let cluster = state.get_cluster_by_name(&name);
     Json(ClusterPayload { cluster })
+}
+
+fn get_failures(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
+    let addresses = request.state().get_failures();
+    Json(FailuresPayload { addresses })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -375,6 +401,12 @@ fn assign_replica(
     state
         .assign_replica(cluster_name, master_node_address, replica_node_address)
         .map(|()| "")
+}
+
+fn add_failure((path, state): (Path<(String, String)>, ServiceState)) -> &'static str {
+    let (server_proxy_address, reporter_id) = path.into_inner();
+    state.add_failure(server_proxy_address, reporter_id);
+    ""
 }
 
 impl error::ResponseError for MetaStoreError {

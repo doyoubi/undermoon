@@ -45,6 +45,7 @@ crossbeam = "0.7.1"
 crossbeam-channel = "0.3"
 chashmap = "2.2.2"
 actix-web = "0.7"
+chrono = "0.4"
 
 [profile.release]
 debug = true

@@ -27,6 +27,7 @@ fn gen_conf() -> MemBrokerConfig {
         address: s
             .get::<String>("address")
             .unwrap_or_else(|_| "127.0.0.1:7799".to_string()),
+        failure_ttl: s.get::<u64>("failure_ttl").unwrap_or_else(|_| 60),
     }
 }
 

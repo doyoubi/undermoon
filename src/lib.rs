@@ -20,6 +20,7 @@ extern crate scopeguard;
 extern crate actix_web;
 extern crate btoi;
 extern crate chashmap;
+extern crate chrono;
 extern crate crossbeam_channel;
 extern crate itertools;
 
