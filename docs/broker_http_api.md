@@ -134,7 +134,7 @@ empty payload
 ```
 
 ##### (7) PUT /api/clusters/migration
-Try to do the failover for the specified node.
+Try to do the migration
 ```
 Request:
 {

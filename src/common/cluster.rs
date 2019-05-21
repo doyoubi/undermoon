@@ -218,6 +218,19 @@ impl ReplMeta {
     pub fn get_peers(&self) -> &Vec<ReplPeer> {
         &self.peers
     }
+
+    pub fn set_role(&mut self, role: Role) {
+        self.role = role
+    }
+
+    pub fn add_peer(&mut self, peer: ReplPeer) {
+        self.peers.push(peer)
+    }
+    pub fn remove_peer(&mut self, peer: &ReplPeer) -> Option<ReplPeer> {
+        let p = self.peers.iter().find(|p| *p == peer).map(ReplPeer::clone);
+        self.peers.retain(|p| p == peer);
+        p
+    }
 }
 
 // (1) In proxy, all Node instances are masters.
@@ -270,9 +283,16 @@ impl Node {
     pub fn get_repl_meta(&self) -> &ReplMeta {
         &self.repl
     }
+
+    pub fn get_mut_slots(&mut self) -> &mut Vec<SlotRange> {
+        &mut self.slots
+    }
+    pub fn get_mut_repl(&mut self) -> &mut ReplMeta {
+        &mut self.repl
+    }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cluster {
     name: String,
     epoch: u64,
@@ -280,6 +300,9 @@ pub struct Cluster {
 }
 
 impl Cluster {
+    pub fn new(name: String, epoch: u64, nodes: Vec<Node>) -> Self {
+        Self { name, epoch, nodes }
+    }
     pub fn get_name(&self) -> &String {
         &self.name
     }
@@ -291,6 +314,35 @@ impl Cluster {
     }
     pub fn into_nodes(self) -> Vec<Node> {
         self.nodes
+    }
+
+    pub fn add_node(&mut self, node: Node) {
+        self.nodes.push(node);
+    }
+    pub fn bump_epoch(&mut self) {
+        self.epoch += 1;
+    }
+    pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
+        let node = match self
+            .nodes
+            .iter()
+            .find(|node| node.get_address() == node_address)
+        {
+            Some(node) => node.clone(),
+            None => return None,
+        };
+        self.nodes.retain(|node| node.get_address() != node_address);
+        Some(node)
+    }
+    pub fn get_node(&mut self, node_address: &str) -> Option<&Node> {
+        self.nodes
+            .iter()
+            .find(|node| node.get_address() == node_address)
+    }
+    pub fn get_mut_node(&mut self, node_address: &str) -> Option<&mut Node> {
+        self.nodes
+            .iter_mut()
+            .find(|node| node.get_address() == node_address)
     }
 }
 
@@ -320,6 +372,25 @@ impl Host {
     }
     pub fn into_nodes(self) -> Vec<Node> {
         self.nodes
+    }
+
+    pub fn add_node(&mut self, node: Node) {
+        self.nodes.push(node);
+    }
+    pub fn bump_epoch(&mut self) {
+        self.epoch += 1;
+    }
+    pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
+        let node = match self
+            .nodes
+            .iter()
+            .find(|node| node.get_address() == node_address)
+        {
+            Some(node) => node.clone(),
+            None => return None,
+        };
+        self.nodes.retain(|node| node.get_address() != node_address);
+        Some(node)
     }
 }
 

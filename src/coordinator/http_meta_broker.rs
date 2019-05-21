@@ -250,27 +250,27 @@ impl MetaDataBroker for HttpMetaBroker {
     }
 }
 
-#[derive(Deserialize)]
-struct ClusterNamesPayload {
-    names: Vec<String>,
+#[derive(Deserialize, Serialize)]
+pub struct ClusterNamesPayload {
+    pub names: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct ClusterPayload {
-    cluster: Option<Cluster>,
+#[derive(Deserialize, Serialize)]
+pub struct ClusterPayload {
+    pub cluster: Option<Cluster>,
 }
 
-#[derive(Deserialize)]
-struct HostAddressesPayload {
-    addresses: Vec<String>,
+#[derive(Deserialize, Serialize)]
+pub struct HostAddressesPayload {
+    pub addresses: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct HostPayload {
-    host: Option<Host>,
+#[derive(Deserialize, Serialize)]
+pub struct HostPayload {
+    pub host: Option<Host>,
 }
 
-#[derive(Deserialize)]
-struct FailuresPayload {
-    addresses: Vec<String>,
+#[derive(Deserialize, Serialize)]
+pub struct FailuresPayload {
+    pub addresses: Vec<String>,
 }
