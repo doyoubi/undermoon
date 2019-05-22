@@ -22,7 +22,7 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/hosts/addresses", |r| {
             r.method(http::Method::GET).f(get_host_addresses)
         })
-        .resource("/clusters/names/{name}", |r| {
+        .resource("/clusters/name/{name}", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
         })
         .resource("/clusters/names", |r| {

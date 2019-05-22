@@ -2,6 +2,7 @@ use ::common::cluster::{Cluster, Host, Node, ReplMeta, ReplPeer, SlotRange, Slot
 use ::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use common::cluster::{MigrationMeta, Role};
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -85,6 +86,10 @@ impl MetaStore {
     }
 
     pub fn add_cluster(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+        if self.clusters.contains_key(&cluster_name) {
+            return Err(MetaStoreError::AlreadyExisted);
+        }
+
         let NodeSlot {
             proxy_address,
             node_address,
@@ -545,22 +550,35 @@ impl MetaStore {
         Ok(())
     }
 
+    // TODO: implement validation
     //    pub fn validate(&self) {}
 
     fn consume_node_slot(&mut self) -> Result<NodeSlot, MetaStoreError> {
         // TODO: find the least used slot
-        for (proxy_address, nodes) in self.all_nodes.iter_mut() {
-            for (node_address, free) in nodes.iter_mut() {
-                if *free {
-                    *free = false;
-                    return Ok(NodeSlot {
-                        proxy_address: proxy_address.clone(),
-                        node_address: node_address.clone(),
-                    });
+        let (proxy_address, nodes) = self
+            .all_nodes
+            .iter_mut()
+            .fold1(|(max_proxy_address, max_nodes), (proxy_address, nodes)| {
+                // the bool(free) conversion is guaranteed to be 1 or 0 in Rust
+                let max_free_num: usize = max_nodes.iter().map(|(_, free)| *free as usize).sum();
+                let curr_free_num: usize = nodes.iter().map(|(_, free)| *free as usize).sum();
+                if curr_free_num > max_free_num {
+                    (proxy_address, nodes)
+                } else {
+                    (max_proxy_address, max_nodes)
                 }
-            }
-        }
-        Err(MetaStoreError::NoAvailableResource)
+            })
+            .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
+
+        let (node_address, free) = nodes
+            .iter_mut()
+            .find(|(_, free)| **free)
+            .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
+        *free = false;
+        Ok(NodeSlot {
+            proxy_address: proxy_address.clone(),
+            node_address: node_address.clone(),
+        })
     }
 
     fn move_slot_ranges(slot_ranges: Vec<SlotRange>) -> (Vec<SlotRange>, Vec<SlotRange>) {
@@ -640,6 +658,7 @@ pub enum MetaStoreError {
     SlotNotEmpty,
     SlotEmpty,
     SameHost,
+    AlreadyExisted,
 }
 
 impl fmt::Display for MetaStoreError {
@@ -660,6 +679,7 @@ impl Error for MetaStoreError {
             MetaStoreError::SlotNotEmpty => "SLOT_NOT_EMPTY",
             MetaStoreError::SlotEmpty => "SLOT_EMPTY",
             MetaStoreError::SameHost => "SAME_HOST",
+            MetaStoreError::AlreadyExisted => "ALREADY_EXISTED",
         }
     }
 

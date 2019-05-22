@@ -31,6 +31,9 @@ docker-build-image:
 	sh scripts/dkrebuild.sh
 	docker image build -f examples/Dockerfile-undermoon -t undermoon .
 
+docker-rebuild-bin:
+	sh scripts/dkrebuild.sh
+
 docker-multi-redis:
 	docker-compose -f examples/docker-compose-multi-redis.yml up
 
@@ -42,6 +45,9 @@ docker-failover:
 
 docker-coordinator:
 	docker-compose -f examples/docker-compose-coordinator.yml up
+
+docker-mem-broker:
+	docker-compose -f examples/docker-compose-mem-broker.yml up
 
 .PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-coordinator
 

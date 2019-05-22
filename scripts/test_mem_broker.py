@@ -114,7 +114,7 @@ def get_cluster_names():
 
 def get_cluster_by_name():
     cluster_name = 'testdb'
-    res = requests.get('http://localhost:7799/api/clusters/names/{}'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/clusters/name/{}'.format(cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 
