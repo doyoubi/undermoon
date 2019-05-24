@@ -1,5 +1,5 @@
 use super::store::{MetaStore, MetaStoreError, MigrationType, NodeSlot};
-use ::common::cluster::{Cluster, Host, Node};
+use ::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
 use ::common::version::UNDERMOON_VERSION;
 use ::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, HostAddressesPayload, HostPayload,
@@ -21,6 +21,9 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         })
         .resource("/hosts/addresses", |r| {
             r.method(http::Method::GET).f(get_host_addresses)
+        })
+        .resource("/clusters/migration", |r| {
+            r.method(http::Method::PUT).with(commit_migration)
         })
         .resource("/clusters/name/{name}", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
@@ -259,6 +262,13 @@ impl MemBrokerService {
             .expect("MemBrokerService::add_failure")
             .add_failure(address, reporter_id)
     }
+
+    pub fn commit_migration(&self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::commit_migration")
+            .commit_migration(task)
+    }
 }
 
 fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
@@ -407,6 +417,12 @@ fn add_failure((path, state): (Path<(String, String)>, ServiceState)) -> &'stati
     let (server_proxy_address, reporter_id) = path.into_inner();
     state.add_failure(server_proxy_address, reporter_id);
     ""
+}
+
+fn commit_migration(
+    (task, state): (Json<MigrationTaskMeta>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    state.commit_migration(task.into_inner()).map(|()| "")
 }
 
 impl error::ResponseError for MetaStoreError {

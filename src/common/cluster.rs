@@ -69,6 +69,21 @@ pub struct SlotRange {
 }
 
 impl SlotRange {
+    pub fn meta_eq(&self, other: &Self) -> bool {
+        if self.start != other.start || self.end != other.end {
+            return false;
+        }
+
+        match (&self.tag, &other.tag) {
+            (SlotRangeTag::None, SlotRangeTag::None) => true,
+            (SlotRangeTag::Migrating(lhs), SlotRangeTag::Migrating(rhs)) => lhs == rhs,
+            (SlotRangeTag::Importing(lhs), SlotRangeTag::Importing(rhs)) => lhs == rhs,
+            (SlotRangeTag::Migrating(lhs), SlotRangeTag::Importing(rhs)) => lhs == rhs,
+            (SlotRangeTag::Importing(lhs), SlotRangeTag::Migrating(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+
     pub fn into_strings(self) -> Vec<String> {
         let SlotRange { start, end, tag } = self;
         let mut strs = vec![];

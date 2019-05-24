@@ -1,4 +1,6 @@
-use ::common::cluster::{Cluster, Host, Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
+use ::common::cluster::{
+    Cluster, Host, MigrationTaskMeta, Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
+};
 use ::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use common::cluster::{MigrationMeta, Role};
@@ -391,6 +393,62 @@ impl MetaStore {
         Ok(())
     }
 
+    pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
+        let MigrationTaskMeta {
+            db_name,
+            slot_range,
+        } = task;
+        let cluster = self
+            .clusters
+            .get_mut(&db_name)
+            .ok_or(MetaStoreError::NotFound)?;
+
+        let migration_meta = match slot_range.tag {
+            SlotRangeTag::None => return Err(MetaStoreError::InvalidRequest),
+            SlotRangeTag::Migrating(ref meta) => meta.clone(),
+            SlotRangeTag::Importing(ref meta) => meta.clone(),
+        };
+
+        {
+            let src = cluster
+                .get_node(&migration_meta.src_node_address)
+                .ok_or(MetaStoreError::NotFound)?;
+            src.get_slots()
+                .iter()
+                .find(|sr| sr.meta_eq(&slot_range))
+                .ok_or(MetaStoreError::NotFound)?;
+        }
+        {
+            let dst = cluster
+                .get_node(&migration_meta.dst_node_address)
+                .ok_or(MetaStoreError::NotFound)?;
+            dst.get_slots()
+                .iter()
+                .find(|sr| sr.meta_eq(&slot_range))
+                .ok_or(MetaStoreError::NotFound)?;
+        }
+
+        {
+            let src = cluster
+                .get_mut_node(&migration_meta.src_node_address)
+                .ok_or(MetaStoreError::NotFound)?;
+            src.get_mut_slots().retain(|sr| !sr.meta_eq(&slot_range));
+        }
+        {
+            let dst = cluster
+                .get_mut_node(&migration_meta.dst_node_address)
+                .ok_or(MetaStoreError::NotFound)?;
+            let dst_slot_range = dst
+                .get_mut_slots()
+                .iter_mut()
+                .find(|sr| sr.meta_eq(&slot_range))
+                .ok_or(MetaStoreError::NotFound)?;
+            dst_slot_range.tag = SlotRangeTag::None;
+        }
+
+        Ok(())
+    }
+
     pub fn stop_migrations(
         &mut self,
         cluster_name: String,
@@ -659,6 +717,8 @@ pub enum MetaStoreError {
     SlotEmpty,
     SameHost,
     AlreadyExisted,
+    InvalidRequest,
+    SlotRangeNotFound,
 }
 
 impl fmt::Display for MetaStoreError {
@@ -680,6 +740,8 @@ impl Error for MetaStoreError {
             MetaStoreError::SlotEmpty => "SLOT_EMPTY",
             MetaStoreError::SameHost => "SAME_HOST",
             MetaStoreError::AlreadyExisted => "ALREADY_EXISTED",
+            MetaStoreError::InvalidRequest => "INVALID_REQUEST",
+            MetaStoreError::SlotRangeNotFound => "SLOT_RANGE_NOT_FOUND",
         }
     }
 

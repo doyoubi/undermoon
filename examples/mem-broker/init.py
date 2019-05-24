@@ -35,7 +35,30 @@ def add_node(cluster_name):
     res.raise_for_status()
 
 
+def get_cluster(cluster_name):
+    res = requests.get('http://localhost:7799/api/clusters/name/{}'.format(cluster_name))
+    res.raise_for_status()
+    return res.json()['cluster']
+
+
+def migrate_slots(cluster_name):
+    cluster = get_cluster(cluster_name)
+    nodes = cluster['nodes']
+    src = next([n for n in nodes if n['slots']].__iter__(), None)
+    dst = next([n for n in nodes if not n['slots']].__iter__(), None)
+    if not src or not dst:
+        raise Exception('cannot find src and dst')
+
+    src_address = src['address']
+    dst_address = dst['address']
+    res = requests.post('http://localhost:7799/api/migrations/half/{}/{}/{}'.format(cluster_name, src_address, dst_address))
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
 cluster_name = 'mydb'
 init_hosts()
 add_cluster(cluster_name)
 add_node(cluster_name)
+print(get_cluster(cluster_name))
+migrate_slots(cluster_name)
