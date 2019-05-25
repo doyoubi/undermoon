@@ -290,7 +290,8 @@ impl MetaStore {
         let nodes = all_nodes
             .get_mut(&proxy_address)
             .ok_or_else(|| MetaStoreError::HostResourceNotFound)?;
-        let free = nodes.get_mut(&node_address)
+        let free = nodes
+            .get_mut(&node_address)
             .ok_or_else(|| MetaStoreError::NodeResourceNotFound)?;
         if *free {
             return Err(MetaStoreError::NotInUse);
@@ -710,6 +711,219 @@ impl MetaStore {
         }
         (src_slot_ranges, dst_slot_ranges, migrating_slot_ranges)
     }
+
+    pub fn replace_failed_node(&mut self, node: Node) -> Result<Node, MetaStoreError> {
+        match self.takeover_master(node.clone()) {
+            Err(MetaStoreError::NotMaster) => (),
+            Err(MetaStoreError::NoPeer) => (),
+            others => return others,
+        }
+        self.replace_node(node)
+    }
+
+    fn takeover_master(&mut self, master: Node) -> Result<Node, MetaStoreError> {
+        let cluster = self
+            .clusters
+            .get_mut(master.get_cluster_name())
+            .ok_or(MetaStoreError::ClusterNotFound)?;
+
+        let mut master_node = cluster
+            .get_node(master.get_address())
+            .ok_or_else(|| MetaStoreError::NodeNotFound)?
+            .clone();
+
+        if master_node.get_repl_meta().get_role() == Role::Replica {
+            return Err(MetaStoreError::NotMaster);
+        }
+
+        let peer = master_node
+            .get_repl_meta()
+            .get_peers()
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| MetaStoreError::NoPeer)?;
+        let peer_node_address = peer.node_address.clone();
+        let mut replica_node = cluster
+            .get_node(&peer.node_address)
+            .ok_or_else(|| MetaStoreError::NodeNotFound)?
+            .clone();
+
+        cluster.bump_epoch();
+
+        Self::change_migration_peer(
+            cluster,
+            &master_node,
+            &peer.node_address,
+            &peer.proxy_address,
+        )?;
+
+        master_node.get_mut_repl().set_role(Role::Replica);
+        replica_node.get_mut_repl().set_role(Role::Master);
+
+        Self::update_peer(cluster, &master_node, &replica_node)?;
+
+        *cluster
+            .get_mut_node(master.get_address())
+            .ok_or_else(|| MetaStoreError::NodeNotFound)? = master_node.clone();
+        *cluster
+            .get_mut_node(&peer_node_address)
+            .ok_or_else(|| MetaStoreError::NodeNotFound)? = replica_node.clone();
+
+        Self::update_host_node(&mut self.hosts, master_node.clone())?;
+        Self::update_host_node(&mut self.hosts, replica_node.clone())?;
+
+        Ok(replica_node)
+    }
+
+    fn change_migration_peer(
+        cluster: &mut Cluster,
+        master_node: &Node,
+        new_node_address: &str,
+        new_proxy_address: &str,
+    ) -> Result<(), MetaStoreError> {
+        let epoch = cluster.get_epoch();
+        let mut slot_ranges = master_node.get_slots().clone();
+        for slot_range in slot_ranges.iter_mut() {
+            let start = slot_range.start;
+            let end = slot_range.end;
+            match &mut slot_range.tag {
+                SlotRangeTag::None => continue,
+                SlotRangeTag::Migrating(meta) => {
+                    let mut new_meta = meta.clone();
+                    new_meta.src_node_address = new_node_address.to_string();
+                    new_meta.src_proxy_address = new_proxy_address.to_string();
+                    new_meta.epoch = epoch;
+                    let peer_node = cluster
+                        .get_mut_node(&meta.dst_node_address)
+                        .ok_or_else(|| MetaStoreError::NodeNotFound)?;
+                    let sr_opt = peer_node
+                        .get_mut_slots()
+                        .iter_mut()
+                        .find(|sr| sr.start == start && sr.end == end);
+                    if let Some(sr) = sr_opt {
+                        *sr.tag
+                            .get_mut_migration_meta()
+                            .ok_or_else(|| MetaStoreError::NotMigrating)? = new_meta.clone();
+                    }
+                    *meta = new_meta;
+                }
+                SlotRangeTag::Importing(meta) => {
+                    let mut new_meta = meta.clone();
+                    new_meta.dst_node_address = new_node_address.to_string();
+                    new_meta.dst_proxy_address = new_proxy_address.to_string();
+                    new_meta.epoch = epoch;
+                    let peer_node = cluster
+                        .get_mut_node(&meta.src_node_address)
+                        .ok_or_else(|| MetaStoreError::NodeNotFound)?;
+                    let sr_opt = peer_node
+                        .get_mut_slots()
+                        .iter_mut()
+                        .find(|sr| sr.start == start && sr.end == end);
+                    if let Some(sr) = sr_opt {
+                        *sr.tag
+                            .get_mut_migration_meta()
+                            .ok_or_else(|| MetaStoreError::NotMigrating)? = new_meta.clone();
+                    }
+                    *meta = new_meta;
+                }
+            };
+        }
+        Ok(())
+    }
+
+    fn update_peer(
+        cluster: &mut Cluster,
+        old_node: &Node,
+        new_node: &Node,
+    ) -> Result<(), MetaStoreError> {
+        let old_peer = ReplPeer {
+            node_address: old_node.get_address().clone(),
+            proxy_address: old_node.get_proxy_address().clone(),
+        };
+        let new_peer = ReplPeer {
+            node_address: new_node.get_address().clone(),
+            proxy_address: new_node.get_proxy_address().clone(),
+        };
+        for repl in old_node.get_repl_meta().get_peers().iter() {
+            if repl.node_address == new_peer.node_address {
+                continue;
+            }
+            let mut peer = cluster
+                .get_mut_node(&repl.node_address)
+                .ok_or_else(|| MetaStoreError::NodeNotFound)?;
+            peer.get_mut_repl()
+                .remove_peer(&old_peer)
+                .ok_or_else(|| MetaStoreError::NodeNotFound)?;
+            peer.get_mut_repl().add_peer(new_peer.clone());
+        }
+        Ok(())
+    }
+
+    fn replace_node(&mut self, node: Node) -> Result<Node, MetaStoreError> {
+        let new_node = {
+            if self.clusters.get(node.get_cluster_name()).is_none() {
+                return Err(MetaStoreError::ClusterNotFound);
+            }
+
+            let NodeSlot {
+                proxy_address,
+                node_address,
+            } = self.consume_node_slot()?;
+
+            let cluster = self
+                .clusters
+                .get_mut(node.get_cluster_name())
+                .ok_or(MetaStoreError::ClusterNotFound)?;
+
+            let new_node = Node::new(
+                node_address,
+                proxy_address.clone(),
+                node.get_cluster_name().clone(),
+                node.get_slots().clone(),
+                node.get_repl_meta().clone(),
+            );
+
+            if new_node.get_role() == Role::Master {
+                Self::change_migration_peer(
+                    cluster,
+                    &node,
+                    new_node.get_address(),
+                    new_node.get_proxy_address(),
+                )?;
+            }
+
+            Self::update_peer(cluster, &node, &new_node)?;
+
+            cluster.add_node(new_node.clone());
+            cluster.bump_epoch();
+
+            new_node
+        };
+
+        let cluster_name = node.get_cluster_name().clone();
+        let old_slot = NodeSlot {
+            proxy_address: node.get_proxy_address().clone(),
+            node_address: node.get_address().clone(),
+        };
+
+        {
+            let host = self
+                .hosts
+                .entry(new_node.get_proxy_address().clone())
+                .or_insert_with(|| Host::new(new_node.get_proxy_address().clone(), 0, vec![]));
+            host.add_node(new_node.clone());
+            host.bump_epoch();
+        }
+
+        self.remove_node_from_cluster(cluster_name.clone(), old_slot)?;
+
+        Ok(new_node)
+    }
+
+    //    fn bump_all_hosts(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+    //        Ok(())
+    //    }
 }
 
 #[derive(Debug)]
@@ -730,6 +944,9 @@ pub enum MetaStoreError {
     HostNotFound,
     HostResourceNotFound,
     NodeResourceNotFound,
+    NotMaster,
+    NoPeer,
+    NotMigrating,
 }
 
 impl fmt::Display for MetaStoreError {
@@ -757,6 +974,9 @@ impl Error for MetaStoreError {
             MetaStoreError::HostNotFound => "HOST_NOT_FOUND",
             MetaStoreError::HostResourceNotFound => "HOST_RESOURCE_NOT_FOUND",
             MetaStoreError::NodeResourceNotFound => "NODE_RESOURCE_NOT_FOUND",
+            MetaStoreError::NotMaster => "NOT_MASTER",
+            MetaStoreError::NoPeer => "NOT_PEER",
+            MetaStoreError::NotMigrating => "NOT_MIGRATING",
         }
     }
 

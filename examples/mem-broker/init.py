@@ -3,7 +3,7 @@ import requests
 def init_hosts():
     hosts = {
         'server_proxy1:6001': ['redis1:6379', 'redis2:6379'],
-        'server_proxy2:6002': ['redis2:6379', 'redis4:6379'],
+        'server_proxy2:6002': ['redis3:6379', 'redis4:6379'],
         'server_proxy3:6003': ['redis5:6379', 'redis6:6379'],
         'server_proxy4:6004': ['redis7:6379', 'redis8:6379'],
         'server_proxy5:6005': ['redis9:6379', 'redis10:6379'],
@@ -56,9 +56,25 @@ def migrate_slots(cluster_name):
     res.raise_for_status()
 
 
+def set_replica(cluster_name):
+    cluster = get_cluster(cluster_name)
+    nodes = cluster['nodes']
+    master = next([n for n in nodes if n['slots']].__iter__(), None)
+    replica = next([n for n in nodes if not n['slots']].__iter__(), None)
+    if not master or not replica:
+        raise Exception('cannot find src and dst')
+
+    master_address = master['address']
+    replica_address = replica['address']
+    res = requests.post('http://localhost:7799/api/replications/{}/{}/{}'.format(cluster_name, master_address, replica_address))
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
 cluster_name = 'mydb'
 init_hosts()
 add_cluster(cluster_name)
 add_node(cluster_name)
 print(get_cluster(cluster_name))
-migrate_slots(cluster_name)
+# migrate_slots(cluster_name)
+set_replica(cluster_name)

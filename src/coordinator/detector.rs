@@ -52,9 +52,7 @@ impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
                             Err(_) => future::ok(Some(address)),
                         })
                 })
-                .or_else(move |_err| {
-                    Ok(Some(address_clone))
-                }),
+                .or_else(move |_err| Ok(Some(address_clone))),
         )
     }
 }

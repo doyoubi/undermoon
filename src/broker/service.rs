@@ -22,6 +22,9 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/hosts/addresses", |r| {
             r.method(http::Method::GET).f(get_host_addresses)
         })
+        .resource("/clusters/nodes", |r| {
+            r.method(http::Method::PUT).with(replace_failed_node)
+        })
         .resource("/clusters/migration", |r| {
             r.method(http::Method::PUT).with(commit_migration)
         })
@@ -269,6 +272,13 @@ impl MemBrokerService {
             .expect("MemBrokerService::commit_migration")
             .commit_migration(task)
     }
+
+    pub fn replace_failed_node(&self, node: Node) -> Result<Node, MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::replace_node")
+            .replace_failed_node(node)
+    }
 }
 
 fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
@@ -423,6 +433,12 @@ fn commit_migration(
     (task, state): (Json<MigrationTaskMeta>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     state.commit_migration(task.into_inner()).map(|()| "")
+}
+
+fn replace_failed_node(
+    (node, state): (Json<Node>, ServiceState),
+) -> Result<Json<Node>, MetaStoreError> {
+    state.replace_failed_node(node.into_inner()).map(Json)
 }
 
 impl error::ResponseError for MetaStoreError {

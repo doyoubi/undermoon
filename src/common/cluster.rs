@@ -59,6 +59,14 @@ impl SlotRangeTag {
             SlotRangeTag::None => None,
         }
     }
+
+    pub fn get_mut_migration_meta(&mut self) -> Option<&mut MigrationMeta> {
+        match self {
+            SlotRangeTag::Migrating(ref mut meta) => Some(meta),
+            SlotRangeTag::Importing(ref mut meta) => Some(meta),
+            SlotRangeTag::None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
