@@ -39,10 +39,10 @@ impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
         &self,
         address: String,
     ) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send + 'static> {
+        let address_clone = address.clone();
         let client_fut = self.client_factory.create_client(address.clone());
         Box::new(
             client_fut
-                .map_err(CoordinateError::Redis)
                 .and_then(|client| {
                     let ping_command = vec!["ping".to_string().into_bytes()];
                     client
@@ -51,6 +51,9 @@ impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
                             Ok(_) => future::ok(None),
                             Err(_) => future::ok(Some(address)),
                         })
+                })
+                .or_else(move |_err| {
+                    Ok(Some(address_clone))
                 }),
         )
     }
