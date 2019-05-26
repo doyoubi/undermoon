@@ -357,7 +357,7 @@ impl Cluster {
         self.nodes.retain(|node| node.get_address() != node_address);
         Some(node)
     }
-    pub fn get_node(&mut self, node_address: &str) -> Option<&Node> {
+    pub fn get_node(&self, node_address: &str) -> Option<&Node> {
         self.nodes
             .iter()
             .find(|node| node.get_address() == node_address)

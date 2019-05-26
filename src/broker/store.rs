@@ -684,9 +684,12 @@ impl MetaStore {
     //    pub fn validate(&self) {}
 
     fn consume_node_slot(&mut self) -> Result<NodeSlot, MetaStoreError> {
+        let failures = self.failures.clone();
+
         let (proxy_address, nodes) = self
             .all_nodes
             .iter_mut()
+            .filter(|(proxy_address, _)| !failures.contains_key(*proxy_address))
             .fold1(|(max_proxy_address, max_nodes), (proxy_address, nodes)| {
                 // the bool(free) conversion is guaranteed to be 1 or 0 in Rust
                 let max_free_num: usize = max_nodes.iter().map(|(_, free)| *free as usize).sum();
@@ -790,16 +793,12 @@ impl MetaStore {
             }
         }
 
-        let old_node_address = node.get_address().clone();
         match self.takeover_master(node.clone()) {
             Err(MetaStoreError::NotMaster) => (),
             Err(MetaStoreError::NoPeer) => (),
             others => return others,
         }
         let new_node = self.replace_node(node)?;
-        if self.failures.remove(&old_node_address).is_some() {
-            info!("Remove failure {}", old_node_address);
-        }
         Ok(new_node)
     }
 
@@ -819,6 +818,7 @@ impl MetaStore {
                 return Err(MetaStoreError::NotMaster);
             }
 
+            info!("start to takeover {:?}", master_node);
             let peer = master_node
                 .get_repl_meta()
                 .get_peers()
@@ -991,9 +991,16 @@ impl MetaStore {
 
     fn replace_node(&mut self, node: Node) -> Result<Node, MetaStoreError> {
         let new_node = {
-            if self.clusters.get(node.get_cluster_name()).is_none() {
-                return Err(MetaStoreError::ClusterNotFound);
-            }
+            let node = {
+                let cluster = self
+                    .clusters
+                    .get(node.get_cluster_name())
+                    .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
+                cluster
+                    .get_node(node.get_address())
+                    .cloned()
+                    .ok_or_else(|| MetaStoreError::NodeNotFound)?
+            };
 
             let NodeSlot {
                 proxy_address,
@@ -1004,6 +1011,11 @@ impl MetaStore {
                 .clusters
                 .get_mut(node.get_cluster_name())
                 .ok_or(MetaStoreError::ClusterNotFound));
+
+            info!(
+                "start to replace {:?} with {} {}",
+                node, proxy_address, node_address
+            );
 
             let new_slot_ranges =
                 Self::gen_new_slots(node.get_slots().clone(), &node_address, &proxy_address);
@@ -1017,6 +1029,7 @@ impl MetaStore {
             );
 
             if new_node.get_role() == Role::Master {
+                info!("Replace a master");
                 try_state!(Self::change_migration_peer(
                     cluster,
                     &node,
