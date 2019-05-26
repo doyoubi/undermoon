@@ -251,7 +251,7 @@ impl ReplMeta {
     }
     pub fn remove_peer(&mut self, peer: &ReplPeer) -> Option<ReplPeer> {
         let p = self.peers.iter().find(|p| *p == peer).map(ReplPeer::clone);
-        self.peers.retain(|p| p == peer);
+        self.peers.retain(|p| p != peer);
         p
     }
 }

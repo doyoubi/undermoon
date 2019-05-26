@@ -274,16 +274,28 @@ impl MetaStore {
             return Err(MetaStoreError::NodeNotFound);
         }
 
-        let host = try_state!(self
-            .hosts
-            .get_mut(&proxy_address)
-            .ok_or_else(|| MetaStoreError::HostNotFound));
-        try_state!(host
-            .remove_node(&node_address)
-            .ok_or_else(|| MetaStoreError::NodeNotFound));
-
         cluster.bump_epoch();
-        host.bump_epoch();
+
+        let empty = {
+            let host = try_state!(self
+                .hosts
+                .get_mut(&proxy_address)
+                .ok_or_else(|| MetaStoreError::HostNotFound));
+            try_state!(host
+                .remove_node(&node_address)
+                .ok_or_else(|| MetaStoreError::NodeNotFound));
+
+            host.bump_epoch();
+
+            host.get_nodes().is_empty()
+        };
+
+        if empty {
+            try_state!(self
+                .hosts
+                .remove(&proxy_address)
+                .ok_or_else(|| MetaStoreError::HostNotFound));
+        }
 
         try_state!(Self::set_node_free(
             &mut self.all_nodes,
@@ -763,13 +775,32 @@ impl MetaStore {
         (src_slot_ranges, dst_slot_ranges, migrating_slot_ranges)
     }
 
-    pub fn replace_failed_node(&mut self, node: Node) -> Result<Node, MetaStoreError> {
+    pub fn replace_failed_node(
+        &mut self,
+        curr_cluster_epoch: u64,
+        node: Node,
+    ) -> Result<Node, MetaStoreError> {
+        {
+            let cluster = self
+                .clusters
+                .get(node.get_cluster_name())
+                .ok_or(MetaStoreError::ClusterNotFound)?;
+            if cluster.get_epoch() != curr_cluster_epoch {
+                return Err(MetaStoreError::MismatchEpoch);
+            }
+        }
+
+        let old_node_address = node.get_address().clone();
         match self.takeover_master(node.clone()) {
             Err(MetaStoreError::NotMaster) => (),
             Err(MetaStoreError::NoPeer) => (),
             others => return others,
         }
-        self.replace_node(node)
+        let new_node = self.replace_node(node)?;
+        if self.failures.remove(&old_node_address).is_some() {
+            info!("Remove failure {}", old_node_address);
+        }
+        Ok(new_node)
     }
 
     fn takeover_master(&mut self, master: Node) -> Result<Node, MetaStoreError> {
@@ -820,7 +851,12 @@ impl MetaStore {
             *replica_node.get_mut_slots() = slot_ranges;
             *master_node.get_mut_slots() = vec![];
 
-            try_state!(Self::update_peer(cluster, &master_node, &replica_node));
+            try_state!(Self::update_peer(
+                cluster,
+                &mut self.hosts,
+                &master_node,
+                &replica_node
+            ));
 
             *try_state!(cluster
                 .get_mut_node(master.get_address())
@@ -900,6 +936,7 @@ impl MetaStore {
 
     fn update_peer(
         cluster: &mut Cluster,
+        hosts: &mut HashMap<String, Host>,
         old_node: &Node,
         new_node: &Node,
     ) -> Result<(), MetaStoreError> {
@@ -923,6 +960,7 @@ impl MetaStore {
                 .remove_peer(&old_peer)
                 .ok_or_else(|| MetaStoreError::NodeNotFound));
             peer.get_mut_repl().add_peer(new_peer.clone());
+            try_state!(Self::update_host_node(hosts, peer.clone()));
         }
         Ok(())
     }
@@ -987,7 +1025,12 @@ impl MetaStore {
                 ));
             }
 
-            try_state!(Self::update_peer(cluster, &node, &new_node));
+            try_state!(Self::update_peer(
+                cluster,
+                &mut self.hosts,
+                &node,
+                &new_node
+            ));
 
             cluster.add_node(new_node.clone());
             cluster.bump_epoch();
@@ -1059,6 +1102,7 @@ pub enum MetaStoreError {
     NotMaster,
     NoPeer,
     NotMigrating,
+    MismatchEpoch,
 }
 
 impl fmt::Display for MetaStoreError {
@@ -1090,6 +1134,7 @@ impl Error for MetaStoreError {
             MetaStoreError::NotMaster => "NOT_MASTER",
             MetaStoreError::NoPeer => "NOT_PEER",
             MetaStoreError::NotMigrating => "NOT_MIGRATING",
+            MetaStoreError::MismatchEpoch => "MISMATCH_EPOCH",
         }
     }
 
