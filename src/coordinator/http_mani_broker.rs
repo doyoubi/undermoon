@@ -106,7 +106,7 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ReplaceNodePayload {
-    cluster_epoch: u64,
-    node: Node,
+pub struct ReplaceNodePayload {
+    pub cluster_epoch: u64,
+    pub node: Node,
 }

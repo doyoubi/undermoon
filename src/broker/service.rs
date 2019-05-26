@@ -1,16 +1,20 @@
 use super::store::{MetaStore, MetaStoreError, MigrationType, NodeSlot};
-use ::common::cluster::{Cluster, Host, Node};
+use ::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
 use ::common::version::UNDERMOON_VERSION;
+use ::coordinator::http_mani_broker::ReplaceNodePayload;
 use ::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, HostAddressesPayload, HostPayload,
 };
-use actix_web::{error, http, App, HttpRequest, HttpResponse, Json, Path, Responder, State};
+use actix_web::{
+    error, http, middleware, App, HttpRequest, HttpResponse, Json, Path, Responder, State,
+};
 use chrono;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 
 pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
     App::with_state(service)
+        .middleware(middleware::Logger::default())
         .prefix("/api")
         .resource("/version", |r| r.method(http::Method::GET).f(get_version))
         .resource("/metadata", |r| {
@@ -22,7 +26,13 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/hosts/addresses", |r| {
             r.method(http::Method::GET).f(get_host_addresses)
         })
-        .resource("/clusters/names/{name}", |r| {
+        .resource("/clusters/nodes", |r| {
+            r.method(http::Method::PUT).with(replace_failed_node)
+        })
+        .resource("/clusters/migration", |r| {
+            r.method(http::Method::PUT).with(commit_migration)
+        })
+        .resource("/clusters/name/{name}", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
         })
         .resource("/clusters/names", |r| {
@@ -259,6 +269,24 @@ impl MemBrokerService {
             .expect("MemBrokerService::add_failure")
             .add_failure(address, reporter_id)
     }
+
+    pub fn commit_migration(&self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::commit_migration")
+            .commit_migration(task)
+    }
+
+    pub fn replace_failed_node(
+        &self,
+        curr_cluster_epoch: u64,
+        node: Node,
+    ) -> Result<Node, MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::replace_node")
+            .replace_failed_node(curr_cluster_epoch, node)
+    }
 }
 
 fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
@@ -407,6 +435,22 @@ fn add_failure((path, state): (Path<(String, String)>, ServiceState)) -> &'stati
     let (server_proxy_address, reporter_id) = path.into_inner();
     state.add_failure(server_proxy_address, reporter_id);
     ""
+}
+
+fn commit_migration(
+    (task, state): (Json<MigrationTaskMeta>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    state.commit_migration(task.into_inner()).map(|()| "")
+}
+
+fn replace_failed_node(
+    (payload, state): (Json<ReplaceNodePayload>, ServiceState),
+) -> Result<Json<Node>, MetaStoreError> {
+    let ReplaceNodePayload {
+        cluster_epoch,
+        node,
+    } = payload.into_inner();
+    state.replace_failed_node(cluster_epoch, node).map(Json)
 }
 
 impl error::ResponseError for MetaStoreError {

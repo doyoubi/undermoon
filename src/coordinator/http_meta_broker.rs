@@ -145,7 +145,6 @@ impl MetaDataBroker for HttpMetaBroker {
                 Some(host) => (
                     host.get_epoch(),
                     host.get_nodes().iter()
-                        .filter(|node| node.get_role() == Role::Master)
                         .map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
                 ),
             };

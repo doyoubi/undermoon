@@ -59,6 +59,14 @@ impl SlotRangeTag {
             SlotRangeTag::None => None,
         }
     }
+
+    pub fn get_mut_migration_meta(&mut self) -> Option<&mut MigrationMeta> {
+        match self {
+            SlotRangeTag::Migrating(ref mut meta) => Some(meta),
+            SlotRangeTag::Importing(ref mut meta) => Some(meta),
+            SlotRangeTag::None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -69,6 +77,21 @@ pub struct SlotRange {
 }
 
 impl SlotRange {
+    pub fn meta_eq(&self, other: &Self) -> bool {
+        if self.start != other.start || self.end != other.end {
+            return false;
+        }
+
+        match (&self.tag, &other.tag) {
+            (SlotRangeTag::None, SlotRangeTag::None) => true,
+            (SlotRangeTag::Migrating(lhs), SlotRangeTag::Migrating(rhs)) => lhs == rhs,
+            (SlotRangeTag::Importing(lhs), SlotRangeTag::Importing(rhs)) => lhs == rhs,
+            (SlotRangeTag::Migrating(lhs), SlotRangeTag::Importing(rhs)) => lhs == rhs,
+            (SlotRangeTag::Importing(lhs), SlotRangeTag::Migrating(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+
     pub fn into_strings(self) -> Vec<String> {
         let SlotRange { start, end, tag } = self;
         let mut strs = vec![];
@@ -228,7 +251,7 @@ impl ReplMeta {
     }
     pub fn remove_peer(&mut self, peer: &ReplPeer) -> Option<ReplPeer> {
         let p = self.peers.iter().find(|p| *p == peer).map(ReplPeer::clone);
-        self.peers.retain(|p| p == peer);
+        self.peers.retain(|p| p != peer);
         p
     }
 }
@@ -334,7 +357,7 @@ impl Cluster {
         self.nodes.retain(|node| node.get_address() != node_address);
         Some(node)
     }
-    pub fn get_node(&mut self, node_address: &str) -> Option<&Node> {
+    pub fn get_node(&self, node_address: &str) -> Option<&Node> {
         self.nodes
             .iter()
             .find(|node| node.get_address() == node_address)

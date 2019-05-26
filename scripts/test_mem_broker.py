@@ -12,20 +12,10 @@ def get_all_meta():
     res.raise_for_status()
 
 
-def test_adding_host(add_all=False):
+def test_adding_host(proxy, nodes):
     payload = {
-        'proxy_address': '127.0.0.1:7000',
-        'nodes': ['127.0.0.1:6000', '127.0.0.1:6001'] if add_all else ['127.0.0.1:6000'],
-    }
-    res = requests.put('http://localhost:7799/api/hosts/nodes', json=payload)
-    print(res.status_code, res.text)
-    res.raise_for_status()
-
-
-def test_adding_another_host():
-    payload = {
-        'proxy_address': '127.0.0.2:7000',
-        'nodes': ['127.0.0.2:6002']
+        'proxy_address': proxy,
+        'nodes': nodes,
     }
     res = requests.put('http://localhost:7799/api/hosts/nodes', json=payload)
     print(res.status_code, res.text)
@@ -114,9 +104,10 @@ def get_cluster_names():
 
 def get_cluster_by_name():
     cluster_name = 'testdb'
-    res = requests.get('http://localhost:7799/api/clusters/names/{}'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/clusters/name/{}'.format(cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
+    return res.json()['cluster']
 
 
 def get_host_addresses():
@@ -146,13 +137,39 @@ def test_getting_failures():
     res.raise_for_status()
 
 
+def test_replacing_master_node():
+    cluster = get_cluster_by_name()
+    nodes = cluster['nodes']
+    master = next([n for n in nodes if n['repl']['role'] == 'master' and n['slots']].__iter__(), None)
+    payload = {
+        'cluster_epoch': cluster['epoch'],
+        'node': master,
+    }
+    res = requests.put('http://localhost:7799/api/clusters/nodes', json=payload)
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
+def test_replacing_replica_node():
+    cluster = get_cluster_by_name()
+    nodes = cluster['nodes']
+    replica = next([n for n in nodes if n['repl']['role'] == 'replica'].__iter__(), None)
+    payload = {
+        'cluster_epoch': cluster['epoch'],
+        'node': replica,
+    }
+    res = requests.put('http://localhost:7799/api/clusters/nodes', json=payload)
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
 print('add_host')
-test_adding_host()
+test_adding_host('127.0.0.1:7000', ['127.0.0.1:6000'])
 print('add_cluster')
 test_adding_cluster()
 get_all_meta()
 print('add_node')
-test_adding_host(True)
+test_adding_host('127.0.0.1:7000', ['127.0.0.1:6000', '127.0.0.1:6001'])
 test_adding_node()
 get_all_meta()
 print('remove_node_from_cluster')
@@ -162,7 +179,7 @@ print('remove_node')
 test_removing_node()
 get_all_meta()
 print('migrate_half')
-test_adding_host(True)
+test_adding_host('127.0.0.1:7000', ['127.0.0.1:6000', '127.0.0.1:6001'])
 test_adding_node()
 get_all_meta()
 migrate_half()
@@ -177,7 +194,7 @@ print('stop_migrations')
 stop_migrations()
 get_all_meta()
 print('assign_replica')
-test_adding_another_host()
+test_adding_host('127.0.0.2:7000', ['127.0.0.2:6002'])
 test_adding_node()
 assign_replica()
 get_all_meta()
@@ -194,6 +211,13 @@ test_adding_failures()
 get_all_meta()
 print('test_getting_failures')
 test_getting_failures()
+get_all_meta()
+print('test_replacing_master_node')
+test_replacing_master_node()
+get_all_meta()
+print('test_replacing_replica_node')
+test_adding_host('127.0.0.2:7000', ['127.0.0.2:6003'])
+test_replacing_replica_node()
 get_all_meta()
 print('remove cluster')
 test_removing_cluster()
