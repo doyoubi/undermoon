@@ -74,6 +74,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
                 let epoch = db_map.get_epoch();
                 match self.db.set_dbs(db_map) {
                     Ok(()) => {
+                        self.migration_manager.clear_tmp_dbs(epoch);
                         self.migration_manager.update_local_meta_epoch(epoch);
                         Ok(())
                     }

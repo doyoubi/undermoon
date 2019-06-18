@@ -7,6 +7,7 @@ use ::protocol::RedisClientFactory;
 use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
+use arc_swap::ArcSwap;
 use futures::Future;
 use itertools::Either;
 use migration::task::{MigrationError, MigrationState, SwitchArg};
@@ -29,6 +30,10 @@ where
         u64,
         TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
     )>,
+    tmp_dbs: ArcSwap<(
+        u64,
+        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+    )>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     local_meta_epoch: atomic::AtomicU64,
@@ -48,6 +53,7 @@ where
             empty: atomic::AtomicBool::new(true),
             updating_epoch: atomic::AtomicU64::new(0),
             dbs: RwLock::new((0, HashMap::new())),
+            tmp_dbs: ArcSwap::new(Arc::new((0, HashMap::new()))),
             client_factory,
             sender_factory,
             local_meta_epoch: atomic::AtomicU64::new(0),
@@ -59,19 +65,49 @@ where
         cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
+        let cmd_task = match self.send_to_db(cmd_task) {
+            Ok(()) => return Ok(()),
+            Err(DBSendError::SlotNotFound(cmd_task)) => cmd_task,
+            errs => return errs,
+        };
+        self.send_to_tmp_db(cmd_task)
+    }
+
+    pub fn send_to_db(
+        &self,
+        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
+    {
         // Optimization for not having any migration.
         if self.empty.load(atomic::Ordering::SeqCst) {
             return Err(DBSendError::SlotNotFound(cmd_task));
         }
 
+        Self::send_helper(
+            &self
+                .dbs
+                .read()
+                .expect("MigrationManager::send lock error")
+                .1,
+            cmd_task,
+        )
+    }
+
+    pub fn send_to_tmp_db(
+        &self,
+        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
+    {
+        Self::send_helper(&self.tmp_dbs.lease().1, cmd_task)
+    }
+
+    fn send_helper(
+        task_map: &TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
+    {
         let db_name = cmd_task.get_db_name();
-        match self
-            .dbs
-            .read()
-            .expect("MigrationManager::send lock error")
-            .1
-            .get(&db_name)
-        {
+        match task_map.get(&db_name) {
             Some(tasks) => {
                 let key = match get_key(cmd_task.get_resp()) {
                     Some(key) => key,
@@ -112,25 +148,19 @@ where
             return Err(DBError::OldEpoch);
         }
 
-        let db_map = host_map.into_map();
+        let (old_epoch, task_map) = self
+            .dbs
+            .read()
+            .expect("MigrationManager::update reuse migrating")
+            .clone();
+        if !force && old_epoch >= epoch {
+            return Err(DBError::OldEpoch);
+        }
 
-        // The computation below might take a long time.
-        // Set epoch first to let later requests fail fast.
-        // We can't update the epoch inside the lock here.
-        // Because when we get the info inside it, it may be partially updated and inconsistent.
-        self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
-        // After this, other threads might accidentally change `updating_epoch` to a lower epoch,
-        // we will correct his later.
+        let db_map = host_map.into_map();
 
         let mut migration_dbs = HashMap::new();
 
-        // Race condition here.
-        // epoch 1 < epoch 2 < epoch 3
-        // Suppose when epoch 3 starts to modify data in epoch 1 and reuse all the tasks of epoch 1,
-        // epoch 2 try to write at the same time and create a new tasks.
-        // If the write operation of epoch 2 goes first, the thread of epoch 3 may not be able to
-        // see the changes of epoch 2 and recreate the new tasks itself.
-        // TODO: test whether a big write lock would be expensive and reimplement it.
         for (db_name, node_map) in db_map.iter() {
             for (_node, slot_ranges) in node_map.iter() {
                 for slot_range in slot_ranges.iter() {
@@ -140,11 +170,7 @@ where
                                 db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(Either::Left(migrating_task)) = self
-                                .dbs
-                                .read()
-                                .expect("MigrationManager::update reuse migrating")
-                                .1
+                            if let Some(Either::Left(migrating_task)) = task_map
                                 .get(db_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
@@ -159,11 +185,7 @@ where
                                 db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(Either::Right(importing_task)) = self
-                                .dbs
-                                .read()
-                                .expect("MigrationManager::update reuse importing")
-                                .1
+                            if let Some(Either::Right(importing_task)) = task_map
                                 .get(db_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
@@ -270,13 +292,31 @@ where
             }
         }
 
+        let mut removed_tasks = HashMap::new();
+        for (db_name, tasks) in task_map.into_iter() {
+            for (meta, task) in tasks.into_iter() {
+                if migration_dbs
+                    .get(&db_name)
+                    .and_then(|new_tasks| new_tasks.get(&meta))
+                    .is_some()
+                {
+                    continue;
+                }
+                removed_tasks
+                    .entry(db_name.clone())
+                    .or_insert_with(HashMap::new)
+                    .insert(meta, task);
+            }
+        }
+
         let empty = migration_dbs.is_empty();
 
         {
             let mut dbs = self.dbs.write().unwrap();
+            if !force && dbs.0 != old_epoch {
+                return Err(DBError::TryAgain);
+            }
             if !force && epoch <= dbs.0 {
-                // We're fooled by the `updating_epoch`, update it.
-                self.updating_epoch.store(dbs.0, atomic::Ordering::SeqCst);
                 return Err(DBError::OldEpoch);
             }
             for (db_name, epoch, start, end, migrating_task) in new_migrating_tasks.into_iter() {
@@ -304,7 +344,9 @@ where
                 }));
             }
             *dbs = (epoch, migration_dbs);
+            self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
             self.empty.store(empty, atomic::Ordering::SeqCst);
+            self.tmp_dbs.store(Arc::new((epoch, removed_tasks)));
         }
 
         Ok(())
@@ -393,6 +435,14 @@ where
                 .compare_and_swap(current, epoch, atomic::Ordering::SeqCst);
         }
         debug!("Successfully update local meta epoch in migration manager");
+    }
+
+    pub fn clear_tmp_dbs(&self, epoch: u64) {
+        let tmp_dbs = self.tmp_dbs.lease();
+        if tmp_dbs.0 == epoch {
+            self.tmp_dbs
+                .compare_and_swap(tmp_dbs, Arc::new((epoch, HashMap::new())));
+        }
     }
 }
 

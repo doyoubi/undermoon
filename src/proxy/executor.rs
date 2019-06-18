@@ -7,7 +7,7 @@ use ::migration::manager::SwitchError;
 use ::migration::task::parse_tmp_switch_command;
 use caseless;
 use common::db::HostDBMap;
-use common::utils::{ThreadSafe, OLD_EPOCH_REPLY};
+use common::utils::{ThreadSafe, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
 use protocol::{Array, BulkStr, RedisClientFactory, Resp};
 use replication::replicator::ReplicatorMeta;
 use std::str;
@@ -170,6 +170,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             Err(err) => match err {
                 DBError::OldEpoch => cmd_ctx
                     .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
+                DBError::TryAgain => cmd_ctx
+                    .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
             },
         }
     }
@@ -195,6 +197,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 match e {
                     DBError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
+                    DBError::TryAgain => cmd_ctx
+                        .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
                 }
             }
         }
@@ -221,6 +225,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 match e {
                     DBError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
+                    DBError::TryAgain => cmd_ctx
+                        .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
                 }
             }
         }
