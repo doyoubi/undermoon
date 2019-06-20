@@ -16,6 +16,7 @@ pub const DEFAULT_DB: &str = "admin";
 #[derive(Debug)]
 pub enum DBError {
     OldEpoch,
+    TryAgain,
 }
 
 impl fmt::Display for DBError {

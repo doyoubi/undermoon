@@ -118,7 +118,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                             Err(RedisClientError::Done)
                         } else {
                             debug!(
-                                "replcation for migration is still not ready {:?} {:?}",
+                                "replication for migration is still not ready {:?} {:?}",
                                 meta, states
                             );
                             Ok(())
