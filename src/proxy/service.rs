@@ -8,6 +8,7 @@ use tokio::net::TcpListener;
 #[derive(Debug, Clone)]
 pub struct ServerProxyConfig {
     pub address: String,
+    pub auto_select_db: bool,
 }
 
 #[derive(Clone)]

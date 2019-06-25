@@ -189,6 +189,22 @@ where
         local.append(&mut remote);
         Ok(Resp::Arr(Array::Arr(local)))
     }
+
+    pub fn auto_select_db(&self) -> Option<String> {
+        {
+            let local = &self.local_dbs.read().unwrap().1;
+            if local.len() == 1 {
+                return local.keys().next().cloned();
+            }
+        }
+        {
+            let remote = &self.remote_dbs.read().unwrap().1;
+            if remote.len() == 1 {
+                return remote.keys().next().cloned();
+            }
+        }
+        None
+    }
 }
 
 // We combine the nodes and slot_map to let them fit into

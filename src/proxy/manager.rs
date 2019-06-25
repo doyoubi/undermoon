@@ -3,18 +3,20 @@ use super::backend::{
     RecoverableBackendNodeFactory,
 };
 use super::database::{DBError, DBSendError, DatabaseMap};
+use super::service::ServerProxyConfig;
 use super::session::CmdCtx;
 use ::common::cluster::MigrationTaskMeta;
 use ::migration::manager::{MigrationManager, SwitchError};
 use ::migration::task::{MigrationConfig, SwitchArg};
 use common::db::HostDBMap;
 use protocol::{RedisClientFactory, Resp};
+use proxy::database::{DBTag, DEFAULT_DB};
 use replication::manager::ReplicatorManager;
 use replication::replicator::ReplicatorMeta;
 use std::sync::Arc;
 
 pub struct MetaManager<F: RedisClientFactory> {
-    service_address: String,
+    config: ServerProxyConfig,
     db: DatabaseMap<
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
@@ -23,7 +25,7 @@ pub struct MetaManager<F: RedisClientFactory> {
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
-    pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
+    pub fn new(config: ServerProxyConfig, client_factory: Arc<F>) -> Self {
         let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
             RecoverableBackendNodeFactory::default(),
         ));
@@ -31,7 +33,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         let redirection_sender_factory = Arc::new(DirectionSenderFactory::default());
         let migration_config = Arc::new(MigrationConfig::default());
         Self {
-            service_address,
+            config,
             db,
             replicator_manager: ReplicatorManager::new(client_factory.clone()),
             migration_manager: MigrationManager::new(
@@ -44,12 +46,12 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
     pub fn gen_cluster_nodes(&self, db_name: String) -> String {
         self.db
-            .gen_cluster_nodes(db_name, self.service_address.clone())
+            .gen_cluster_nodes(db_name, self.config.address.clone())
     }
 
     pub fn gen_cluster_slots(&self, db_name: String) -> Result<Resp, String> {
         self.db
-            .gen_cluster_slots(db_name, self.service_address.clone())
+            .gen_cluster_slots(db_name, self.config.address.clone())
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
@@ -106,6 +108,11 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
+        let mut cmd_ctx = cmd_ctx;
+        if self.config.auto_select_db {
+            cmd_ctx = self.try_select_db(cmd_ctx);
+        }
+
         let cmd_ctx = match self.migration_manager.send(cmd_ctx) {
             Ok(()) => return,
             Err(e) => match e {
@@ -118,7 +125,18 @@ impl<F: RedisClientFactory> MetaManager<F> {
         };
         let res = self.db.send(cmd_ctx);
         if let Err(e) = res {
-            error!("Failed to foward cmd_ctx: {:?}", e)
+            warn!("Failed to forward cmd_ctx: {:?}", e)
         }
+    }
+
+    pub fn try_select_db(&self, cmd_ctx: CmdCtx) -> CmdCtx {
+        if cmd_ctx.get_db_name() != DEFAULT_DB {
+            return cmd_ctx;
+        }
+
+        if let Some(db_name) = self.db.auto_select_db() {
+            cmd_ctx.set_db_name(db_name);
+        }
+        cmd_ctx
     }
 }
