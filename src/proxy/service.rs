@@ -53,21 +53,28 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                 .incoming()
                 .map_err(|e| error!("accept failed: {:?}", e))
                 .for_each(move |sock| {
-                    info!("accept conn {:?}", sock.peer_addr());
+                    let peer = match sock.peer_addr() {
+                        Ok(address) => address.to_string(),
+                        Err(e) => format!("Failed to get peer {}", e),
+                    };
+
+                    info!("accept conn {}", peer);
                     let handle_clone = forward_handler.clone();
                     let (reader_handler, writer_handler) =
                         handle_conn(Session::new(handle_clone), sock);
                     let (reader_handler, writer_handler) =
                         new_future_group(reader_handler, writer_handler);
+
+                    let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer.clone());
                     tokio::spawn(
                         reader_handler
-                            .map(|()| error!("Read IO closed"))
-                            .map_err(|err| error!("Read IO error {:?}", err)),
+                            .map(move |()| info!("Read IO closed {}", p1))
+                            .map_err(move |err| error!("Read IO error {:?} {}", err, p2)),
                     );
                     tokio::spawn(
                         writer_handler
-                            .map(|()| error!("Write IO closed"))
-                            .map_err(|err| error!("Write IO error {:?}", err)),
+                            .map(move |()| info!("Write IO closed {}", p3))
+                            .map_err(move |err| error!("Write IO error {:?} {}", err, p4)),
                     );
                     future::ok(())
                 }),

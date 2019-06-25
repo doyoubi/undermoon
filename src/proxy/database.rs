@@ -195,6 +195,8 @@ where
             let local = &self.local_dbs.read().unwrap().1;
             if local.len() == 1 {
                 return local.keys().next().cloned();
+            } else if local.len() > 1 {
+                return None;
             }
         }
         {
