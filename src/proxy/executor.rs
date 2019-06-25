@@ -2,6 +2,7 @@ use super::backend::CmdTask;
 use super::command::CmdType;
 use super::database::{DBError, DBTag};
 use super::manager::MetaManager;
+use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use ::migration::manager::SwitchError;
 use ::migration::task::parse_tmp_switch_command;
@@ -28,9 +29,9 @@ impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
 }
 
 impl<F: RedisClientFactory> SharedForwardHandler<F> {
-    pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
+    pub fn new(config: ServerProxyConfig, client_factory: Arc<F>) -> Self {
         Self {
-            handler: sync::Arc::new(ForwardHandler::new(service_address, client_factory)),
+            handler: sync::Arc::new(ForwardHandler::new(config, client_factory)),
         }
     }
 }
@@ -46,9 +47,9 @@ pub struct ForwardHandler<F: RedisClientFactory> {
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
-    pub fn new(service_address: String, client_factory: Arc<F>) -> Self {
+    pub fn new(config: ServerProxyConfig, client_factory: Arc<F>) -> Self {
         Self {
-            manager: MetaManager::new(service_address, client_factory),
+            manager: MetaManager::new(config, client_factory),
         }
     }
 }

@@ -30,6 +30,7 @@ fn gen_conf() -> ServerProxyConfig {
         address: s
             .get::<String>("address")
             .unwrap_or_else(|_| "127.0.0.1:5299".to_string()),
+        auto_select_db: s.get::<bool>("auto_select_db").unwrap_or_else(|_| false),
     }
 }
 
@@ -42,8 +43,7 @@ fn main() {
     let pool_size = 1;
     let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
 
-    let forward_handler =
-        SharedForwardHandler::new(config.address.clone(), Arc::new(client_factory));
+    let forward_handler = SharedForwardHandler::new(config.clone(), Arc::new(client_factory));
     let server = ServerProxyService::new(config, forward_handler);
 
     tokio::run(server.run());
