@@ -1,4 +1,4 @@
-use super::store::{MetaStore, MetaStoreError, MigrationType, NodeSlot};
+use super::store::{MetaStore, MetaStoreError, MigrationType};
 use ::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
 use ::common::version::UNDERMOON_VERSION;
 use ::coordinator::http_mani_broker::ReplaceNodePayload;
@@ -38,20 +38,16 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/clusters/names", |r| {
             r.method(http::Method::GET).f(get_cluster_names)
         })
-        .resource("/hosts/nodes/{proxy_address}/{node_address}", |r| {
-            r.method(http::Method::DELETE).with(remove_node)
+        .resource("/hosts/nodes/{proxy_address}", |r| {
+            r.method(http::Method::DELETE).with(remove_proxy)
         })
         .resource("/hosts/nodes", |r| {
             r.method(http::Method::PUT).with(add_host)
         })
-        .resource(
-            "/clusters/{cluster_name}/nodes/{proxy_address}/{node_address}",
-            |r| {
-                r.method(http::Method::POST).with(add_node);
-                r.method(http::Method::DELETE)
-                    .with(remove_node_from_cluster);
-            },
-        )
+        .resource("/clusters/{cluster_name}/nodes/{proxy_address}", |r| {
+            r.method(http::Method::DELETE)
+                .with(remove_proxy_from_cluster);
+        })
         .resource("/clusters/{cluster_name}/nodes", |r| {
             r.method(http::Method::POST).with(auto_add_node)
         })
@@ -159,58 +155,29 @@ impl MemBrokerService {
             .remove_cluster(cluster_name)
     }
 
-    pub fn auto_add_node(&self, cluster_name: String) -> Result<Node, MetaStoreError> {
+    pub fn auto_add_node(&self, cluster_name: String) -> Result<Vec<Node>, MetaStoreError> {
         self.store
             .write()
             .expect("MemBrokerService::auto_add_node")
             .auto_add_node(cluster_name)
     }
 
-    pub fn add_node(
+    pub fn remove_proxy_from_cluster(
         &self,
         cluster_name: String,
         proxy_address: String,
-        node_address: String,
-    ) -> Result<Node, MetaStoreError> {
-        let node_slot = NodeSlot {
-            proxy_address,
-            node_address,
-        };
+    ) -> Result<(), MetaStoreError> {
         self.store
             .write()
-            .expect("MemBrokerService::add_node")
-            .add_node(cluster_name, node_slot)
+            .expect("MemBrokerService::remove_proxy_from_cluster")
+            .remove_proxy_from_cluster(cluster_name, proxy_address)
     }
 
-    pub fn remove_node_from_cluster(
-        &self,
-        cluster_name: String,
-        proxy_address: String,
-        node_address: String,
-    ) -> Result<(), MetaStoreError> {
-        let node_slot = NodeSlot {
-            proxy_address,
-            node_address,
-        };
+    pub fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
         self.store
             .write()
-            .expect("MemBrokerService::remove_node_from_cluster")
-            .remove_node_from_cluster(cluster_name, node_slot)
-    }
-
-    pub fn remove_node(
-        &self,
-        proxy_address: String,
-        node_address: String,
-    ) -> Result<(), MetaStoreError> {
-        let node_slot = NodeSlot {
-            proxy_address,
-            node_address,
-        };
-        self.store
-            .write()
-            .expect("MemBrokerService::remove_node")
-            .remove_node(node_slot)
+            .expect("MemBrokerService::remove_proxy")
+            .remove_proxy(proxy_address)
     }
 
     pub fn migrate_slots(
@@ -355,34 +322,25 @@ fn remove_cluster(
 
 fn auto_add_node(
     (path, state): (Path<(String,)>, ServiceState),
-) -> Result<Json<Node>, MetaStoreError> {
+) -> Result<Json<Vec<Node>>, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     state.auto_add_node(cluster_name).map(Json)
 }
 
-fn add_node(
-    (path, state): (Path<(String, String, String)>, ServiceState),
-) -> Result<Json<Node>, MetaStoreError> {
-    let (cluster_name, proxy_address, node_address) = path.into_inner();
-    state
-        .add_node(cluster_name, proxy_address, node_address)
-        .map(Json)
-}
-
-fn remove_node_from_cluster(
-    (path, state): (Path<(String, String, String)>, ServiceState),
+fn remove_proxy_from_cluster(
+    (path, state): (Path<(String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    let (cluster_name, proxy_address, node_address) = path.into_inner();
+    let (cluster_name, proxy_address) = path.into_inner();
     state
-        .remove_node_from_cluster(cluster_name, proxy_address, node_address)
+        .remove_proxy_from_cluster(cluster_name, proxy_address)
         .map(|()| "")
 }
 
-fn remove_node(
-    (path, state): (Path<(String, String)>, ServiceState),
+fn remove_proxy(
+    (path, state): (Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    let (proxy_address, node_address) = path.into_inner();
-    state.remove_node(proxy_address, node_address).map(|()| "")
+    let (proxy_address,) = path.into_inner();
+    state.remove_proxy(proxy_address).map(|()| "")
 }
 
 fn migrate_half_slots(
