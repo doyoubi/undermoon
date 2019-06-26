@@ -49,7 +49,7 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
                 .with(remove_proxy_from_cluster);
         })
         .resource("/clusters/{cluster_name}/nodes", |r| {
-            r.method(http::Method::POST).with(auto_add_node)
+            r.method(http::Method::POST).with(auto_add_nodes)
         })
         .resource("/clusters/{cluster_name}", |r| {
             r.method(http::Method::POST).with(add_cluster);
@@ -159,7 +159,7 @@ impl MemBrokerService {
         self.store
             .write()
             .expect("MemBrokerService::auto_add_node")
-            .auto_add_node(cluster_name)
+            .auto_add_nodes(cluster_name)
     }
 
     pub fn remove_proxy_from_cluster(
@@ -320,7 +320,7 @@ fn remove_cluster(
     state.remove_cluster(cluster_name).map(|()| "")
 }
 
-fn auto_add_node(
+fn auto_add_nodes(
     (path, state): (Path<(String,)>, ServiceState),
 ) -> Result<Json<Vec<Node>>, MetaStoreError> {
     let cluster_name = path.into_inner().0;
