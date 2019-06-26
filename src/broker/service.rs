@@ -8,6 +8,7 @@ use ::coordinator::http_meta_broker::{
 use actix_web::{
     error, http, middleware, App, HttpRequest, HttpResponse, Json, Path, Responder, State,
 };
+use broker::store::InconsistentError;
 use chrono;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -19,6 +20,9 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/version", |r| r.method(http::Method::GET).f(get_version))
         .resource("/metadata", |r| {
             r.method(http::Method::GET).f(get_all_metadata)
+        })
+        .resource("/validation", |r| {
+            r.method(http::Method::POST).f(validate_meta)
         })
         .resource("/hosts/addresses/{address}", |r| {
             r.method(http::Method::GET).with(get_host_by_address)
@@ -255,6 +259,13 @@ impl MemBrokerService {
             .expect("MemBrokerService::replace_node")
             .replace_failed_node(curr_cluster_epoch, node)
     }
+
+    pub fn validate_meta(&self) -> Result<(), InconsistentError> {
+        self.store
+            .read()
+            .expect("MemBrokerService::validate_meta")
+            .validate()
+    }
 }
 
 fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
@@ -412,10 +423,22 @@ fn replace_failed_node(
     state.replace_failed_node(cluster_epoch, node).map(Json)
 }
 
+fn validate_meta(req: &HttpRequest<Arc<MemBrokerService>>) -> Result<String, InconsistentError> {
+    req.state().validate_meta().map(|()| "".to_string())
+}
+
 impl error::ResponseError for MetaStoreError {
     fn error_response(&self) -> HttpResponse {
         let mut response = HttpResponse::new(http::StatusCode::BAD_REQUEST);
         response.set_body(self.description().to_string());
+        response
+    }
+}
+
+impl error::ResponseError for InconsistentError {
+    fn error_response(&self) -> HttpResponse {
+        let mut response = HttpResponse::new(http::StatusCode::INTERNAL_SERVER_ERROR);
+        response.set_body(format!("{}", self));
         response
     }
 }

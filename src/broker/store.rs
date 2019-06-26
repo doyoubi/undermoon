@@ -594,8 +594,164 @@ impl MetaStore {
         Ok(())
     }
 
-    // TODO: implement validation
-    //    pub fn validate(&self) {}
+    pub fn validate(&self) -> Result<(), InconsistentError> {
+        self.validate_all_nodes()?;
+        self.validate_cluster_nodes()?;
+        self.validate_peers()?;
+        self.validate_slots()?;
+        Ok(())
+    }
+
+    pub fn validate_all_nodes(&self) -> Result<(), InconsistentError> {
+        let all_nodes = &self.all_nodes;
+        let clusters = &self.clusters;
+        for (proxy_address, node_resource) in all_nodes.iter() {
+            let cluster_name = match &node_resource.cluster_name {
+                Some(cluster_name) => cluster_name,
+                None => continue,
+            };
+            let cluster =
+                clusters
+                    .get(cluster_name)
+                    .ok_or_else(|| InconsistentError::ClusterNotFound {
+                        cluster_name: cluster_name.clone(),
+                    })?;
+            for node_address in node_resource.node_addresses.iter() {
+                let node = cluster.get_node(node_address).ok_or_else(|| {
+                    InconsistentError::NodeNotFoundInCluster {
+                        proxy_address: proxy_address.clone(),
+                        node_address: node_address.clone(),
+                    }
+                })?;
+                if node.get_proxy_address() != proxy_address {
+                    return Err(InconsistentError::InvalidProxyAddress {
+                        node_address: node_address.clone(),
+                        expected_proxy_address: proxy_address.clone(),
+                        unexpected_proxy_address: node.get_proxy_address().clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_cluster_nodes(&self) -> Result<(), InconsistentError> {
+        let all_nodes = &self.all_nodes;
+        let clusters = &self.clusters;
+        for (cluster_name, cluster) in clusters.iter() {
+            if cluster_name != cluster.get_name() {
+                return Err(InconsistentError::InvalidClusterName {
+                    expected_name: cluster_name.clone(),
+                    unexpected_name: cluster.get_name().clone(),
+                });
+            }
+            for node in cluster.get_nodes().iter() {
+                if node.get_cluster_name() != cluster_name {
+                    return Err(InconsistentError::InvalidClusterName {
+                        expected_name: cluster_name.clone(),
+                        unexpected_name: node.get_cluster_name().clone(),
+                    });
+                }
+                let proxy_address = node.get_proxy_address();
+                let node_address = node.get_address();
+                let node_resource = all_nodes.get(proxy_address).ok_or_else(|| {
+                    InconsistentError::NodeNotFoundInAllNodes {
+                        proxy_address: proxy_address.clone(),
+                        node_address: node_address.clone(),
+                    }
+                })?;
+                node_resource
+                    .node_addresses
+                    .iter()
+                    .find(|node| *node == node_address)
+                    .ok_or_else(|| InconsistentError::NodeNotFoundInAllNodes {
+                        proxy_address: proxy_address.clone(),
+                        node_address: node_address.clone(),
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_peers(&self) -> Result<(), InconsistentError> {
+        for cluster in self.clusters.values() {
+            for node in cluster.get_nodes().iter() {
+                let peers = node.get_repl_meta().get_peers();
+                for peer in peers.iter() {
+                    let peer_node = cluster.get_node(&peer.node_address).ok_or_else(|| {
+                        InconsistentError::PeerNotFound {
+                            proxy_address: peer.proxy_address.clone(),
+                            node_address: peer.node_address.clone(),
+                        }
+                    })?;
+                    if *peer_node.get_proxy_address() != peer.proxy_address {
+                        return Err(InconsistentError::InvalidProxyAddress {
+                            node_address: peer.node_address.clone(),
+                            expected_proxy_address: peer.proxy_address.clone(),
+                            unexpected_proxy_address: peer_node.get_proxy_address().clone(),
+                        });
+                    }
+                    if node.get_role() == peer_node.get_role() {
+                        return Err(InconsistentError::SameRole {
+                            node_address: node.get_address().clone(),
+                            node_address_peer: peer_node.get_address().clone(),
+                        });
+                    }
+                }
+                if node.get_role() == Role::Replica && !node.get_slots().is_empty() {
+                    return Err(InconsistentError::ReplicaHasSlots {
+                        proxy_address: node.get_proxy_address().clone(),
+                        node_address: node.get_address().clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_slots(&self) -> Result<(), InconsistentError> {
+        for cluster in self.clusters.values() {
+            for node in cluster.get_nodes().iter() {
+                let slots = node.get_slots();
+                for slot_range in slots.iter() {
+                    match &slot_range.tag {
+                        SlotRangeTag::None => continue,
+                        SlotRangeTag::Migrating(meta) => {
+                            let peer_node =
+                                cluster.get_node(&meta.dst_node_address).ok_or_else(|| {
+                                    InconsistentError::MigrationPeerNotFound {
+                                        node_address: meta.dst_node_address.clone(),
+                                        proxy_address: meta.dst_proxy_address.clone(),
+                                    }
+                                })?;
+                            if *peer_node.get_proxy_address() != meta.dst_proxy_address {
+                                return Err(InconsistentError::MigrationPeerNotFound {
+                                    node_address: meta.dst_node_address.clone(),
+                                    proxy_address: meta.dst_proxy_address.clone(),
+                                });
+                            }
+                        }
+                        SlotRangeTag::Importing(meta) => {
+                            let peer_node =
+                                cluster.get_node(&meta.src_node_address).ok_or_else(|| {
+                                    InconsistentError::MigrationPeerNotFound {
+                                        node_address: meta.src_node_address.clone(),
+                                        proxy_address: meta.src_proxy_address.clone(),
+                                    }
+                                })?;
+                            if *peer_node.get_proxy_address() != meta.src_proxy_address {
+                                return Err(InconsistentError::MigrationPeerNotFound {
+                                    node_address: meta.src_node_address.clone(),
+                                    proxy_address: meta.src_proxy_address.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     fn consume_node_slot(&mut self, cluster_name: &str) -> Result<Vec<NodeSlot>, MetaStoreError> {
         let failures = self.failures.clone();
@@ -1011,6 +1167,72 @@ impl MetaStore {
             })
             .next()
             .ok_or_else(|| MetaStoreError::NodeNotFound)
+    }
+}
+
+#[derive(Debug)]
+pub enum InconsistentError {
+    ClusterNotFound {
+        cluster_name: String,
+    },
+    NodeNotFoundInCluster {
+        proxy_address: String,
+        node_address: String,
+    },
+    InvalidProxyAddress {
+        node_address: String,
+        expected_proxy_address: String,
+        unexpected_proxy_address: String,
+    },
+    InvalidClusterName {
+        expected_name: String,
+        unexpected_name: String,
+    },
+    NodeNotFoundInAllNodes {
+        proxy_address: String,
+        node_address: String,
+    },
+    PeerNotFound {
+        proxy_address: String,
+        node_address: String,
+    },
+    SameRole {
+        node_address: String,
+        node_address_peer: String,
+    },
+    ReplicaHasSlots {
+        proxy_address: String,
+        node_address: String,
+    },
+    MigrationPeerNotFound {
+        proxy_address: String,
+        node_address: String,
+    },
+}
+
+impl fmt::Display for InconsistentError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for InconsistentError {
+    fn description(&self) -> &str {
+        match self {
+            InconsistentError::ClusterNotFound { .. } => "CLUSTER_NOT_FOUND",
+            InconsistentError::NodeNotFoundInCluster { .. } => "NODE_NOT_FOUND_IN_CLUSTER",
+            InconsistentError::InvalidProxyAddress { .. } => "INVALID_PROXY_ADDRESS",
+            InconsistentError::InvalidClusterName { .. } => "INVALID_CLUSTER_NAME",
+            InconsistentError::NodeNotFoundInAllNodes { .. } => "NODE_NOT_FOUND_IN_ALL_NODES",
+            InconsistentError::PeerNotFound { .. } => "PEER_NOT_FOUND",
+            InconsistentError::SameRole { .. } => "SAME_ROLE",
+            InconsistentError::ReplicaHasSlots { .. } => "REPLICA_HAS_SLOTS",
+            InconsistentError::MigrationPeerNotFound { .. } => "MIGRATION_PEER_NOT_FOUND",
+        }
+    }
+
+    fn cause(&self) -> Option<&Error> {
+        None
     }
 }
 
