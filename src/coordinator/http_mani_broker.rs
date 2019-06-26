@@ -71,7 +71,7 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
         &self,
         meta: MigrationTaskMeta,
     ) -> Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send> {
-        let url = format!("http://{}/api/clusters/migration", self.broker_address);
+        let url = format!("http://{}/api/clusters/migrations", self.broker_address);
         let request_payload = meta.clone();
 
         let request = self.client.put(&url).json(&request_payload).send();

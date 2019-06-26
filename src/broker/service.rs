@@ -20,7 +20,7 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/metadata", |r| {
             r.method(http::Method::GET).f(get_all_metadata)
         })
-        .resource("/hosts/address/{address}", |r| {
+        .resource("/hosts/addresses/{address}", |r| {
             r.method(http::Method::GET).with(get_host_by_address)
         })
         .resource("/hosts/addresses", |r| {
@@ -29,10 +29,7 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/clusters/nodes", |r| {
             r.method(http::Method::PUT).with(replace_failed_node)
         })
-        .resource("/clusters/migration", |r| {
-            r.method(http::Method::PUT).with(commit_migration)
-        })
-        .resource("/clusters/name/{name}", |r| {
+        .resource("/clusters/{cluster_name}/meta", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
         })
         .resource("/clusters/names", |r| {
@@ -60,20 +57,24 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         })
         .resource("/failures", |r| r.method(http::Method::GET).f(get_failures))
         .resource(
-            "/migrations/half/{cluster_name}/{src_node}/{dst_node}",
+            "/clusters/{cluster_name}/migrations/half/{src_node}/{dst_node}",
             |r| r.method(http::Method::POST).with(migrate_half_slots),
         )
         .resource(
-            "/migrations/all/{cluster_name}/{src_node}/{dst_node}",
+            "/clusters/{cluster_name}/migrations/all/{src_node}/{dst_node}",
             |r| r.method(http::Method::POST).with(migrate_all_slots),
         )
-        .resource("/migrations/{cluster_name}/{src_node}/{dst_node}", |r| {
-            r.method(http::Method::DELETE).with(stop_migrations)
-        })
         .resource(
-            "/replications/{cluster_name}/{master_node}/{replica_node}",
+            "/clusters/{cluster_name}/migrations/{src_node}/{dst_node}",
+            |r| r.method(http::Method::DELETE).with(stop_migrations),
+        )
+        .resource(
+            "/clusters/{cluster_name}/replications/{master_node}/{replica_node}",
             |r| r.method(http::Method::POST).with(assign_replica),
         )
+        .resource("/clusters/migrations", |r| {
+            r.method(http::Method::PUT).with(commit_migration)
+        })
 }
 
 #[derive(Debug, Clone)]

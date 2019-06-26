@@ -36,7 +36,7 @@ def add_node(cluster_name):
 
 
 def get_cluster(cluster_name):
-    res = requests.get('http://localhost:7799/api/clusters/name/{}'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/clusters/{}/meta'.format(cluster_name))
     res.raise_for_status()
     return res.json()['cluster']
 

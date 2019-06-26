@@ -62,7 +62,7 @@ def migrate_half():
     cluster_name = 'testdb'
     src_address = '127.0.0.1:6000'
     dst_address = '127.0.0.2:6000'
-    res = requests.post('http://localhost:7799/api/migrations/half/{}/{}/{}'.format(cluster_name, src_address, dst_address))
+    res = requests.post('http://localhost:7799/api/clusters/{}/migrations/half/{}/{}'.format(cluster_name, src_address, dst_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -71,7 +71,7 @@ def migrate_all():
     cluster_name = 'testdb'
     src_address = '127.0.0.1:6000'
     dst_address = '127.0.0.2:6000'
-    res = requests.post('http://localhost:7799/api/migrations/all/{}/{}/{}'.format(cluster_name, src_address, dst_address))
+    res = requests.post('http://localhost:7799/api/clusters/{}/migrations/all/{}/{}'.format(cluster_name, src_address, dst_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -80,7 +80,7 @@ def stop_migrations():
     cluster_name = 'testdb'
     src_address = '127.0.0.1:6000'
     dst_address = '127.0.0.2:6000'
-    res = requests.delete('http://localhost:7799/api/migrations/{}/{}/{}'.format(cluster_name, src_address, dst_address))
+    res = requests.delete('http://localhost:7799/api/clusters/{}/migrations/{}/{}'.format(cluster_name, src_address, dst_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -89,7 +89,7 @@ def assign_replica():
     cluster_name = 'testdb'
     master_address = '127.0.0.1:6000'
     replica_address = '127.0.0.2:6001'
-    res = requests.post('http://localhost:7799/api/replications/{}/{}/{}'.format(cluster_name, master_address, replica_address))
+    res = requests.post('http://localhost:7799/api/clusters/{}/replications/{}/{}'.format(cluster_name, master_address, replica_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -102,7 +102,7 @@ def get_cluster_names():
 
 def get_cluster_by_name():
     cluster_name = 'testdb'
-    res = requests.get('http://localhost:7799/api/clusters/name/{}'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/clusters/{}/meta'.format(cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
     return res.json()['cluster']
@@ -116,7 +116,7 @@ def get_host_addresses():
 
 def get_host_by_address():
     address = '127.0.0.1:7000'
-    res = requests.get('http://localhost:7799/api/hosts/address/{}'.format(address))
+    res = requests.get('http://localhost:7799/api/hosts/addresses/{}'.format(address))
     print(res.status_code, res.text)
     res.raise_for_status()
 

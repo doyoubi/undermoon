@@ -11,7 +11,7 @@ def test_get_cluster_names():
     pp.pprint(names)
 
 def test_get_cluster():
-    res = requests.get('http://localhost:5000/api/clusters/name/{}'.format('mydb'))
+    res = requests.get('http://localhost:5000/api/clusters/{}/meta'.format('mydb'))
     cluster = res.json()
     pp.pprint(cluster)
 
@@ -20,7 +20,7 @@ def test_get_proxies():
     pp.pprint(proxies)
 
 def test_get_proxy(proxy_address):
-    proxy = requests.get('http://localhost:5000/api/hosts/address/{}'.format(proxy_address)).json()
+    proxy = requests.get('http://localhost:5000/api/hosts/addresses/{}'.format(proxy_address)).json()
     pp.pprint(proxy)
 
 def test_report_failure():
