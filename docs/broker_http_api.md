@@ -104,33 +104,39 @@ Response:
 }
 ```
 
-##### (7) PUT /api/clusters/nodes
-Try to do the failover for the specified node.
+##### (7) POST /api/hosts/<server_proxy_address>/failover
+Try to do the failover for the specified proxy.
 ```
 Request:
+empty payload
+
+Response:
+If success:
 {
-    "cluster_epoch": 1,
-    "node": {
-        "address": "127.0.0.1:7001",
-        "proxy_address": "127.0.0.1:6001",
-        "cluster_name": "cluster_name1",
-        "repl": {
-            "role": "master",
-            "peers": [{
-                "node_address": "127.0.0.1:7002",
-                "proxy_address": "127.0.0.1:7003",
-            }...]
-        },
-        "slots": [{
-            "start": 0,
-            "end": 5000,
-            "tag": "None"
+    "host": {
+        "address": "server_proxy_address1",
+        "epoch": 1,
+        "nodes": [{
+            "address": "127.0.0.1:7001",
+            "proxy_address": "127.0.0.1:6001",
+            "cluster_name": "cluster_name1",
+            "repl": {
+                "role": "master",
+                "peers": [{
+                    "node_address": "127.0.0.1:7002",
+                    "proxy_address": "127.0.0.1:7003",
+                }...]
+            },
+            "slots": [{
+                "start": 0,
+                "end": 5000,
+                "tag": "None"
+            }, ...]
         }, ...]
     }
 }
-
-Response:
-empty payload
+If not:
+HTTP 409
 ```
 
 ##### (7) PUT /api/clusters/migrations

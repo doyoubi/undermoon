@@ -139,11 +139,8 @@ def test_replacing_master_node():
     cluster = get_cluster_by_name()
     nodes = cluster['nodes']
     master = next([n for n in nodes if n['repl']['role'] == 'master' and n['slots']].__iter__(), None)
-    payload = {
-        'cluster_epoch': cluster['epoch'],
-        'node': master,
-    }
-    res = requests.put('http://localhost:7799/api/clusters/nodes', json=payload)
+    proxy_address = master['proxy_address']
+    res = requests.post('http://localhost:7799/api/hosts/{}/failover'.format(proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -152,11 +149,8 @@ def test_replacing_replica_node():
     cluster = get_cluster_by_name()
     nodes = cluster['nodes']
     replica = next([n for n in nodes if n['repl']['role'] == 'replica'].__iter__(), None)
-    payload = {
-        'cluster_epoch': cluster['epoch'],
-        'node': replica,
-    }
-    res = requests.put('http://localhost:7799/api/clusters/nodes', json=payload)
+    proxy_address = replica['proxy_address']
+    res = requests.post('http://localhost:7799/api/hosts/{}/failover'.format(proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -209,10 +203,11 @@ print('test_getting_failures')
 test_getting_failures()
 get_all_meta()
 print('test_replacing_master_node')
+test_adding_host('127.0.0.3:7000', ['127.0.0.3:6000'])
 test_replacing_master_node()
 get_all_meta()
 print('test_replacing_replica_node')
-test_adding_host('127.0.0.3:7000', ['127.0.0.3:6000'])
+test_adding_host('127.0.0.4:7000', ['127.0.0.4:6000'])
 test_replacing_replica_node()
 get_all_meta()
 print('remove cluster')

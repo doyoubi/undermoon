@@ -1,9 +1,8 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
-use common::cluster::{MigrationTaskMeta, Node};
+use common::cluster::{Host, MigrationTaskMeta};
 use common::utils::ThreadSafe;
 use futures::{future, Future, Stream};
 use reqwest::r#async as request_async; // async is a keyword later
-use serde_derive::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct HttpMetaManipulationBroker {
@@ -23,40 +22,41 @@ impl HttpMetaManipulationBroker {
 impl ThreadSafe for HttpMetaManipulationBroker {}
 
 impl MetaManipulationBroker for HttpMetaManipulationBroker {
-    fn replace_node(
+    fn replace_proxy(
         &self,
-        cluster_epoch: u64,
-        failed_node: Node,
-    ) -> Box<dyn Future<Item = Node, Error = MetaManipulationBrokerError> + Send> {
-        let url = format!("http://{}/api/clusters/nodes", self.broker_address);
-        let request_payload = ReplaceNodePayload {
-            cluster_epoch,
-            node: failed_node,
-        };
-        let request = self.client.put(&url).json(&request_payload).send();
+        failed_proxy_address: String,
+    ) -> Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send> {
+        let url = format!(
+            "http://{}/api/hosts/{}/failover",
+            self.broker_address, failed_proxy_address
+        );
+        let request = self.client.post(&url).send();
         let fut = request
             .map_err(|e| {
-                error!("Failed to replace node {:?}", e);
+                error!("Failed to replace proxy {:?}", e);
                 MetaManipulationBrokerError::InvalidReply
             })
             .and_then(|mut response| {
                 let status = response.status();
-                let fut: Box<dyn Future<Item = Node, Error = MetaManipulationBrokerError> + Send> =
+                let fut: Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send> =
                     if status.is_success() {
-                        let node_fut = response.json().map_err(|e| {
+                        let host_fut = response.json().map_err(|e| {
                             error!("Failed to get json payload {:?}", e);
                             MetaManipulationBrokerError::InvalidReply
                         });
-                        Box::new(node_fut)
+                        Box::new(host_fut)
                     } else {
-                        error!("Failed to replace node: status code {:?}", status);
+                        error!(
+                            "replace_proxy: Failed to replace node: status code {:?}",
+                            status
+                        );
                         let body_fut = response.into_body().collect().then(|result| match result {
                             Ok(body) => {
-                                error!("Error body: {:?}", body);
+                                error!("replace_proxy: Error body: {:?}", body);
                                 future::err(MetaManipulationBrokerError::InvalidReply)
                             }
                             Err(e) => {
-                                error!("Failed to get body: {:?}", e);
+                                error!("replace_proxy: Failed to get body: {:?}", e);
                                 future::err(MetaManipulationBrokerError::InvalidReply)
                             }
                         });
@@ -103,10 +103,4 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
             });
         Box::new(fut)
     }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ReplaceNodePayload {
-    pub cluster_epoch: u64,
-    pub node: Node,
 }

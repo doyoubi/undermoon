@@ -852,38 +852,93 @@ impl MetaStore {
         (src_slot_ranges, dst_slot_ranges, migrating_slot_ranges)
     }
 
-    pub fn replace_failed_node(
+    pub fn replace_failed_proxy(
         &mut self,
-        curr_cluster_epoch: u64,
-        node: Node,
-    ) -> Result<Node, MetaStoreError> {
-        {
-            let cluster = self
-                .clusters
-                .get(node.get_cluster_name())
-                .ok_or(MetaStoreError::ClusterNotFound)?;
-            if cluster.get_epoch() != curr_cluster_epoch {
-                return Err(MetaStoreError::MismatchEpoch);
+        failed_proxy_address: String,
+    ) -> Result<Host, MetaStoreError> {
+        let (cluster_name, node_addresses) = {
+            let node_resource = self
+                .all_nodes
+                .get(&failed_proxy_address)
+                .ok_or(MetaStoreError::HostNotFound)?;
+            (
+                node_resource
+                    .cluster_name
+                    .clone()
+                    .ok_or_else(|| MetaStoreError::NotInUse)?,
+                node_resource
+                    .node_addresses
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<String>>(),
+            )
+        };
+
+        for node_address in node_addresses.iter() {
+            match self.takeover_master(&cluster_name, &node_address) {
+                Err(MetaStoreError::NotMaster) => (),
+                Err(MetaStoreError::NoPeer) => (),
+                Err(unexpected_errors) => {
+                    error!(
+                        "unexpected errors when replacing failed nodes {:?}",
+                        unexpected_errors
+                    );
+                    return Err(unexpected_errors);
+                }
+                Ok(_) => continue,
             }
         }
 
-        match self.takeover_master(node.clone()) {
-            Err(MetaStoreError::NotMaster) => (),
-            Err(MetaStoreError::NoPeer) => (),
-            others => return others,
+        let node_slots = self.consume_new_proxy(&cluster_name)?;
+        if node_slots.len() != node_addresses.len() {
+            if let Some(node_resource) = self.all_nodes.get_mut(&failed_proxy_address) {
+                node_resource.cluster_name = None;
+            }
+            let cluster = try_state!(self
+                .clusters
+                .get_mut(&cluster_name)
+                .ok_or_else(|| MetaStoreError::ClusterNotFound));
+            for node_slot in node_slots.iter() {
+                try_state!(cluster
+                    .remove_node(&node_slot.node_address)
+                    .ok_or_else(|| MetaStoreError::NodeNotFound));
+            }
+            return Err(MetaStoreError::InvalidNodeNum);
         }
-        let new_node = self.replace_node(node)?;
-        Ok(new_node)
+
+        let new_proxy_address = node_slots
+            .iter()
+            .next()
+            .map(|node_slot| node_slot.proxy_address.clone())
+            .ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
+
+        for (node_address, node_slot) in node_addresses.iter().zip(node_slots.into_iter()) {
+            try_state!(self.replace_node(&cluster_name, node_address, node_slot));
+        }
+
+        try_state!(self.remove_proxy_from_cluster_helper(
+            &cluster_name,
+            &failed_proxy_address,
+            false
+        ));
+        let host = try_state!(self
+            .get_host_by_address(&new_proxy_address)
+            .ok_or_else(|| MetaStoreError::HostNotFound));
+        Ok(host)
     }
 
-    fn takeover_master(&mut self, master: Node) -> Result<Node, MetaStoreError> {
+    fn takeover_master(
+        &mut self,
+        cluster_name: &str,
+        node_address: &str,
+    ) -> Result<Node, MetaStoreError> {
         let cluster = self
             .clusters
-            .get_mut(master.get_cluster_name())
+            .get_mut(cluster_name)
             .ok_or(MetaStoreError::ClusterNotFound)?;
 
         let mut master_node = cluster
-            .get_node(master.get_address())
+            .get_node(node_address)
             .ok_or_else(|| MetaStoreError::NodeNotFound)?
             .clone();
 
@@ -920,6 +975,7 @@ impl MetaStore {
             master_node.get_slots().clone(),
             replica_node.get_address(),
             replica_node.get_proxy_address(),
+            cluster.get_epoch(),
         );
         *replica_node.get_mut_slots() = slot_ranges;
         *master_node.get_mut_slots() = vec![];
@@ -927,7 +983,7 @@ impl MetaStore {
         try_state!(Self::update_peer(cluster, &master_node, &replica_node));
 
         *try_state!(cluster
-            .get_mut_node(master.get_address())
+            .get_mut_node(&node_address)
             .ok_or_else(|| MetaStoreError::NodeNotFound)) = master_node.clone();
         *try_state!(cluster
             .get_mut_node(&peer_node_address)
@@ -1023,6 +1079,7 @@ impl MetaStore {
         slot_ranges: Vec<SlotRange>,
         new_node_address: &str,
         new_proxy_address: &str,
+        new_cluster_epoch: u64,
     ) -> Vec<SlotRange> {
         slot_ranges
             .into_iter()
@@ -1032,10 +1089,12 @@ impl MetaStore {
                     SlotRangeTag::Migrating(ref mut meta) => {
                         meta.src_node_address = new_node_address.to_string();
                         meta.src_proxy_address = new_proxy_address.to_string();
+                        meta.epoch = new_cluster_epoch;
                     }
                     SlotRangeTag::Importing(ref mut meta) => {
                         meta.dst_node_address = new_node_address.to_string();
                         meta.dst_proxy_address = new_proxy_address.to_string();
+                        meta.epoch = new_cluster_epoch;
                     }
                 }
                 slot_range
@@ -1043,44 +1102,47 @@ impl MetaStore {
             .collect()
     }
 
-    fn replace_node(&mut self, node: Node) -> Result<Node, MetaStoreError> {
+    fn replace_node(
+        &mut self,
+        cluster_name: &str,
+        node_address: &str,
+        node_slot: NodeSlot,
+    ) -> Result<Node, MetaStoreError> {
         let new_node = {
             let node = {
                 let cluster = self
                     .clusters
-                    .get(node.get_cluster_name())
+                    .get(cluster_name)
                     .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
                 cluster
-                    .get_node(node.get_address())
+                    .get_node(node_address)
                     .cloned()
                     .ok_or_else(|| MetaStoreError::NodeNotFound)?
             };
 
-            let mut excluded_proxy_addresses = node
-                .get_repl_meta()
-                .get_peers()
-                .iter()
-                .map(|peer| peer.proxy_address.clone())
-                .collect::<Vec<String>>();
-            excluded_proxy_addresses.push(node.get_proxy_address().clone());
-
             let NodeSlot {
                 proxy_address,
                 node_address,
-            } = self.consume_free_node(&node.get_cluster_name(), excluded_proxy_addresses)?;
+            } = node_slot;
 
             let cluster = try_state!(self
                 .clusters
                 .get_mut(node.get_cluster_name())
                 .ok_or(MetaStoreError::ClusterNotFound));
 
+            cluster.bump_epoch();
+
             info!(
                 "start to replace {:?} with {} {}",
                 node, proxy_address, node_address
             );
 
-            let new_slot_ranges =
-                Self::gen_new_slots(node.get_slots().clone(), &node_address, &proxy_address);
+            let new_slot_ranges = Self::gen_new_slots(
+                node.get_slots().clone(),
+                &node_address,
+                &proxy_address,
+                cluster.get_epoch(),
+            );
 
             try_state!(cluster
                 .remove_node(&node_address)
@@ -1106,67 +1168,22 @@ impl MetaStore {
 
             cluster.add_node(new_node.clone());
             try_state!(Self::update_peer(cluster, &node, &new_node));
-            cluster.bump_epoch();
 
             new_node
         };
 
-        if let Err(err) = self.remove_proxy_from_cluster_helper(
-            node.get_cluster_name(),
-            node.get_proxy_address(),
-            false,
-        ) {
-            debug!(
-                "still can't remove proxy {:?} {}",
-                err,
-                node.get_proxy_address()
-            );
-        }
-
         Ok(new_node)
     }
 
-    fn consume_free_node(
-        &mut self,
-        cluster_name: &str,
-        excluded_proxy_addresses: Vec<String>,
-    ) -> Result<NodeSlot, MetaStoreError> {
-        if let Ok(free_node) = self.get_free_node(cluster_name, excluded_proxy_addresses) {
-            return Ok(free_node);
-        }
+    fn consume_new_proxy(&mut self, cluster_name: &str) -> Result<Vec<NodeSlot>, MetaStoreError> {
         let nodes = self.auto_add_nodes(cluster_name.to_string())?;
-        nodes
+        Ok(nodes
             .into_iter()
             .map(|node| NodeSlot {
                 node_address: node.get_address().clone(),
                 proxy_address: node.get_proxy_address().clone(),
             })
-            .next()
-            .ok_or_else(|| MetaStoreError::NodeNotFound)
-    }
-
-    fn get_free_node(
-        &self,
-        cluster_name: &str,
-        excluded_proxy_addresses: Vec<String>,
-    ) -> Result<NodeSlot, MetaStoreError> {
-        let cluster = self
-            .clusters
-            .get(cluster_name)
-            .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
-        cluster
-            .get_nodes()
-            .iter()
-            .filter(|node| node.get_role() == Role::Master)
-            .filter(|node| !excluded_proxy_addresses.contains(&node.get_proxy_address()))
-            .filter(|node| node.get_slots().is_empty())
-            .filter(|node| node.get_repl_meta().get_peers().is_empty())
-            .map(|node| NodeSlot {
-                node_address: node.get_address().clone(),
-                proxy_address: node.get_proxy_address().clone(),
-            })
-            .next()
-            .ok_or_else(|| MetaStoreError::NodeNotFound)
+            .collect())
     }
 }
 
@@ -1259,6 +1276,7 @@ pub enum MetaStoreError {
     NoPeer,
     NotMigrating,
     MismatchEpoch,
+    InvalidNodeNum,
 }
 
 impl fmt::Display for MetaStoreError {
@@ -1291,6 +1309,7 @@ impl Error for MetaStoreError {
             MetaStoreError::NoPeer => "NOT_PEER",
             MetaStoreError::NotMigrating => "NOT_MIGRATING",
             MetaStoreError::MismatchEpoch => "MISMATCH_EPOCH",
+            MetaStoreError::InvalidNodeNum => "INVALID_NODE_NUM",
         }
     }
 

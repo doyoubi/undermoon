@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBrokerError, MetaManipulationBrokerError};
-use common::cluster::{Host, MigrationTaskMeta, Node};
+use common::cluster::{Host, MigrationTaskMeta};
 use futures::{future, Future, Stream};
 use protocol::RedisClientError;
 use std::error::Error;
@@ -11,7 +11,7 @@ pub trait ProxiesRetriever: Sync + Send + 'static {
     fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
 }
 
-pub type NodeFailure = Node;
+pub type ProxyFailure = String; // proxy address
 
 pub trait FailureChecker: Sync + Send + 'static {
     fn check(
@@ -86,72 +86,43 @@ pub trait ProxyFailureRetriever: Sync + Send + 'static {
     ) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
 }
 
-pub trait NodeFailureRetriever: Sync + Send + 'static {
-    fn retrieve_node_failures(
+pub trait ProxyFailureHandler: Sync + Send + 'static {
+    fn handle_proxy_failure(
         &self,
-        failed_proxy_address: String,
-    ) -> Box<dyn Stream<Item = NodeFailure, Error = CoordinateError> + Send>;
-}
-
-pub trait NodeFailureHandler: Sync + Send + 'static {
-    fn handle_node_failure(
-        &self,
-        failure_node: NodeFailure,
+        proxy_failure: ProxyFailure,
     ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
 }
 
 pub trait FailureHandler {
     type PFRetriever: ProxyFailureRetriever;
-    type NFRetriever: NodeFailureRetriever;
-    type Handler: NodeFailureHandler;
+    type Handler: ProxyFailureHandler;
 
-    fn new(
-        proxy_failure_retriever: Self::PFRetriever,
-        node_failure_retriever: Self::NFRetriever,
-        handler: Self::Handler,
-    ) -> Self;
+    fn new(proxy_failure_retriever: Self::PFRetriever, handler: Self::Handler) -> Self;
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
 }
 
-pub struct SeqFailureHandler<
-    PFRetriever: ProxyFailureRetriever,
-    NFRetriever: NodeFailureRetriever,
-    Handler: NodeFailureHandler,
-> {
+pub struct SeqFailureHandler<PFRetriever: ProxyFailureRetriever, Handler: ProxyFailureHandler> {
     proxy_failure_retriever: PFRetriever,
-    node_failure_retriever: Arc<NFRetriever>,
     handler: Arc<Handler>,
 }
 
-impl<P: ProxyFailureRetriever, N: NodeFailureRetriever, H: NodeFailureHandler> FailureHandler
-    for SeqFailureHandler<P, N, H>
-{
+impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFailureHandler<P, H> {
     type PFRetriever = P;
-    type NFRetriever = N;
     type Handler = H;
 
-    fn new(proxy_failure_retriever: P, node_failure_retriever: N, handler: H) -> Self {
+    fn new(proxy_failure_retriever: P, handler: H) -> Self {
         Self {
             proxy_failure_retriever,
-            node_failure_retriever: Arc::new(node_failure_retriever),
             handler: Arc::new(handler),
         }
     }
 
     fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
-        let node_failure_retriever = self.node_failure_retriever.clone();
         let handler = self.handler.clone();
         Box::new(
             self.proxy_failure_retriever
                 .retrieve_proxy_failures()
-                .and_then(move |proxy_address| {
-                    let cloned_handler = handler.clone();
-                    node_failure_retriever
-                        .retrieve_node_failures(proxy_address)
-                        .for_each(move |node_failure| {
-                            cloned_handler.handle_node_failure(node_failure)
-                        })
-                }),
+                .and_then(move |proxy_address| handler.handle_proxy_failure(proxy_address)),
         )
     }
 }
