@@ -23,9 +23,8 @@ def test_adding_host(proxy, nodes):
 
 
 def test_removing_node():
-    proxy_address = '127.0.0.1:7000'
-    node_address = '127.0.0.1:6001'
-    res = requests.delete('http://localhost:7799/api/hosts/nodes/{}/{}'.format(proxy_address, node_address))
+    proxy_address = '127.0.0.2:7000'
+    res = requests.delete('http://localhost:7799/api/hosts/nodes/{}'.format(proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -53,9 +52,8 @@ def test_adding_node():
 
 def test_removing_node_from_cluster():
     cluster_name = 'testdb'
-    proxy_address = '127.0.0.1:7000'
-    node_address = '127.0.0.1:6001'
-    res = requests.delete('http://localhost:7799/api/clusters/{}/nodes/{}/{}'.format(cluster_name, proxy_address, node_address))
+    proxy_address = '127.0.0.2:7000'
+    res = requests.delete('http://localhost:7799/api/clusters/{}/nodes/{}'.format(cluster_name, proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -63,8 +61,8 @@ def test_removing_node_from_cluster():
 def migrate_half():
     cluster_name = 'testdb'
     src_address = '127.0.0.1:6000'
-    dst_address = '127.0.0.1:6001'
-    res = requests.post('http://localhost:7799/api/migrations/half/{}/{}/{}'.format(cluster_name, src_address, dst_address))
+    dst_address = '127.0.0.2:6000'
+    res = requests.post('http://localhost:7799/api/clusters/{}/migrations/half/{}/{}'.format(cluster_name, src_address, dst_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -72,8 +70,8 @@ def migrate_half():
 def migrate_all():
     cluster_name = 'testdb'
     src_address = '127.0.0.1:6000'
-    dst_address = '127.0.0.1:6001'
-    res = requests.post('http://localhost:7799/api/migrations/all/{}/{}/{}'.format(cluster_name, src_address, dst_address))
+    dst_address = '127.0.0.2:6000'
+    res = requests.post('http://localhost:7799/api/clusters/{}/migrations/all/{}/{}'.format(cluster_name, src_address, dst_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -81,8 +79,8 @@ def migrate_all():
 def stop_migrations():
     cluster_name = 'testdb'
     src_address = '127.0.0.1:6000'
-    dst_address = '127.0.0.1:6001'
-    res = requests.delete('http://localhost:7799/api/migrations/{}/{}/{}'.format(cluster_name, src_address, dst_address))
+    dst_address = '127.0.0.2:6000'
+    res = requests.delete('http://localhost:7799/api/clusters/{}/migrations/{}/{}'.format(cluster_name, src_address, dst_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -90,8 +88,8 @@ def stop_migrations():
 def assign_replica():
     cluster_name = 'testdb'
     master_address = '127.0.0.1:6000'
-    replica_address = '127.0.0.2:6002'
-    res = requests.post('http://localhost:7799/api/replications/{}/{}/{}'.format(cluster_name, master_address, replica_address))
+    replica_address = '127.0.0.2:6001'
+    res = requests.post('http://localhost:7799/api/clusters/{}/replications/{}/{}'.format(cluster_name, master_address, replica_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -104,7 +102,7 @@ def get_cluster_names():
 
 def get_cluster_by_name():
     cluster_name = 'testdb'
-    res = requests.get('http://localhost:7799/api/clusters/name/{}'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/clusters/{}/meta'.format(cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
     return res.json()['cluster']
@@ -118,7 +116,7 @@ def get_host_addresses():
 
 def get_host_by_address():
     address = '127.0.0.1:7000'
-    res = requests.get('http://localhost:7799/api/hosts/address/{}'.format(address))
+    res = requests.get('http://localhost:7799/api/hosts/addresses/{}'.format(address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -169,7 +167,7 @@ print('add_cluster')
 test_adding_cluster()
 get_all_meta()
 print('add_node')
-test_adding_host('127.0.0.1:7000', ['127.0.0.1:6000', '127.0.0.1:6001'])
+test_adding_host('127.0.0.2:7000', ['127.0.0.2:6001'])
 test_adding_node()
 get_all_meta()
 print('remove_node_from_cluster')
@@ -179,7 +177,7 @@ print('remove_node')
 test_removing_node()
 get_all_meta()
 print('migrate_half')
-test_adding_host('127.0.0.1:7000', ['127.0.0.1:6000', '127.0.0.1:6001'])
+test_adding_host('127.0.0.2:7000', ['127.0.0.2:6000', '127.0.0.2:6001'])
 test_adding_node()
 get_all_meta()
 migrate_half()
@@ -194,8 +192,6 @@ print('stop_migrations')
 stop_migrations()
 get_all_meta()
 print('assign_replica')
-test_adding_host('127.0.0.2:7000', ['127.0.0.2:6002'])
-test_adding_node()
 assign_replica()
 get_all_meta()
 print('get_cluster_names')
@@ -216,7 +212,7 @@ print('test_replacing_master_node')
 test_replacing_master_node()
 get_all_meta()
 print('test_replacing_replica_node')
-test_adding_host('127.0.0.2:7000', ['127.0.0.2:6003'])
+test_adding_host('127.0.0.3:7000', ['127.0.0.3:6000'])
 test_replacing_replica_node()
 get_all_meta()
 print('remove cluster')

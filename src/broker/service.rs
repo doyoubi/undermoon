@@ -1,4 +1,4 @@
-use super::store::{MetaStore, MetaStoreError, MigrationType, NodeSlot};
+use super::store::{MetaStore, MetaStoreError, MigrationType};
 use ::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
 use ::common::version::UNDERMOON_VERSION;
 use ::coordinator::http_mani_broker::ReplaceNodePayload;
@@ -8,6 +8,7 @@ use ::coordinator::http_meta_broker::{
 use actix_web::{
     error, http, middleware, App, HttpRequest, HttpResponse, Json, Path, Responder, State,
 };
+use broker::store::InconsistentError;
 use chrono;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -20,7 +21,10 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/metadata", |r| {
             r.method(http::Method::GET).f(get_all_metadata)
         })
-        .resource("/hosts/address/{address}", |r| {
+        .resource("/validation", |r| {
+            r.method(http::Method::POST).f(validate_meta)
+        })
+        .resource("/hosts/addresses/{address}", |r| {
             r.method(http::Method::GET).with(get_host_by_address)
         })
         .resource("/hosts/addresses", |r| {
@@ -29,31 +33,27 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/clusters/nodes", |r| {
             r.method(http::Method::PUT).with(replace_failed_node)
         })
-        .resource("/clusters/migration", |r| {
+        .resource("/clusters/migrations", |r| {
             r.method(http::Method::PUT).with(commit_migration)
         })
-        .resource("/clusters/name/{name}", |r| {
+        .resource("/clusters/{cluster_name}/meta", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
         })
         .resource("/clusters/names", |r| {
             r.method(http::Method::GET).f(get_cluster_names)
         })
-        .resource("/hosts/nodes/{proxy_address}/{node_address}", |r| {
-            r.method(http::Method::DELETE).with(remove_node)
+        .resource("/hosts/nodes/{proxy_address}", |r| {
+            r.method(http::Method::DELETE).with(remove_proxy)
         })
         .resource("/hosts/nodes", |r| {
             r.method(http::Method::PUT).with(add_host)
         })
-        .resource(
-            "/clusters/{cluster_name}/nodes/{proxy_address}/{node_address}",
-            |r| {
-                r.method(http::Method::POST).with(add_node);
-                r.method(http::Method::DELETE)
-                    .with(remove_node_from_cluster);
-            },
-        )
+        .resource("/clusters/{cluster_name}/nodes/{proxy_address}", |r| {
+            r.method(http::Method::DELETE)
+                .with(remove_proxy_from_cluster);
+        })
         .resource("/clusters/{cluster_name}/nodes", |r| {
-            r.method(http::Method::POST).with(auto_add_node)
+            r.method(http::Method::POST).with(auto_add_nodes)
         })
         .resource("/clusters/{cluster_name}", |r| {
             r.method(http::Method::POST).with(add_cluster);
@@ -64,18 +64,19 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         })
         .resource("/failures", |r| r.method(http::Method::GET).f(get_failures))
         .resource(
-            "/migrations/half/{cluster_name}/{src_node}/{dst_node}",
+            "/clusters/{cluster_name}/migrations/half/{src_node}/{dst_node}",
             |r| r.method(http::Method::POST).with(migrate_half_slots),
         )
         .resource(
-            "/migrations/all/{cluster_name}/{src_node}/{dst_node}",
+            "/clusters/{cluster_name}/migrations/all/{src_node}/{dst_node}",
             |r| r.method(http::Method::POST).with(migrate_all_slots),
         )
-        .resource("/migrations/{cluster_name}/{src_node}/{dst_node}", |r| {
-            r.method(http::Method::DELETE).with(stop_migrations)
-        })
         .resource(
-            "/replications/{cluster_name}/{master_node}/{replica_node}",
+            "/clusters/{cluster_name}/migrations/{src_node}/{dst_node}",
+            |r| r.method(http::Method::DELETE).with(stop_migrations),
+        )
+        .resource(
+            "/clusters/{cluster_name}/replications/{master_node}/{replica_node}",
             |r| r.method(http::Method::POST).with(assign_replica),
         )
 }
@@ -159,58 +160,29 @@ impl MemBrokerService {
             .remove_cluster(cluster_name)
     }
 
-    pub fn auto_add_node(&self, cluster_name: String) -> Result<Node, MetaStoreError> {
+    pub fn auto_add_node(&self, cluster_name: String) -> Result<Vec<Node>, MetaStoreError> {
         self.store
             .write()
             .expect("MemBrokerService::auto_add_node")
-            .auto_add_node(cluster_name)
+            .auto_add_nodes(cluster_name)
     }
 
-    pub fn add_node(
+    pub fn remove_proxy_from_cluster(
         &self,
         cluster_name: String,
         proxy_address: String,
-        node_address: String,
-    ) -> Result<Node, MetaStoreError> {
-        let node_slot = NodeSlot {
-            proxy_address,
-            node_address,
-        };
+    ) -> Result<(), MetaStoreError> {
         self.store
             .write()
-            .expect("MemBrokerService::add_node")
-            .add_node(cluster_name, node_slot)
+            .expect("MemBrokerService::remove_proxy_from_cluster")
+            .remove_proxy_from_cluster(cluster_name, proxy_address)
     }
 
-    pub fn remove_node_from_cluster(
-        &self,
-        cluster_name: String,
-        proxy_address: String,
-        node_address: String,
-    ) -> Result<(), MetaStoreError> {
-        let node_slot = NodeSlot {
-            proxy_address,
-            node_address,
-        };
+    pub fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
         self.store
             .write()
-            .expect("MemBrokerService::remove_node_from_cluster")
-            .remove_node_from_cluster(cluster_name, node_slot)
-    }
-
-    pub fn remove_node(
-        &self,
-        proxy_address: String,
-        node_address: String,
-    ) -> Result<(), MetaStoreError> {
-        let node_slot = NodeSlot {
-            proxy_address,
-            node_address,
-        };
-        self.store
-            .write()
-            .expect("MemBrokerService::remove_node")
-            .remove_node(node_slot)
+            .expect("MemBrokerService::remove_proxy")
+            .remove_proxy(proxy_address)
     }
 
     pub fn migrate_slots(
@@ -287,6 +259,13 @@ impl MemBrokerService {
             .expect("MemBrokerService::replace_node")
             .replace_failed_node(curr_cluster_epoch, node)
     }
+
+    pub fn validate_meta(&self) -> Result<(), InconsistentError> {
+        self.store
+            .read()
+            .expect("MemBrokerService::validate_meta")
+            .validate()
+    }
 }
 
 fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
@@ -353,36 +332,27 @@ fn remove_cluster(
     state.remove_cluster(cluster_name).map(|()| "")
 }
 
-fn auto_add_node(
+fn auto_add_nodes(
     (path, state): (Path<(String,)>, ServiceState),
-) -> Result<Json<Node>, MetaStoreError> {
+) -> Result<Json<Vec<Node>>, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     state.auto_add_node(cluster_name).map(Json)
 }
 
-fn add_node(
-    (path, state): (Path<(String, String, String)>, ServiceState),
-) -> Result<Json<Node>, MetaStoreError> {
-    let (cluster_name, proxy_address, node_address) = path.into_inner();
-    state
-        .add_node(cluster_name, proxy_address, node_address)
-        .map(Json)
-}
-
-fn remove_node_from_cluster(
-    (path, state): (Path<(String, String, String)>, ServiceState),
+fn remove_proxy_from_cluster(
+    (path, state): (Path<(String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    let (cluster_name, proxy_address, node_address) = path.into_inner();
+    let (cluster_name, proxy_address) = path.into_inner();
     state
-        .remove_node_from_cluster(cluster_name, proxy_address, node_address)
+        .remove_proxy_from_cluster(cluster_name, proxy_address)
         .map(|()| "")
 }
 
-fn remove_node(
-    (path, state): (Path<(String, String)>, ServiceState),
+fn remove_proxy(
+    (path, state): (Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    let (proxy_address, node_address) = path.into_inner();
-    state.remove_node(proxy_address, node_address).map(|()| "")
+    let (proxy_address,) = path.into_inner();
+    state.remove_proxy(proxy_address).map(|()| "")
 }
 
 fn migrate_half_slots(
@@ -453,10 +423,22 @@ fn replace_failed_node(
     state.replace_failed_node(cluster_epoch, node).map(Json)
 }
 
+fn validate_meta(req: &HttpRequest<Arc<MemBrokerService>>) -> Result<String, InconsistentError> {
+    req.state().validate_meta().map(|()| "".to_string())
+}
+
 impl error::ResponseError for MetaStoreError {
     fn error_response(&self) -> HttpResponse {
         let mut response = HttpResponse::new(http::StatusCode::BAD_REQUEST);
         response.set_body(self.description().to_string());
+        response
+    }
+}
+
+impl error::ResponseError for InconsistentError {
+    fn error_response(&self) -> HttpResponse {
+        let mut response = HttpResponse::new(http::StatusCode::INTERNAL_SERVER_ERROR);
+        response.set_body(format!("{}", self));
         response
     }
 }

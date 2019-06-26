@@ -55,7 +55,7 @@ impl MetaDataBroker for HttpMetaBroker {
         &self,
         name: String,
     ) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send> {
-        let url = format!("http://{}/api/clusters/name/{}", self.broker_address, name);
+        let url = format!("http://{}/api/clusters/{}/meta", self.broker_address, name);
         let request = self.client.get(&url).send();
         let cluster_fut = request
             .map_err(|e| {
@@ -108,7 +108,7 @@ impl MetaDataBroker for HttpMetaBroker {
         address: String,
     ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
         let url = format!(
-            "http://{}/api/hosts/address/{}",
+            "http://{}/api/hosts/addresses/{}",
             self.broker_address, address
         );
         let request = self.client.get(&url).send();

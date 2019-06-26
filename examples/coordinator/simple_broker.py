@@ -506,7 +506,7 @@ def get_cluster_names():
     return jsonify(meta_store.get_cluster_names())
 
 
-@app.route('/api/clusters/name/<cluster_name>')
+@app.route('/api/clusters/<cluster_name>/meta')
 def get_cluster(cluster_name):
     return jsonify(meta_store.get_cluster(cluster_name))
 
@@ -516,7 +516,7 @@ def get_proxies():
     return jsonify(meta_store.get_proxy_addresses())
 
 
-@app.route('/api/hosts/address/<server_proxy_address>')
+@app.route('/api/hosts/addresses/<server_proxy_address>')
 def get_proxy(server_proxy_address):
     proxy = meta_store.get_proxy(server_proxy_address)
     return jsonify(proxy)
@@ -539,7 +539,7 @@ def replace_node():
     return jsonify(meta_store.replace_node(failed_node))
 
 
-@app.route('/api/clusters/migration', methods=['PUT'])
+@app.route('/api/clusters/migrations', methods=['PUT'])
 def commit_migration():
     logger.info('migration %s', request.get_json())
     migration_task_meta = request.get_json()

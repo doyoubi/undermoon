@@ -14,7 +14,7 @@ Response:
 }
 ```
 
-##### (2) GET /api/clusters/name/<cluster_name>
+##### (2) GET /api/clusters/<cluster_name>/meta
 Get the meta data of <cluster_name>.
 ```
 Response:
@@ -56,7 +56,7 @@ Response:
 }
 ```
 
-##### (4) GET /api/hosts/address/<server_proxy_address>
+##### (4) GET /api/hosts/addresses/<server_proxy_address>
 Get the meta data of <server_proxy_address>
 ```
 Response:
@@ -133,7 +133,7 @@ Response:
 empty payload
 ```
 
-##### (7) PUT /api/clusters/migration
+##### (7) PUT /api/clusters/migrations
 Try to do the migration
 ```
 Request:
