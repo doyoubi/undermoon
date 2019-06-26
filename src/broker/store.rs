@@ -147,7 +147,7 @@ impl MetaStore {
         let node_slots = self.consume_node_slot(&cluster_name)?;
 
         let node_num = node_slots.len();
-        let range_per_node = SLOT_NUM + node_num - 1 / node_num;
+        let range_per_node = (SLOT_NUM + node_num - 1) / node_num;
         let mut nodes = vec![];
         for (i, node_slot) in node_slots.into_iter().enumerate() {
             let NodeSlot {
@@ -156,7 +156,7 @@ impl MetaStore {
             } = node_slot;
             let slots = SlotRange {
                 start: i * range_per_node,
-                end: cmp::min((i + 1) * range_per_node, SLOT_NUM - 1),
+                end: cmp::min((i + 1) * range_per_node - 1, SLOT_NUM - 1),
                 tag: SlotRangeTag::None,
             };
             let repl = ReplMeta::new(Role::Master, vec![]);

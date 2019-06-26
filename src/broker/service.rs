@@ -29,6 +29,9 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/clusters/nodes", |r| {
             r.method(http::Method::PUT).with(replace_failed_node)
         })
+        .resource("/clusters/migrations", |r| {
+            r.method(http::Method::PUT).with(commit_migration)
+        })
         .resource("/clusters/{cluster_name}/meta", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
         })
@@ -72,9 +75,6 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
             "/clusters/{cluster_name}/replications/{master_node}/{replica_node}",
             |r| r.method(http::Method::POST).with(assign_replica),
         )
-        .resource("/clusters/migrations", |r| {
-            r.method(http::Method::PUT).with(commit_migration)
-        })
 }
 
 #[derive(Debug, Clone)]
