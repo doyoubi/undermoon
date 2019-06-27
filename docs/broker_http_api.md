@@ -47,7 +47,7 @@ If not:
 { "cluster": null }
 ```
 
-##### (3) GET /api/hosts/addresses
+##### (3) GET /api/proxies/addresses
 Get all the server-side proxy addresses.
 ```
 Response:
@@ -56,7 +56,7 @@ Response:
 }
 ```
 
-##### (4) GET /api/hosts/addresses/<server_proxy_address>
+##### (4) GET /api/proxies/<server_proxy_address>/meta
 Get the meta data of <server_proxy_address>
 ```
 Response:
@@ -104,7 +104,7 @@ Response:
 }
 ```
 
-##### (7) POST /api/hosts/<server_proxy_address>/failover
+##### (7) POST /api/proxies/<server_proxy_address>/failover
 Try to do the failover for the specified proxy.
 ```
 Request:

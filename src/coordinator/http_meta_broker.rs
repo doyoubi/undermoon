@@ -80,7 +80,7 @@ impl MetaDataBroker for HttpMetaBroker {
     fn get_host_addresses(
         &self,
     ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
-        let url = format!("http://{}/api/hosts/addresses", self.broker_address);
+        let url = format!("http://{}/api/proxies/addresses", self.broker_address);
         let request = self.client.get(&url).send();
         let addresses_fut = request
             .map_err(|e| {
@@ -108,7 +108,7 @@ impl MetaDataBroker for HttpMetaBroker {
         address: String,
     ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
         let url = format!(
-            "http://{}/api/hosts/addresses/{}",
+            "http://{}/api/proxies/{}/meta",
             self.broker_address, address
         );
         let request = self.client.get(&url).send();

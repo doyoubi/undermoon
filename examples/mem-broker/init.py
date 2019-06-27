@@ -18,7 +18,7 @@ def add_host(proxy_address, node_addresses):
         'proxy_address': proxy_address,
         'nodes': node_addresses,
     }
-    res = requests.put('http://localhost:7799/api/hosts/nodes', json=payload)
+    res = requests.put('http://localhost:7799/api/proxies/nodes', json=payload)
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -82,7 +82,7 @@ def replace_master_proxy(cluster_name, master=True):
         raise Exception('cannot find src and dst')
 
     proxy_address = node['proxy_address']
-    res = requests.post('http://localhost:7799/api/hosts/{}/failover'.format(proxy_address))
+    res = requests.post('http://localhost:7799/api/proxies/{}/failover'.format(proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
