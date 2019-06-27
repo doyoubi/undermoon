@@ -108,11 +108,6 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
-        let mut cmd_ctx = cmd_ctx;
-        if self.config.auto_select_db {
-            cmd_ctx = self.try_select_db(cmd_ctx);
-        }
-
         let cmd_ctx = match self.migration_manager.send(cmd_ctx) {
             Ok(()) => return,
             Err(e) => match e {

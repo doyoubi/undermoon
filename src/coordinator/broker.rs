@@ -1,4 +1,4 @@
-use common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
+use common::cluster::{Cluster, Host, MigrationTaskMeta};
 use common::utils::ThreadSafe;
 use futures::{Future, Stream};
 use std::error::Error;
@@ -35,11 +35,10 @@ pub trait MetaDataBroker: ThreadSafe {
 // Maybe we would want to support other database supporting redis protocol.
 // For them, we may need to trigger other action such as migrating data.
 pub trait MetaManipulationBroker: ThreadSafe {
-    fn replace_node(
+    fn replace_proxy(
         &self,
-        cluster_epoch: u64,
-        failed_node: Node,
-    ) -> Box<dyn Future<Item = Node, Error = MetaManipulationBrokerError> + Send>;
+        failed_proxy_address: String,
+    ) -> Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send>;
     fn commit_migration(
         &self,
         meta: MigrationTaskMeta,

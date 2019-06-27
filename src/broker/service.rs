@@ -1,7 +1,6 @@
 use super::store::{MetaStore, MetaStoreError, MigrationType};
 use ::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
 use ::common::version::UNDERMOON_VERSION;
-use ::coordinator::http_mani_broker::ReplaceNodePayload;
 use ::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, HostAddressesPayload, HostPayload,
 };
@@ -30,8 +29,8 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/hosts/addresses", |r| {
             r.method(http::Method::GET).f(get_host_addresses)
         })
-        .resource("/clusters/nodes", |r| {
-            r.method(http::Method::PUT).with(replace_failed_node)
+        .resource("/hosts/{address}/failover", |r| {
+            r.method(http::Method::POST).with(replace_failed_node)
         })
         .resource("/clusters/migrations", |r| {
             r.method(http::Method::PUT).with(commit_migration)
@@ -251,13 +250,12 @@ impl MemBrokerService {
 
     pub fn replace_failed_node(
         &self,
-        curr_cluster_epoch: u64,
-        node: Node,
-    ) -> Result<Node, MetaStoreError> {
+        failed_proxy_address: String,
+    ) -> Result<Host, MetaStoreError> {
         self.store
             .write()
-            .expect("MemBrokerService::replace_node")
-            .replace_failed_node(curr_cluster_epoch, node)
+            .expect("MemBrokerService::replace_failed_node")
+            .replace_failed_proxy(failed_proxy_address)
     }
 
     pub fn validate_meta(&self) -> Result<(), InconsistentError> {
@@ -414,13 +412,10 @@ fn commit_migration(
 }
 
 fn replace_failed_node(
-    (payload, state): (Json<ReplaceNodePayload>, ServiceState),
-) -> Result<Json<Node>, MetaStoreError> {
-    let ReplaceNodePayload {
-        cluster_epoch,
-        node,
-    } = payload.into_inner();
-    state.replace_failed_node(cluster_epoch, node).map(Json)
+    (path, state): (Path<(String,)>, ServiceState),
+) -> Result<Json<Host>, MetaStoreError> {
+    let (proxy_address,) = path.into_inner();
+    state.replace_failed_node(proxy_address).map(Json)
 }
 
 fn validate_meta(req: &HttpRequest<Arc<MemBrokerService>>) -> Result<String, InconsistentError> {
@@ -429,7 +424,11 @@ fn validate_meta(req: &HttpRequest<Arc<MemBrokerService>>) -> Result<String, Inc
 
 impl error::ResponseError for MetaStoreError {
     fn error_response(&self) -> HttpResponse {
-        let mut response = HttpResponse::new(http::StatusCode::BAD_REQUEST);
+        let status_code = match self {
+            MetaStoreError::NoAvailableResource => http::StatusCode::CONFLICT,
+            _ => http::StatusCode::BAD_REQUEST,
+        };
+        let mut response = HttpResponse::new(status_code);
         response.set_body(self.description().to_string());
         response
     }

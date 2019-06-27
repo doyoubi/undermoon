@@ -71,6 +71,22 @@ def set_replica(cluster_name):
     res.raise_for_status()
 
 
+def replace_master_proxy(cluster_name, master=True):
+    cluster = get_cluster(cluster_name)
+    nodes = cluster['nodes']
+    if master:
+        node = next([n for n in nodes if n['slots']].__iter__(), None)
+    else:
+        node = next([n for n in nodes if n['repl']['role'] == 'replica'].__iter__(), None)
+    if not node:
+        raise Exception('cannot find src and dst')
+
+    proxy_address = node['proxy_address']
+    res = requests.post('http://localhost:7799/api/hosts/{}/failover'.format(proxy_address))
+    print(res.status_code, res.text)
+    res.raise_for_status()
+
+
 cluster_name = 'mydb'
 init_hosts()
 add_cluster(cluster_name)
@@ -79,7 +95,10 @@ print(get_cluster(cluster_name))
 set_replica(cluster_name)
 set_replica(cluster_name)
 
-add_node(cluster_name)
-migrate_slots(cluster_name)
-add_node(cluster_name)
-set_replica(cluster_name)
+# add_node(cluster_name)
+# migrate_slots(cluster_name)
+# add_node(cluster_name)
+# set_replica(cluster_name)
+#
+# replace_master_proxy(cluster_name)
+# replace_master_proxy(cluster_name, False)

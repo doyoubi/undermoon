@@ -6,7 +6,7 @@ use super::core::{
 };
 use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailureDetector};
 use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
-use super::recover::{BrokerNodeFailureRetriever, BrokerProxyFailureRetriever, ReplaceNodeHandler};
+use super::recover::{BrokerProxyFailureRetriever, ReplaceNodeHandler};
 use super::sync::{BrokerMetaRetriever, HostMetaRespSender};
 use common::utils::ThreadSafe;
 use futures::future::select_all;
@@ -93,9 +93,8 @@ impl<
 
     fn gen_failure_handler(data_broker: Arc<DB>, mani_broker: Arc<MB>) -> impl FailureHandler {
         let proxy_retriever = BrokerProxyFailureRetriever::new(data_broker.clone());
-        let node_retriever = BrokerNodeFailureRetriever::new(data_broker.clone());
         let handler = ReplaceNodeHandler::new(data_broker, mani_broker);
-        SeqFailureHandler::new(proxy_retriever, node_retriever, handler)
+        SeqFailureHandler::new(proxy_retriever, handler)
     }
 
     fn gen_migration_state_synchronizer(

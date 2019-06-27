@@ -206,16 +206,18 @@ You can implement this HTTP broker yourself and there's a working in progress [G
 
 ![architecture](docs/architecture.svg)
 
-Here's an example for Coordinator working with a simple [Python HTTP Broker](examples/coordinator/simple_broker.py).
+Here's an example for Coordinator working with a simple in-memory broker.
 
 ```bash
-$ make docker-coordinator
+$ make docker-mem-broker
 ```
 
-Note that this example also supports replica for backing up your data for `serverproxy1-3`. For simplicity, `CLUSTER NODES` does not show you the replica nodes.
-You can find them via `UMCTL INFOREPL`.
+Then init the basic metadata.
+```bash
+$ python examples/mem-broker/init.py
+```
 
-It also supports scaling. Before run this example, you need to add these hosts to you `/etc/hosts`:
+Before connecting to the cluster, you need to add these hosts to you `/etc/hosts`:
 ```
 # /etc/hosts
 127.0.0.1 server_proxy1
@@ -225,30 +227,26 @@ It also supports scaling. Before run this example, you need to add these hosts t
 127.0.0.1 server_proxy5
 127.0.0.1 server_proxy6
 ```
+
+Now get the metadata:
+```bash
+$ curl localhost:7799/api/metadata | python -m json.tool
+```
+
+Pickup the randomly chosen proxies (in `proxy_address` field) for the cluster `mydb` and connect to them.
+
 Now we have:
 ```bash
 $ redis-cli -h server_proxy2 -p 6002 -a mydb -c
 Warning: Using a password with '-a' or '-u' option on the command line interface may not be safe.
 server_proxy2:6002> cluster nodes
-mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 1 connected 5462-10922
-mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 1 connected 0-5461
-mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 connected 10923-16383
+mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 5 connected 8192-16383 0-8191
 ```
 
-Then run:
-```bash
-$ curl -XPOST localhost:6699/api/test/migration
-```
-It will start the migration. About 3 seconds later you can see we have scaled from 3 to 6 nodes!
-```bash
-server_proxy2:6002> cluster nodes
-mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 5 connected 5462-8192
-mydb________________server_proxy4:6004__ server_proxy4:6004 master - 0 0 5 connected 2731-5461
-mydb________________server_proxy6:6006__ server_proxy6:6006 master - 0 0 5 connected 13654-16383
-mydb________________server_proxy1:6001__ server_proxy1:6001 master - 0 0 5 connected 0-2730
-mydb________________server_proxy5:6005__ server_proxy5:6005 master - 0 0 5 connected 8193-10922
-mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 5 connected 10923-13653
-```
+Note that this example also supports replica for backing up your data. For simplicity, `CLUSTER NODES` does not show you the replica nodes.
+You can find them via `UMCTL INFOREPL`.
+
+It also supports slots migration. See `examples/mem-broker/init.py` for more details.
 
 
 ## API

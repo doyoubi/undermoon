@@ -49,10 +49,16 @@ impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
                         .execute(ping_command)
                         .then(move |result| match result {
                             Ok(_) => future::ok(None),
-                            Err(_) => future::ok(Some(address)),
+                            Err(_) => {
+                                error!("PingFailureDetector::check failed to send PING");
+                                future::ok(Some(address))
+                            }
                         })
                 })
-                .or_else(move |_err| Ok(Some(address_clone))),
+                .or_else(move |_err| {
+                    error!("PingFailureDetector::check failed to connect");
+                    Ok(Some(address_clone))
+                }),
         )
     }
 }
