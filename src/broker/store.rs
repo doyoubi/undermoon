@@ -33,6 +33,7 @@ pub struct MetaStore {
     clusters: HashMap<String, Cluster>,
     // proxy_address => nodes and cluster_name
     all_nodes: HashMap<String, NodeResource>,
+    failed_proxies: HashMap<String, HashSet<String>>,
     failures: HashMap<String, i64>,
 }
 
@@ -41,6 +42,7 @@ impl Default for MetaStore {
         Self {
             clusters: HashMap::new(),
             all_nodes: HashMap::new(),
+            failed_proxies: HashMap::new(),
             failures: HashMap::new(),
         }
     }
@@ -51,7 +53,7 @@ macro_rules! try_state {
         match $expression {
             Ok(v) => (v),
             Err(err) => {
-                error!("Invalid state: {}", line!());
+                error!("Invalid state: {} {:?}", line!(), err);
                 return Err(err);
             }
         }
@@ -140,6 +142,11 @@ impl MetaStore {
         for node in nodes.into_iter() {
             node_resource.node_addresses.insert(node);
         }
+
+        self.failed_proxies
+            .remove(&proxy_address)
+            .map(|_| ())
+            .unwrap_or(());
         Ok(())
     }
 
@@ -283,20 +290,46 @@ impl MetaStore {
         Ok(())
     }
 
-    pub fn remove_proxy(&mut self, proxy_address: String) -> Result<(), MetaStoreError> {
+    fn move_failed_proxy(&mut self, failed_proxy_address: &str) -> Result<(), MetaStoreError> {
         self.all_nodes
-            .get_mut(&proxy_address)
+            .get(failed_proxy_address)
             .ok_or_else(|| MetaStoreError::HostResourceNotFound)
             .and_then(|node_resource| {
                 if node_resource.cluster_name.is_some() {
+                    Err(MetaStoreError::InUse)
+                } else {
+                    Ok(())
+                }
+            })?;
+        let NodeResource { node_addresses, .. } = self
+            .all_nodes
+            .remove(failed_proxy_address)
+            .ok_or_else(|| MetaStoreError::HostResourceNotFound)?;
+        self.failed_proxies
+            .insert(failed_proxy_address.to_string(), node_addresses);
+        Ok(())
+    }
+
+    pub fn remove_proxy(&mut self, proxy_address: String) -> Result<(), MetaStoreError> {
+        let all_nodes = &mut self.all_nodes;
+        let failed_proxies = &mut self.failed_proxies;
+        match all_nodes.get_mut(&proxy_address) {
+            None => {
+                return failed_proxies
+                    .remove(&proxy_address)
+                    .map(|_| ())
+                    .ok_or_else(|| MetaStoreError::HostResourceNotFound);
+            }
+            Some(node_resource) => {
+                if node_resource.cluster_name.is_some() {
                     return Err(MetaStoreError::InUse);
                 }
-                Ok(())
-            })?;
-        self.all_nodes
+            }
+        }
+        all_nodes
             .remove(&proxy_address)
             .map(|_| ())
-            .ok_or_else(|| MetaStoreError::NodeResourceNotFound)
+            .ok_or_else(|| MetaStoreError::HostResourceNotFound)
     }
 
     fn set_node_free(
@@ -925,6 +958,7 @@ impl MetaStore {
             &failed_proxy_address,
             false
         ));
+        try_state!(self.move_failed_proxy(&failed_proxy_address));
         let host = try_state!(self
             .get_host_by_address(&new_proxy_address)
             .ok_or_else(|| MetaStoreError::HostNotFound));
@@ -1109,7 +1143,7 @@ impl MetaStore {
     fn replace_node(
         &mut self,
         cluster_name: &str,
-        node_address: &str,
+        old_node_address: &str,
         node_slot: NodeSlot,
     ) -> Result<Node, MetaStoreError> {
         let new_node = {
@@ -1119,7 +1153,7 @@ impl MetaStore {
                     .get(cluster_name)
                     .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
                 cluster
-                    .get_node(node_address)
+                    .get_node(old_node_address)
                     .cloned()
                     .ok_or_else(|| MetaStoreError::NodeNotFound)?
             };
@@ -1172,6 +1206,11 @@ impl MetaStore {
 
             cluster.add_node(new_node.clone());
             try_state!(Self::update_peer(cluster, &node, &new_node));
+
+            let old_node = try_state!(cluster
+                .get_mut_node(old_node_address)
+                .ok_or_else(|| MetaStoreError::NodeNotFound));
+            *old_node.get_mut_slots() = vec![];
 
             new_node
         };
@@ -1275,7 +1314,6 @@ pub enum MetaStoreError {
     NodeNotFound,
     HostNotFound,
     HostResourceNotFound,
-    NodeResourceNotFound,
     NotMaster,
     NoPeer,
     NotMigrating,
@@ -1308,7 +1346,6 @@ impl Error for MetaStoreError {
             MetaStoreError::NodeNotFound => "NODE_NOT_FOUND",
             MetaStoreError::HostNotFound => "HOST_NOT_FOUND",
             MetaStoreError::HostResourceNotFound => "HOST_RESOURCE_NOT_FOUND",
-            MetaStoreError::NodeResourceNotFound => "NODE_RESOURCE_NOT_FOUND",
             MetaStoreError::NotMaster => "NOT_MASTER",
             MetaStoreError::NoPeer => "NOT_PEER",
             MetaStoreError::NotMigrating => "NOT_MIGRATING",

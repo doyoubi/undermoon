@@ -122,7 +122,15 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFai
         Box::new(
             self.proxy_failure_retriever
                 .retrieve_proxy_failures()
-                .and_then(move |proxy_address| handler.handle_proxy_failure(proxy_address)),
+                .and_then(move |proxy_address| {
+                    let proxy_address_clone = proxy_address.clone();
+                    handler
+                        .handle_proxy_failure(proxy_address_clone)
+                        .or_else(move |err| {
+                            error!("Failed to handler proxy failre {} {:?}", proxy_address, err);
+                            future::ok(())
+                        })
+                }),
         )
     }
 }
