@@ -43,12 +43,14 @@ impl<F: RedisClientFactory> CmdCtxHandler for SharedForwardHandler<F> {
 }
 
 pub struct ForwardHandler<F: RedisClientFactory> {
+    config: ServerProxyConfig,
     manager: MetaManager<F>,
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
     pub fn new(config: ServerProxyConfig, client_factory: Arc<F>) -> Self {
         Self {
+            config: config.clone(),
             manager: MetaManager::new(config, client_factory),
         }
     }
@@ -280,6 +282,11 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
 impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
+        let mut cmd_ctx = cmd_ctx;
+        if self.config.auto_select_db {
+            cmd_ctx = self.manager.try_select_db(cmd_ctx);
+        }
+
         //        debug!("get command {:?}", cmd_ctx.get_cmd());
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {

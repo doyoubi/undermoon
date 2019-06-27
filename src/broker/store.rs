@@ -59,19 +59,16 @@ macro_rules! try_state {
 }
 
 impl MetaStore {
-    pub fn get_hosts(&self) -> Vec<String> {
+    pub fn get_max_epoch(&self) -> u64 {
         self.clusters
-            .iter()
-            .map(|(_, cluster)| {
-                cluster
-                    .get_nodes()
-                    .iter()
-                    .map(|node| node.get_proxy_address().clone())
-            })
-            .flatten()
-            .collect::<HashSet<String>>()
-            .into_iter()
-            .collect()
+            .values()
+            .map(Cluster::get_epoch)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn get_hosts(&self) -> Vec<String> {
+        self.all_nodes.keys().cloned().collect()
     }
 
     pub fn get_host_by_address(&self, address: &str) -> Option<Host> {
@@ -90,6 +87,13 @@ impl MetaStore {
                     .cloned()
                     .collect();
                 Host::new(address.to_string(), epoch, nodes)
+            })
+            .or_else(|| {
+                Some(Host::new(
+                    address.to_string(),
+                    self.get_max_epoch() + 1,
+                    vec![],
+                ))
             })
     }
 
@@ -170,7 +174,7 @@ impl MetaStore {
             nodes.push(node);
         }
 
-        let cluster = Cluster::new(cluster_name.clone(), 0, nodes);
+        let cluster = Cluster::new(cluster_name.clone(), self.get_max_epoch() + 1, nodes);
         self.clusters.insert(cluster_name, cluster);
         Ok(())
     }
@@ -212,7 +216,7 @@ impl MetaStore {
         Ok(nodes)
     }
 
-    pub fn add_node(cluster: &mut Cluster, node_slot: NodeSlot) -> Result<Node, MetaStoreError> {
+    fn add_node(cluster: &mut Cluster, node_slot: NodeSlot) -> Result<Node, MetaStoreError> {
         let NodeSlot {
             proxy_address,
             node_address,
@@ -396,7 +400,7 @@ impl MetaStore {
             let dst_node = try_state!(cluster
                 .get_mut_node(&dst_node_address)
                 .ok_or_else(|| MetaStoreError::NodeNotFound));
-            *dst_node.get_mut_slots() = dst_slot_ranges;
+            dst_node.get_mut_slots().extend_from_slice(&dst_slot_ranges);
         }
 
         Ok(())
