@@ -424,7 +424,11 @@ fn validate_meta(req: &HttpRequest<Arc<MemBrokerService>>) -> Result<String, Inc
 
 impl error::ResponseError for MetaStoreError {
     fn error_response(&self) -> HttpResponse {
-        let mut response = HttpResponse::new(http::StatusCode::BAD_REQUEST);
+        let status_code = match self {
+            MetaStoreError::NoAvailableResource => http::StatusCode::CONFLICT,
+            _ => http::StatusCode::BAD_REQUEST,
+        };
+        let mut response = HttpResponse::new(status_code);
         response.set_body(self.description().to_string());
         response
     }
