@@ -4,7 +4,7 @@ services:
     container_name: server_proxy1
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/coordinator/server_proxy1.toml:/undermoon/config/server_proxy.toml
+    - ${PWD}/examples/mem-broker/server_proxy1.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
@@ -20,7 +20,7 @@ services:
     container_name: server_proxy2
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/coordinator/server_proxy2.toml:/undermoon/config/server_proxy.toml
+    - ${PWD}/examples/mem-broker/server_proxy2.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
@@ -36,7 +36,7 @@ services:
     container_name: server_proxy3
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/coordinator/server_proxy3.toml:/undermoon/config/server_proxy.toml
+    - ${PWD}/examples/mem-broker/server_proxy3.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
@@ -53,7 +53,7 @@ services:
     container_name: server_proxy4
     image: "undermoon"
     volumes:
-      - ${PWD}/examples/coordinator/server_proxy4.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/mem-broker/server_proxy4.toml:/undermoon/config/server_proxy.toml
       - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
       - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
@@ -69,7 +69,7 @@ services:
     container_name: server_proxy5
     image: "undermoon"
     volumes:
-      - ${PWD}/examples/coordinator/server_proxy5.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/mem-broker/server_proxy5.toml:/undermoon/config/server_proxy.toml
       - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
       - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
@@ -85,7 +85,7 @@ services:
     container_name: server_proxy6
     image: "undermoon"
     volumes:
-      - ${PWD}/examples/coordinator/server_proxy6.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/mem-broker/server_proxy6.toml:/undermoon/config/server_proxy.toml
       - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
       - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh

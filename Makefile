@@ -43,11 +43,8 @@ docker-multi-shard:
 docker-failover:
 	docker-compose -f examples/docker-compose-multi-shard.yml -f examples/docker-compose-failover.yml up
 
-docker-coordinator:
-	docker-compose -f examples/docker-compose-coordinator.yml up
-
 docker-mem-broker:
 	docker-compose -f examples/docker-compose-mem-broker.yml up
 
-.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-coordinator
+.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker
 

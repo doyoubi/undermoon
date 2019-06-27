@@ -95,10 +95,10 @@ print(get_cluster(cluster_name))
 set_replica(cluster_name)
 set_replica(cluster_name)
 
-add_node(cluster_name)
-migrate_slots(cluster_name)
-add_node(cluster_name)
-set_replica(cluster_name)
-
-replace_master_proxy(cluster_name)
-replace_master_proxy(cluster_name, False)
+# add_node(cluster_name)
+# migrate_slots(cluster_name)
+# add_node(cluster_name)
+# set_replica(cluster_name)
+#
+# replace_master_proxy(cluster_name)
+# replace_master_proxy(cluster_name, False)
