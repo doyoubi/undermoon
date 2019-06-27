@@ -69,6 +69,7 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
                 .buffer_unordered(10)
                 .filter_map(|a| a)
                 .and_then(move |address| {
+                    error!("failed to ping {}", address);
                     reporter.report(address).then(|res| {
                         if let Err(e) = res {
                             error!("failed to report failure: {:?}", e);

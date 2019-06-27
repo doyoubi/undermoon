@@ -984,7 +984,6 @@ impl MetaStore {
             return Err(MetaStoreError::NotMaster);
         }
 
-        info!("start to takeover {:?}", master_node);
         let peer = master_node
             .get_repl_meta()
             .get_peers()
@@ -992,6 +991,7 @@ impl MetaStore {
             .next()
             .cloned()
             .ok_or_else(|| MetaStoreError::NoPeer)?;
+        info!("start to takeover {:?}", master_node);
         let peer_node_address = peer.node_address.clone();
         let mut replica_node = try_state!(cluster
             .get_node(&peer.node_address)
