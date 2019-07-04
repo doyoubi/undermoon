@@ -14,7 +14,7 @@ Response:
 }
 ```
 
-##### (2) GET /api/clusters/<cluster_name>/meta
+##### (2) GET /api/clusters/meta/<cluster_name>
 Get the meta data of <cluster_name>.
 ```
 Response:
@@ -56,7 +56,7 @@ Response:
 }
 ```
 
-##### (4) GET /api/proxies/<server_proxy_address>/meta
+##### (4) GET /api/proxies/meta/<server_proxy_address>
 Get the meta data of <server_proxy_address>
 ```
 Response:
@@ -104,7 +104,7 @@ Response:
 }
 ```
 
-##### (7) POST /api/proxies/<server_proxy_address>/failover
+##### (7) POST /api/proxies/failover/<server_proxy_address>
 Try to do the failover for the specified proxy.
 ```
 Request:

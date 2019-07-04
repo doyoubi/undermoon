@@ -32,16 +32,16 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/proxies/nodes", |r| {
             r.method(http::Method::PUT).with(add_host)
         })
-        .resource("/proxies/{address}/failover", |r| {
+        .resource("/proxies/failover/{address}", |r| {
             r.method(http::Method::POST).with(replace_failed_node)
         })
-        .resource("/proxies/{address}/meta", |r| {
+        .resource("/proxies/meta/{address}", |r| {
             r.method(http::Method::GET).with(get_host_by_address)
         })
         .resource("/clusters/migrations", |r| {
             r.method(http::Method::PUT).with(commit_migration)
         })
-        .resource("/clusters/{cluster_name}/meta", |r| {
+        .resource("/clusters/meta/{cluster_name}", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
         })
         .resource("/clusters/names", |r| {

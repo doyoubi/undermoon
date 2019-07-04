@@ -12,13 +12,13 @@ release:
 	cargo build --release
 
 server:
-	RUST_LOG=undermoon=debug,server_proxy=debug target/debug/server_proxy
+	RUST_LOG=undermoon=debug,server_proxy=debug target/debug/server_proxy conf/server-proxy.toml
 
 coord:
-	RUST_LOG=undermoon=debug,coordinator=debug target/debug/coordinator
+	RUST_LOG=undermoon=debug,coordinator=debug target/debug/coordinator conf/coordinator.toml
 
 broker:
-	RUST_LOG=undermoon=debug,mem_broker=debug target/debug/mem_broker
+	RUST_LOG=undermoon=debug,mem_broker=debug target/debug/mem_broker conf/mem-broker.toml
 
 test_broker:
 	RUST_LOG=undermoon=debug,test_http_broker=debug target/debug/test_http_broker

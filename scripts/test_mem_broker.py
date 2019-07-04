@@ -102,7 +102,7 @@ def get_cluster_names():
 
 def get_cluster_by_name():
     cluster_name = 'testdb'
-    res = requests.get('http://localhost:7799/api/clusters/{}/meta'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/clusters/meta/{}'.format(cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
     return res.json()['cluster']
@@ -116,7 +116,7 @@ def get_host_addresses():
 
 def get_host_by_address():
     address = '127.0.0.1:7000'
-    res = requests.get('http://localhost:7799/api/proxies/{}/meta'.format(address))
+    res = requests.get('http://localhost:7799/api/proxies/meta/{}'.format(address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -140,7 +140,7 @@ def test_replacing_master_node():
     nodes = cluster['nodes']
     master = next([n for n in nodes if n['repl']['role'] == 'master' and n['slots']].__iter__(), None)
     proxy_address = master['proxy_address']
-    res = requests.post('http://localhost:7799/api/proxies/{}/failover'.format(proxy_address))
+    res = requests.post('http://localhost:7799/api/proxies/failover/{}'.format(proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -150,7 +150,7 @@ def test_replacing_replica_node():
     nodes = cluster['nodes']
     replica = next([n for n in nodes if n['repl']['role'] == 'replica'].__iter__(), None)
     proxy_address = replica['proxy_address']
-    res = requests.post('http://localhost:7799/api/proxies/{}/failover'.format(proxy_address))
+    res = requests.post('http://localhost:7799/api/proxies/failover/{}'.format(proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
