@@ -23,29 +23,29 @@ pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
         .resource("/validation", |r| {
             r.method(http::Method::POST).f(validate_meta)
         })
-        .resource("/hosts/addresses/{address}", |r| {
-            r.method(http::Method::GET).with(get_host_by_address)
-        })
-        .resource("/hosts/addresses", |r| {
+        .resource("/proxies/addresses", |r| {
             r.method(http::Method::GET).f(get_host_addresses)
         })
-        .resource("/hosts/{address}/failover", |r| {
+        .resource("/proxies/nodes/{proxy_address}", |r| {
+            r.method(http::Method::DELETE).with(remove_proxy)
+        })
+        .resource("/proxies/nodes", |r| {
+            r.method(http::Method::PUT).with(add_host)
+        })
+        .resource("/proxies/failover/{address}", |r| {
             r.method(http::Method::POST).with(replace_failed_node)
+        })
+        .resource("/proxies/meta/{address}", |r| {
+            r.method(http::Method::GET).with(get_host_by_address)
         })
         .resource("/clusters/migrations", |r| {
             r.method(http::Method::PUT).with(commit_migration)
         })
-        .resource("/clusters/{cluster_name}/meta", |r| {
+        .resource("/clusters/meta/{cluster_name}", |r| {
             r.method(http::Method::GET).with(get_cluster_by_name)
         })
         .resource("/clusters/names", |r| {
             r.method(http::Method::GET).f(get_cluster_names)
-        })
-        .resource("/hosts/nodes/{proxy_address}", |r| {
-            r.method(http::Method::DELETE).with(remove_proxy)
-        })
-        .resource("/hosts/nodes", |r| {
-            r.method(http::Method::PUT).with(add_host)
         })
         .resource("/clusters/{cluster_name}/nodes/{proxy_address}", |r| {
             r.method(http::Method::DELETE)

@@ -940,6 +940,11 @@ impl MetaStore {
                     .remove_node(&node_slot.node_address)
                     .ok_or_else(|| MetaStoreError::NodeNotFound));
             }
+            error!(
+                "invalid node number, slots: {} nodes {}",
+                node_slots.len(),
+                node_addresses.len()
+            );
             return Err(MetaStoreError::InvalidNodeNum);
         }
 

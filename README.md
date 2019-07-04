@@ -289,11 +289,7 @@ Sets the replication metadata to server-side proxies. This API supports multiple
 Refer to [HTTP API documentation](./docs/broker_http_api.md).
 
 ## Current Status
-This project is now only for demonstration and has **NOT** been well tested in production environment yet.
-
-There're two big features needed:
-- Replication for better failover.
-- The HTTP broker project - overmoon.
+This project has **NOT** been well tested in production environment yet.
 
 ## TODO
 - ~~Basic proxy implementation~~ (done)
@@ -316,5 +312,5 @@ There're two big features needed:
 - Statistics
 - Support multi-key commands
 - Support dynamic configuration by CONFIG command
-- Implement a simple rust HTTP broker before we have the Golang broker based on etcd.
+- ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
 - Recover peer meta to after reboot support direction.

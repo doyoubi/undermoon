@@ -27,7 +27,7 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
         failed_proxy_address: String,
     ) -> Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send> {
         let url = format!(
-            "http://{}/api/hosts/{}/failover",
+            "http://{}/api/proxies/failover/{}",
             self.broker_address, failed_proxy_address
         );
         let request = self.client.post(&url).send();
