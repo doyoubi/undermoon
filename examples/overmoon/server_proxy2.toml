@@ -1,0 +1,2 @@
+address = "server_proxy2:6002"
+auto_select_db = true

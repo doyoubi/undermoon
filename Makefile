@@ -46,5 +46,12 @@ docker-failover:
 docker-mem-broker:
 	docker-compose -f examples/docker-compose-mem-broker.yml up
 
-.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker
+docker-overmoon:
+	# Need to build the 'overmoon' image first
+	# > git clone https://github.com/doyoubi/overmoon
+	# > cd overmoon
+	# > make build-docker
+	docker-compose -f examples/docker-compose-overmoon.yml up
+
+.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker docker-overmoon
 

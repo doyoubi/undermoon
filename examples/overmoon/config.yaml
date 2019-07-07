@@ -1,0 +1,5 @@
+address: 0.0.0.0:7799
+path_prefix: /overmoon
+failure_ttl: 10
+etcd_nodes:
+  - etcd:2379

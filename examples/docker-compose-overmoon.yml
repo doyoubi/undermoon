@@ -4,14 +4,14 @@ services:
     container_name: server_proxy1
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/mem-broker/server_proxy1.toml:/undermoon/config/server_proxy.toml
+    - ${PWD}/examples/overmoon/server_proxy1.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6001:6001"
     environment:
-    - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_LOG=undermoon=info,server_proxy=info
     - RUST_BACKTRACE=full
     depends_on:
     - "redis1"
@@ -20,14 +20,14 @@ services:
     container_name: server_proxy2
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/mem-broker/server_proxy2.toml:/undermoon/config/server_proxy.toml
+    - ${PWD}/examples/overmoon/server_proxy2.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6002:6002"
     environment:
-    - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_LOG=undermoon=info,server_proxy=info
     - RUST_BACKTRACE=full
     depends_on:
     - "redis3"
@@ -36,14 +36,14 @@ services:
     container_name: server_proxy3
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/mem-broker/server_proxy3.toml:/undermoon/config/server_proxy.toml
+    - ${PWD}/examples/overmoon/server_proxy3.toml:/undermoon/config/server_proxy.toml
     - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6003:6003"
     environment:
-    - RUST_LOG=undermoon=debug,server_proxy=debug
+    - RUST_LOG=undermoon=info,server_proxy=info
     - RUST_BACKTRACE=full
     depends_on:
     - "redis5"
@@ -53,14 +53,14 @@ services:
     container_name: server_proxy4
     image: "undermoon"
     volumes:
-      - ${PWD}/examples/mem-broker/server_proxy4.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/overmoon/server_proxy4.toml:/undermoon/config/server_proxy.toml
       - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
       - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
       - "6004:6004"
     environment:
-      - RUST_LOG=undermoon=debug,server_proxy=debug
+      - RUST_LOG=undermoon=info,server_proxy=info
       - RUST_BACKTRACE=full
     depends_on:
       - "redis7"
@@ -69,14 +69,14 @@ services:
     container_name: server_proxy5
     image: "undermoon"
     volumes:
-      - ${PWD}/examples/mem-broker/server_proxy5.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/overmoon/server_proxy5.toml:/undermoon/config/server_proxy.toml
       - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
       - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
       - "6005:6005"
     environment:
-      - RUST_LOG=undermoon=debug,server_proxy=debug
+      - RUST_LOG=undermoon=info,server_proxy=info
       - RUST_BACKTRACE=full
     depends_on:
       - "redis9"
@@ -85,14 +85,14 @@ services:
     container_name: server_proxy6
     image: "undermoon"
     volumes:
-      - ${PWD}/examples/mem-broker/server_proxy6.toml:/undermoon/config/server_proxy.toml
+      - ${PWD}/examples/overmoon/server_proxy6.toml:/undermoon/config/server_proxy.toml
       - ${PWD}/examples/run_proxy.sh:/undermoon/run_proxy.sh
       - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_proxy.sh
     ports:
       - "6006:6006"
     environment:
-      - RUST_LOG=undermoon=debug,server_proxy=debug
+      - RUST_LOG=undermoon=info,server_proxy=info
       - RUST_BACKTRACE=full
     depends_on:
       - "redis11"
@@ -102,12 +102,12 @@ services:
     container_name: coordinator1
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/mem-broker/coordinator1.toml:/undermoon/config/coordinator.toml
+    - ${PWD}/examples/overmoon/coordinator1.toml:/undermoon/config/coordinator.toml
     - ${PWD}/examples/run_coordinator.sh:/undermoon/run_coordinator.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_coordinator.sh
     environment:
-    - RUST_LOG=undermoon=debug,coordinator=debug
+    - RUST_LOG=undermoon=info,coordinator=info
     - RUST_BACKTRACE=full
     depends_on:
     - "server_proxy1"
@@ -116,17 +116,17 @@ services:
     - "server_proxy4"
     - "server_proxy5"
     - "server_proxy6"
-    - "mem_broker"
+    - "overmoon"
   coordinator2:
     container_name: coordinator2
     image: "undermoon"
     volumes:
-    - ${PWD}/examples/mem-broker/coordinator2.toml:/undermoon/config/coordinator.toml
+    - ${PWD}/examples/overmoon/coordinator2.toml:/undermoon/config/coordinator.toml
     - ${PWD}/examples/run_coordinator.sh:/undermoon/run_coordinator.sh
     - ${PWD}/examples/target_volume:/undermoon/target
     command: bash /undermoon/run_coordinator.sh
     environment:
-    - RUST_LOG=undermoon=debug,coordinator=debug
+    - RUST_LOG=undermoon=info,coordinator=info
     - RUST_BACKTRACE=full
     depends_on:
     - "server_proxy1"
@@ -135,21 +135,26 @@ services:
     - "server_proxy4"
     - "server_proxy5"
     - "server_proxy6"
-    - "mem_broker"
+    - "overmoon"
 
-  mem_broker:
-    container_name: mem_broker
-    image: "undermoon"
-    volumes:
-      - ${PWD}/examples/mem-broker/mem-broker.toml:/undermoon/config/mem-broker.toml
-      - ${PWD}/examples/run_broker.sh:/undermoon/run_broker.sh
-      - ${PWD}/examples/target_volume:/undermoon/target
-    command: bash /undermoon/run_broker.sh
+  etcd:
+    container_name: etcd
+    image: "bitnami/etcd:latest"
     environment:
-      - RUST_LOG=undermoon=debug,mem_broker=debug
-      - RUST_BACKTRACE=full
+      - ALLOW_NONE_AUTHENTICATION=yes
+    ports:
+      - "2379:2379"
+
+  overmoon:
+    container_name: overmoon
+    image: "overmoon"
+    volumes:
+      - ${PWD}/examples/overmoon/config.yaml:/overmoon/config.yaml
+    command: /overmoon/proxy
     ports:
     - "7799:7799"
+    depends_on:
+    - "etcd"
 
   redis1:
     container_name: redis1
