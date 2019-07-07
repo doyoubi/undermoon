@@ -270,13 +270,21 @@ impl RedisClientFactory for PooledRedisClientFactory {
         let timeout = self.timeout;
 
         match new_reclaim_sender.take(Ordering::SeqCst) {
-            Some(reclaim_sender) => Box::new(self.create_conn(address).map(move |conn| {
-                let conn_handle = PoolItemHandle {
-                    item: conn,
-                    reclaim_sender: *reclaim_sender,
-                };
-                PooledRedisClient::new(conn_handle, timeout)
-            })),
+            Some(reclaim_sender) => Box::new(
+                self.create_conn(address)
+                    .timeout(timeout)
+                    .map(move |conn| {
+                        let conn_handle = PoolItemHandle {
+                            item: conn,
+                            reclaim_sender: *reclaim_sender,
+                        };
+                        PooledRedisClient::new(conn_handle, timeout)
+                    })
+                    .map_err(|timeout_err| {
+                        debug!("connection error: {:?}", timeout_err);
+                        RedisClientError::Timeout
+                    }),
+            ),
             None => {
                 error!("invalid state, can't get the reclaim_sender");
                 Box::new(future::err(RedisClientError::InitError))
