@@ -238,7 +238,7 @@ where
                 let fut: Box<Future<Item = _, Error = BackendError> + Send> = match res {
                     Ok(writer) => {
                         let fut = tx.send(task).map(move |tx| (writer, tx)).map_err(|e| {
-                            error!("rx closed {:?}", e);
+                            error!("backend handle_write rx closed {:?}", e);
                             BackendError::Canceled
                         });
                         Box::new(fut)

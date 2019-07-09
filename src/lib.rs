@@ -22,6 +22,7 @@ extern crate btoi;
 extern crate chashmap;
 extern crate chrono;
 extern crate crossbeam_channel;
+extern crate enum_map;
 extern crate itertools;
 
 pub mod broker;
