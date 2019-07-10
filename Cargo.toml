@@ -47,6 +47,7 @@ chashmap = "2.2.2"
 actix-web = "0.7"
 chrono = "0.4"
 arr_macro = "0.1.2"
+atoi = "0.3.1"
 
 [profile.release]
 debug = true

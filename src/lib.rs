@@ -19,6 +19,7 @@ extern crate log;
 extern crate scopeguard;
 extern crate actix_web;
 extern crate arr_macro;
+extern crate atoi;
 extern crate btoi;
 extern crate chashmap;
 extern crate chrono;

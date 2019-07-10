@@ -4,12 +4,13 @@ use super::database::{DBError, DBTag};
 use super::manager::MetaManager;
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
-use super::slowlog::SlowRequestLogger;
+use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use ::migration::manager::SwitchError;
 use ::migration::task::parse_tmp_switch_command;
+use atoi::atoi;
 use caseless;
 use common::db::HostDBMap;
-use common::utils::{ThreadSafe, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
+use common::utils::{get_element, ThreadSafe, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
 use protocol::{Array, BulkStr, RedisClientFactory, Resp};
 use replication::replicator::ReplicatorMeta;
 use std::str;
@@ -91,7 +92,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_cluster(&self, cmd_ctx: CmdCtx) {
-        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx) {
+        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx, 1) {
             Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd),
             None => return,
         };
@@ -112,8 +113,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         }
     }
 
-    fn get_sub_command(cmd_ctx: CmdCtx) -> Option<(CmdCtx, String)> {
-        match cmd_ctx.get_cmd().get_key() {
+    fn get_sub_command(cmd_ctx: CmdCtx, index: usize) -> Option<(CmdCtx, String)> {
+        match get_element(cmd_ctx.get_resp(), index) {
             None => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Missing sub command").into_bytes(),
@@ -133,7 +134,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_umctl(&self, cmd_ctx: CmdCtx) {
-        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx) {
+        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx, 1) {
             Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd),
             None => return,
         };
@@ -162,6 +163,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_info_migration(cmd_ctx);
         } else if sub_cmd.eq("TMPSWITCH") {
             self.handle_umctl_tmp_switch(cmd_ctx);
+        } else if sub_cmd.eq("SLOWLOG") {
+            self.handle_umctl_slowlog(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -292,6 +295,30 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
             .collect();
         cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(packet))))
+    }
+
+    fn handle_umctl_slowlog(&self, cmd_ctx: CmdCtx) {
+        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx, 2) {
+            Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd),
+            None => return,
+        };
+
+        let sub_cmd = sub_cmd.to_uppercase();
+
+        if sub_cmd.eq("GET") {
+            let limit =
+                get_element(cmd_ctx.get_resp(), 3).and_then(|element| atoi::<usize>(&element));
+            let logs = self.slow_request_logger.get(limit);
+            let reply = slowlogs_to_resp(logs);
+            cmd_ctx.set_resp_result(Ok(reply));
+        } else if sub_cmd.eq("RESET") {
+            self.slow_request_logger.reset();
+            cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+        } else {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                "invalid slowlog sub-command".to_string().into_bytes(),
+            )))
+        }
     }
 }
 

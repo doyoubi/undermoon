@@ -30,15 +30,19 @@ pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
     }
 }
 
-pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
+pub fn get_element(resp: &Resp, index: usize) -> Option<BinSafeStr> {
     match resp {
-        Resp::Arr(Array::Arr(ref resps)) => resps.get(1).and_then(|resp| match resp {
+        Resp::Arr(Array::Arr(ref resps)) => resps.get(index).and_then(|resp| match resp {
             Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
             Resp::Simple(ref s) => Some(s.clone()),
             _ => None,
         }),
         _ => None,
     }
+}
+
+pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
+    get_element(resp, 1)
 }
 
 pub fn get_commands(resp: &Resp) -> Option<Vec<String>> {

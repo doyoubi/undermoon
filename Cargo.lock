@@ -169,6 +169,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "atoi"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "num-traits 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "atomic-option"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2011,6 +2019,7 @@ dependencies = [
  "actix-web 0.7.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "arc-swap 0.3.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "arr_macro 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "atoi 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "atomic-option 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "btoi 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.4.12 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2258,6 +2267,7 @@ dependencies = [
 "checksum arr_macro 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d262b83f2f573121554ad6e764cd444303df85d86e5fcebc81903ddcf8dd3a97"
 "checksum arr_macro_impl 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "8decbe97ffec939e44228d91e5d0829ceb1616c6ed0984c09df164b1e7ebaafc"
 "checksum arrayvec 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)" = "a1e964f9e24d588183fcb43503abda40d288c8657dfc27311516ce2f05675aef"
+"checksum atoi 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "04475a7d319fc8b405a22948ac839e49fb92f8d54e83524e2b82dff0d4341acb"
 "checksum atomic-option 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "0db678acb667b525ac40a324fc5f7d3390e29239b31c7327bb8157f5b4fff593"
 "checksum atty 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)" = "9a7d5b8723950951411ee34d271d99dddcc2035a16ab25310ea2c8cfd4369652"
 "checksum autocfg 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a6d640bee2da49f60a4068a7fae53acde8982514ab7bae8b8cea9e88cbcfd799"
