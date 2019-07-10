@@ -1,4 +1,5 @@
 use super::command::{CommandError, CommandResult};
+use super::slowlog::{Slowlog, TaskEvent};
 use bytes::BytesMut;
 use common::future_group::new_future_group;
 use common::utils::{gen_moved, get_key, get_slot, revolve_first_address, ThreadSafe};
@@ -36,6 +37,8 @@ pub trait CmdTask: ThreadSafe + fmt::Debug {
     {
         self.set_result(result.map(|resp| Box::new(RespPacket::new(resp))))
     }
+
+    fn get_slowlog(&self) -> &Slowlog;
 }
 
 pub trait CmdTaskSender {
@@ -181,6 +184,9 @@ impl<T: CmdTask> BackendNode<T> {
     }
 
     pub fn send(&self, cmd_task: T) -> Result<(), BackendError> {
+        cmd_task
+            .get_slowlog()
+            .log_event(TaskEvent::SentToWritingQueue);
         self.tx
             .unbounded_send(cmd_task)
             .map(|_| ())
@@ -222,6 +228,9 @@ where
     task_receiver
         .map_err(|()| BackendError::Canceled)
         .fold((writer, tx), |(writer, tx), task| {
+            task.get_slowlog()
+                .log_event(TaskEvent::WritingQueueReceived);
+
             let item = match task.drain_packet_data() {
                 Some(data) => {
                     // Tricky code here. The nil array will be ignored when encoded.
@@ -235,6 +244,8 @@ where
                 }
             };
             writer.send(Box::new(item)).then(|res| {
+                task.get_slowlog().log_event(TaskEvent::SentToBackend);
+
                 let fut: Box<Future<Item = _, Error = BackendError> + Send> = match res {
                     Ok(writer) => {
                         let fut = tx.send(task).map(move |tx| (writer, tx)).map_err(|e| {
@@ -286,6 +297,7 @@ where
             })
             .and_then(|(task_opt, rx)| match task_opt {
                 Some(task) => {
+                    task.get_slowlog().log_event(TaskEvent::ReceivedFromBackend);
                     task.set_result(Ok(packet));
                     // TODO: call handler
                     future::ok((handler, rx.into_future()))
@@ -419,12 +431,12 @@ impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
     }
 }
 
-pub struct DirectionSender<T: CmdTask> {
+pub struct RedirectionSender<T: CmdTask> {
     redirection_address: String,
     phantom: PhantomData<T>,
 }
 
-impl<T: CmdTask> CmdTaskSender for DirectionSender<T> {
+impl<T: CmdTask> CmdTaskSender for RedirectionSender<T> {
     type Task = T;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
@@ -443,21 +455,21 @@ impl<T: CmdTask> CmdTaskSender for DirectionSender<T> {
     }
 }
 
-pub struct DirectionSenderFactory<T: CmdTask>(PhantomData<T>);
+pub struct RedirectionSenderFactory<T: CmdTask>(PhantomData<T>);
 
-impl<T: CmdTask> ThreadSafe for DirectionSenderFactory<T> {}
+impl<T: CmdTask> ThreadSafe for RedirectionSenderFactory<T> {}
 
-impl<T: CmdTask> Default for DirectionSenderFactory<T> {
+impl<T: CmdTask> Default for RedirectionSenderFactory<T> {
     fn default() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T: CmdTask> CmdTaskSenderFactory for DirectionSenderFactory<T> {
-    type Sender = DirectionSender<T>;
+impl<T: CmdTask> CmdTaskSenderFactory for RedirectionSenderFactory<T> {
+    type Sender = RedirectionSender<T>;
 
     fn create(&self, address: String) -> Self::Sender {
-        DirectionSender {
+        RedirectionSender {
             redirection_address: address,
             phantom: PhantomData,
         }

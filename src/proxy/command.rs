@@ -1,3 +1,4 @@
+use super::slowlog::Slowlog;
 use ::common::utils::get_key;
 use atomic_option::AtomicOption;
 use bytes::BytesMut;
@@ -10,6 +11,7 @@ use std::io;
 use std::result::Result;
 use std::str;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum CmdType {
@@ -91,9 +93,28 @@ impl Command {
     }
 }
 
+pub struct TaskReply {
+    packet: Box<RespPacket>,
+    slowlog: Arc<Slowlog>,
+}
+
+impl TaskReply {
+    pub fn new(packet: Box<RespPacket>, slowlog: Arc<Slowlog>) -> Self {
+        Self { packet, slowlog }
+    }
+
+    pub fn into_inner(self) -> (Box<RespPacket>, Arc<Slowlog>) {
+        let Self { packet, slowlog } = self;
+        (packet, slowlog)
+    }
+}
+
+pub type CommandResult = Result<Box<RespPacket>, CommandError>;
+pub type TaskResult = Result<Box<TaskReply>, CommandError>;
+
 pub struct CmdReplySender {
     cmd: Command,
-    reply_sender: AtomicOption<oneshot::Sender<CommandResult>>,
+    reply_sender: AtomicOption<oneshot::Sender<TaskResult>>,
 }
 
 impl fmt::Debug for CmdReplySender {
@@ -103,11 +124,11 @@ impl fmt::Debug for CmdReplySender {
 }
 
 pub struct CmdReplyReceiver {
-    reply_receiver: oneshot::Receiver<CommandResult>,
+    reply_receiver: oneshot::Receiver<TaskResult>,
 }
 
 pub fn new_command_pair(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
-    let (s, r) = oneshot::channel::<CommandResult>();
+    let (s, r) = oneshot::channel::<TaskResult>();
     let reply_sender = CmdReplySender {
         cmd,
         reply_sender: AtomicOption::new(Box::new(s)),
@@ -121,7 +142,7 @@ impl CmdReplySender {
         &self.cmd
     }
 
-    pub fn send(&self, res: CommandResult) -> Result<(), CommandError> {
+    pub fn send(&self, res: TaskResult) -> Result<(), CommandError> {
         // Must not send twice.
         match self.reply_sender.take(Ordering::SeqCst) {
             Some(reply_sender) => reply_sender.send(res).map_err(|_| CommandError::Canceled),
@@ -132,7 +153,7 @@ impl CmdReplySender {
         }
     }
 
-    pub fn try_send(&self, res: CommandResult) -> Option<Result<(), CommandError>> {
+    pub fn try_send(&self, res: TaskResult) -> Option<Result<(), CommandError>> {
         match self.reply_sender.take(Ordering::SeqCst) {
             Some(reply_sender) => Some(reply_sender.send(res).map_err(|_| CommandError::Canceled)),
             None => None,
@@ -141,7 +162,7 @@ impl CmdReplySender {
 }
 
 impl CmdReplyReceiver {
-    pub fn wait_response(self) -> impl Future<Item = Box<RespPacket>, Error = CommandError> + Send {
+    pub fn wait_response(self) -> impl Future<Item = Box<TaskReply>, Error = CommandError> + Send {
         self.reply_receiver
             .map_err(|_| CommandError::Canceled)
             .and_then(future::result)
@@ -175,5 +196,3 @@ impl Error for CommandError {
         }
     }
 }
-
-pub type CommandResult = Result<Box<RespPacket>, CommandError>;

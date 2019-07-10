@@ -18,11 +18,11 @@ extern crate log;
 #[macro_use(defer)]
 extern crate scopeguard;
 extern crate actix_web;
+extern crate arr_macro;
 extern crate btoi;
 extern crate chashmap;
 extern crate chrono;
 extern crate crossbeam_channel;
-extern crate enum_map;
 extern crate itertools;
 
 pub mod broker;

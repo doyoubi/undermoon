@@ -1,37 +1,82 @@
+use super::command::Command;
 use arc_swap::ArcSwapOption;
-use chrono::{DateTime, Utc};
-use enum_map::{Enum, EnumMap};
+use arr_macro::arr;
+use chrono::Utc;
 use protocol::BinSafeStr;
+use protocol::{Array, BulkStr, Resp};
 use std::sync::atomic;
 use std::sync::Arc;
 
-#[derive(Debug, Enum)]
-pub enum RequestEvent {
-    Created,
-    SentToWritingQueue,
-    WritingQueueReceived,
-    SentToBackend,
-    ReadingQueueReceived,
-    ReceivedFromBackend,
-    WaitDone,
-    WrittenToClient,
+#[repr(u8)]
+#[derive(Debug)]
+pub enum TaskEvent {
+    Created = 0,
+    SentToWritingQueue = 1,
+    WritingQueueReceived = 2,
+    SentToBackend = 3,
+    ReceivedFromBackend = 4,
+    WaitDone = 5,
 }
 
-struct Slowlog {
-    eventMap: EnumMap<RequestEvent, Option<DateTime<Utc>>>,
+const EVENT_NUMBER: usize = 6;
+const LOG_ELEMENT_NUMBER: usize = 5;
+
+#[derive(Debug)]
+struct RequestEventMap {
+    events: [atomic::AtomicI64; EVENT_NUMBER],
+}
+
+impl RequestEventMap {
+    fn set_event_time(&self, event: TaskEvent, timestamp: i64) {
+        self.events[event as usize].store(timestamp, atomic::Ordering::SeqCst)
+    }
+
+    fn get_event_time(&self, event: TaskEvent) -> i64 {
+        self.events[event as usize].load(atomic::Ordering::SeqCst)
+    }
+}
+
+impl Default for RequestEventMap {
+    fn default() -> Self {
+        Self {
+            events: arr![atomic::AtomicI64::new(0); 6],
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Slowlog {
+    event_map: RequestEventMap,
     command: Vec<BinSafeStr>,
 }
 
 impl Slowlog {
-    fn new() -> Self {
+    pub fn from_command(command: &Command) -> Self {
+        let command = Self::get_brief_command(command);
         Slowlog {
-            eventMap: EnumMap::new(),
-            command: Vec::new(),
+            event_map: RequestEventMap::default(),
+            command,
         }
     }
 
-    fn log_event(&mut self, event: RequestEvent) {
-        self.eventMap[event] = Some(Utc::now());
+    fn get_brief_command(command: &Command) -> Vec<BinSafeStr> {
+        let resps = match command.get_resp() {
+            Resp::Arr(Array::Arr(ref resps)) => resps,
+            others => return vec![format!("{:?}", others).into_bytes()],
+        };
+        resps
+            .iter()
+            .take(LOG_ELEMENT_NUMBER)
+            .map(|element| match element {
+                Resp::Bulk(BulkStr::Str(s)) => s.clone(),
+                others => format!("{:?}", others).into_bytes(),
+            })
+            .collect()
+    }
+
+    pub fn log_event(&self, event: TaskEvent) {
+        self.event_map
+            .set_event_time(event, Utc::now().timestamp_nanos())
     }
 }
 
@@ -41,7 +86,7 @@ pub struct SlowRequestLogger {
 }
 
 impl SlowRequestLogger {
-    fn new(log_queue_size: usize) -> Self {
+    pub fn new(log_queue_size: usize) -> Self {
         let mut slowlogs = Vec::new();
         while slowlogs.len() != log_queue_size {
             slowlogs.push(ArcSwapOption::new(None));
@@ -52,22 +97,24 @@ impl SlowRequestLogger {
         }
     }
 
-    fn add(&self, log: Slowlog) {
+    pub fn add(&self, log: Arc<Slowlog>) {
         let index = self.curr_index.fetch_add(1, atomic::Ordering::SeqCst) % self.slowlogs.len();
-        self.slowlogs
-            .get(index)
-            .map(|log_slot| log_slot.store(Some(Arc::new(log))));
+        if let Some(log_slot) = self.slowlogs.get(index) {
+            log_slot.store(Some(log))
+        }
     }
 
-    fn get(&self, num: usize) -> Vec<Arc<Slowlog>> {
+    pub fn get(&self, num: usize) -> Vec<Arc<Slowlog>> {
         self.slowlogs
             .iter()
-            .filter_map(|log_slot| log_slot.load())
+            .filter_map(arc_swap::ArcSwapAny::load)
             .take(num)
             .collect()
     }
 
-    fn reset(&self) {
-        self.slowlogs.iter().map(|log_slot| log_slot.store(None));
+    pub fn reset(&self) {
+        for log_slot in self.slowlogs.iter() {
+            log_slot.store(None)
+        }
     }
 }

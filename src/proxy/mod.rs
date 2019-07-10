@@ -6,4 +6,4 @@ mod manager;
 pub mod service;
 pub mod session;
 mod slot;
-mod slowlog;
+pub mod slowlog;

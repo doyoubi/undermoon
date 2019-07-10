@@ -4,6 +4,7 @@ use super::database::{DBError, DBTag};
 use super::manager::MetaManager;
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
+use super::slowlog::SlowRequestLogger;
 use ::migration::manager::SwitchError;
 use ::migration::task::parse_tmp_switch_command;
 use caseless;
@@ -29,9 +30,17 @@ impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
 }
 
 impl<F: RedisClientFactory> SharedForwardHandler<F> {
-    pub fn new(config: ServerProxyConfig, client_factory: Arc<F>) -> Self {
+    pub fn new(
+        config: ServerProxyConfig,
+        client_factory: Arc<F>,
+        slow_request_logger: Arc<SlowRequestLogger>,
+    ) -> Self {
         Self {
-            handler: sync::Arc::new(ForwardHandler::new(config, client_factory)),
+            handler: sync::Arc::new(ForwardHandler::new(
+                config,
+                client_factory,
+                slow_request_logger,
+            )),
         }
     }
 }
@@ -45,13 +54,19 @@ impl<F: RedisClientFactory> CmdCtxHandler for SharedForwardHandler<F> {
 pub struct ForwardHandler<F: RedisClientFactory> {
     config: ServerProxyConfig,
     manager: MetaManager<F>,
+    slow_request_logger: Arc<SlowRequestLogger>,
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
-    pub fn new(config: ServerProxyConfig, client_factory: Arc<F>) -> Self {
+    pub fn new(
+        config: ServerProxyConfig,
+        client_factory: Arc<F>,
+        slow_request_logger: Arc<SlowRequestLogger>,
+    ) -> Self {
         Self {
             config: config.clone(),
             manager: MetaManager::new(config, client_factory),
+            slow_request_logger,
         }
     }
 }
