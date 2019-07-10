@@ -165,7 +165,7 @@ fn slowlog_to_report(log: &Slowlog) -> Resp {
     let elements = vec![
         format!("created: {}", start_date),
         format!(
-            "send_to_queue: {}",
+            "sent_to_queue: {}",
             log.event_map.get_used_time(TaskEvent::SentToWritingQueue)
         ),
         format!(

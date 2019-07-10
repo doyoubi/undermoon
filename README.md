@@ -308,7 +308,7 @@ This project has **NOT** been well tested in production environment yet.
 - Batch write operations with interval flushing
 - ~~Add configuration~~ (done)
 - Limit running commands, connections
-- Slow log
+- ~~Slow log~~ (done)
 - Statistics
 - Support multi-key commands
 - Support dynamic configuration by CONFIG command
