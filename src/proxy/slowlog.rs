@@ -36,7 +36,7 @@ impl RequestEventMap {
     }
 
     fn get_used_time(&self, event: TaskEvent) -> i64 {
-        let t =  self.get_event_time(event);
+        let t = self.get_event_time(event);
         if t == 0 {
             0
         } else {
@@ -96,10 +96,11 @@ impl Slowlog {
 pub struct SlowRequestLogger {
     slowlogs: Vec<ArcSwapOption<Slowlog>>,
     curr_index: atomic::AtomicUsize,
+    slowlog_log_slower_than: i64, // unlike Redis, this is in nanoseconds.
 }
 
 impl SlowRequestLogger {
-    pub fn new(log_queue_size: usize) -> Self {
+    pub fn new(log_queue_size: usize, slowlog_log_slower_than: i64) -> Self {
         let mut slowlogs = Vec::new();
         while slowlogs.len() != log_queue_size {
             slowlogs.push(ArcSwapOption::new(None));
@@ -107,6 +108,14 @@ impl SlowRequestLogger {
         Self {
             slowlogs,
             curr_index: atomic::AtomicUsize::new(0),
+            slowlog_log_slower_than,
+        }
+    }
+
+    pub fn add_slow_log(&self, log: Arc<Slowlog>) {
+        let dt = log.event_map.get_used_time(TaskEvent::WaitDone);
+        if dt > self.slowlog_log_slower_than {
+            self.add(log);
         }
     }
 
@@ -155,12 +164,32 @@ fn slowlog_to_report(log: &Slowlog) -> Resp {
     };
     let elements = vec![
         format!("created: {}", start_date),
-        format!("send_to_queue: {}", log.event_map.get_used_time(TaskEvent::SentToWritingQueue)),
-        format!("queue_received: {}", log.event_map.get_used_time(TaskEvent::WritingQueueReceived)),
-        format!("sent_to_backend: {}", log.event_map.get_used_time(TaskEvent::SentToBackend)),
-        format!("received_from_backend: {}", log.event_map.get_used_time(TaskEvent::ReceivedFromBackend)),
-        format!("wait_done: {}", log.event_map.get_used_time(TaskEvent::WaitDone)),
+        format!(
+            "send_to_queue: {}",
+            log.event_map.get_used_time(TaskEvent::SentToWritingQueue)
+        ),
+        format!(
+            "queue_received: {}",
+            log.event_map.get_used_time(TaskEvent::WritingQueueReceived)
+        ),
+        format!(
+            "sent_to_backend: {}",
+            log.event_map.get_used_time(TaskEvent::SentToBackend)
+        ),
+        format!(
+            "received_from_backend: {}",
+            log.event_map.get_used_time(TaskEvent::ReceivedFromBackend)
+        ),
+        format!(
+            "wait_done: {}",
+            log.event_map.get_used_time(TaskEvent::WaitDone)
+        ),
         format!("command: {}", log.command.join(" ")),
     ];
-    Resp::Arr(Array::Arr(elements.into_iter().map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes()))).collect()))
+    Resp::Arr(Array::Arr(
+        elements
+            .into_iter()
+            .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+            .collect(),
+    ))
 }

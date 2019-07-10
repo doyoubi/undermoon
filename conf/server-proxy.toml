@@ -1,3 +1,4 @@
 address = "127.0.0.1:5299"
 auto_select_db = false
 slowlog_len = 1024
+slowlog_log_slower_than = 1000

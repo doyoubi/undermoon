@@ -12,6 +12,7 @@ pub struct ServerProxyConfig {
     pub address: String,
     pub auto_select_db: bool,
     pub slowlog_len: usize,
+    pub slowlog_log_slower_than: i64,
 }
 
 #[derive(Clone)]

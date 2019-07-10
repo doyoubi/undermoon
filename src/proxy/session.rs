@@ -115,7 +115,7 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     }
 
     fn handle_slowlog(&self, slowlog: sync::Arc<Slowlog>) {
-        self.slow_request_logger.add(slowlog)
+        self.slow_request_logger.add_slow_log(slowlog)
     }
 }
 
