@@ -14,6 +14,9 @@ release:
 server:
 	RUST_LOG=undermoon=debug,server_proxy=debug target/debug/server_proxy conf/server-proxy.toml
 
+server-release:
+	RUST_LOG=undermoon=info,server_proxy=info target/release/server_proxy conf/server-proxy.toml
+
 coord:
 	RUST_LOG=undermoon=debug,coordinator=debug target/debug/coordinator conf/coordinator.toml
 
@@ -24,7 +27,7 @@ test_broker:
 	RUST_LOG=undermoon=debug,test_http_broker=debug target/debug/test_http_broker
 
 flame:
-	sudo flamegraph -o $(name).svg target/release/server_proxy
+	sudo flamegraph -o $(name).svg target/release/server_proxy conf/server-proxy.toml
 
 docker-build-image:
 	docker image build -f examples/Dockerfile-builder -t undermoon_builder .

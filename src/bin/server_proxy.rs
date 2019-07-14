@@ -11,6 +11,7 @@ use std::time::Duration;
 use undermoon::protocol::PooledRedisClientFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
+use undermoon::proxy::slowlog::SlowRequestLogger;
 
 fn gen_conf() -> ServerProxyConfig {
     let conf_file_path = env::args()
@@ -31,6 +32,10 @@ fn gen_conf() -> ServerProxyConfig {
             .get::<String>("address")
             .unwrap_or_else(|_| "127.0.0.1:5299".to_string()),
         auto_select_db: s.get::<bool>("auto_select_db").unwrap_or_else(|_| false),
+        slowlog_len: s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024),
+        slowlog_log_slower_than: s
+            .get::<i64>("slowlog_log_slower_than")
+            .unwrap_or_else(|_| 50000),
     }
 }
 
@@ -43,8 +48,16 @@ fn main() {
     let pool_size = 1;
     let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
 
-    let forward_handler = SharedForwardHandler::new(config.clone(), Arc::new(client_factory));
-    let server = ServerProxyService::new(config, forward_handler);
+    let slow_request_logger = Arc::new(SlowRequestLogger::new(
+        config.slowlog_len,
+        config.slowlog_log_slower_than * 1000,
+    ));
+    let forward_handler = SharedForwardHandler::new(
+        config.clone(),
+        Arc::new(client_factory),
+        slow_request_logger.clone(),
+    );
+    let server = ServerProxyService::new(config, forward_handler, slow_request_logger);
 
     tokio::run(server.run());
 }

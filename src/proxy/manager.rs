@@ -1,6 +1,6 @@
 use super::backend::{
-    CachedSenderFactory, DirectionSenderFactory, RRSenderGroupFactory,
-    RecoverableBackendNodeFactory,
+    CachedSenderFactory, RRSenderGroupFactory, RecoverableBackendNodeFactory,
+    RedirectionSenderFactory,
 };
 use super::database::{DBError, DBSendError, DatabaseMap};
 use super::service::ServerProxyConfig;
@@ -21,7 +21,7 @@ pub struct MetaManager<F: RedisClientFactory> {
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
     replicator_manager: ReplicatorManager<F>,
-    migration_manager: MigrationManager<F, DirectionSenderFactory<CmdCtx>>,
+    migration_manager: MigrationManager<F, RedirectionSenderFactory<CmdCtx>>,
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
@@ -30,7 +30,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             RecoverableBackendNodeFactory::default(),
         ));
         let db = DatabaseMap::new(sender_factory);
-        let redirection_sender_factory = Arc::new(DirectionSenderFactory::default());
+        let redirection_sender_factory = Arc::new(RedirectionSenderFactory::default());
         let migration_config = Arc::new(MigrationConfig::default());
         Self {
             config,

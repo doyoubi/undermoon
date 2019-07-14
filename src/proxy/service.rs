@@ -1,27 +1,38 @@
 use super::session::CmdCtxHandler;
 use super::session::{handle_conn, Session};
+use super::slowlog::SlowRequestLogger;
 use common::future_group::new_future_group;
 use common::utils::{revolve_first_address, ThreadSafe};
 use futures::{future, Future, Stream};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 #[derive(Debug, Clone)]
 pub struct ServerProxyConfig {
     pub address: String,
     pub auto_select_db: bool,
+    pub slowlog_len: usize,
+    pub slowlog_log_slower_than: i64,
 }
 
 #[derive(Clone)]
 pub struct ServerProxyService<H: CmdCtxHandler + ThreadSafe + Clone> {
     config: ServerProxyConfig,
     cmd_ctx_handler: H,
+    slow_request_logger: Arc<SlowRequestLogger>,
 }
 
 impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
-    pub fn new(config: ServerProxyConfig, cmd_ctx_handler: H) -> Self {
+    pub fn new(
+        config: ServerProxyConfig,
+        cmd_ctx_handler: H,
+        slow_request_logger: Arc<SlowRequestLogger>,
+    ) -> Self {
         Self {
             config,
             cmd_ctx_handler,
+            slow_request_logger,
         }
     }
 
@@ -47,6 +58,9 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         };
 
         let forward_handler = self.cmd_ctx_handler.clone();
+        let slow_request_logger = self.slow_request_logger.clone();
+
+        let session_id = AtomicUsize::new(0);
 
         Box::new(
             listener
@@ -58,10 +72,18 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                         Err(e) => format!("Failed to get peer {}", e),
                     };
 
-                    info!("accept conn {}", peer);
+                    info!("accept conn: {}", peer);
+                    let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
+
                     let handle_clone = forward_handler.clone();
-                    let (reader_handler, writer_handler) =
-                        handle_conn(Session::new(handle_clone), sock);
+                    let (reader_handler, writer_handler) = handle_conn(
+                        Arc::new(Session::new(
+                            curr_session_id,
+                            handle_clone,
+                            slow_request_logger.clone(),
+                        )),
+                        sock,
+                    );
                     let (reader_handler, writer_handler) =
                         new_future_group(reader_handler, writer_handler);
 
