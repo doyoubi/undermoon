@@ -7,6 +7,9 @@ use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
 
+// try letting the element and postfix fit into 128 bytes.
+const MAX_ELEMENT_LENGTH: usize = 100;
+
 #[repr(u8)]
 #[derive(Debug)]
 pub enum TaskEvent {
@@ -58,14 +61,16 @@ impl Default for RequestEventMap {
 pub struct Slowlog {
     event_map: RequestEventMap,
     command: Vec<String>,
+    session_id: usize,
 }
 
 impl Slowlog {
-    pub fn from_command(command: &Command) -> Self {
+    pub fn from_command(command: &Command, session_id: usize) -> Self {
         let command = Self::get_brief_command(command);
         Slowlog {
             event_map: RequestEventMap::default(),
             command,
+            session_id,
         }
     }
 
@@ -83,6 +88,15 @@ impl Slowlog {
                     _ => format!("{:?}", data),
                 },
                 others => format!("{:?}", others),
+            })
+            .map(|mut s| {
+                let real_len = s.len();
+                s.truncate(MAX_ELEMENT_LENGTH);
+                if real_len > MAX_ELEMENT_LENGTH {
+                    let postfix = format!("({}bytes)", real_len);
+                    s.push_str(&postfix)
+                }
+                s
             })
             .collect()
     }
@@ -163,6 +177,7 @@ fn slowlog_to_report(log: &Slowlog) -> Resp {
         None => start.to_string(),
     };
     let elements = vec![
+        format!("session_id: {}", log.session_id),
         format!("created: {}", start_date),
         format!(
             "sent_to_queue: {}",

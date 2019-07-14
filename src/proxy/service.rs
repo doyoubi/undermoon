@@ -4,6 +4,7 @@ use super::slowlog::SlowRequestLogger;
 use common::future_group::new_future_group;
 use common::utils::{revolve_first_address, ThreadSafe};
 use futures::{future, Future, Stream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -59,6 +60,8 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let forward_handler = self.cmd_ctx_handler.clone();
         let slow_request_logger = self.slow_request_logger.clone();
 
+        let session_id = AtomicUsize::new(0);
+
         Box::new(
             listener
                 .incoming()
@@ -69,10 +72,16 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                         Err(e) => format!("Failed to get peer {}", e),
                     };
 
-                    info!("accept conn {}", peer);
+                    info!("accept conn: {}", peer);
+                    let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
+
                     let handle_clone = forward_handler.clone();
                     let (reader_handler, writer_handler) = handle_conn(
-                        Arc::new(Session::new(handle_clone, slow_request_logger.clone())),
+                        Arc::new(Session::new(
+                            curr_session_id,
+                            handle_clone,
+                            slow_request_logger.clone(),
+                        )),
                         sock,
                     );
                     let (reader_handler, writer_handler) =

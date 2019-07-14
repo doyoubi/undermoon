@@ -289,7 +289,7 @@ Sets the replication metadata to server-side proxies. This API supports multiple
 Refer to [HTTP API documentation](./docs/broker_http_api.md).
 
 ## Current Status
-This project has **NOT** been well tested in production environment yet.
+This project is still under testing but has **NOT** been well tested in production environment yet.
 
 ## TODO
 - ~~Basic proxy implementation~~ (done)

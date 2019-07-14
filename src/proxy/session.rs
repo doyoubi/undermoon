@@ -37,8 +37,12 @@ pub struct CmdCtx {
 impl ThreadSafe for CmdCtx {}
 
 impl CmdCtx {
-    fn new(db: sync::Arc<sync::RwLock<String>>, reply_sender: CmdReplySender) -> CmdCtx {
-        let slowlog = sync::Arc::new(Slowlog::from_command(reply_sender.get_cmd()));
+    fn new(
+        db: sync::Arc<sync::RwLock<String>>,
+        reply_sender: CmdReplySender,
+        session_id: usize,
+    ) -> CmdCtx {
+        let slowlog = sync::Arc::new(Slowlog::from_command(reply_sender.get_cmd(), session_id));
         CmdCtx {
             db,
             reply_sender,
@@ -92,14 +96,20 @@ impl DBTag for CmdCtx {
 }
 
 pub struct Session<H: CmdCtxHandler> {
+    session_id: usize,
     db: sync::Arc<sync::RwLock<String>>,
     cmd_ctx_handler: H,
     slow_request_logger: sync::Arc<SlowRequestLogger>,
 }
 
 impl<H: CmdCtxHandler> Session<H> {
-    pub fn new(cmd_ctx_handler: H, slow_request_logger: sync::Arc<SlowRequestLogger>) -> Self {
+    pub fn new(
+        session_id: usize,
+        cmd_ctx_handler: H,
+        slow_request_logger: sync::Arc<SlowRequestLogger>,
+    ) -> Self {
         Session {
+            session_id,
             db: sync::Arc::new(sync::RwLock::new(DEFAULT_DB.to_string())),
             cmd_ctx_handler,
             slow_request_logger,
@@ -109,7 +119,7 @@ impl<H: CmdCtxHandler> Session<H> {
 
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, reply_sender: CmdReplySender) {
-        let cmd_ctx = CmdCtx::new(self.db.clone(), reply_sender);
+        let cmd_ctx = CmdCtx::new(self.db.clone(), reply_sender, self.session_id);
         cmd_ctx.get_slowlog().log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx);
     }
