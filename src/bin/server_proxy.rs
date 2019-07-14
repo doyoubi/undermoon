@@ -36,6 +36,7 @@ fn gen_conf() -> ServerProxyConfig {
         slowlog_log_slower_than: s
             .get::<i64>("slowlog_log_slower_than")
             .unwrap_or_else(|_| 50000),
+        thread_number: s.get::<usize>("thread_number").unwrap_or_else(|_| 4),
     }
 }
 
@@ -57,7 +58,20 @@ fn main() {
         Arc::new(client_factory),
         slow_request_logger.clone(),
     );
-    let server = ServerProxyService::new(config, forward_handler, slow_request_logger);
+    let server = ServerProxyService::new(config.clone(), forward_handler, slow_request_logger);
 
-    tokio::run(server.run());
+    let mut runtime = match tokio::runtime::Builder::new()
+        .core_threads(config.thread_number)
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(err) => {
+            error!("failed to build tokio runtime: {}", err);
+            return;
+        }
+    };
+
+    if let Err(()) = runtime.block_on(server.run()) {
+        error!("tokio runtime failed");
+    }
 }

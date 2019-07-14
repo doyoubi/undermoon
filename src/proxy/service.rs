@@ -14,6 +14,7 @@ pub struct ServerProxyConfig {
     pub auto_select_db: bool,
     pub slowlog_len: usize,
     pub slowlog_log_slower_than: i64,
+    pub thread_number: usize,
 }
 
 #[derive(Clone)]
