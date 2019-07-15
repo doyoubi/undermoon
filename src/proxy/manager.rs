@@ -16,7 +16,7 @@ use replication::replicator::ReplicatorMeta;
 use std::sync::Arc;
 
 pub struct MetaManager<F: RedisClientFactory> {
-    config: ServerProxyConfig,
+    config: Arc<ServerProxyConfig>,
     db: DatabaseMap<
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
     >,
@@ -25,9 +25,9 @@ pub struct MetaManager<F: RedisClientFactory> {
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
-    pub fn new(config: ServerProxyConfig, client_factory: Arc<F>) -> Self {
+    pub fn new(config: Arc<ServerProxyConfig>, client_factory: Arc<F>) -> Self {
         let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
-            RecoverableBackendNodeFactory::default(),
+            RecoverableBackendNodeFactory::new(config.clone()),
         ));
         let db = DatabaseMap::new(sender_factory);
         let redirection_sender_factory = Arc::new(RedirectionSenderFactory::default());

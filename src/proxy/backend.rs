@@ -1,4 +1,5 @@
 use super::command::{CommandError, CommandResult};
+use super::service::ServerProxyConfig;
 use super::slowlog::{Slowlog, TaskEvent};
 use bytes::BytesMut;
 use common::future_group::new_future_group;
@@ -57,13 +58,20 @@ pub trait CmdTaskSenderFactory {
 pub struct RecoverableBackendNode<T: CmdTask> {
     addr: sync::Arc<String>,
     node: sync::Arc<sync::RwLock<Option<BackendNode<T>>>>,
+    config: sync::Arc<ServerProxyConfig>,
 }
 
-pub struct RecoverableBackendNodeFactory<T: CmdTask>(PhantomData<T>);
+pub struct RecoverableBackendNodeFactory<T: CmdTask> {
+    phantom: PhantomData<T>,
+    config: sync::Arc<ServerProxyConfig>,
+}
 
-impl<T: CmdTask> Default for RecoverableBackendNodeFactory<T> {
-    fn default() -> Self {
-        Self(PhantomData)
+impl<T: CmdTask> RecoverableBackendNodeFactory<T> {
+    pub fn new(config: sync::Arc<ServerProxyConfig>) -> Self {
+        Self {
+            phantom: PhantomData,
+            config,
+        }
     }
 }
 
@@ -74,6 +82,7 @@ impl<T: CmdTask> CmdTaskSenderFactory for RecoverableBackendNodeFactory<T> {
         Self::Sender {
             addr: sync::Arc::new(address),
             node: sync::Arc::new(sync::RwLock::new(None)),
+            config: self.config.clone(),
         }
     }
 }
@@ -92,13 +101,15 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
                 None => return Err(BackendError::InvalidAddress),
             };
 
+            let config = self.config.clone();
+
             let sock = TcpStream::connect(&address);
             let fut = sock.then(move |res| {
                 debug!("sock result: {:?}", res);
                 match res {
                     Ok(sock) => {
                         let (node, reader_handler, writer_handler) =
-                            BackendNode::<T>::new(sock, ReplyCommitHandler {});
+                            BackendNode::<T>::new(sock, ReplyCommitHandler {}, config.clone());
                         let (reader_handler, writer_handler) =
                             new_future_group(reader_handler, writer_handler);
 
@@ -173,13 +184,15 @@ impl<T: CmdTask> BackendNode<T> {
     pub fn new<H: ReplyHandler<T>>(
         sock: TcpStream,
         handler: H,
+        config: sync::Arc<ServerProxyConfig>,
     ) -> (
         BackendNode<T>,
         impl Future<Item = (), Error = BackendError> + Send,
         impl Future<Item = (), Error = BackendError> + Send,
     ) {
         let (tx, rx) = mpsc::unbounded();
-        let (reader_handler, writer_handler) = handle_backend(handler, rx, sock);
+        let (reader_handler, writer_handler) =
+            handle_backend(handler, rx, sock, config.backend_channel_size);
         (Self { tx }, reader_handler, writer_handler)
     }
 
@@ -198,6 +211,7 @@ pub fn handle_backend<H, T>(
     handler: H,
     task_receiver: mpsc::UnboundedReceiver<T>,
     sock: TcpStream,
+    channel_size: usize,
 ) -> (
     impl Future<Item = (), Error = BackendError> + Send,
     impl Future<Item = (), Error = BackendError> + Send,
@@ -208,7 +222,7 @@ where
 {
     let (writer, reader) = RespCodec {}.framed(sock).split();
 
-    let (tx, rx) = mpsc::channel(1024);
+    let (tx, rx) = mpsc::channel(channel_size);
 
     let writer_handler = handle_write(task_receiver, writer, tx);
     let reader_handler = handle_read(handler, reader, rx);
