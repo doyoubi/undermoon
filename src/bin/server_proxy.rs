@@ -37,13 +37,19 @@ fn gen_conf() -> ServerProxyConfig {
             .get::<i64>("slowlog_log_slower_than")
             .unwrap_or_else(|_| 50000),
         thread_number: s.get::<usize>("thread_number").unwrap_or_else(|_| 4),
+        session_channel_size: s
+            .get::<usize>("session_channel_size")
+            .unwrap_or_else(|_| 4096),
+        backend_channel_size: s
+            .get::<usize>("backend_channel_size")
+            .unwrap_or_else(|_| 4096),
     }
 }
 
 fn main() {
     env_logger::init();
 
-    let config = gen_conf();
+    let config = Arc::new(gen_conf());
 
     let timeout = Duration::new(1, 0);
     let pool_size = 1;

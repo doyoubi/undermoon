@@ -15,18 +15,20 @@ pub struct ServerProxyConfig {
     pub slowlog_len: usize,
     pub slowlog_log_slower_than: i64,
     pub thread_number: usize,
+    pub session_channel_size: usize,
+    pub backend_channel_size: usize,
 }
 
 #[derive(Clone)]
 pub struct ServerProxyService<H: CmdCtxHandler + ThreadSafe + Clone> {
-    config: ServerProxyConfig,
+    config: Arc<ServerProxyConfig>,
     cmd_ctx_handler: H,
     slow_request_logger: Arc<SlowRequestLogger>,
 }
 
 impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
     pub fn new(
-        config: ServerProxyConfig,
+        config: Arc<ServerProxyConfig>,
         cmd_ctx_handler: H,
         slow_request_logger: Arc<SlowRequestLogger>,
     ) -> Self {
@@ -62,12 +64,18 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let slow_request_logger = self.slow_request_logger.clone();
 
         let session_id = AtomicUsize::new(0);
+        let config = self.config.clone();
 
         Box::new(
             listener
                 .incoming()
                 .map_err(|e| error!("accept failed: {:?}", e))
                 .for_each(move |sock| {
+                    if let Err(err) = sock.set_nodelay(true) {
+                        error!("failed to set TCP_NODELAY: {:?}", err);
+                        return future::err(());
+                    }
+
                     let peer = match sock.peer_addr() {
                         Ok(address) => address.to_string(),
                         Err(e) => format!("Failed to get peer {}", e),
@@ -84,6 +92,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                             slow_request_logger.clone(),
                         )),
                         sock,
+                        config.session_channel_size,
                     );
                     let (reader_handler, writer_handler) =
                         new_future_group(reader_handler, writer_handler);

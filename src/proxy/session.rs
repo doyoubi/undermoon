@@ -132,6 +132,7 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
 pub fn handle_conn<H>(
     handler: sync::Arc<H>,
     sock: TcpStream,
+    channel_size: usize,
 ) -> (
     impl Future<Item = (), Error = SessionError> + Send,
     impl Future<Item = (), Error = SessionError> + Send,
@@ -141,7 +142,7 @@ where
 {
     let (writer, reader) = RespCodec {}.framed(sock).split();
 
-    let (tx, rx) = mpsc::channel(1024);
+    let (tx, rx) = mpsc::channel(channel_size);
 
     let reader_handler = handle_read(handler.clone(), reader, tx);
     let writer_handler = handle_write(handler, writer, rx);

@@ -32,7 +32,7 @@ impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
 
 impl<F: RedisClientFactory> SharedForwardHandler<F> {
     pub fn new(
-        config: ServerProxyConfig,
+        config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
     ) -> Self {
@@ -53,14 +53,14 @@ impl<F: RedisClientFactory> CmdCtxHandler for SharedForwardHandler<F> {
 }
 
 pub struct ForwardHandler<F: RedisClientFactory> {
-    config: ServerProxyConfig,
+    config: Arc<ServerProxyConfig>,
     manager: MetaManager<F>,
     slow_request_logger: Arc<SlowRequestLogger>,
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
     pub fn new(
-        config: ServerProxyConfig,
+        config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
     ) -> Self {
