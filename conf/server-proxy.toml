@@ -15,3 +15,5 @@ thread_number = 2
 
 session_channel_size = 4096
 backend_channel_size = 4096
+
+backend_conn_num = 16

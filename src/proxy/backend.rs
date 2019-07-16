@@ -350,20 +350,22 @@ impl Error for BackendError {
     }
 }
 
-const DEFAULT_GROUP_SIZE: usize = 4;
-
 pub struct RRSenderGroup<S: CmdTaskSender> {
     senders: Vec<S>,
     cursor: AtomicUsize,
 }
 
 pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
+    group_size: usize,
     inner_factory: F,
 }
 
 impl<F: CmdTaskSenderFactory> RRSenderGroupFactory<F> {
-    pub fn new(inner_factory: F) -> Self {
-        Self { inner_factory }
+    pub fn new(group_size: usize, inner_factory: F) -> Self {
+        Self {
+            group_size,
+            inner_factory,
+        }
     }
 }
 
@@ -372,7 +374,7 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for RRSenderGroupFactory<F> {
 
     fn create(&self, address: String) -> Self::Sender {
         let mut senders = Vec::new();
-        for _ in 0..DEFAULT_GROUP_SIZE {
+        for _ in 0..self.group_size {
             senders.push(self.inner_factory.create(address.clone()));
         }
         Self::Sender {
