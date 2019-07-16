@@ -150,7 +150,7 @@ services:
     image: "overmoon"
     volumes:
       - ${PWD}/examples/overmoon/config.yaml:/overmoon/config.yaml
-    command: /overmoon/proxy
+    command: /overmoon/overmoon
     ports:
     - "7799:7799"
     depends_on:
