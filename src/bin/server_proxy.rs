@@ -33,7 +33,7 @@ fn gen_conf() -> ServerProxyConfig {
 
     ServerProxyConfig {
         address: address.clone(),
-        announce_address: s.get::<String>("address").unwrap_or_else(|_| address),
+        announce_address: s.get::<String>("announce_address").unwrap_or_else(|_| address),
         auto_select_db: s.get::<bool>("auto_select_db").unwrap_or_else(|_| false),
         slowlog_len: s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024),
         slowlog_log_slower_than: s
