@@ -17,6 +17,7 @@ pub struct ServerProxyConfig {
     pub thread_number: usize,
     pub session_channel_size: usize,
     pub backend_channel_size: usize,
+    pub backend_conn_num: usize,
 }
 
 #[derive(Clone)]

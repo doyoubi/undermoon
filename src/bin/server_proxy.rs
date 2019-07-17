@@ -43,6 +43,7 @@ fn gen_conf() -> ServerProxyConfig {
         backend_channel_size: s
             .get::<usize>("backend_channel_size")
             .unwrap_or_else(|_| 4096),
+        backend_conn_num: s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 16),
     }
 }
 
