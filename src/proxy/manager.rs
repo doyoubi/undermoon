@@ -47,12 +47,12 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
     pub fn gen_cluster_nodes(&self, db_name: String) -> String {
         self.db
-            .gen_cluster_nodes(db_name, self.config.address.clone())
+            .gen_cluster_nodes(db_name, self.config.announce_address.clone())
     }
 
     pub fn gen_cluster_slots(&self, db_name: String) -> Result<Resp, String> {
         self.db
-            .gen_cluster_slots(db_name, self.config.address.clone())
+            .gen_cluster_slots(db_name, self.config.announce_address.clone())
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
