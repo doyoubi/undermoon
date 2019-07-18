@@ -31,7 +31,7 @@ coordinator{{ coordinator_id }}:
 {% endfilter %}
 
 {% filter indent(width=2) %}
-{% for redis_port in redis_services %}
+{% for redis_port in redis_ports %}
 redis{{ redis_port }}:
   image: "redis"
   command: redis-server --port {{ redis_port }} --slave-announce-ip redis{{ redis_port }} --slave-announce-port {{ redis_port }} --maxmemory {{ redis_maxmemory }}
@@ -41,7 +41,7 @@ redis{{ redis_port }}:
 {% endfilter %}
 
 {% filter indent(width=2) %}
-{% for proxy_port in server_proxy_services %}
+{% for proxy_port in server_proxy_ports %}
 server_proxy{{ proxy_port }}:
   image: "undermoon"
   volumes:
