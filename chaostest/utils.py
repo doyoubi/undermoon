@@ -124,7 +124,7 @@ class OvermoonClient:
     def get_cluster(self, cluster_name):
         r = self.client.get('/api/clusters/meta/{}'.format(cluster_name))
         if r.status_code == 200:
-            return r.json()
+            return r.json()['cluster']
         print('OVERMOON_ERROR: failed to get cluster: {} {} {}'.format(cluster_name, r.status_code, r.text))
 
     def delete_cluster(self, cluster_name):
