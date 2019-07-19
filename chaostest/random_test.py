@@ -2,6 +2,7 @@ import time
 import signal
 import random
 
+from redis import StrictRedis
 from rediscluster import StrictRedisCluster
 
 import config
@@ -45,9 +46,21 @@ class KeyValueTester:
             proxies.append({'host': host, 'port': port})
         return proxies
 
+    def cluster_ready(self, proxies):
+        for proxy in proxies:
+            client = StrictRedis(host=proxy['host'], port=proxy['port'])
+            r = client.execute_command('cluster', 'nodes')
+            if not r:
+                return False
+        return True
+
     def test_key_value(self):
         proxies = self.get_proxies()
         if proxies is None:
+            return
+
+        if not self.cluster_ready(proxies):
+            print('cluster {} not ready'.format(self.cluster_name))
             return
 
         if random.randint(0, 10) < 5:
