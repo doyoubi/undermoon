@@ -82,7 +82,7 @@ class OvermoonClient:
         if r.status_code == 400:
             return
         if r.status_code == 200:
-            print('recover server proxy: {}'.format(server_proxy))
+            print('recover server proxy: {}'.format(server_proxy.to_dict()))
             return
 
         print('OVERMOON_ERROR: failed to sync server proxy data: {} {}'.format(r.status_code, r.text))
@@ -104,7 +104,6 @@ class OvermoonClient:
             print('created cluster: {} {}'.format(cluster_name, node_number))
             return
         if r.status_code == 400:
-            print('failed to create cluster:', r.text)
             return
         if r.status_code == 409:
             print('no resource')
@@ -122,6 +121,12 @@ class OvermoonClient:
         names = payload['names']
         return names
 
+    def get_cluster(self, cluster_name):
+        r = self.client.get('/api/clusters/meta/{}'.format(cluster_name))
+        if r.status_code == 200:
+            return r.json()
+        print('OVERMOON_ERROR: failed to get cluster: {} {} {}'.format(cluster_name, r.status_code, r.text))
+
     def delete_cluster(self, cluster_name):
         r = self.client.delete('/api/clusters/meta/{}'.format(cluster_name))
         if r.status_code == 200:
@@ -130,3 +135,40 @@ class OvermoonClient:
         if r.status_code == 404:
             return
         print('OVERMOON_ERROR: failed to delete cluster: {} {} {}'.format(cluster_name, r.status_code, r.text))
+
+    def add_nodes(self, cluster_name):
+        r = self.client.put('/api/clusters/nodes/{}'.format(cluster_name))
+        if r.status_code == 200:
+            print('added nodes to cluster {}'.format(cluster_name))
+            return
+        if r.status_code in (404, 409):
+            return
+        if r.status_code == 400:
+            print('failed to add nodes:', r.text)
+            return
+        print('OVERMOON_ERROR: failed to add nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
+
+    def remove_unused_nodes(self, cluster_name):
+        r = self.client.delete('/api/clusters/free_nodes/{}'.format(cluster_name))
+        if r.status_code == 200:
+            print('removed unused nodes')
+            return
+        if r.status_code == 404:
+            return
+        if r.status_code == 400:
+            print('failed to remove unused nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
+            return
+
+        print('OVERMOON_ERROR: failed to remove unused nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
+        print(self.get_cluster(cluster_name))
+
+    def scale_cluster(self, cluster_name):
+        r = self.client.post('/api/clusters/migrations/{}'.format(cluster_name))
+        if r.status_code == 200:
+            print('start migration', cluster_name)
+            return
+        if r.status_code in (400, 404):
+            return
+
+        print('OVERMOON_ERROR: failed to start migration: {} {} {}'.format(cluster_name, r.status_code, r.text))
+        print(self.get_cluster(cluster_name))

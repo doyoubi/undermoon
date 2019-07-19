@@ -1,4 +1,6 @@
+import sys
 import time
+import signal
 import random
 
 import config
@@ -25,6 +27,16 @@ class RandomTester:
     def __init__(self, overmoon_client):
         self.overmoon_client = overmoon_client
         self.server_proxy_list = gen_server_proxy_list()
+        self.stopped = False
+
+    def init_signal_handler(self):
+        signal.signal(signal.SIGINT, self.handle_signal())
+
+    def handle_signal(self, sig, frame):
+        self.stop()
+
+    def stop(self):
+        self.stopped = True
 
     def gen_cluster_name(self):
         names = ['mydb', 'somedb', 'otherdb', 'dybdb', '99db']
@@ -32,7 +44,7 @@ class RandomTester:
         return random.choice(names)
 
     def loop_test(self):
-        while True:
+        while not self.stopped:
             self.overmoon_client.sync_all_server_proxy(self.server_proxy_list)
 
             names = self.overmoon_client.get_cluster_names()
@@ -42,7 +54,19 @@ class RandomTester:
                 node_number = random.randint(0, 40)
                 self.overmoon_client.create_cluster(self.gen_cluster_name(), node_number)
 
-            if names and random.randint(0, 10) < 2:
+            if names and random.randint(0, 10) < 4:
+                cluster_name = random.choice(names)
+                self.overmoon_client.add_nodes(cluster_name)
+                if random.randint(0, 10) < 7:
+                    self.overmoon_client.scale_cluster(cluster_name)
+
+            if names and random.randint(0, 10) < 6:
+                self.overmoon_client.remove_unused_nodes(random.choice(names))
+
+            if self.stopped:
+                break
+
+            if names and random.randint(0, 10) < 1:
                 self.overmoon_client.delete_cluster(random.choice(names))
 
             time.sleep(0.1)
