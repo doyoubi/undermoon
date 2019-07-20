@@ -4,6 +4,7 @@ use ::protocol::Resp;
 use ::proxy::backend::CmdTask;
 use ::proxy::database::DBSendError;
 use futures::Future;
+use replication::replicator::ReplicatorError;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -142,6 +143,8 @@ pub enum MigrationError {
     AlreadyStarted,
     AlreadyEnded,
     Canceled,
+    NotReady,
+    ReplError(ReplicatorError),
     Io(io::Error),
 }
 
@@ -159,6 +162,7 @@ impl Error for MigrationError {
     fn cause(&self) -> Option<&Error> {
         match self {
             MigrationError::Io(err) => Some(err),
+            MigrationError::ReplError(err) => Some(err),
             _ => None,
         }
     }

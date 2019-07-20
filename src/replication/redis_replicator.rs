@@ -73,8 +73,8 @@ impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
         )
     }
 
-    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
-        Box::new(future::result(self.send_stop_signal()))
+    fn stop(&self) -> Result<(), ReplicatorError> {
+        self.send_stop_signal()
     }
 
     fn get_meta(&self) -> &MasterMeta {
@@ -167,8 +167,8 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
         )
     }
 
-    fn stop(&self) -> Box<Future<Item = (), Error = ReplicatorError> + Send> {
-        Box::new(future::result(self.send_stop_signal()))
+    fn stop(&self) -> Result<(), ReplicatorError> {
+        self.send_stop_signal()
     }
 
     fn get_meta(&self) -> &ReplicaMeta {

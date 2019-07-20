@@ -270,6 +270,7 @@ where
 
                             let task = Arc::new(RedisImportingTask::new(
                                 self.config.clone(),
+                                db_name.clone(),
                                 meta,
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),
@@ -392,9 +393,10 @@ where
                         return Err(SwitchError::PeerMigrating);
                     }
                     Either::Right(importing_task) => {
-                        return importing_task
-                            .commit(switch_arg)
-                            .map_err(SwitchError::MgrErr);
+                        return importing_task.commit(switch_arg).map_err(|e| match e {
+                            MigrationError::NotReady => SwitchError::NotReady,
+                            others => SwitchError::MgrErr(others),
+                        });
                     }
                 }
             }

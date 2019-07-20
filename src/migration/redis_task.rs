@@ -1,10 +1,11 @@
+use super::redis_controller::RedisImportingController;
 use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationConfig, MigrationError,
     MigrationState, SwitchArg,
 };
 use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::resp_execution::keep_connecting_and_sending;
-use ::common::utils::ThreadSafe;
+use ::common::utils::{ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
 use ::common::version::UNDERMOON_VERSION;
 use ::protocol::{BulkStr, RedisClientError, RedisClientFactory, Resp};
 use ::proxy::database::DBSendError;
@@ -193,7 +194,11 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
 
         let handle_func = move |response| match response {
             Resp::Error(err_str) => {
-                error!("failed to switch {:?} {:?}", meta, err_str);
+                if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
+                    info!("switch not ready, try again {:?}", meta)
+                } else {
+                    error!("failed to switch {:?} {:?}", meta, err_str);
+                }
                 Ok(())
             }
             reply => {
@@ -405,9 +410,9 @@ pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     config: Arc<MigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
-    _client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
+    redis_importing_controller: RedisImportingController<RCF>,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
@@ -418,17 +423,22 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImportingTask<RCF, TSF> {
     pub fn new(
         config: Arc<MigrationConfig>,
+        db_name: String,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
     ) -> Self {
         Self {
             config,
-            meta,
+            meta: meta.clone(),
             state: Arc::new(AtomicMigrationState::new()),
-            _client_factory: client_factory,
             sender_factory,
             stop_signal: AtomicOption::empty(),
+            redis_importing_controller: RedisImportingController::new(
+                db_name,
+                meta.clone(),
+                client_factory,
+            ),
         }
     }
 
@@ -488,10 +498,11 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
         let meta = self.meta.clone();
 
         let timeout_release = self.release_importing_for_timeout();
+        let importing_control = self.redis_importing_controller.start();
         Box::new(
             receiver
                 .map_err(|_| MigrationError::Canceled)
-                .select(timeout_release)
+                .select(timeout_release.join(importing_control).map(|_| ()))
                 .then(move |_| {
                     warn!("Importing tasks stopped {:?}", meta);
                     future::ok(())
@@ -519,12 +530,14 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
 
     fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError> {
         if switch_arg.version != UNDERMOON_VERSION {
-            Err(MigrationError::IncompatibleVersion)
-        } else {
-            info!("importing node commit switch {:?}", self.meta);
-            self.state.set_state(MigrationState::SwitchCommitted);
-            Ok(())
+            return Err(MigrationError::IncompatibleVersion);
         }
+
+        self.redis_importing_controller.switch_to_master()?;
+
+        info!("importing node commit switch {:?}", self.meta);
+        self.state.set_state(MigrationState::SwitchCommitted);
+        Ok(())
     }
 }
 

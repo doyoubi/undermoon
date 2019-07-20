@@ -43,7 +43,10 @@ where
                     future::err(RedisClientError::Done)
                 }
                 Err(e) => {
-                    error!("failed to send commands {:?} {:?}. Try again.", e, cmd_clone2);
+                    error!(
+                        "failed to send commands {:?} {:?}. Try again.",
+                        e, cmd_clone2
+                    );
                     future::ok(())
                 }
             })

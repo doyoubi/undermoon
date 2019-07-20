@@ -13,13 +13,13 @@ use std::str;
 
 pub trait MasterReplicator: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &MasterMeta;
 }
 
 pub trait ReplicaReplicator: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &ReplicaMeta;
 }
 
