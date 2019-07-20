@@ -36,14 +36,16 @@ where
             .and_then(move |client| {
                 keep_sending_cmd(client, cmd_clone, interval_clone, handle_result_clone)
             })
-            .map_err(move |e| {
-                match e {
-                    RedisClientError::Done => {
-                        info!("stop keep sending commands {:?} {:?}", e, cmd_clone2)
-                    }
-                    _ => error!("failed to keep sending commands {:?} {:?}", e, cmd_clone2),
+            .then(move |result| match result {
+                Ok(()) => future::ok(()),
+                Err(RedisClientError::Done) => {
+                    info!("stop keep sending commands {:?}", cmd_clone2);
+                    future::err(RedisClientError::Done)
                 }
-                e
+                Err(e) => {
+                    error!("failed to send commands {:?} {:?}. Try again.", e, cmd_clone2);
+                    future::ok(())
+                }
             })
     })
 }
@@ -194,7 +196,7 @@ mod tests {
                 retry_counter.count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             } else {
-                Err(RedisClientError::Closed)
+                Err(RedisClientError::Done)
             }
         };
         let factory = Arc::new(DummyClientFactory::new(counter.clone()));

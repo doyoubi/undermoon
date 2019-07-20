@@ -268,10 +268,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
                     Err(DBSendError::SlotNotFound(cmd_task))
                 }
             },
-            None => {
-                warn!("failed to get slot");
-                Err(DBSendError::SlotNotFound(cmd_task))
-            }
+            None => Err(DBSendError::SlotNotFound(cmd_task)),
         }
     }
 

@@ -1,2 +1,3 @@
-address = "server_proxy3:6003"
+address = "0.0.0.0:6003"
+announce_address = "server_proxy3:6003"
 auto_select_db = true

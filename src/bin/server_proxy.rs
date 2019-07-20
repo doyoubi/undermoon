@@ -14,23 +14,27 @@ use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 use undermoon::proxy::slowlog::SlowRequestLogger;
 
 fn gen_conf() -> ServerProxyConfig {
-    let conf_file_path = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "server-proxy.toml".to_string());
-
     let mut s = config::Config::new();
-    s.merge(config::File::with_name(&conf_file_path))
-        .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
+    // If config file is specified, load it.
+    if let Some(conf_file_path) = env::args().nth(1) {
+        s.merge(config::File::with_name(&conf_file_path))
+            .map(|_| ())
+            .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
+    }
     // e.g. UNDERMOON_ADDRESS='127.0.0.1:5299'
     s.merge(config::Environment::with_prefix("undermoon"))
         .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read address from env vars {:?}", e));
+        .unwrap_or_else(|e| warn!("failed to read config from env vars: {:?}", e));
+
+    let address = s
+        .get::<String>("address")
+        .unwrap_or_else(|_| "127.0.0.1:5299".to_string());
 
     ServerProxyConfig {
-        address: s
-            .get::<String>("address")
-            .unwrap_or_else(|_| "127.0.0.1:5299".to_string()),
+        address: address.clone(),
+        announce_address: s
+            .get::<String>("announce_address")
+            .unwrap_or_else(|_| address),
         auto_select_db: s.get::<bool>("auto_select_db").unwrap_or_else(|_| false),
         slowlog_len: s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024),
         slowlog_log_slower_than: s

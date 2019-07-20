@@ -1,4 +1,5 @@
 address = "127.0.0.1:5299"
+announce_address = "127.0.0.1:5299"
 
 # If this server proxy has one and only one cluster(database) set,
 # server proxy will automatically set the cluster(database) to default without

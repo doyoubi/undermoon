@@ -19,22 +19,17 @@ use undermoon::coordinator::service::{CoordinatorConfig, CoordinatorService};
 use undermoon::protocol::PooledRedisClientFactory;
 
 fn gen_conf() -> Vec<CoordinatorConfig> {
-    let conf_file_path = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "coordinator.toml".to_string());
-
     let mut s = config::Config::new();
-    s.merge(config::File::with_name(&conf_file_path))
-        .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
-    // e.g. UNDERMOON_BROKER_ADDRESS='127.0.0.1:7799'
+    // If config file is specified, load it.
+    if let Some(conf_file_path) = env::args().nth(1) {
+        s.merge(config::File::with_name(&conf_file_path))
+            .map(|_| ())
+            .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
+    }
+    // e.g. UNDERMOON_ADDRESS_LIST='127.0.0.1:5299'
     s.merge(config::Environment::with_prefix("undermoon"))
         .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read broker_address from env vars {:?}", e));
-    // e.g. UNDERMOON_REPORTER_ID='127.0.0.1:6699'
-    s.merge(config::Environment::with_prefix("undermoon"))
-        .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read reporter_id from env vars {:?}", e));
+        .unwrap_or_else(|e| warn!("failed to read config from env vars: {:?}", e));
 
     let mut broker_address_list = vec![];
 
@@ -48,8 +43,10 @@ fn gen_conf() -> Vec<CoordinatorConfig> {
         )
     }
 
+    // Currently this address it not used. Later we should open a http
+    // api to expose some inner states.
     let reporter_id = s
-        .get::<String>("broker_address")
+        .get::<String>("reporter_id")
         .unwrap_or_else(|_| "127.0.0.1:6699".to_string());
 
     broker_address_list

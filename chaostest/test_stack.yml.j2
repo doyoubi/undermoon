@@ -1,0 +1,65 @@
+version: '3'
+services:
+  etcd:
+    image: "bitnami/etcd:latest"
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+    ports:
+      - "{{ etcd_port }}:{{ etcd_port }}"
+
+  overmoon:
+    image: "overmoon"
+    volumes:
+      - ${PWD}/examples/overmoon/config.yaml:/overmoon/config.yaml
+    command: /overmoon/overmoon
+    ports:
+    - "{{ overmoon_port }}:{{ overmoon_port }}"
+
+{% filter indent(width=2) %}
+{% for coordinator_id in range(coordinator_num) %}
+coordinator{{ coordinator_id }}:
+  image: "undermoon"
+  volumes:
+  - ${PWD}/examples/target_volume:/undermoon/target
+  command: /undermoon/target/debug/coordinator
+  environment:
+  - RUST_LOG=undermoon=info,coordinator=info
+  - RUST_BACKTRACE=full
+  - UNDERMOON_BROKER_ADDRESS={{ overmoon_address }}
+  - UNDERMOON_REPORTER_ID=coordinator{{ coordinator_id }}
+{% endfor %}
+{% endfilter %}
+
+{% filter indent(width=2) %}
+{% for redis_port in redis_ports %}
+redis{{ redis_port }}:
+  image: "redis"
+  command: redis-server --port {{ redis_port }} --slave-announce-ip redis{{ redis_port }} --slave-announce-port {{ redis_port }} --maxmemory {{ redis_maxmemory }}
+  ports:
+  - "{{ redis_port }}:{{ redis_port }}"
+{% endfor %}
+{% endfilter %}
+
+{% filter indent(width=2) %}
+{% for proxy_port in server_proxy_ports %}
+server_proxy{{ proxy_port }}:
+  image: "undermoon"
+  volumes:
+  - ${PWD}/examples/target_volume:/undermoon/target
+  command: /undermoon/target/debug/server_proxy
+  ports:
+  - "{{ proxy_port }}:{{ proxy_port }}"
+  environment:
+  - RUST_LOG=undermoon=info,server_proxy=info
+  - RUST_BACKTRACE=full
+  - UNDERMOON_ADDRESS=0.0.0.0:{{ proxy_port }}
+  - UNDERMOON_ANNOUNCE_ADDRESS=server_proxy{{ proxy_port }}:{{ proxy_port }}
+  - UNDERMOON_AUTO_SELECT_DB=true
+  - UNDERMOON_SLOWLOG_LEN=1024
+  - UNDERMOON_SLOWLOG_LOG_SLOWER_THAN=50000
+  - UNDERMOON_THREAD_NUMBER=1
+  - UNDERMOON_SESSION_CHANNEL_SIZE=4096
+  - UNDERMOON_BACKEND_CHANNEL_SIZE=4096
+  - UNDERMOON_BACKEND_CONN_NUM=4
+{% endfor %}
+{% endfilter %}
