@@ -2,11 +2,14 @@ use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError,
 };
 use atomic_option::AtomicOption;
-use common::resp_execution::keep_retrying_and_sending;
+use common::resp_execution::{
+    keep_connecting_and_sending, keep_retrying_and_sending, retry_handle_func,
+};
 use common::utils::{revolve_first_address, ThreadSafe};
 use futures::sync::oneshot;
 use futures::{future, Future};
 use protocol::RedisClientFactory;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +18,7 @@ pub struct RedisMasterReplicator<F: RedisClientFactory> {
     meta: MasterMeta,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
     client_factory: Arc<F>,
+    switched_to_master: Arc<AtomicBool>,
 }
 
 impl<F: RedisClientFactory> ThreadSafe for RedisMasterReplicator<F> {}
@@ -25,6 +29,7 @@ impl<F: RedisClientFactory> RedisMasterReplicator<F> {
             meta,
             stop_signal: AtomicOption::empty(),
             client_factory,
+            switched_to_master: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -37,6 +42,10 @@ impl<F: RedisClientFactory> RedisMasterReplicator<F> {
         } else {
             Err(ReplicatorError::AlreadyEnded)
         }
+    }
+
+    pub fn already_master(&self) -> bool {
+        self.switched_to_master.load(Ordering::SeqCst)
     }
 }
 
@@ -51,13 +60,22 @@ impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
             return Box::new(future::err(ReplicatorError::AlreadyStarted));
         }
 
+        let switched_to_master = self.switched_to_master.clone();
+
         let interval = Duration::new(5, 0);
         let cmd = vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()];
-        let send_fut = keep_retrying_and_sending(
+        let send_fut = keep_connecting_and_sending(
             self.client_factory.clone(),
             self.meta.master_node_address.clone(),
             cmd,
             interval,
+            move |response| {
+                let r = retry_handle_func(response);
+                if r.is_ok() {
+                    switched_to_master.store(true, Ordering::SeqCst);
+                }
+                r
+            },
         );
 
         let meta = self.meta.clone();

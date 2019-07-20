@@ -1,6 +1,7 @@
 import time
 import signal
 import random
+from datetime import datetime
 
 from redis import StrictRedis
 from rediscluster import StrictRedisCluster
@@ -50,7 +51,7 @@ class KeyValueTester:
         for proxy in proxies:
             client = StrictRedis(host=proxy['host'], port=proxy['port'])
             r = client.execute_command('cluster', 'nodes')
-            if not r:
+            if len(list(r.decode('utf-8').split('\n'))) <= 1:
                 return False
         return True
 
@@ -73,10 +74,14 @@ class KeyValueTester:
             print('cluster {} not ready'.format(self.cluster_name))
             return
 
-        if random.randint(0, 10) < 5:
-            self.test_set(proxies)
-        else:
-            self.test_get(proxies)
+        try:
+            if random.randint(0, 10) < 5:
+                self.test_set(proxies)
+            else:
+                self.test_get(proxies)
+        except Exception as e:
+            print(self.overmoon_client.get_cluster(self.cluster_name), datetime.utcnow())
+            raise
 
     def test_set(self, proxies):
         if len(self.kvs) >= self.MAX_KVS:

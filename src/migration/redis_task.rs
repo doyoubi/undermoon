@@ -154,14 +154,13 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     fn block_request(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         let min_blocking_time = Duration::from_millis(self.config.get_min_blocking_time());
         let state = self.state.clone();
-        let delay = Delay::new(min_blocking_time).map_err(MigrationError::Io);
         let meta = self.meta.clone();
         future::ok(())
             .map(move |()| {
                 info!("start to block request {:?}", meta);
                 state.set_state(MigrationState::Blocking);
             })
-            .and_then(|()| delay)
+            .and_then(move |()| Delay::new(min_blocking_time).map_err(MigrationError::Io))
             .then(|result| {
                 info!("blocking request done {:?}", result);
                 Ok(())

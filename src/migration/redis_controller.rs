@@ -5,13 +5,11 @@ use ::replication::replicator::{MasterMeta, ReplicaMeta, ReplicaReplicator, Repl
 use futures::Future;
 use protocol::RedisClientFactory;
 use replication::replicator::MasterReplicator;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub struct RedisImportingController<F: RedisClientFactory> {
     master_replicator: RedisMasterReplicator<F>,
     replica_replicator: RedisReplicaReplicator<F>,
-    switched_to_master: Arc<AtomicBool>,
 }
 
 impl<F: RedisClientFactory> RedisImportingController<F> {
@@ -33,19 +31,16 @@ impl<F: RedisClientFactory> RedisImportingController<F> {
         Self {
             master_replicator: RedisMasterReplicator::new(master_meta, client_factory.clone()),
             replica_replicator: RedisReplicaReplicator::new(replica_meta, client_factory),
-            switched_to_master: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
         let master_task = self.master_replicator.start();
-        let switched_to_master = self.switched_to_master.clone();
         Box::new(
             self.replica_replicator
                 .start()
                 .then(move |result| {
                     warn!("replica_replicator result {:?}", result);
-                    switched_to_master.store(true, Ordering::SeqCst);
                     master_task
                 })
                 .map_err(MigrationError::ReplError),
@@ -59,7 +54,7 @@ impl<F: RedisClientFactory> RedisImportingController<F> {
         }
 
         // this is like to require a second try.
-        if self.switched_to_master.load(Ordering::SeqCst) {
+        if self.master_replicator.already_master() {
             Ok(())
         } else {
             Err(MigrationError::NotReady)
