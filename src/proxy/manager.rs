@@ -5,11 +5,13 @@ use super::backend::{
 use super::database::{DBError, DBSendError, DatabaseMap};
 use super::service::ServerProxyConfig;
 use super::session::CmdCtx;
+use super::slowlog::TaskEvent;
 use ::common::cluster::MigrationTaskMeta;
 use ::migration::manager::{MigrationManager, SwitchError};
 use ::migration::task::{MigrationConfig, SwitchArg};
 use common::db::HostDBMap;
 use protocol::{RedisClientFactory, Resp};
+use proxy::backend::CmdTask;
 use proxy::database::{DBTag, DEFAULT_DB};
 use replication::manager::ReplicatorManager;
 use replication::replicator::ReplicatorMeta;
@@ -109,6 +111,9 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
+        cmd_ctx
+            .get_slowlog()
+            .log_event(TaskEvent::SentToMigrationManager);
         let cmd_ctx = match self.migration_manager.send(cmd_ctx) {
             Ok(()) => return,
             Err(e) => match e {
@@ -119,6 +124,8 @@ impl<F: RedisClientFactory> MetaManager<F> {
                 }
             },
         };
+
+        cmd_ctx.get_slowlog().log_event(TaskEvent::SentToDB);
         let res = self.db.send(cmd_ctx);
         if let Err(e) = res {
             warn!("Failed to forward cmd_ctx: {:?}", e)

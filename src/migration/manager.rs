@@ -7,6 +7,7 @@ use ::protocol::RedisClientFactory;
 use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
+use ::proxy::slowlog::TaskEvent;
 use arc_swap::ArcSwap;
 use futures::Future;
 use itertools::Either;
@@ -65,11 +66,17 @@ where
         cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
+        cmd_task
+            .get_slowlog()
+            .log_event(TaskEvent::SentToMigrationDB);
         let cmd_task = match self.send_to_db(cmd_task) {
             Ok(()) => return Ok(()),
             Err(DBSendError::SlotNotFound(cmd_task)) => cmd_task,
             errs => return errs,
         };
+        cmd_task
+            .get_slowlog()
+            .log_event(TaskEvent::SentToMigrationTmpDB);
         self.send_to_tmp_db(cmd_task)
     }
 
@@ -344,10 +351,12 @@ where
                     )
                 }));
             }
+            info!("spawn finished");
             *dbs = (epoch, migration_dbs);
             self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
             self.empty.store(empty, atomic::Ordering::SeqCst);
             self.tmp_dbs.store(Arc::new((epoch, removed_tasks)));
+            info!("migration meta update finished");
         }
 
         Ok(())
