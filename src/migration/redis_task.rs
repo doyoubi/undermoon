@@ -189,21 +189,26 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         .into_strings();
         cmd.extend(arg.into_iter());
 
-        let interval = Duration::new(1, 0);
+        let interval = Duration::from_millis(self.config.get_switch_retry_interval());
         let meta = self.meta.clone();
 
         let handle_func = move |response| match response {
             Resp::Error(err_str) => {
                 if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
                     info!("switch not ready, try again {:?}", meta)
-                } else {
+                } else if state.get_state() != MigrationState::SwitchCommitted {
+                    // only log when we still have not committed.
                     error!("failed to switch {:?} {:?}", meta, err_str);
                 }
                 Ok(())
             }
             reply => {
+                if state.get_state() != MigrationState::SwitchCommitted {
+                    info!("Migrationg node successfully switch {:?} {:?}", meta, reply);
+                }
                 state.set_state(MigrationState::SwitchCommitted);
-                info!("Successfully switch {:?} {:?}", meta, reply);
+                // Even we have already committed, the destination proxy might fail and reboot.
+                // We just keep the sending, but suppress the logs.
                 Ok(())
             }
         };
@@ -269,9 +274,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         })
     }
 
-    fn stop_redirection(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
-        let redirection_stopped = self.redirection_stopped.clone();
-        let redirection_timeout = self.config.get_max_redirection_time();
+    fn stop_redirection(
+        redirection_stopped: Arc<AtomicBool>,
+        redirection_timeout: u64,
+    ) -> impl Future<Item = (), Error = MigrationError> + Send {
         let delay_time = Duration::from_millis(redirection_timeout);
         let delay = Delay::new(delay_time).map_err(MigrationError::Io);
         delay
@@ -321,12 +327,15 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
 
         let meta = self.meta.clone();
 
+        let redirection_stopped = self.redirection_stopped.clone();
+        let redirection_timeout = self.config.get_max_redirection_time();
+
         let check_phase = self.check_repl_state();
         let block_request = self.block_request();
         let commit_switch = self.commit_switch();
         let release_queue = self.release_queue();
-        let stop_redirection = self.stop_redirection();
-        let release_queue_or_timeout = release_queue.and_then(move |()| stop_redirection);
+        let release_queue_or_timeout = release_queue
+            .and_then(move |()| Self::stop_redirection(redirection_stopped, redirection_timeout));
         let migration_fut = check_phase
             .and_then(|()| block_request)
             .and_then(move |()| {
@@ -535,7 +544,9 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
 
         self.redis_importing_controller.switch_to_master()?;
 
-        info!("importing node commit switch {:?}", self.meta);
+        if self.state.get_state() != MigrationState::SwitchCommitted {
+            info!("importing node commit switch {:?}", self.meta);
+        }
         self.state.set_state(MigrationState::SwitchCommitted);
         Ok(())
     }

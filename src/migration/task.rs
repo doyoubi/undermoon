@@ -64,18 +64,20 @@ pub trait ImportingTask: ThreadSafe {
 
 pub struct MigrationConfig {
     lag_threshold: AtomicU64,
-    max_blocking_time: AtomicU64, // milliseconds
-    min_blocking_time: AtomicU64, // in milliseconds
+    max_blocking_time: AtomicU64,
+    min_blocking_time: AtomicU64,
     max_redirection_time: AtomicU64,
+    switch_retry_interval: AtomicU64,
 }
 
 impl Default for MigrationConfig {
     fn default() -> Self {
         Self {
             lag_threshold: AtomicU64::new(50000),
-            max_blocking_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes
-            min_blocking_time: AtomicU64::new(10),             // 10ms
-            max_redirection_time: AtomicU64::new(5000),        // 10 seconds
+            max_blocking_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes, should leave some time for replication
+            min_blocking_time: AtomicU64::new(100),            // 100ms
+            max_redirection_time: AtomicU64::new(5000), // 5s, to wait for coordinator to update meta
+            switch_retry_interval: AtomicU64::new(10),  // 10ms
         }
     }
 }
@@ -102,6 +104,9 @@ impl MigrationConfig {
     }
     pub fn get_max_redirection_time(&self) -> u64 {
         self.max_redirection_time.load(Ordering::SeqCst)
+    }
+    pub fn get_switch_retry_interval(&self) -> u64 {
+        self.switch_retry_interval.load(Ordering::SeqCst)
     }
 }
 

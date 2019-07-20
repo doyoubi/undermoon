@@ -54,6 +54,16 @@ class KeyValueTester:
                 return False
         return True
 
+    def gen_client(self, proxies):
+        conn_timeout = 1
+        return StrictRedisCluster(
+            startup_nodes=proxies,
+            decode_responses=True,
+            skip_full_coverage_check=True,
+            socket_timeout=conn_timeout,
+            socket_connect_timeout=conn_timeout,
+        )
+
     def test_key_value(self):
         proxies = self.get_proxies()
         if proxies is None:
@@ -72,7 +82,7 @@ class KeyValueTester:
         if len(self.kvs) >= self.MAX_KVS:
             return
 
-        rc = StrictRedisCluster(startup_nodes=proxies, decode_responses=True, skip_full_coverage_check=True)
+        rc = self.gen_client(proxies)
         t = int(time.time())
         for i in range(10):
             k = 'test:{}:{}'.format(t, i)
@@ -87,7 +97,7 @@ class KeyValueTester:
             self.kvs.append(k)
 
     def test_get(self, proxies):
-        rc = StrictRedisCluster(startup_nodes=proxies, decode_responses=True, skip_full_coverage_check=True)
+        rc = self.gen_client(proxies)
         for k in self.kvs:
             try:
                 v = rc.get(k)
