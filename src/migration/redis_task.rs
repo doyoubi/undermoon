@@ -603,7 +603,7 @@ fn extract_replicas_from_replication_info(info: String) -> Result<Vec<ReplicaSta
         }
         let mut kv = line.split(':');
         let _slavex = kv.next().ok_or(())?;
-        let mut value = kv.next().ok_or(())?.to_string();
+        let value = kv.next().ok_or(())?.to_string();
         states.push(ReplicaState::parse_replica_meta(value)?);
     }
     Ok(states)

@@ -40,10 +40,10 @@ class DockerHttpClient:
         return self.http_client.put('/{}{}'.format(self.api_version, path), payload)
 
     def post(self, path, payload=None):
-        return self.http_client.post('{}{}'.format(self.api_version, path), payload)
+        return self.http_client.post('/{}{}'.format(self.api_version, path), payload)
 
     def delete(self, path):
-        return self.http_client.delete('{}{}'.format(self.api_version, path))
+        return self.http_client.delete('/{}{}'.format(self.api_version, path))
 
 
 class ServerProxy:
@@ -91,8 +91,8 @@ class OvermoonClient:
         for server_proxy in server_proxy_list:
             try:
                 self.sync_server_proxy(server_proxy)
-            except:
-                print('sync_server_proxy failed: {}'.format(server_proxy))
+            except Exception as e:
+                print('sync_server_proxy failed: {}'.format(server_proxy.to_dict()), e)
 
     def create_cluster(self, cluster_name, node_number):
         payload = {

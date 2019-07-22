@@ -63,3 +63,13 @@ server_proxy{{ proxy_port }}:
   - UNDERMOON_BACKEND_CONN_NUM=4
 {% endfor %}
 {% endfilter %}
+
+{% filter indent(width=2) %}
+{% for name, cmd in pumba_commands.items() %}
+pumba_{{ name }}:
+  image: "gaiaadm/pumba"
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+  command: {{ cmd }}
+{% endfor %}
+{% endfilter %}

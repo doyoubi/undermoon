@@ -70,18 +70,18 @@ class KeyValueTester:
         if proxies is None:
             return
 
-        if not self.cluster_ready(proxies):
-            print('cluster {} not ready'.format(self.cluster_name))
-            return
-
         try:
+            if not self.cluster_ready(proxies):
+                print('cluster {} not ready'.format(self.cluster_name))
+                return
+
             if random.randint(0, 10) < 5:
                 self.test_set(proxies)
             else:
                 self.test_get(proxies)
         except Exception as e:
+            print('REDIS_TEST_FAILED:', e)
             print(self.overmoon_client.get_cluster(self.cluster_name), datetime.utcnow())
-            raise
 
     def test_set(self, proxies):
         if len(self.kvs) >= self.MAX_KVS:
@@ -132,7 +132,7 @@ class RandomTester:
 
     def gen_cluster_name(self):
         names = ['mydb', 'somedb', 'otherdb', 'dybdb', '99db']
-        names.append('ramdomdb{}'.format(random.randint(1, 100)))
+        names.append('randomdb{}'.format(random.randint(1, 100)))
         return random.choice(names)
 
     def test_data(self):
@@ -178,10 +178,19 @@ class RandomTester:
             if self.stopped:
                 break
 
-            if names and random.randint(0, 10) < 1:
-                self.overmoon_client.delete_cluster(random.choice(names))
+            if names and random.randint(0, 30) < 1:
+                cluster_name = random.choice(names)
+                self.overmoon_client.delete_cluster(cluster_name)
+                self.kvs_tester.pop(cluster_name, None)
 
             time.sleep(0.1)
 
+    def keep_testing(self):
+        while not self.stopped:
+            try:
+                self.loop_test()
+            except Exception as e:
+                print('TEST_FAILED:', e)
 
-RandomTester(OvermoonClient(OVERMOON_ENDPOINT)).loop_test()
+
+RandomTester(OvermoonClient(OVERMOON_ENDPOINT)).keep_testing()
