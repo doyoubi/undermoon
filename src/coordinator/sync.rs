@@ -182,6 +182,11 @@ fn generate_repl_meta_cmd_args(host: Host, flags: DBMapFlags) -> Vec<String> {
         let db_name = node.get_cluster_name().clone();
         match role {
             Role::Master => {
+                // For importing nodes, the role is controlled by the migration progress.
+                if node.get_slots().iter().any(|sr| sr.tag.is_importing()) {
+                    continue;
+                }
+
                 let master_node_address = node.get_address().clone();
                 let replicas = meta.get_peers().clone();
                 let master_meta = MasterMeta {
