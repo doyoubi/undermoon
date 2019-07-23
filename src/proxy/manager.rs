@@ -9,21 +9,26 @@ use super::slowlog::TaskEvent;
 use ::common::cluster::MigrationTaskMeta;
 use ::migration::manager::{MigrationManager, SwitchError};
 use ::migration::task::{MigrationConfig, SwitchArg};
-use common::db::HostDBMap;
+use common::db::{ProxyDBMeta};
 use protocol::{RedisClientFactory, Resp};
 use proxy::backend::CmdTask;
 use proxy::database::{DBTag, DEFAULT_DB};
 use replication::manager::ReplicatorManager;
 use replication::replicator::ReplicatorMeta;
-use std::sync::Arc;
+use arc_swap::ArcSwap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 pub struct MetaManager<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,
-    db: DatabaseMap<
+    db: ArcSwap<DatabaseMap<
         CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
-    >,
+    >>,
+    epoch: AtomicU64,
+    lock: Mutex<()>,  // This is the write lock for `epoch`, `db`, `replicator` and `task`.
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, RedirectionSenderFactory<CmdCtx>>,
+    sender_factory: CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
@@ -32,66 +37,73 @@ impl<F: RedisClientFactory> MetaManager<F> {
             config.backend_conn_num,
             RecoverableBackendNodeFactory::new(config.clone()),
         ));
-        let db = DatabaseMap::new(sender_factory);
+        let db = DatabaseMap::new();
         let redirection_sender_factory = Arc::new(RedirectionSenderFactory::default());
         let migration_config = Arc::new(MigrationConfig::default());
         Self {
             config,
-            db,
+            db: ArcSwap::new(Arc::new(db)),
+            epoch: AtomicU64::new(0),
+            lock: Mutex::new(()),
             replicator_manager: ReplicatorManager::new(client_factory.clone()),
             migration_manager: MigrationManager::new(
                 migration_config,
                 client_factory,
                 redirection_sender_factory,
             ),
+            sender_factory,
         }
     }
 
     pub fn gen_cluster_nodes(&self, db_name: String) -> String {
-        self.db
+        self.db.load()
             .gen_cluster_nodes(db_name, self.config.announce_address.clone())
     }
 
     pub fn gen_cluster_slots(&self, db_name: String) -> Result<Resp, String> {
-        self.db
+        self.db.load()
             .gen_cluster_slots(db_name, self.config.announce_address.clone())
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
-        self.db.get_dbs()
+        self.db.load().get_dbs()
     }
 
-    pub fn clear_db(&self) {
-        self.db.clear()
-    }
+    pub fn set_db(&self, db_meta: ProxyDBMeta) -> Result<(), DBError> {
+        let sender_factory = &self.sender_factory;
+        let _guard = self.lock.lock().unwrap();
 
-    pub fn set_db(&self, db_map: HostDBMap) -> Result<(), DBError> {
-        let db_map_clone = db_map.clone();
+        if db_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst) {
+            return Err(DBError::OldEpoch)
+        }
+
+        // TODO: later we need to use it to update migration and replication.
+        let _old_db = self.db.load();
+        let db_map = DatabaseMap::from_db_map(&db_meta, sender_factory);
+        self.db.store(Arc::new(db_map));
+
+        Ok(())
 
         // Put db meta and migration meta together for consistency.
         // We can make sure that IMPORTING slots will not be handled directly
         // before the migration succeed. This is also why we should store the
         // new metadata to `migration_manager` first.
-        match self.migration_manager.update(db_map_clone) {
-            Ok(()) => {
-                debug!("Successfully update migration meta data");
-                debug!("local meta data: {:?}", db_map);
-                let epoch = db_map.get_epoch();
-                match self.db.set_dbs(db_map) {
-                    Ok(()) => {
-                        self.migration_manager.clear_tmp_dbs(epoch);
-                        self.migration_manager.update_local_meta_epoch(epoch);
-                        Ok(())
-                    }
-                    err => err,
-                }
-            }
-            err => err,
-        }
-    }
-
-    pub fn set_peers(&self, db_map: HostDBMap) -> Result<(), DBError> {
-        self.db.set_peers(db_map)
+//        match self.migration_manager.update(db_meta.get_local()) {
+//            Ok(()) => {
+//                debug!("Successfully update migration meta data");
+//                debug!("local meta data: {:?}", db_map);
+//                let epoch = db_map.get_epoch();
+//                match self.db.set_dbs(db_meta) {
+//                    Ok(()) => {
+////                        self.migration_manager.clear_tmp_dbs(epoch);
+//                        self.migration_manager.update_local_meta_epoch(epoch);
+//                        Ok(())
+//                    }
+//                    err => err,
+//                }
+//            }
+//            err => err,
+//        }
     }
 
     pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), DBError> {
@@ -126,7 +138,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         };
 
         cmd_ctx.get_slowlog().log_event(TaskEvent::SentToDB);
-        let res = self.db.send(cmd_ctx);
+        let res = self.db.load().send(cmd_ctx);
         if let Err(e) = res {
             warn!("Failed to forward cmd_ctx: {:?}", e)
         }
@@ -137,7 +149,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             return cmd_ctx;
         }
 
-        if let Some(db_name) = self.db.auto_select_db() {
+        if let Some(db_name) = self.db.load().auto_select_db() {
             cmd_ctx.set_db_name(db_name);
         }
         cmd_ctx

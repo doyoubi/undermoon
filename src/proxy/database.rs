@@ -2,14 +2,13 @@ use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
 use common::cluster::{SlotRange, SlotRangeTag};
-use common::db::HostDBMap;
+use common::db::{ ProxyDBMeta};
 use common::utils::{gen_moved, get_key, get_slot};
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::iter::Iterator;
-use std::sync;
 
 pub const DEFAULT_DB: &str = "admin";
 
@@ -44,21 +43,43 @@ pub struct DatabaseMap<F: CmdTaskSenderFactory>
 where
     <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
+    epoch: u64,
     // (epoch, meta data)
-    local_dbs: sync::RwLock<(u64, HashMap<String, Database<F>>)>,
-    remote_dbs: sync::RwLock<(u64, HashMap<String, RemoteDB>)>,
-    sender_factory: F,
+    local_dbs: HashMap<String, Database<F>>,
+    remote_dbs: HashMap<String, RemoteDB>,
 }
 
 impl<F: CmdTaskSenderFactory> DatabaseMap<F>
 where
     <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
-    pub fn new(sender_factory: F) -> DatabaseMap<F> {
+    pub fn from_db_map(db_meta: &ProxyDBMeta, sender_factory: &F) -> Self {
+        let epoch = db_meta.get_epoch();
+
+        let mut local_dbs = HashMap::new();
+        for (db_name, slot_ranges) in db_meta.get_local().get_map().iter() {
+            let db =
+                Database::from_slot_map(sender_factory, db_name.clone(), epoch, slot_ranges.clone());
+            local_dbs.insert(db_name.clone(), db);
+        }
+
+        let mut remote_dbs = HashMap::new();
+        for (db_name, slot_ranges) in db_meta.get_peer().get_map().iter() {
+            let remote_db = RemoteDB::from_slot_map(db_name.clone(), epoch, slot_ranges.clone());
+            remote_dbs.insert(db_name.clone(), remote_db);
+        }
+        Self{
+            epoch,
+            local_dbs,
+            remote_dbs,
+        }
+    }
+
+    pub fn new() -> DatabaseMap<F> {
         Self {
-            local_dbs: sync::RwLock::new((0, HashMap::new())),
-            remote_dbs: sync::RwLock::new((0, HashMap::new())),
-            sender_factory,
+            epoch: 0,
+            local_dbs: HashMap::new(),
+            remote_dbs: HashMap::new(),
         }
     }
 
@@ -67,7 +88,7 @@ where
         cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
         let db_name = cmd_task.get_db_name();
-        let (cmd_task, db_exists) = match self.local_dbs.read().unwrap().1.get(&db_name) {
+        let (cmd_task, db_exists) = match self.local_dbs.get(&db_name) {
             Some(db) => match db.send(cmd_task) {
                 Err(DBSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
                 others => return others,
@@ -75,7 +96,7 @@ where
             None => (cmd_task, false),
         };
 
-        match self.remote_dbs.read().unwrap().1.get(&db_name) {
+        match self.remote_dbs.get(&db_name) {
             Some(remote_db) => remote_db.send_remote(cmd_task),
             None => {
                 if db_exists {
@@ -95,73 +116,67 @@ where
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
-        self.local_dbs.read().unwrap().1.keys().cloned().collect()
+        self.local_dbs.keys().cloned().collect()
     }
 
-    pub fn clear(&self) {
-        self.local_dbs.write().unwrap().1.clear()
-    }
+//    pub fn clear(&self) {
+//        self.local_dbs.write().unwrap().1.clear()
+//    }
 
-    pub fn set_dbs(&self, db_map: HostDBMap) -> Result<(), DBError> {
-        let force = db_map.get_flags().force;
+//    pub fn set_dbs(&self, db_meta: ProxyDBMeta) -> Result<(), DBError> {
+//        let force = db_map.get_flags().force;
+//
+//        if !force && self.local_dbs.read().unwrap().0 >= db_map.get_epoch() {
+//            return Err(DBError::OldEpoch);
+//        }
 
-        if !force && self.local_dbs.read().unwrap().0 >= db_map.get_epoch() {
-            return Err(DBError::OldEpoch);
-        }
+//        let epoch = db_map.get_epoch();
+//        let mut map = HashMap::new();
+//        for (db_name, slot_ranges) in db_map.into_map() {
+//            let db =
+//                Database::from_slot_map(&self.sender_factory, db_name.clone(), epoch, slot_ranges);
+//            map.insert(db_name, db);
+//        }
 
-        let epoch = db_map.get_epoch();
-        let mut map = HashMap::new();
-        for (db_name, slot_ranges) in db_map.into_map() {
-            let db =
-                Database::from_slot_map(&self.sender_factory, db_name.clone(), epoch, slot_ranges);
-            map.insert(db_name, db);
-        }
+//        let mut local = self.local_dbs.write().unwrap();
+//        if !force && epoch <= local.0 {
+//            return Err(DBError::OldEpoch);
+//        }
+//        *local = (epoch, map);
+//        Ok(())
+//    }
 
-        let mut local = self.local_dbs.write().unwrap();
-        if !force && epoch <= local.0 {
-            return Err(DBError::OldEpoch);
-        }
-        *local = (epoch, map);
-        Ok(())
-    }
+//    pub fn set_peers(&self, db_map: HostDBMap) -> Result<(), DBError> {
+//        let force = db_map.get_flags().force;
+//
+//        if !force && self.remote_dbs.read().unwrap().0 >= db_map.get_epoch() {
+//            return Err(DBError::OldEpoch);
+//        }
 
-    pub fn set_peers(&self, db_map: HostDBMap) -> Result<(), DBError> {
-        let force = db_map.get_flags().force;
+//        let epoch = db_map.get_epoch();
+//        let mut map = HashMap::new();
+//        for (db_name, slot_ranges) in db_map.into_map() {
+//            let remote_db = RemoteDB::from_slot_map(db_name.clone(), epoch, slot_ranges);
+//            map.insert(db_name, remote_db);
+//        }
 
-        if !force && self.remote_dbs.read().unwrap().0 >= db_map.get_epoch() {
-            return Err(DBError::OldEpoch);
-        }
-
-        let epoch = db_map.get_epoch();
-        let mut map = HashMap::new();
-        for (db_name, slot_ranges) in db_map.into_map() {
-            let remote_db = RemoteDB::from_slot_map(db_name.clone(), epoch, slot_ranges);
-            map.insert(db_name, remote_db);
-        }
-
-        let mut remote = self.remote_dbs.write().unwrap();
-        if !force && epoch <= remote.0 {
-            return Err(DBError::OldEpoch);
-        }
-        *remote = (epoch, map);
-        Ok(())
-    }
+//        let mut remote = self.remote_dbs.write().unwrap();
+//        if !force && epoch <= remote.0 {
+//            return Err(DBError::OldEpoch);
+//        }
+//        *remote = (epoch, map);
+//        Ok(())
+//    }
 
     pub fn gen_cluster_nodes(&self, dbname: String, service_address: String) -> String {
         let local = self
             .local_dbs
-            .read()
-            .unwrap()
-            .1
             .get(&dbname)
             .map_or("".to_string(), |db| {
                 db.gen_local_cluster_nodes(service_address)
             });
         let remote = self
             .remote_dbs
-            .read()
-            .unwrap()
-            .1
             .get(&dbname)
             .map_or("".to_string(), RemoteDB::gen_remote_cluster_nodes);
         format!("{}{}", local, remote)
@@ -174,16 +189,10 @@ where
     ) -> Result<Resp, String> {
         let mut local = self
             .local_dbs
-            .read()
-            .unwrap()
-            .1
             .get(&dbname)
             .map_or(Ok(vec![]), |db| db.gen_local_cluster_slots(service_address))?;
         let mut remote = self
             .remote_dbs
-            .read()
-            .unwrap()
-            .1
             .get(&dbname)
             .map_or(Ok(vec![]), RemoteDB::gen_remote_cluster_slots)?;
         local.append(&mut remote);
@@ -192,7 +201,7 @@ where
 
     pub fn auto_select_db(&self) -> Option<String> {
         {
-            let local = &self.local_dbs.read().unwrap().1;
+            let local = &self.local_dbs;
             if local.len() == 1 {
                 return local.keys().next().cloned();
             } else if local.len() > 1 {
@@ -200,7 +209,7 @@ where
             }
         }
         {
-            let remote = &self.remote_dbs.read().unwrap().1;
+            let remote = &self.remote_dbs;
             if remote.len() == 1 {
                 return remote.keys().next().cloned();
             }

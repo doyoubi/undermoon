@@ -8,13 +8,12 @@ use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
 use ::proxy::database::{DBError, DBSendError, DBTag};
 use ::proxy::slowlog::TaskEvent;
-use arc_swap::ArcSwap;
 use futures::Future;
 use itertools::Either;
 use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
 use std::sync::atomic;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 
 type TaskRecord<T> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask<Task = T>>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
@@ -26,15 +25,16 @@ where
 {
     config: Arc<MigrationConfig>,
     empty: atomic::AtomicBool,
-    updating_epoch: atomic::AtomicU64,
-    dbs: RwLock<(
-        u64,
-        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
-    )>,
-    tmp_dbs: ArcSwap<(
-        u64,
-        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
-    )>,
+//    updating_epoch: atomic::AtomicU64,
+//    dbs: RwLock<(
+//        u64,
+//        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+//    )>,
+    dbs:TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+//    tmp_dbs: ArcSwap<(
+//        u64,
+//        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+//    )>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     local_meta_epoch: atomic::AtomicU64,
@@ -52,9 +52,9 @@ where
         Self {
             config,
             empty: atomic::AtomicBool::new(true),
-            updating_epoch: atomic::AtomicU64::new(0),
-            dbs: RwLock::new((0, HashMap::new())),
-            tmp_dbs: ArcSwap::new(Arc::new((0, HashMap::new()))),
+//            updating_epoch: atomic::AtomicU64::new(0),
+            dbs: HashMap::new(),
+//            tmp_dbs: ArcSwap::new(Arc::new((0, HashMap::new()))),
             client_factory,
             sender_factory,
             local_meta_epoch: atomic::AtomicU64::new(0),
@@ -69,15 +69,16 @@ where
         cmd_task
             .get_slowlog()
             .log_event(TaskEvent::SentToMigrationDB);
-        let cmd_task = match self.send_to_db(cmd_task) {
-            Ok(()) => return Ok(()),
-            Err(DBSendError::SlotNotFound(cmd_task)) => cmd_task,
-            errs => return errs,
-        };
-        cmd_task
-            .get_slowlog()
-            .log_event(TaskEvent::SentToMigrationTmpDB);
-        self.send_to_tmp_db(cmd_task)
+        self.send_to_db(cmd_task)
+//        let cmd_task = match self.send_to_db(cmd_task) {
+//            Ok(()) => return Ok(()),
+//            Err(DBSendError::SlotNotFound(cmd_task)) => cmd_task,
+//            errs => return errs,
+//        };
+//        cmd_task
+//            .get_slowlog()
+//            .log_event(TaskEvent::SentToMigrationTmpDB);
+//        self.send_to_tmp_db(cmd_task)
     }
 
     pub fn send_to_db(
@@ -92,21 +93,21 @@ where
 
         Self::send_helper(
             &self
-                .dbs
-                .read()
-                .expect("MigrationManager::send lock error")
-                .1,
+                .dbs,
+//                .read()
+//                .expect("MigrationManager::send lock error")
+//                .1,
             cmd_task,
         )
     }
 
-    pub fn send_to_tmp_db(
-        &self,
-        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
-    {
-        Self::send_helper(&self.tmp_dbs.lease().1, cmd_task)
-    }
+//    pub fn send_to_tmp_db(
+//        &self,
+//        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+//    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
+//    {
+//        Self::send_helper(&self.tmp_dbs.lease().1, cmd_task)
+//    }
 
     fn send_helper(
         task_map: &TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
@@ -146,25 +147,26 @@ where
         }
     }
 
-    pub fn update(&self, host_map: HostDBMap) -> Result<(), DBError> {
-        let epoch = host_map.get_epoch();
-        let flags = host_map.get_flags();
+    pub fn update(&self, local_db_map: &HostDBMap) -> Result<(), DBError> {
+//        let epoch = host_map.get_epoch();
+//        let flags = host_map.get_flags();
+//
+//        let force = flags.force;
+//        if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) >= epoch {
+//            return Err(DBError::OldEpoch);
+//        }
 
-        let force = flags.force;
-        if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) >= epoch {
-            return Err(DBError::OldEpoch);
-        }
+//        let (old_epoch, task_map) = self
+//            .dbs
+//            .read()
+//            .expect("MigrationManager::update reuse migrating")
+//            .clone();
+//        if !force && old_epoch >= epoch {
+//            return Err(DBError::OldEpoch);
+//        }
+        let task_map = &self.dbs;
 
-        let (old_epoch, task_map) = self
-            .dbs
-            .read()
-            .expect("MigrationManager::update reuse migrating")
-            .clone();
-        if !force && old_epoch >= epoch {
-            return Err(DBError::OldEpoch);
-        }
-
-        let db_map = host_map.into_map();
+        let db_map = local_db_map.get_map();
 
         let mut migration_dbs = HashMap::new();
 
@@ -217,7 +219,7 @@ where
                     let start = slot_range.start;
                     let end = slot_range.end;
                     match slot_range.tag {
-                        SlotRangeTag::Migrating(meta) => {
+                        SlotRangeTag::Migrating(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
                                 db_name: db_name.clone(),
@@ -230,7 +232,7 @@ where
 
                             if Some(true)
                                 == migration_dbs
-                                    .get(&db_name)
+                                    .get(db_name)
                                     .map(|tasks| tasks.contains_key(&migration_meta))
                             {
                                 continue;
@@ -240,7 +242,7 @@ where
                                 self.config.clone(),
                                 db_name.clone(),
                                 (slot_range.start, slot_range.end),
-                                meta,
+                                meta.clone(),
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),
                             ));
@@ -256,7 +258,7 @@ where
                                 .or_insert_with(HashMap::new);
                             tasks.insert(migration_meta, Either::Left(task));
                         }
-                        SlotRangeTag::Importing(meta) => {
+                        SlotRangeTag::Importing(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
                                 db_name: db_name.clone(),
@@ -269,7 +271,7 @@ where
 
                             if Some(true)
                                 == migration_dbs
-                                    .get(&db_name)
+                                    .get(db_name)
                                     .map(|tasks| tasks.contains_key(&migration_meta))
                             {
                                 continue;
@@ -278,7 +280,7 @@ where
                             let task = Arc::new(RedisImportingTask::new(
                                 self.config.clone(),
                                 db_name.clone(),
-                                meta,
+                                meta.clone(),
                                 self.client_factory.clone(),
                                 self.sender_factory.clone(),
                             ));
@@ -304,7 +306,7 @@ where
         for (db_name, tasks) in task_map.into_iter() {
             for (meta, task) in tasks.into_iter() {
                 if migration_dbs
-                    .get(&db_name)
+                    .get(db_name)
                     .and_then(|new_tasks| new_tasks.get(&meta))
                     .is_some()
                 {
@@ -320,13 +322,13 @@ where
         let empty = migration_dbs.is_empty();
 
         {
-            let mut dbs = self.dbs.write().unwrap();
-            if !force && dbs.0 != old_epoch {
-                return Err(DBError::TryAgain);
-            }
-            if !force && epoch <= dbs.0 {
-                return Err(DBError::OldEpoch);
-            }
+//            let mut dbs = self.dbs.write().unwrap();
+//            if !force && dbs.0 != old_epoch {
+//                return Err(DBError::TryAgain);
+//            }
+//            if !force && epoch <= dbs.0 {
+//                return Err(DBError::OldEpoch);
+//            }
             for (db_name, epoch, start, end, migrating_task) in new_migrating_tasks.into_iter() {
                 info!(
                     "spawn slot migrating task {} {} {} {}",
@@ -352,10 +354,11 @@ where
                 }));
             }
             info!("spawn finished");
-            *dbs = (epoch, migration_dbs);
-            self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
+//            *dbs = migration_dbs;
+            let _ = migration_dbs;
+//            self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
             self.empty.store(empty, atomic::Ordering::SeqCst);
-            self.tmp_dbs.store(Arc::new((epoch, removed_tasks)));
+//            self.tmp_dbs.store(Arc::new((epoch, removed_tasks)));
             info!("migration meta update finished");
         }
 
@@ -380,9 +383,9 @@ where
 
         if let Some(tasks) = self
             .dbs
-            .read()
-            .expect("MigrationManager::commit_importing lock error")
-            .1
+//            .read()
+//            .expect("MigrationManager::commit_importing lock error")
+//            .1
             .get(&switch_arg.meta.db_name)
         {
             debug!(
@@ -419,9 +422,9 @@ where
         {
             for (_db_name, tasks) in self
                 .dbs
-                .read()
-                .expect("Migration::get_finished_tasks")
-                .1
+//                .read()
+//                .expect("Migration::get_finished_tasks")
+//                .1
                 .iter()
             {
                 for (meta, task) in tasks.iter() {
@@ -448,13 +451,13 @@ where
         debug!("Successfully update local meta epoch in migration manager");
     }
 
-    pub fn clear_tmp_dbs(&self, epoch: u64) {
-        let tmp_dbs = self.tmp_dbs.lease();
-        if tmp_dbs.0 == epoch {
-            self.tmp_dbs
-                .compare_and_swap(tmp_dbs, Arc::new((epoch, HashMap::new())));
-        }
-    }
+//    pub fn clear_tmp_dbs(&self, epoch: u64) {
+//        let tmp_dbs = self.tmp_dbs.lease();
+//        if tmp_dbs.0 == epoch {
+//            self.tmp_dbs
+//                .compare_and_swap(tmp_dbs, Arc::new((epoch, HashMap::new())));
+//        }
+//    }
 }
 
 #[derive(Debug)]

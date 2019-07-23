@@ -5,6 +5,24 @@ use std::collections::HashMap;
 use std::iter::Peekable;
 use std::str;
 
+macro_rules! try_parse {
+    ($expression:expr) => {{
+        match $expression {
+            Ok(v) => (v),
+            Err(_) => return Err(CmdParseError {}),
+        }
+    }};
+}
+
+macro_rules! try_get {
+    ($expression:expr) => {{
+        match $expression {
+            Some(v) => (v),
+            None => return Err(CmdParseError {}),
+        }
+    }};
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DBMapFlags {
     pub force: bool,
@@ -25,41 +43,23 @@ impl DBMapFlags {
     }
 }
 
+const PEER_PREFIX: &str= "PEER";
+
 #[derive(Debug, Clone)]
-pub struct HostDBMap {
+pub struct ProxyDBMeta {
     epoch: u64,
     flags: DBMapFlags,
-    db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+    local: HostDBMap,
+    peer: HostDBMap,
 }
 
-macro_rules! try_parse {
-    ($expression:expr) => {{
-        match $expression {
-            Ok(v) => (v),
-            Err(_) => return Err(CmdParseError {}),
-        }
-    }};
-}
-
-macro_rules! try_get {
-    ($expression:expr) => {{
-        match $expression {
-            Some(v) => (v),
-            None => return Err(CmdParseError {}),
-        }
-    }};
-}
-
-impl HostDBMap {
-    pub fn new(
-        epoch: u64,
-        flags: DBMapFlags,
-        db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
-    ) -> Self {
+impl ProxyDBMeta {
+    pub fn new(epoch: u64, flags: DBMapFlags, local: HostDBMap, peer: HostDBMap) -> Self {
         Self {
             epoch,
             flags,
-            db_map,
+            local,
+            peer,
         }
     }
 
@@ -70,6 +70,81 @@ impl HostDBMap {
     pub fn get_flags(&self) -> DBMapFlags {
         self.flags.clone()
     }
+
+    pub fn get_local(&self) -> &HostDBMap { &self.local }
+    pub fn get_peer(&self) -> &HostDBMap { &self.peer }
+
+    pub fn from_resp(resp: &Resp) -> Result<Self, CmdParseError> {
+        let arr = match resp {
+            Resp::Arr(Array::Arr(ref arr)) => arr,
+            _ => return Err(CmdParseError {}),
+        };
+
+        // Skip the "UMCTL SET_DB"
+        let it = arr.iter().skip(2).flat_map(|resp| match resp {
+            Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str) {
+                Ok(s) => Some(s.to_string()),
+                _ => None,
+            },
+            _ => None,
+        });
+        let mut it = it.peekable();
+
+        let epoch_str = try_get!(it.next());
+        let epoch = try_parse!(epoch_str.parse::<u64>());
+
+        let flags = DBMapFlags::from_arg(&try_get!(it.next()));
+
+        // TODO: not that easy, add prefix checking
+        let local = HostDBMap::parse(&mut it)?;
+        let peer = HostDBMap::parse(&mut it)?;
+
+        Ok(Self{
+            epoch,
+            flags,
+            local,
+            peer,
+        })
+    }
+
+    pub fn to_args(&self) -> Vec<String> {
+        let mut args = vec![self.epoch.to_string(), self.flags.to_arg()];
+        let local = self.local.db_map_to_args();
+        let peer = self.peer.db_map_to_args();
+        args.extend_from_slice(&local);
+        args.push(PEER_PREFIX.to_string());
+        args.extend_from_slice(&peer);
+        args
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HostDBMap {
+//    epoch: u64,
+//    flags: DBMapFlags,
+    db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+}
+
+impl HostDBMap {
+    pub fn new(
+//        epoch: u64,
+//        flags: DBMapFlags,
+        db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+    ) -> Self {
+        Self {
+//            epoch,
+//            flags,
+            db_map,
+        }
+    }
+
+//    pub fn get_epoch(&self) -> u64 {
+//        self.epoch
+//    }
+//
+//    pub fn get_flags(&self) -> DBMapFlags {
+//        self.flags.clone()
+//    }
 
     pub fn get_map(&self) -> &HashMap<String, HashMap<String, Vec<SlotRange>>> {
         &self.db_map
@@ -115,33 +190,14 @@ impl HostDBMap {
         args
     }
 
-    pub fn from_resp(resp: &Resp) -> Result<Self, CmdParseError> {
-        let arr = match resp {
-            Resp::Arr(Array::Arr(ref arr)) => arr,
-            _ => return Err(CmdParseError {}),
-        };
-
-        // Skip the "UMCTL SET_DB|SET_REMOTE"
-        let it = arr.iter().skip(2).flat_map(|resp| match resp {
-            Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str) {
-                Ok(s) => Some(s.to_string()),
-                _ => None,
-            },
-            _ => None,
-        });
-        let mut it = it.peekable();
-
-        Self::parse(&mut it)
-    }
-
     fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
     where
         It: Iterator<Item = String>,
     {
-        let epoch_str = try_get!(it.next());
-        let epoch = try_parse!(epoch_str.parse::<u64>());
+//        let epoch_str = try_get!(it.next());
+//        let epoch = try_parse!(epoch_str.parse::<u64>());
 
-        let flags = DBMapFlags::from_arg(&try_get!(it.next()));
+//        let flags = DBMapFlags::from_arg(&try_get!(it.next()));
 
         let mut db_map = HashMap::new();
 
@@ -153,8 +209,8 @@ impl HostDBMap {
         }
 
         Ok(Self {
-            epoch,
-            flags,
+//            epoch,
+//            flags,
             db_map,
         })
     }
@@ -183,23 +239,19 @@ mod tests {
 
     #[test]
     fn test_single_db() {
-        let mut arguments = vec!["233", "force", "dbname", "127.0.0.1:6379", "0-1000"]
+        let mut arguments = vec!["dbname", "127.0.0.1:6379", "0-1000"]
             .into_iter()
             .map(|s| s.to_string())
             .peekable();
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_single_db");
-        assert_eq!(host_db_map.epoch, 233);
-        assert_eq!(host_db_map.flags, DBMapFlags { force: true });
         assert_eq!(host_db_map.db_map.len(), 1);
     }
 
     #[test]
     fn test_multiple_slots() {
         let mut arguments = vec![
-            "233",
-            "noflag",
             "dbname",
             "127.0.0.1:6379",
             "0-1000",
@@ -210,11 +262,10 @@ mod tests {
         .into_iter()
         .map(|s| s.to_string())
         .peekable();
+
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_slots");
-        assert_eq!(host_db_map.epoch, 233);
-        assert_eq!(host_db_map.flags, DBMapFlags { force: false });
         assert_eq!(host_db_map.db_map.len(), 1);
         assert_eq!(
             host_db_map
@@ -239,8 +290,6 @@ mod tests {
     #[test]
     fn test_multiple_nodes() {
         let mut arguments = vec![
-            "233",
-            "noflag",
             "dbname",
             "127.0.0.1:7000",
             "0-1000",
@@ -254,8 +303,6 @@ mod tests {
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_nodes");
-        assert_eq!(host_db_map.epoch, 233);
-        assert_eq!(host_db_map.flags, DBMapFlags { force: false });
         assert_eq!(host_db_map.db_map.len(), 1);
         assert_eq!(
             host_db_map
@@ -290,8 +337,6 @@ mod tests {
     #[test]
     fn test_multiple_db() {
         let mut arguments = vec![
-            "233",
-            "noflag",
             "dbname",
             "127.0.0.1:7000",
             "0-1000",
@@ -308,8 +353,6 @@ mod tests {
         let r = HostDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_db");
-        assert_eq!(host_db_map.epoch, 233);
-        assert_eq!(host_db_map.flags, DBMapFlags { force: false });
         assert_eq!(host_db_map.db_map.len(), 2);
         assert_eq!(
             host_db_map
@@ -362,8 +405,6 @@ mod tests {
     #[test]
     fn test_to_map() {
         let arguments = vec![
-            "233",
-            "noflag",
             "dbname",
             "127.0.0.1:7000",
             "0-1000",
@@ -394,11 +435,10 @@ mod tests {
         let r = HostDBMap::parse(&mut it);
         let host_db_map = r.expect("test_to_map");
 
-        let db_map = HostDBMap::new(host_db_map.epoch, host_db_map.flags, host_db_map.db_map);
+        let db_map = HostDBMap::new(host_db_map.db_map);
         let mut args = db_map.db_map_to_args();
         let mut db_args: Vec<String> = arguments
             .into_iter()
-            .skip(2)
             .map(|s| s.to_string())
             .collect();
         args.sort();

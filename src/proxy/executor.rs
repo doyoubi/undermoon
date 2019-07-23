@@ -9,7 +9,7 @@ use ::migration::manager::SwitchError;
 use ::migration::task::parse_tmp_switch_command;
 use atoi::atoi;
 use caseless;
-use common::db::HostDBMap;
+use common::db::{ProxyDBMeta};
 use common::utils::{
     get_element, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
 };
@@ -150,13 +150,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 .map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes())))
                 .collect();
             cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
-        } else if sub_cmd.eq("CLEARDB") {
-            self.manager.clear_db();
-            cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
         } else if sub_cmd.eq("SETDB") {
             self.handle_umctl_setdb(cmd_ctx);
-        } else if sub_cmd.eq("SETPEER") {
-            self.handle_umctl_setpeer(cmd_ctx);
+//        } else if sub_cmd.eq("SETPEER") {
+//            self.handle_umctl_setpeer(cmd_ctx);
         } else if sub_cmd.eq("SETREPL") {
             self.handle_umctl_setrepl(cmd_ctx);
         } else if sub_cmd.eq("INFOREPL") {
@@ -175,8 +172,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_umctl_setdb(&self, cmd_ctx: CmdCtx) {
-        let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
-            Ok(db_map) => db_map,
+        let db_meta = match ProxyDBMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(db_meta) => db_meta,
             Err(_) => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Invalid arguments").into_bytes(),
@@ -185,7 +182,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
         };
 
-        match self.manager.set_db(db_map) {
+        match self.manager.set_db(db_meta) {
             Ok(()) => {
                 debug!("Successfully update local meta data");
                 cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
@@ -199,33 +196,33 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         }
     }
 
-    fn handle_umctl_setpeer(&self, cmd_ctx: CmdCtx) {
-        let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
-            Ok(db_map) => db_map,
-            Err(_) => {
-                cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Invalid arguments").into_bytes(),
-                )));
-                return;
-            }
-        };
-
-        match self.manager.set_peers(db_map) {
-            Ok(()) => {
-                info!("Successfully update peer meta data");
-                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
-            }
-            Err(e) => {
-                //                debug!("Failed to update peer meta data {:?}", e);
-                match e {
-                    DBError::OldEpoch => cmd_ctx
-                        .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
-                    DBError::TryAgain => cmd_ctx
-                        .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
-                }
-            }
-        }
-    }
+//    fn handle_umctl_setpeer(&self, cmd_ctx: CmdCtx) {
+//        let db_map = match HostDBMap::from_resp(cmd_ctx.get_cmd().get_resp()) {
+//            Ok(db_map) => db_map,
+//            Err(_) => {
+//                cmd_ctx.set_resp_result(Ok(Resp::Error(
+//                    String::from("Invalid arguments").into_bytes(),
+//                )));
+//                return;
+//            }
+//        };
+//
+//        match self.manager.set_peers(db_map) {
+//            Ok(()) => {
+//                info!("Successfully update peer meta data");
+//                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+//            }
+//            Err(e) => {
+//                //                debug!("Failed to update peer meta data {:?}", e);
+//                match e {
+//                    DBError::OldEpoch => cmd_ctx
+//                        .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
+//                    DBError::TryAgain => cmd_ctx
+//                        .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
+//                }
+//            }
+//        }
+//    }
 
     fn handle_umctl_setrepl(&self, cmd_ctx: CmdCtx) {
         let meta = match ReplicatorMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
