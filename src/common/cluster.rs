@@ -67,6 +67,13 @@ impl SlotRangeTag {
             SlotRangeTag::None => None,
         }
     }
+
+    pub fn is_importing(&self) -> bool {
+        match self {
+            SlotRangeTag::Importing(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]

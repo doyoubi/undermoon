@@ -1106,7 +1106,7 @@ impl MetaStore {
             if repl.node_address == new_peer.node_address {
                 continue;
             }
-            let mut peer = try_state!(cluster
+            let peer = try_state!(cluster
                 .get_mut_node(&repl.node_address)
                 .ok_or_else(|| MetaStoreError::NodeNotFound));
             try_state!(peer

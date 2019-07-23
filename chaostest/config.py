@@ -17,4 +17,12 @@ DOCKER_COMPOSE_CONFIG = {
     'overmoon_port': 7799,
     'overmoon_address': 'overmoon:7799',
     'etcd_port': 2379,
+    'pumba_commands': {
+        'kill': "--random --interval 40s kill 're2:(server_proxy|coordinator|overmoon).*'",
+        'delay': "--random --interval 20s netem --duration 5s delay 're2:(server_proxy|coordinator|overmoon).*'",
+        'loss': "--random --interval 20s netem --duration 5s loss 're2:(server_proxy|coordinator|overmoon).*'",
+        'rate': "--random --interval 20s netem --duration 5s rate 're2:(server_proxy|coordinator|overmoon).*'",
+        'duplicate': "--random --interval 20s netem --duration 5s duplicate 're2:(server_proxy|coordinator|overmoon).*'",
+        'corrupt': "--random --interval 20s netem --duration 5s corrupt 're2:(server_proxy|coordinator|overmoon).*'",
+    },
 }

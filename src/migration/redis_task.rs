@@ -1,10 +1,11 @@
+use super::redis_controller::RedisImportingController;
 use super::task::{
     AtomicMigrationState, ImportingTask, MigratingTask, MigrationConfig, MigrationError,
     MigrationState, SwitchArg,
 };
 use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::resp_execution::keep_connecting_and_sending;
-use ::common::utils::ThreadSafe;
+use ::common::utils::{ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
 use ::common::version::UNDERMOON_VERSION;
 use ::protocol::{BulkStr, RedisClientError, RedisClientFactory, Resp};
 use ::proxy::database::DBSendError;
@@ -153,14 +154,13 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     fn block_request(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         let min_blocking_time = Duration::from_millis(self.config.get_min_blocking_time());
         let state = self.state.clone();
-        let delay = Delay::new(min_blocking_time).map_err(MigrationError::Io);
         let meta = self.meta.clone();
         future::ok(())
             .map(move |()| {
                 info!("start to block request {:?}", meta);
                 state.set_state(MigrationState::Blocking);
             })
-            .and_then(|()| delay)
+            .and_then(move |()| Delay::new(min_blocking_time).map_err(MigrationError::Io))
             .then(|result| {
                 info!("blocking request done {:?}", result);
                 Ok(())
@@ -188,17 +188,26 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         .into_strings();
         cmd.extend(arg.into_iter());
 
-        let interval = Duration::new(1, 0);
+        let interval = Duration::from_millis(self.config.get_switch_retry_interval());
         let meta = self.meta.clone();
 
         let handle_func = move |response| match response {
             Resp::Error(err_str) => {
-                error!("failed to switch {:?} {:?}", meta, err_str);
+                if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
+                    info!("switch not ready, try again {:?}", meta)
+                } else if state.get_state() != MigrationState::SwitchCommitted {
+                    // only log when we still have not committed.
+                    error!("failed to switch {:?} {:?}", meta, err_str);
+                }
                 Ok(())
             }
             reply => {
+                if state.get_state() != MigrationState::SwitchCommitted {
+                    info!("Migrationg node successfully switch {:?} {:?}", meta, reply);
+                }
                 state.set_state(MigrationState::SwitchCommitted);
-                info!("Successfully switch {:?} {:?}", meta, reply);
+                // Even we have already committed, the destination proxy might fail and reboot.
+                // We just keep the sending, but suppress the logs.
                 Ok(())
             }
         };
@@ -264,9 +273,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         })
     }
 
-    fn stop_redirection(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
-        let redirection_stopped = self.redirection_stopped.clone();
-        let redirection_timeout = self.config.get_max_redirection_time();
+    fn stop_redirection(
+        redirection_stopped: Arc<AtomicBool>,
+        redirection_timeout: u64,
+    ) -> impl Future<Item = (), Error = MigrationError> + Send {
         let delay_time = Duration::from_millis(redirection_timeout);
         let delay = Delay::new(delay_time).map_err(MigrationError::Io);
         delay
@@ -316,12 +326,15 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
 
         let meta = self.meta.clone();
 
+        let redirection_stopped = self.redirection_stopped.clone();
+        let redirection_timeout = self.config.get_max_redirection_time();
+
         let check_phase = self.check_repl_state();
         let block_request = self.block_request();
         let commit_switch = self.commit_switch();
         let release_queue = self.release_queue();
-        let stop_redirection = self.stop_redirection();
-        let release_queue_or_timeout = release_queue.and_then(move |()| stop_redirection);
+        let release_queue_or_timeout = release_queue
+            .and_then(move |()| Self::stop_redirection(redirection_stopped, redirection_timeout));
         let migration_fut = check_phase
             .and_then(|()| block_request)
             .and_then(move |()| {
@@ -405,9 +418,9 @@ pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     config: Arc<MigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
-    _client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     stop_signal: AtomicOption<oneshot::Sender<()>>,
+    redis_importing_controller: RedisImportingController<RCF>,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
@@ -418,17 +431,22 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImportingTask<RCF, TSF> {
     pub fn new(
         config: Arc<MigrationConfig>,
+        db_name: String,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
     ) -> Self {
         Self {
             config,
-            meta,
+            meta: meta.clone(),
             state: Arc::new(AtomicMigrationState::new()),
-            _client_factory: client_factory,
             sender_factory,
             stop_signal: AtomicOption::empty(),
+            redis_importing_controller: RedisImportingController::new(
+                db_name,
+                meta.clone(),
+                client_factory,
+            ),
         }
     }
 
@@ -488,10 +506,11 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
         let meta = self.meta.clone();
 
         let timeout_release = self.release_importing_for_timeout();
+        let importing_control = self.redis_importing_controller.start();
         Box::new(
             receiver
                 .map_err(|_| MigrationError::Canceled)
-                .select(timeout_release)
+                .select(timeout_release.join(importing_control).map(|_| ()))
                 .then(move |_| {
                     warn!("Importing tasks stopped {:?}", meta);
                     future::ok(())
@@ -519,12 +538,16 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
 
     fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError> {
         if switch_arg.version != UNDERMOON_VERSION {
-            Err(MigrationError::IncompatibleVersion)
-        } else {
-            info!("importing node commit switch {:?}", self.meta);
-            self.state.set_state(MigrationState::SwitchCommitted);
-            Ok(())
+            return Err(MigrationError::IncompatibleVersion);
         }
+
+        self.redis_importing_controller.switch_to_master()?;
+
+        if self.state.get_state() != MigrationState::SwitchCommitted {
+            info!("importing node commit switch {:?}", self.meta);
+        }
+        self.state.set_state(MigrationState::SwitchCommitted);
+        Ok(())
     }
 }
 
@@ -580,7 +603,7 @@ fn extract_replicas_from_replication_info(info: String) -> Result<Vec<ReplicaSta
         }
         let mut kv = line.split(':');
         let _slavex = kv.next().ok_or(())?;
-        let mut value = kv.next().ok_or(())?.to_string();
+        let value = kv.next().ok_or(())?.to_string();
         states.push(ReplicaState::parse_replica_meta(value)?);
     }
     Ok(states)

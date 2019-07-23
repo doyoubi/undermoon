@@ -36,10 +36,7 @@ def add_cluster(cluster_name):
 
 
 def add_node(cluster_name):
-    payload = {
-        'expected_node_number': 8
-    }
-    res = requests.put('http://localhost:7799/api/clusters/nodes/{}'.format(cluster_name), json=payload)
+    res = requests.put('http://localhost:7799/api/clusters/nodes/{}'.format(cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 

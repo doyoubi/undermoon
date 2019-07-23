@@ -43,7 +43,10 @@ where
                     future::err(RedisClientError::Done)
                 }
                 Err(e) => {
-                    error!("failed to send commands {:?} {:?}. Try again.", e, cmd_clone2);
+                    error!(
+                        "failed to send commands {:?} {:?}. Try again.",
+                        e, cmd_clone2
+                    );
                     future::ok(())
                 }
             })
@@ -63,7 +66,6 @@ where
     infinite_stream
         .fold(client, move |client, ()| {
             let byte_cmd = cmd.iter().map(|s| s.clone().into_bytes()).collect();
-            let delay = Delay::new(interval).map_err(RedisClientError::Io);
             // debug!("sending cmd {:?}", cmd);
             let handle_result_clone = handle_result.clone();
             let exec_fut = client
@@ -75,12 +77,13 @@ where
                 .and_then(move |(client, response)| {
                     future::result(handle_result_clone(response).map(|()| client))
                 });
+            let delay = Delay::new(interval).map_err(RedisClientError::Io);
             exec_fut.join(delay).map(move |(client, ())| client)
         })
         .map(|_| ())
 }
 
-fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
+pub fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
     if let Resp::Error(err) = response {
         let err_str = str::from_utf8(&err)
             .map(ToString::to_string)

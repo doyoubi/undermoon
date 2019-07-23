@@ -68,7 +68,7 @@ impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
     fn poll(&mut self) -> Poll<Self::Item, DecodeError> {
         let (resp, consumed) = match self.state {
             State::Reading(ref mut reader) => {
-                let mut buf = match reader.fill_buf() {
+                let buf = match reader.fill_buf() {
                     Ok(buf) => buf,
                     Err(e) => {
                         if e.kind() == io::ErrorKind::WouldBlock {

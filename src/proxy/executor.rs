@@ -10,7 +10,9 @@ use ::migration::task::parse_tmp_switch_command;
 use atoi::atoi;
 use caseless;
 use common::db::HostDBMap;
-use common::utils::{get_element, ThreadSafe, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
+use common::utils::{
+    get_element, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
+};
 use protocol::{Array, BulkStr, RedisClientFactory, Resp};
 use replication::replicator::ReplicatorMeta;
 use std::str;
@@ -279,7 +281,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                     SwitchError::InvalidArg => "Invalid Arg".to_string(),
                     SwitchError::TaskNotFound => "No Corresponding Task Found".to_string(),
                     SwitchError::PeerMigrating => "Peer Not Migrating".to_string(),
-                    SwitchError::NotReady => "Not Ready For Switching".to_string(),
+                    SwitchError::NotReady => NOT_READY_FOR_SWITCHING_REPLY.to_string(),
                     SwitchError::MgrErr(err) => format!("switch failed: {:?}", err),
                 };
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
