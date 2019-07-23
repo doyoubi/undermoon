@@ -100,13 +100,15 @@ impl<F: RedisClientFactory> MetaManager<F> {
         // TODO: later we need to use it to update migration and replication.
         let old_meta_map = self.meta_map.load();
         let db_map = DatabaseMap::from_db_map(&db_meta, sender_factory);
-        let migration_map = migration_manager
+        let (migration_map, new_tasks) = migration_manager
             .create_new_migration_map(&old_meta_map.migration_map, db_meta.get_local());
         self.meta_map.store(Arc::new(MetaMap {
             db_map,
             migration_map,
         }));
         self.epoch.store(db_meta.get_epoch(), Ordering::SeqCst);
+
+        self.migration_manager.run_tasks(new_tasks);
 
         Ok(())
 
