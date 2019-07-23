@@ -43,7 +43,8 @@ impl DBMapFlags {
     }
 }
 
-const PEER_PREFIX: &str= "PEER";
+const PEER_PREFIX: &str = "PEER";
+const REPL_PREFIX: &str = "REPL";
 
 #[derive(Debug, Clone)]
 pub struct ProxyDBMeta {
@@ -71,8 +72,12 @@ impl ProxyDBMeta {
         self.flags.clone()
     }
 
-    pub fn get_local(&self) -> &HostDBMap { &self.local }
-    pub fn get_peer(&self) -> &HostDBMap { &self.peer }
+    pub fn get_local(&self) -> &HostDBMap {
+        &self.local
+    }
+    pub fn get_peer(&self) -> &HostDBMap {
+        &self.peer
+    }
 
     pub fn from_resp(resp: &Resp) -> Result<Self, CmdParseError> {
         let arr = match resp {
@@ -99,7 +104,7 @@ impl ProxyDBMeta {
         let local = HostDBMap::parse(&mut it)?;
         let peer = HostDBMap::parse(&mut it)?;
 
-        Ok(Self{
+        Ok(Self {
             epoch,
             flags,
             local,
@@ -114,44 +119,23 @@ impl ProxyDBMeta {
         args.extend_from_slice(&local);
         args.push(PEER_PREFIX.to_string());
         args.extend_from_slice(&peer);
+        args.push(REPL_PREFIX.to_string());
         args
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct HostDBMap {
-//    epoch: u64,
-//    flags: DBMapFlags,
     db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
 }
 
 impl HostDBMap {
-    pub fn new(
-//        epoch: u64,
-//        flags: DBMapFlags,
-        db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
-    ) -> Self {
-        Self {
-//            epoch,
-//            flags,
-            db_map,
-        }
+    pub fn new(db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>) -> Self {
+        Self { db_map }
     }
-
-//    pub fn get_epoch(&self) -> u64 {
-//        self.epoch
-//    }
-//
-//    pub fn get_flags(&self) -> DBMapFlags {
-//        self.flags.clone()
-//    }
 
     pub fn get_map(&self) -> &HashMap<String, HashMap<String, Vec<SlotRange>>> {
         &self.db_map
-    }
-
-    pub fn into_map(self) -> HashMap<String, HashMap<String, Vec<SlotRange>>> {
-        self.db_map
     }
 
     pub fn db_map_to_args(&self) -> Vec<String> {
@@ -194,25 +178,28 @@ impl HostDBMap {
     where
         It: Iterator<Item = String>,
     {
-//        let epoch_str = try_get!(it.next());
-//        let epoch = try_parse!(epoch_str.parse::<u64>());
-
-//        let flags = DBMapFlags::from_arg(&try_get!(it.next()));
-
         let mut db_map = HashMap::new();
 
-        while let Some(_) = it.peek() {
+        // To workaround lifetime problem.
+        #[allow(clippy::while_let_loop)]
+        loop {
+            match it.peek() {
+                Some(first_token) => {
+                    let prefix = first_token.to_uppercase();
+                    if prefix == PEER_PREFIX || prefix == REPL_PREFIX {
+                        break;
+                    }
+                }
+                None => break,
+            }
+
             let (dbname, address, slot_range) = try_parse!(Self::parse_db(it));
             let db = db_map.entry(dbname).or_insert_with(HashMap::new);
             let slots = db.entry(address).or_insert_with(Vec::new);
             slots.push(slot_range);
         }
 
-        Ok(Self {
-//            epoch,
-//            flags,
-            db_map,
-        })
+        Ok(Self { db_map })
     }
 
     fn parse_db<It>(it: &mut It) -> Result<(String, String, SlotRange), CmdParseError>
@@ -437,10 +424,7 @@ mod tests {
 
         let db_map = HostDBMap::new(host_db_map.db_map);
         let mut args = db_map.db_map_to_args();
-        let mut db_args: Vec<String> = arguments
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
+        let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         args.sort();
         db_args.sort();
         assert_eq!(args, db_args);

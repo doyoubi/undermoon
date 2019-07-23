@@ -2,7 +2,7 @@ use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
 use common::cluster::{SlotRange, SlotRangeTag};
-use common::db::{ ProxyDBMeta};
+use common::db::ProxyDBMeta;
 use common::utils::{gen_moved, get_key, get_slot};
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
@@ -43,10 +43,20 @@ pub struct DatabaseMap<F: CmdTaskSenderFactory>
 where
     <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
-    epoch: u64,
-    // (epoch, meta data)
     local_dbs: HashMap<String, Database<F>>,
     remote_dbs: HashMap<String, RemoteDB>,
+}
+
+impl<F: CmdTaskSenderFactory> Default for DatabaseMap<F>
+where
+    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+{
+    fn default() -> Self {
+        Self {
+            local_dbs: HashMap::new(),
+            remote_dbs: HashMap::new(),
+        }
+    }
 }
 
 impl<F: CmdTaskSenderFactory> DatabaseMap<F>
@@ -58,8 +68,12 @@ where
 
         let mut local_dbs = HashMap::new();
         for (db_name, slot_ranges) in db_meta.get_local().get_map().iter() {
-            let db =
-                Database::from_slot_map(sender_factory, db_name.clone(), epoch, slot_ranges.clone());
+            let db = Database::from_slot_map(
+                sender_factory,
+                db_name.clone(),
+                epoch,
+                slot_ranges.clone(),
+            );
             local_dbs.insert(db_name.clone(), db);
         }
 
@@ -68,18 +82,9 @@ where
             let remote_db = RemoteDB::from_slot_map(db_name.clone(), epoch, slot_ranges.clone());
             remote_dbs.insert(db_name.clone(), remote_db);
         }
-        Self{
-            epoch,
+        Self {
             local_dbs,
             remote_dbs,
-        }
-    }
-
-    pub fn new() -> DatabaseMap<F> {
-        Self {
-            epoch: 0,
-            local_dbs: HashMap::new(),
-            remote_dbs: HashMap::new(),
         }
     }
 
@@ -119,62 +124,10 @@ where
         self.local_dbs.keys().cloned().collect()
     }
 
-//    pub fn clear(&self) {
-//        self.local_dbs.write().unwrap().1.clear()
-//    }
-
-//    pub fn set_dbs(&self, db_meta: ProxyDBMeta) -> Result<(), DBError> {
-//        let force = db_map.get_flags().force;
-//
-//        if !force && self.local_dbs.read().unwrap().0 >= db_map.get_epoch() {
-//            return Err(DBError::OldEpoch);
-//        }
-
-//        let epoch = db_map.get_epoch();
-//        let mut map = HashMap::new();
-//        for (db_name, slot_ranges) in db_map.into_map() {
-//            let db =
-//                Database::from_slot_map(&self.sender_factory, db_name.clone(), epoch, slot_ranges);
-//            map.insert(db_name, db);
-//        }
-
-//        let mut local = self.local_dbs.write().unwrap();
-//        if !force && epoch <= local.0 {
-//            return Err(DBError::OldEpoch);
-//        }
-//        *local = (epoch, map);
-//        Ok(())
-//    }
-
-//    pub fn set_peers(&self, db_map: HostDBMap) -> Result<(), DBError> {
-//        let force = db_map.get_flags().force;
-//
-//        if !force && self.remote_dbs.read().unwrap().0 >= db_map.get_epoch() {
-//            return Err(DBError::OldEpoch);
-//        }
-
-//        let epoch = db_map.get_epoch();
-//        let mut map = HashMap::new();
-//        for (db_name, slot_ranges) in db_map.into_map() {
-//            let remote_db = RemoteDB::from_slot_map(db_name.clone(), epoch, slot_ranges);
-//            map.insert(db_name, remote_db);
-//        }
-
-//        let mut remote = self.remote_dbs.write().unwrap();
-//        if !force && epoch <= remote.0 {
-//            return Err(DBError::OldEpoch);
-//        }
-//        *remote = (epoch, map);
-//        Ok(())
-//    }
-
     pub fn gen_cluster_nodes(&self, dbname: String, service_address: String) -> String {
-        let local = self
-            .local_dbs
-            .get(&dbname)
-            .map_or("".to_string(), |db| {
-                db.gen_local_cluster_nodes(service_address)
-            });
+        let local = self.local_dbs.get(&dbname).map_or("".to_string(), |db| {
+            db.gen_local_cluster_nodes(service_address)
+        });
         let remote = self
             .remote_dbs
             .get(&dbname)

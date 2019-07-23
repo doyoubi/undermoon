@@ -125,22 +125,26 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
     }
 }
 
-fn generate_host_meta_cmd_args( flags: DBMapFlags, local_proxy: Host, peer_proxy: Host) -> Vec<String> {
+fn generate_host_meta_cmd_args(
+    flags: DBMapFlags,
+    local_proxy: Host,
+    peer_proxy: Host,
+) -> Vec<String> {
     let epoch = local_proxy.get_epoch();
-//    let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
-//    for node in host.into_nodes() {
-//        let dbs = db_map
-//            .entry(node.get_cluster_name().clone())
-//            .or_insert_with(HashMap::new);
-//        dbs.insert(node.get_address().clone(), node.into_slots().clone());
-//    }
+    //    let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+    //    for node in host.into_nodes() {
+    //        let dbs = db_map
+    //            .entry(node.get_cluster_name().clone())
+    //            .or_insert_with(HashMap::new);
+    //        dbs.insert(node.get_address().clone(), node.into_slots().clone());
+    //    }
     let local = generate_proxy_db_map(local_proxy);
     let peer = generate_proxy_db_map(peer_proxy);
     let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer);
-//    let args = HostDBMap::new(epoch, flags.clone(), db_map).db_map_to_args();
-//    let mut cmd = vec![epoch.to_string(), flags.to_arg()];
-//    cmd.extend(args.into_iter());
-//    cmd
+    //    let args = HostDBMap::new(epoch, flags.clone(), db_map).db_map_to_args();
+    //    let mut cmd = vec![epoch.to_string(), flags.to_arg()];
+    //    cmd.extend(args.into_iter());
+    //    cmd
     proxy_db_meta.to_args()
 }
 

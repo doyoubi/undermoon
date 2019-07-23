@@ -6,14 +6,12 @@ use ::common::utils::{get_key, get_slot, ThreadSafe};
 use ::protocol::RedisClientFactory;
 use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
-use ::proxy::database::{DBError, DBSendError, DBTag};
+use ::proxy::database::{DBSendError, DBTag};
 use ::proxy::slowlog::TaskEvent;
-use futures::Future;
 use itertools::Either;
 use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
-use std::sync::atomic;
-use std::sync::{Arc};
+use std::sync::Arc;
 
 type TaskRecord<T> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask<Task = T>>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
@@ -24,20 +22,8 @@ where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
     config: Arc<MigrationConfig>,
-    empty: atomic::AtomicBool,
-//    updating_epoch: atomic::AtomicU64,
-//    dbs: RwLock<(
-//        u64,
-//        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
-//    )>,
-    dbs:TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
-//    tmp_dbs: ArcSwap<(
-//        u64,
-//        TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
-//    )>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
-    local_meta_epoch: atomic::AtomicU64,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigrationManager<RCF, TSF>
@@ -51,13 +37,41 @@ where
     ) -> Self {
         Self {
             config,
-            empty: atomic::AtomicBool::new(true),
-//            updating_epoch: atomic::AtomicU64::new(0),
-            dbs: HashMap::new(),
-//            tmp_dbs: ArcSwap::new(Arc::new((0, HashMap::new()))),
             client_factory,
             sender_factory,
-            local_meta_epoch: atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn create_new_migration_map(
+        &self,
+        old_migration_map: &MigrationMap<TSF>,
+        local_db_map: &HostDBMap,
+    ) -> MigrationMap<TSF> {
+        old_migration_map.update_from_old_task_map(
+            local_db_map,
+            self.config.clone(),
+            self.client_factory.clone(),
+            self.sender_factory.clone(),
+        )
+    }
+}
+
+pub struct MigrationMap<TSF: CmdTaskSenderFactory + ThreadSafe>
+where
+    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+{
+    empty: bool,
+    task_map: TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+}
+
+impl<TSF: CmdTaskSenderFactory + ThreadSafe> MigrationMap<TSF>
+where
+    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+{
+    pub fn new() -> Self {
+        Self {
+            empty: true,
+            task_map: HashMap::new(),
         }
     }
 
@@ -70,15 +84,6 @@ where
             .get_slowlog()
             .log_event(TaskEvent::SentToMigrationDB);
         self.send_to_db(cmd_task)
-//        let cmd_task = match self.send_to_db(cmd_task) {
-//            Ok(()) => return Ok(()),
-//            Err(DBSendError::SlotNotFound(cmd_task)) => cmd_task,
-//            errs => return errs,
-//        };
-//        cmd_task
-//            .get_slowlog()
-//            .log_event(TaskEvent::SentToMigrationTmpDB);
-//        self.send_to_tmp_db(cmd_task)
     }
 
     pub fn send_to_db(
@@ -87,27 +92,12 @@ where
     ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
         // Optimization for not having any migration.
-        if self.empty.load(atomic::Ordering::SeqCst) {
+        if self.empty {
             return Err(DBSendError::SlotNotFound(cmd_task));
         }
 
-        Self::send_helper(
-            &self
-                .dbs,
-//                .read()
-//                .expect("MigrationManager::send lock error")
-//                .1,
-            cmd_task,
-        )
+        Self::send_helper(&self.task_map, cmd_task)
     }
-
-//    pub fn send_to_tmp_db(
-//        &self,
-//        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-//    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
-//    {
-//        Self::send_helper(&self.tmp_dbs.lease().1, cmd_task)
-//    }
 
     fn send_helper(
         task_map: &TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
@@ -147,30 +137,23 @@ where
         }
     }
 
-    pub fn update(&self, local_db_map: &HostDBMap) -> Result<(), DBError> {
-//        let epoch = host_map.get_epoch();
-//        let flags = host_map.get_flags();
-//
-//        let force = flags.force;
-//        if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) >= epoch {
-//            return Err(DBError::OldEpoch);
-//        }
+    pub fn update_from_old_task_map<RCF>(
+        &self,
+        local_db_map: &HostDBMap,
+        config: Arc<MigrationConfig>,
+        client_factory: Arc<RCF>,
+        sender_factory: Arc<TSF>,
+    ) -> Self
+    where
+        RCF: RedisClientFactory,
+    {
+        let old_task_map = &self.task_map;
 
-//        let (old_epoch, task_map) = self
-//            .dbs
-//            .read()
-//            .expect("MigrationManager::update reuse migrating")
-//            .clone();
-//        if !force && old_epoch >= epoch {
-//            return Err(DBError::OldEpoch);
-//        }
-        let task_map = &self.dbs;
-
-        let db_map = local_db_map.get_map();
+        let new_db_map = local_db_map.get_map();
 
         let mut migration_dbs = HashMap::new();
 
-        for (db_name, node_map) in db_map.iter() {
+        for (db_name, node_map) in new_db_map.iter() {
             for (_node, slot_ranges) in node_map.iter() {
                 for slot_range in slot_ranges.iter() {
                     match slot_range.tag {
@@ -179,7 +162,7 @@ where
                                 db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(Either::Left(migrating_task)) = task_map
+                            if let Some(Either::Left(migrating_task)) = old_task_map
                                 .get(db_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
@@ -194,7 +177,7 @@ where
                                 db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(Either::Right(importing_task)) = task_map
+                            if let Some(Either::Right(importing_task)) = old_task_map
                                 .get(db_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
@@ -213,8 +196,8 @@ where
         let mut new_migrating_tasks = Vec::new();
         let mut new_importing_tasks = Vec::new();
 
-        for (db_name, node_map) in db_map.into_iter() {
-            for (_node, slot_ranges) in node_map.into_iter() {
+        for (db_name, node_map) in new_db_map.iter() {
+            for (_node, slot_ranges) in node_map.iter() {
                 for slot_range in slot_ranges {
                     let start = slot_range.start;
                     let end = slot_range.end;
@@ -239,12 +222,12 @@ where
                             }
 
                             let task = Arc::new(RedisMigratingTask::new(
-                                self.config.clone(),
+                                config.clone(),
                                 db_name.clone(),
                                 (slot_range.start, slot_range.end),
                                 meta.clone(),
-                                self.client_factory.clone(),
-                                self.sender_factory.clone(),
+                                client_factory.clone(),
+                                sender_factory.clone(),
                             ));
                             new_migrating_tasks.push((
                                 db_name.clone(),
@@ -278,11 +261,11 @@ where
                             }
 
                             let task = Arc::new(RedisImportingTask::new(
-                                self.config.clone(),
+                                config.clone(),
                                 db_name.clone(),
                                 meta.clone(),
-                                self.client_factory.clone(),
-                                self.sender_factory.clone(),
+                                client_factory.clone(),
+                                sender_factory.clone(),
                             ));
                             new_importing_tasks.push((
                                 db_name.clone(),
@@ -302,99 +285,56 @@ where
             }
         }
 
-        let mut removed_tasks = HashMap::new();
-        for (db_name, tasks) in task_map.into_iter() {
-            for (meta, task) in tasks.into_iter() {
-                if migration_dbs
-                    .get(db_name)
-                    .and_then(|new_tasks| new_tasks.get(&meta))
-                    .is_some()
-                {
-                    continue;
-                }
-                removed_tasks
-                    .entry(db_name.clone())
-                    .or_insert_with(HashMap::new)
-                    .insert(meta, task);
-            }
-        }
-
         let empty = migration_dbs.is_empty();
 
-        {
-//            let mut dbs = self.dbs.write().unwrap();
-//            if !force && dbs.0 != old_epoch {
-//                return Err(DBError::TryAgain);
-//            }
-//            if !force && epoch <= dbs.0 {
-//                return Err(DBError::OldEpoch);
-//            }
-            for (db_name, epoch, start, end, migrating_task) in new_migrating_tasks.into_iter() {
-                info!(
-                    "spawn slot migrating task {} {} {} {}",
-                    db_name, epoch, start, end
-                );
-                tokio::spawn(migrating_task.start().map_err(move |e| {
-                    error!(
-                        "master slot task {} {} {} {} exit {:?}",
-                        db_name, epoch, start, end, e
-                    )
-                }));
-            }
-            for (db_name, epoch, start, end, importing_task) in new_importing_tasks.into_iter() {
-                info!(
-                    "spawn slot importing replica {} {} {}-{}",
-                    db_name, epoch, start, end
-                );
-                tokio::spawn(importing_task.start().map_err(move |e| {
-                    error!(
-                        "replica slot task {} {} {}-{} exit {:?}",
-                        db_name, epoch, start, end, e
-                    )
-                }));
-            }
-            info!("spawn finished");
-//            *dbs = migration_dbs;
-            let _ = migration_dbs;
-//            self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
-            self.empty.store(empty, atomic::Ordering::SeqCst);
-//            self.tmp_dbs.store(Arc::new((epoch, removed_tasks)));
-            info!("migration meta update finished");
-        }
+        //        {
+        //            for (db_name, epoch, start, end, migrating_task) in new_migrating_tasks.into_iter() {
+        //                info!(
+        //                    "spawn slot migrating task {} {} {} {}",
+        //                    db_name, epoch, start, end
+        //                );
+        //                tokio::spawn(migrating_task.start().map_err(move |e| {
+        //                    error!(
+        //                        "master slot task {} {} {} {} exit {:?}",
+        //                        db_name, epoch, start, end, e
+        //                    )
+        //                }));
+        //            }
+        //            for (db_name, epoch, start, end, importing_task) in new_importing_tasks.into_iter() {
+        //                info!(
+        //                    "spawn slot importing replica {} {} {}-{}",
+        //                    db_name, epoch, start, end
+        //                );
+        //                tokio::spawn(importing_task.start().map_err(move |e| {
+        //                    error!(
+        //                        "replica slot task {} {} {}-{} exit {:?}",
+        //                        db_name, epoch, start, end, e
+        //                    )
+        //                }));
+        //            }
+        //            info!("spawn finished");
+        //            //            *dbs = migration_dbs;
+        //            let _ = migration_dbs;
+        //            //            self.updating_epoch.store(epoch, atomic::Ordering::SeqCst);
+        //            self.empty.store(empty, atomic::Ordering::SeqCst);
+        //            info!("migration meta update finished");
+        //        }
 
-        Ok(())
+        Self {
+            empty,
+            task_map: migration_dbs,
+        }
     }
 
     pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
-        let mut task_meta = switch_arg.meta.clone();
-
-        let arg_epoch = match switch_arg.meta.slot_range.tag {
-            SlotRangeTag::None => return Err(SwitchError::InvalidArg),
-            SlotRangeTag::Migrating(ref meta) => {
-                let epoch = meta.epoch;
-                task_meta.slot_range.tag = SlotRangeTag::Importing(meta.clone());
-                epoch
-            }
-            SlotRangeTag::Importing(ref meta) => meta.epoch,
-        };
-        if self.local_meta_epoch.load(atomic::Ordering::SeqCst) < arg_epoch {
-            return Err(SwitchError::NotReady);
-        }
-
-        if let Some(tasks) = self
-            .dbs
-//            .read()
-//            .expect("MigrationManager::commit_importing lock error")
-//            .1
-            .get(&switch_arg.meta.db_name)
-        {
+        if let Some(tasks) = self.task_map.get(&switch_arg.meta.db_name) {
             debug!(
                 "found tasks for db {} {}",
                 switch_arg.meta.db_name,
                 tasks.len()
             );
 
-            if let Some(record) = tasks.get(&task_meta) {
+            if let Some(record) = tasks.get(&switch_arg.meta) {
                 debug!("found record for db {}", switch_arg.meta.db_name);
                 match record {
                     Either::Left(_migrating_task) => {
@@ -420,13 +360,7 @@ where
     pub fn get_finished_tasks(&self) -> Vec<MigrationTaskMeta> {
         let mut metadata = vec![];
         {
-            for (_db_name, tasks) in self
-                .dbs
-//                .read()
-//                .expect("Migration::get_finished_tasks")
-//                .1
-                .iter()
-            {
+            for (_db_name, tasks) in self.task_map.iter() {
                 for (meta, task) in tasks.iter() {
                     if let Either::Left(migrating_task) = task {
                         if migrating_task.get_state() == MigrationState::SwitchCommitted {
@@ -438,26 +372,6 @@ where
         }
         metadata
     }
-
-    pub fn update_local_meta_epoch(&self, epoch: u64) {
-        loop {
-            let current = self.local_meta_epoch.load(atomic::Ordering::SeqCst);
-            if current >= epoch {
-                break;
-            }
-            self.local_meta_epoch
-                .compare_and_swap(current, epoch, atomic::Ordering::SeqCst);
-        }
-        debug!("Successfully update local meta epoch in migration manager");
-    }
-
-//    pub fn clear_tmp_dbs(&self, epoch: u64) {
-//        let tmp_dbs = self.tmp_dbs.lease();
-//        if tmp_dbs.0 == epoch {
-//            self.tmp_dbs
-//                .compare_and_swap(tmp_dbs, Arc::new((epoch, HashMap::new())));
-//        }
-//    }
 }
 
 #[derive(Debug)]

@@ -17,7 +17,6 @@ pub enum TaskEvent {
 
     SentToMigrationManager = 1,
     SentToMigrationDB = 2,
-    SentToMigrationTmpDB = 3,
     SentToDB = 4,
 
     SentToWritingQueue = 5,
@@ -193,10 +192,6 @@ fn slowlog_to_report(log: &Slowlog) -> Resp {
         format!(
             "sent_to_migration_db: {}",
             log.event_map.get_used_time(TaskEvent::SentToMigrationDB)
-        ),
-        format!(
-            "sent_to_migration_tmp_db: {}",
-            log.event_map.get_used_time(TaskEvent::SentToMigrationTmpDB)
         ),
         format!(
             "sent_to_db: {}",
