@@ -125,12 +125,14 @@ impl<F: RedisClientFactory> MetaManager<F> {
         let meta_map = self.meta_map.load();
         let db_info = meta_map.db_map.info();
         let mgr_info = meta_map.migration_map.info();
-        format!("# DB\r\n{}\r\n# Migration{}\r\n", db_info, mgr_info)
+        format!("# DB\r\n{}\r\n# Migration\r\n{}\r\n", db_info, mgr_info)
     }
 
     pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
         let mut task_meta = switch_arg.meta.clone();
 
+        // The stored meta is with importing tag.
+        // We need to change from migrating tag to importing tag.
         let arg_epoch = match switch_arg.meta.slot_range.tag {
             SlotRangeTag::None => return Err(SwitchError::InvalidArg),
             SlotRangeTag::Migrating(ref meta) => {
@@ -148,7 +150,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         self.meta_map
             .load()
             .migration_map
-            .commit_importing(switch_arg)
+            .commit_importing(SwitchArg{version: switch_arg.version, meta: task_meta})
     }
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {

@@ -228,7 +228,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
     pub fn info(&self) -> String {
         let mut lines = vec![
             format!("name: {}", self.name),
-            format!("epoch {}", self.epoch),
+            format!("epoch: {}", self.epoch),
             "nodes:".to_string(),
         ];
         for (node, slot_ranges) in self.slot_ranges.iter() {

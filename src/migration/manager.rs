@@ -134,7 +134,7 @@ where
         self.task_map
             .iter()
             .map(|(db_name, tasks)| {
-                let mut lines = vec![db_name.to_string()];
+                let mut lines = vec![format!("name: {}", db_name)];
                 for task_meta in tasks.keys() {
                     if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
                         lines.push(format!(
@@ -151,7 +151,7 @@ where
                 lines.join("\n")
             })
             .collect::<Vec<String>>()
-            .join("\n\n")
+            .join("\r\n")
     }
 
     pub fn send(
