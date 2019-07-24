@@ -130,6 +130,30 @@ where
         }
     }
 
+    pub fn info(&self) -> String {
+        self.task_map
+            .iter()
+            .map(|(db_name, tasks)| {
+                let mut lines = vec![db_name.to_string()];
+                for task_meta in tasks.keys() {
+                    if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
+                        lines.push(format!(
+                            "{}-{} {} -> {}",
+                            task_meta.slot_range.start,
+                            task_meta.slot_range.end,
+                            migration_meta.src_node_address,
+                            migration_meta.dst_node_address
+                        ));
+                    } else {
+                        error!("invalid slot range migration meta");
+                    }
+                }
+                lines.join("\n")
+            })
+            .collect::<Vec<String>>()
+            .join("\n\n")
+    }
+
     pub fn send(
         &self,
         cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,

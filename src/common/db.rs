@@ -95,14 +95,29 @@ impl ProxyDBMeta {
         });
         let mut it = it.peekable();
 
+        Self::parse(&mut it)
+    }
+
+    pub fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
+    where
+        It: Iterator<Item = String>,
+    {
         let epoch_str = try_get!(it.next());
         let epoch = try_parse!(epoch_str.parse::<u64>());
 
         let flags = DBMapFlags::from_arg(&try_get!(it.next()));
 
-        // TODO: not that easy, add prefix checking
-        let local = HostDBMap::parse(&mut it)?;
-        let peer = HostDBMap::parse(&mut it)?;
+        let local = HostDBMap::parse(it)?;
+        let mut peer = HostDBMap::new(HashMap::new());
+        while let Some(token) = it.next() {
+            if token.to_uppercase() == PEER_PREFIX {
+                peer = HostDBMap::parse(it)?;
+            } else if token.to_uppercase() == REPL_PREFIX {
+                // TODO: move replication here
+            } else {
+                return Err(CmdParseError {});
+            }
+        }
 
         Ok(Self {
             epoch,
@@ -117,9 +132,11 @@ impl ProxyDBMeta {
         let local = self.local.db_map_to_args();
         let peer = self.peer.db_map_to_args();
         args.extend_from_slice(&local);
-        args.push(PEER_PREFIX.to_string());
-        args.extend_from_slice(&peer);
-        args.push(REPL_PREFIX.to_string());
+        if !peer.is_empty() {
+            args.push(PEER_PREFIX.to_string());
+            args.extend_from_slice(&peer);
+        }
+        //        args.push(REPL_PREFIX.to_string());
         args
     }
 }
@@ -424,6 +441,96 @@ mod tests {
 
         let db_map = HostDBMap::new(host_db_map.db_map);
         let mut args = db_map.db_map_to_args();
+        let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
+        args.sort();
+        db_args.sort();
+        assert_eq!(args, db_args);
+    }
+
+    #[test]
+    fn test_parse_proxy_db_meta() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "dbname",
+            "127.0.0.1:7001",
+            "1001-2000",
+            "PEER",
+            "dbname",
+            "127.0.0.2:7001",
+            "2001-3000",
+            "dbname",
+            "127.0.0.2:7002",
+            "3001-4000",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        let db_meta = ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta");
+        assert_eq!(db_meta.epoch, 233);
+        assert!(db_meta.flags.force);
+        let local = &db_meta.local.get_map();
+        let peer = &db_meta.peer.get_map();
+        assert_eq!(local.len(), 1);
+        assert_eq!(
+            local.get("dbname").expect("test_parse_proxy_db_meta").len(),
+            2
+        );
+        assert_eq!(
+            local
+                .get("dbname")
+                .expect("test_parse_proxy_db_meta")
+                .get("127.0.0.1:7000")
+                .expect("test_parse_proxy_db_meta")
+                .get(0)
+                .expect("test_parse_proxy_db_meta")
+                .start,
+            0
+        );
+        assert_eq!(
+            local
+                .get("dbname")
+                .expect("test_parse_proxy_db_meta")
+                .get("127.0.0.1:7001")
+                .expect("test_parse_proxy_db_meta")
+                .get(0)
+                .expect("test_parse_proxy_db_meta")
+                .start,
+            1001
+        );
+        assert_eq!(peer.len(), 1);
+        assert_eq!(
+            peer.get("dbname").expect("test_parse_proxy_db_meta").len(),
+            2
+        );
+        assert_eq!(
+            peer.get("dbname")
+                .expect("test_parse_proxy_db_meta")
+                .get("127.0.0.2:7001")
+                .expect("test_parse_proxy_db_meta")
+                .get(0)
+                .expect("test_parse_proxy_db_meta")
+                .start,
+            2001
+        );
+        assert_eq!(
+            peer.get("dbname")
+                .expect("test_parse_proxy_db_meta")
+                .get("127.0.0.2:7002")
+                .expect("test_parse_proxy_db_meta")
+                .get(0)
+                .expect("test_parse_proxy_db_meta")
+                .start,
+            3001
+        );
+
+        let mut args = db_meta.to_args();
         let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         args.sort();
         db_args.sort();

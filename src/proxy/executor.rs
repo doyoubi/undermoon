@@ -305,7 +305,7 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Info => cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(
-                String::from("version:dev\r\n").into_bytes(),
+                format!("version:dev\r\n\r\n{}", self.manager.info()).into_bytes(),
             )))),
             CmdType::Auth => self.handle_auth(cmd_ctx),
             CmdType::Quit => {

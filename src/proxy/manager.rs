@@ -97,7 +97,6 @@ impl<F: RedisClientFactory> MetaManager<F> {
             return Err(DBError::OldEpoch);
         }
 
-        // TODO: later we need to use it to update migration and replication.
         let old_meta_map = self.meta_map.load();
         let db_map = DatabaseMap::from_db_map(&db_meta, sender_factory);
         let (migration_map, new_tasks) = migration_manager
@@ -109,29 +108,9 @@ impl<F: RedisClientFactory> MetaManager<F> {
         self.epoch.store(db_meta.get_epoch(), Ordering::SeqCst);
 
         self.migration_manager.run_tasks(new_tasks);
+        debug!("Successfully update db meta data");
 
         Ok(())
-
-        // Put db meta and migration meta together for consistency.
-        // We can make sure that IMPORTING slots will not be handled directly
-        // before the migration succeed. This is also why we should store the
-        // new metadata to `migration_manager` first.
-        //        match self.migration_manager.update(db_meta.get_local()) {
-        //            Ok(()) => {
-        //                debug!("Successfully update migration meta data");
-        //                debug!("local meta data: {:?}", db_map);
-        //                let epoch = db_map.get_epoch();
-        //                match self.db.set_dbs(db_meta) {
-        //                    Ok(()) => {
-        ////                        self.migration_manager.clear_tmp_dbs(epoch);
-        //                        self.migration_manager.update_local_meta_epoch(epoch);
-        //                        Ok(())
-        //                    }
-        //                    err => err,
-        //                }
-        //            }
-        //            err => err,
-        //        }
     }
 
     pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), DBError> {
@@ -140,6 +119,13 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
     pub fn get_replication_info(&self) -> String {
         self.replicator_manager.get_metadata_report()
+    }
+
+    pub fn info(&self) -> String {
+        let meta_map = self.meta_map.load();
+        let db_info = meta_map.db_map.info();
+        let mgr_info = meta_map.migration_map.info();
+        format!("# DB\r\n{}\r\n# Migration{}\r\n", db_info, mgr_info)
     }
 
     pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
@@ -173,7 +159,9 @@ impl<F: RedisClientFactory> MetaManager<F> {
         cmd_ctx
             .get_slowlog()
             .log_event(TaskEvent::SentToMigrationManager);
-        let cmd_ctx = match self.meta_map.load().migration_map.send(cmd_ctx) {
+
+        let meta_map = self.meta_map.lease();
+        let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
             Ok(()) => return,
             Err(e) => match e {
                 DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
@@ -185,7 +173,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         };
 
         cmd_ctx.get_slowlog().log_event(TaskEvent::SentToDB);
-        let res = self.meta_map.load().db_map.send(cmd_ctx);
+        let res = meta_map.db_map.send(cmd_ctx);
         if let Err(e) = res {
             warn!("Failed to forward cmd_ctx: {:?}", e)
         }

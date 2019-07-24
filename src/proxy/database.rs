@@ -88,6 +88,22 @@ where
         }
     }
 
+    pub fn info(&self) -> String {
+        let local = self
+            .local_dbs
+            .iter()
+            .map(|(_, db)| db.info())
+            .collect::<Vec<String>>()
+            .join("\r\n");
+        let peer = self
+            .remote_dbs
+            .iter()
+            .map(|(_, db)| db.info())
+            .collect::<Vec<String>>()
+            .join("\r\n");
+        format!("{}\r\n{}", local, peer)
+    }
+
     pub fn send(
         &self,
         cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
@@ -209,6 +225,30 @@ impl<F: CmdTaskSenderFactory> Database<F> {
         }
     }
 
+    pub fn info(&self) -> String {
+        let mut lines = vec![
+            format!("name: {}", self.name),
+            format!("epoch {}", self.epoch),
+            "nodes:".to_string(),
+        ];
+        for (node, slot_ranges) in self.slot_ranges.iter() {
+            let slot_ranges = slot_ranges
+                .iter()
+                .map(|slot_range| {
+                    format!(
+                        "{}-{} {:?}",
+                        slot_range.start,
+                        slot_range.end,
+                        slot_range.tag.get_migration_meta()
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join(", ");
+            lines.push(format!("{}: {}", node, slot_ranges));
+        }
+        lines.join("\r\n")
+    }
+
     pub fn send(
         &self,
         cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
@@ -278,6 +318,26 @@ impl RemoteDB {
             slot_map: SlotMap::from_ranges(slot_map.clone()),
             slot_ranges: slot_map,
         }
+    }
+
+    pub fn info(&self) -> String {
+        let mut lines = vec!["peers:".to_string()];
+        for (node, slot_ranges) in self.slot_ranges.iter() {
+            let slot_ranges = slot_ranges
+                .iter()
+                .map(|slot_range| {
+                    format!(
+                        "{}-{} {:?}",
+                        slot_range.start,
+                        slot_range.end,
+                        slot_range.tag.get_migration_meta()
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join(", ");
+            lines.push(format!("{}: {}", node, slot_ranges));
+        }
+        lines.join("\r\n")
     }
 
     pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), DBSendError<T>> {

@@ -24,8 +24,6 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
         &self,
         host: HostMeta,
     ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        // If a proxy receives a SETDB before SETPEER, the migrating slots will be cleared
-        // and we can't find the owner of this slot range. Thus we need to always send SETPEER first.
         let HostMeta { local, peer } = host;
         let address = local.get_address().clone();
 
@@ -37,13 +35,6 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
         let local_host_with_only_masters = filter_host_masters(local.clone());
         Box::new(
             client_fut
-//                .and_then(|client| {
-//                    send_meta(
-//                        client,
-//                        "SETPEER".to_string(),
-//                        generate_host_meta_cmd_args(peer, DBMapFlags { force: false }),
-//                    )
-//                })
                 .and_then(move |client| {
                     // SETREPL should be sent before SETDB to avoid sending to replica while handling slots.
                     send_meta(
@@ -114,7 +105,7 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
                     // If requesting two read operation from different stateless broker proxy,
                     // we might still have a stale SETDB.
                     // Check this explicitly.
-                    if local.get_epoch() <= peer.get_epoch() {
+                    if local.get_epoch() == peer.get_epoch() {
                         return Some(HostMeta { local, peer });
                     }
                     debug!("local.epoch > peer.epoch. Drop it.")
@@ -131,20 +122,9 @@ fn generate_host_meta_cmd_args(
     peer_proxy: Host,
 ) -> Vec<String> {
     let epoch = local_proxy.get_epoch();
-    //    let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
-    //    for node in host.into_nodes() {
-    //        let dbs = db_map
-    //            .entry(node.get_cluster_name().clone())
-    //            .or_insert_with(HashMap::new);
-    //        dbs.insert(node.get_address().clone(), node.into_slots().clone());
-    //    }
     let local = generate_proxy_db_map(local_proxy);
     let peer = generate_proxy_db_map(peer_proxy);
     let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer);
-    //    let args = HostDBMap::new(epoch, flags.clone(), db_map).db_map_to_args();
-    //    let mut cmd = vec![epoch.to_string(), flags.to_arg()];
-    //    cmd.extend(args.into_iter());
-    //    cmd
     proxy_db_meta.to_args()
 }
 
