@@ -301,6 +301,6 @@ This project is still under testing but has **NOT** been well tested in producti
 - ~~Slow log~~ (done)
 - Statistics
 - Support multi-key commands
-- Support dynamic configuration by CONFIG command
+- ~~Support dynamic configuration by CONFIG command~~
 - ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
 - Recover peer meta after reboot to support redirection.

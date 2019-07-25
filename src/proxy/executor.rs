@@ -289,6 +289,51 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             )))
         }
     }
+
+    fn handle_config(&self, cmd_ctx: CmdCtx) {
+        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx, 1) {
+            Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd.to_uppercase()),
+            None => return,
+        };
+
+        if sub_cmd.eq("GET") {
+            let (cmd_ctx, field) = match Self::get_sub_command(cmd_ctx, 2) {
+                Some((cmd_ctx, field)) => (cmd_ctx, field),
+                None => return,
+            };
+            let value = match self.config.get_field(&field) {
+                Ok(value) => value,
+                Err(_) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        format!("config field {} not found", field).into_bytes(),
+                    )));
+                    return;
+                }
+            };
+            cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(value.into_bytes()))));
+        } else if sub_cmd.eq("SET") {
+            let (cmd_ctx, field) = match Self::get_sub_command(cmd_ctx, 2) {
+                Some((cmd_ctx, field)) => (cmd_ctx, field),
+                None => return,
+            };
+            let (cmd_ctx, value) = match Self::get_sub_command(cmd_ctx, 3) {
+                Some((cmd_ctx, value)) => (cmd_ctx, value),
+                None => return,
+            };
+            match self.config.set_value(&field, &value) {
+                Ok(()) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+                }
+                Err(err) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(format!("{:?}", err).into_bytes())))
+                }
+            }
+        } else {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                "invalid config sub-command".to_string().into_bytes(),
+            )))
+        }
+    }
 }
 
 impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
@@ -324,6 +369,7 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             ))),
             CmdType::UmCtl => self.handle_umctl(cmd_ctx),
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
+            CmdType::Config => self.handle_config(cmd_ctx),
         };
     }
 }
