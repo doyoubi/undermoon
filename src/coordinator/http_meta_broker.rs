@@ -179,7 +179,8 @@ impl MetaDataBroker for HttpMetaBroker {
                         })
                         .collect::<Vec<Node>>();
                     debug!("get peer meta {} {} {:?}", address_clone2, epoch, nodes);
-                    Host::new(address_clone2, epoch, nodes)
+                    // These nodes are actually proxies.
+                    Host::new(address_clone2, epoch, nodes, Vec::new())
                 });
             Box::new(f.map(Some))
         });

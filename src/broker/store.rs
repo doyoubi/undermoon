@@ -88,12 +88,13 @@ impl MetaStore {
                     .filter(|node| node.get_proxy_address() == address)
                     .cloned()
                     .collect();
-                Host::new(address.to_string(), epoch, nodes)
+                Host::new(address.to_string(), epoch, nodes, Vec::new())
             })
             .or_else(|| {
                 Some(Host::new(
                     address.to_string(),
                     self.get_max_epoch() + 1,
+                    vec![],
                     vec![],
                 ))
             })

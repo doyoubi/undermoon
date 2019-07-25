@@ -62,13 +62,14 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
 fn filter_host_masters(host: Host) -> Host {
     let address = host.get_address().clone();
     let epoch = host.get_epoch();
+    let free_nodes = host.get_free_nodes().clone();
     let masters = host
         .into_nodes()
         .into_iter()
         .filter(|node| node.get_role() == Role::Master)
         .collect();
 
-    Host::new(address, epoch, masters)
+    Host::new(address, epoch, masters, free_nodes)
 }
 
 pub struct BrokerMetaRetriever<B: MetaDataBroker> {

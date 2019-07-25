@@ -381,14 +381,16 @@ pub struct Host {
     address: String,
     epoch: u64,
     nodes: Vec<Node>,
+    free_nodes: Vec<String>,
 }
 
 impl Host {
-    pub fn new(address: String, epoch: u64, nodes: Vec<Node>) -> Self {
+    pub fn new(address: String, epoch: u64, nodes: Vec<Node>, free_nodes: Vec<String>) -> Self {
         Self {
             address,
             epoch,
             nodes,
+            free_nodes,
         }
     }
     pub fn get_address(&self) -> &String {
@@ -402,6 +404,9 @@ impl Host {
     }
     pub fn into_nodes(self) -> Vec<Node> {
         self.nodes
+    }
+    pub fn get_free_nodes(&self) -> &Vec<String> {
+        &self.free_nodes
     }
 
     pub fn add_node(&mut self, node: Node) {
@@ -512,7 +517,8 @@ mod tests {
                     },
                     "slots": []
                 }
-            ]
+            ],
+            "free_nodes": []
         }"#;
         let host: Host = match serde_json::from_str(host_str) {
             Ok(h) => h,
@@ -556,6 +562,7 @@ mod tests {
                     ),
                 ),
             ],
+            Vec::new(),
         );
         assert_eq!(expected_host, host);
     }
