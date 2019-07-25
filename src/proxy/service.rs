@@ -4,21 +4,70 @@ use super::slowlog::SlowRequestLogger;
 use common::future_group::new_future_group;
 use common::utils::{revolve_first_address, ThreadSafe};
 use futures::{future, Future, Stream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub enum ConfigError {
+    ReadonlyField,
+    FieldNotFound,
+    InvalidValue,
+}
+
+#[derive(Debug)]
 pub struct ServerProxyConfig {
     pub address: String,
     pub announce_address: String,
     pub auto_select_db: bool,
     pub slowlog_len: usize,
-    pub slowlog_log_slower_than: i64,
+    pub slowlog_log_slower_than: AtomicI64,
     pub thread_number: usize,
     pub session_channel_size: usize,
     pub backend_channel_size: usize,
     pub backend_conn_num: usize,
+}
+
+impl ServerProxyConfig {
+    pub fn get_field(&self, field: &str) -> Result<String, ConfigError> {
+        match field.to_lowercase().as_ref() {
+            "address" => Ok(self.address.clone()),
+            "announce_address" => Ok(self.announce_address.clone()),
+            "auto_select_db" => Ok(self.auto_select_db.to_string()),
+            "slowlog_len" => Ok(self.slowlog_len.to_string()),
+            "thread_number" => Ok(self.thread_number.to_string()),
+            "session_channel_size" => Ok(self.session_channel_size.to_string()),
+            "backend_channel_size" => Ok(self.backend_channel_size.to_string()),
+            "backend_conn_num" => Ok(self.backend_conn_num.to_string()),
+            "slowlog_log_slower_than" => Ok(self
+                .slowlog_log_slower_than
+                .load(Ordering::SeqCst)
+                .to_string()),
+            _ => Err(ConfigError::FieldNotFound),
+        }
+    }
+
+    pub fn set_value(&self, field: &str, value: &str) -> Result<(), ConfigError> {
+        match field.to_lowercase().as_ref() {
+            "address" => Err(ConfigError::ReadonlyField),
+            "announce_address" => Err(ConfigError::ReadonlyField),
+            "auto_select_db" => Err(ConfigError::ReadonlyField),
+            "slowlog_len" => Err(ConfigError::ReadonlyField),
+            "thread_number" => Err(ConfigError::ReadonlyField),
+            "session_channel_size" => Err(ConfigError::ReadonlyField),
+            "backend_channel_size" => Err(ConfigError::ReadonlyField),
+            "backend_conn_num" => Err(ConfigError::ReadonlyField),
+            "slowlog_log_slower_than" => {
+                let int_value = value
+                    .parse::<i64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.slowlog_log_slower_than
+                    .store(int_value, Ordering::SeqCst);
+                Ok(())
+            }
+            _ => Err(ConfigError::FieldNotFound),
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -6,6 +6,7 @@ extern crate config;
 extern crate env_logger;
 
 use std::env;
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
 use undermoon::protocol::PooledRedisClientFactory;
@@ -37,9 +38,10 @@ fn gen_conf() -> ServerProxyConfig {
             .unwrap_or_else(|_| address),
         auto_select_db: s.get::<bool>("auto_select_db").unwrap_or_else(|_| false),
         slowlog_len: s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024),
-        slowlog_log_slower_than: s
-            .get::<i64>("slowlog_log_slower_than")
-            .unwrap_or_else(|_| 50000),
+        slowlog_log_slower_than: AtomicI64::new(
+            s.get::<i64>("slowlog_log_slower_than")
+                .unwrap_or_else(|_| 50000),
+        ),
         thread_number: s.get::<usize>("thread_number").unwrap_or_else(|_| 4),
         session_channel_size: s
             .get::<usize>("session_channel_size")
@@ -60,10 +62,7 @@ fn main() {
     let pool_size = 1;
     let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
 
-    let slow_request_logger = Arc::new(SlowRequestLogger::new(
-        config.slowlog_len,
-        config.slowlog_log_slower_than * 1000,
-    ));
+    let slow_request_logger = Arc::new(SlowRequestLogger::new(config.clone()));
     let forward_handler = SharedForwardHandler::new(
         config.clone(),
         Arc::new(client_factory),

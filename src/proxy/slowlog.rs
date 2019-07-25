@@ -1,4 +1,5 @@
 use super::command::Command;
+use super::service::ServerProxyConfig;
 use arc_swap::ArcSwapOption;
 use arr_macro::arr;
 use chrono::{naive, DateTime, Utc};
@@ -114,25 +115,30 @@ impl Slowlog {
 pub struct SlowRequestLogger {
     slowlogs: Vec<ArcSwapOption<Slowlog>>,
     curr_index: atomic::AtomicUsize,
-    slowlog_log_slower_than: i64, // unlike Redis, this is in nanoseconds.
+    config: Arc<ServerProxyConfig>,
 }
 
 impl SlowRequestLogger {
-    pub fn new(log_queue_size: usize, slowlog_log_slower_than: i64) -> Self {
+    pub fn new(config: Arc<ServerProxyConfig>) -> Self {
         let mut slowlogs = Vec::new();
-        while slowlogs.len() != log_queue_size {
+        while slowlogs.len() != config.slowlog_len {
             slowlogs.push(ArcSwapOption::new(None));
         }
         Self {
             slowlogs,
             curr_index: atomic::AtomicUsize::new(0),
-            slowlog_log_slower_than,
+            config,
         }
     }
 
     pub fn add_slow_log(&self, log: Arc<Slowlog>) {
         let dt = log.event_map.get_used_time(TaskEvent::WaitDone);
-        if dt > self.slowlog_log_slower_than {
+        let threshold = self
+            .config
+            .slowlog_log_slower_than
+            .load(atomic::Ordering::SeqCst);
+        // ms to ns
+        if dt > threshold * 1000 {
             self.add(log);
         }
     }

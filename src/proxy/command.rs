@@ -25,6 +25,7 @@ pub enum CmdType {
     Invalid,
     UmCtl,
     Cluster,
+    Config,
 }
 
 #[derive(Debug)]
@@ -83,6 +84,8 @@ impl Command {
             CmdType::UmCtl
         } else if cmd_name.eq("CLUSTER") {
             CmdType::Cluster
+        } else if cmd_name.eq("CONFIG") {
+            CmdType::Config
         } else {
             CmdType::Others
         }
