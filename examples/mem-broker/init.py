@@ -5,9 +5,6 @@ def init_hosts():
         'server_proxy1:6001': ['redis1:6379', 'redis2:6379'],
         'server_proxy2:6002': ['redis3:6379', 'redis4:6379'],
         'server_proxy3:6003': ['redis5:6379', 'redis6:6379'],
-        'server_proxy4:6004': ['redis7:6379', 'redis8:6379'],
-        'server_proxy5:6005': ['redis9:6379', 'redis10:6379'],
-        'server_proxy6:6006': ['redis11:6379', 'redis12:6379'],
     }
     for proxy_address, node_addresses in hosts.items():
         add_host(proxy_address, node_addresses)

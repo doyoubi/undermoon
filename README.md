@@ -34,8 +34,7 @@ Note that how we use the `AUTH` command to do something like `USE [database]` in
 ```bash
 > redis-cli -p 5299
 # Initialize the proxy by `UMCTL` commands.
-127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 0-8000
-127.0.0.1:5299> UMCTL SETPEER 1 NOFLAGS mydb 127.0.0.1:7000 8001-16383
+127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 0-8000 PEER mydb 127.0.0.1:7000 8001-16383
 
 # Now we still didn't select our database `mydb` we just set.
 # Then we are in the default `admin` database for our connection.
@@ -147,7 +146,7 @@ The server-side proxy itself does not support failure detection and failover.
 But this can be easy done by using the two meta data management commands:
 
 - UMCTL SETDB
-- UMCTL SETPEER
+- UMCTL SETREPL
 
 See the api docs later for details.
 Here we will use a simple Python script utilizing these two commands to do the failover for us.
@@ -251,27 +250,18 @@ It also supports slots migration. See `examples/mem-broker/init.py` for more det
 
 ## API
 ### Server-side Proxy Commands
-#### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]
+#### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...] [PEER [dbname1 ip:port slot_range...]]
 
 Sets the mapping relationship between the server-side proxy and its corresponding redis instances behind it.
 
 - `epoch` is the logical time of the configuration this command is sending used to decide which configuration is more up-to-date.
-Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETDB|SETPEER]` requests which don't have higher epoch.
+Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETDB|SETREPL]` requests which don't have higher epoch.
 - `flags`: Currently it may be NOFLAG or FORCE. When it's `FORCE`, the server-side proxy will ignore the epoch rule above and will always accept the configuration
 - `slot_range` can be like
     - 0-1000
     - migrating dst_ip:dst_port 0-1000
     - importing src_ip:src_port 0-1000
-- `ip:port` should be the addresses of redis instances.
-
-#### UMCTL SETPEER epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...]
-
-Sets the addresses and slots of other server-side proxies serving databases in common.
-
-- `epoch`: same as `epoch` in UMCTL SETDB.
-- `flags`: same as `flags` in UMCTL SETDB.
-- `slot_range` can be like `0-1000`.
-- `ip:port` should be the addresses of other server-side proxies.
+- `ip:port` should be the addresses of redis instances or other proxies for `PEER` part.
 
 Note that both these two commands set all the `local` or `peer` meta data of the proxy.
 For example, you can't add multiple backend redis instances one by one by sending multiple `UMCTL SETDB`.
@@ -302,7 +292,7 @@ This project is still under testing but has **NOT** been well tested in producti
 - ~~Support slot migration via replication~~ (done)
 - ~~Optimize RESP parsing~~ (done)
 - ~~Implement CLUSTER SLOTS~~ (done)
-- Implement commands to get proxy meta
+- ~~Implement commands to get proxy meta~~
 - Track spawned futures
 - ~~Simple script to push configuration to proxy for demonstration~~ (done)
 - Batch write operations with interval flushing
@@ -313,4 +303,4 @@ This project is still under testing but has **NOT** been well tested in producti
 - Support multi-key commands
 - Support dynamic configuration by CONFIG command
 - ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
-- Recover peer meta to after reboot support direction.
+- Recover peer meta after reboot to support redirection.
