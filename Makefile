@@ -2,7 +2,7 @@ build:
 	cargo build
 
 test:
-	cargo test
+	RUST_BACKTRACE=full cargo test
 
 lint:
 	find src -name "*.rs" | xargs rustup run stable rustfmt

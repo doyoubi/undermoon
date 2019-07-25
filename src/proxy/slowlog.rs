@@ -15,19 +15,17 @@ const MAX_ELEMENT_LENGTH: usize = 100;
 pub enum TaskEvent {
     Created = 0,
 
-    SentToMigrationManager = 1,
-    SentToMigrationDB = 2,
-    SentToMigrationTmpDB = 3,
-    SentToDB = 4,
+    SentToMigrationDB = 1,
+    SentToDB = 2,
 
-    SentToWritingQueue = 5,
-    WritingQueueReceived = 6,
-    SentToBackend = 7,
-    ReceivedFromBackend = 8,
-    WaitDone = 9,
+    SentToWritingQueue = 3,
+    WritingQueueReceived = 4,
+    SentToBackend = 5,
+    ReceivedFromBackend = 6,
+    WaitDone = 7,
 }
 
-const EVENT_NUMBER: usize = 10;
+const EVENT_NUMBER: usize = 8;
 const LOG_ELEMENT_NUMBER: usize = 5;
 
 #[derive(Debug)]
@@ -58,7 +56,7 @@ impl RequestEventMap {
 impl Default for RequestEventMap {
     fn default() -> Self {
         Self {
-            events: arr![atomic::AtomicI64::new(0); 10],
+            events: arr![atomic::AtomicI64::new(0); 8],
         }
     }
 }
@@ -186,17 +184,8 @@ fn slowlog_to_report(log: &Slowlog) -> Resp {
         format!("session_id: {}", log.session_id),
         format!("created: {}", start_date),
         format!(
-            "sent_to_migration_manager: {}",
-            log.event_map
-                .get_used_time(TaskEvent::SentToMigrationManager)
-        ),
-        format!(
             "sent_to_migration_db: {}",
             log.event_map.get_used_time(TaskEvent::SentToMigrationDB)
-        ),
-        format!(
-            "sent_to_migration_tmp_db: {}",
-            log.event_map.get_used_time(TaskEvent::SentToMigrationTmpDB)
         ),
         format!(
             "sent_to_db: {}",
