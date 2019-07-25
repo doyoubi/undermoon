@@ -44,7 +44,6 @@ impl DBMapFlags {
 }
 
 const PEER_PREFIX: &str = "PEER";
-const REPL_PREFIX: &str = "REPL";
 
 #[derive(Debug, Clone)]
 pub struct ProxyDBMeta {
@@ -85,7 +84,7 @@ impl ProxyDBMeta {
             _ => return Err(CmdParseError {}),
         };
 
-        // Skip the "UMCTL SET_DB"
+        // Skip the "UMCTL SETDB"
         let it = arr.iter().skip(2).flat_map(|resp| match resp {
             Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str) {
                 Ok(s) => Some(s.to_string()),
@@ -112,8 +111,6 @@ impl ProxyDBMeta {
         while let Some(token) = it.next() {
             if token.to_uppercase() == PEER_PREFIX {
                 peer = HostDBMap::parse(it)?;
-            } else if token.to_uppercase() == REPL_PREFIX {
-                // TODO: move replication here
             } else {
                 return Err(CmdParseError {});
             }
@@ -136,7 +133,6 @@ impl ProxyDBMeta {
             args.push(PEER_PREFIX.to_string());
             args.extend_from_slice(&peer);
         }
-        //        args.push(REPL_PREFIX.to_string());
         args
     }
 }
@@ -203,7 +199,7 @@ impl HostDBMap {
             match it.peek() {
                 Some(first_token) => {
                     let prefix = first_token.to_uppercase();
-                    if prefix == PEER_PREFIX || prefix == REPL_PREFIX {
+                    if prefix == PEER_PREFIX {
                         break;
                     }
                 }

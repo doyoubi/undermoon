@@ -29,11 +29,14 @@ where
 
 pub struct MetaManager<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,
+    // Now replicator is not in meta_map, if later we need consistency
+    // between replication metadata and other metadata, we should put that
+    // inside meta_map.
     meta_map: ArcSwap<
         MetaMap<CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>>,
     >,
     epoch: AtomicU64,
-    lock: Mutex<()>, // This is the write lock for `epoch`, `db`, `replicator` and `task`.
+    lock: Mutex<()>, // This is the write lock for `epoch`, `db`, and `task`.
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, RedirectionSenderFactory<CmdCtx>>,
     sender_factory:
@@ -150,7 +153,10 @@ impl<F: RedisClientFactory> MetaManager<F> {
         self.meta_map
             .load()
             .migration_map
-            .commit_importing(SwitchArg{version: switch_arg.version, meta: task_meta})
+            .commit_importing(SwitchArg {
+                version: switch_arg.version,
+                meta: task_meta,
+            })
     }
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {
@@ -158,10 +164,6 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
-        cmd_ctx
-            .get_slowlog()
-            .log_event(TaskEvent::SentToMigrationManager);
-
         let meta_map = self.meta_map.lease();
         let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
             Ok(()) => return,

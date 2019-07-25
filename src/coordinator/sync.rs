@@ -36,7 +36,7 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
         Box::new(
             client_fut
                 .and_then(move |client| {
-                    // SETREPL should be sent before SETDB to avoid sending to replica while handling slots.
+                    // SETREPL should be sent before SETDB to eliminate the possibility sending to replica while handling slots.
                     send_meta(
                         client,
                         "SETREPL".to_string(),
@@ -86,11 +86,6 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
         &self,
         address: String,
     ) -> Box<dyn Future<Item = Option<HostMeta>, Error = CoordinateError> + Send> {
-        // We should get local first but send the peer first for consistency for migration,
-        // so that we have local.epoch <= peer.epoch,
-        // which means if proxy received a SETDB clearing the migrated slot range,
-        // there should have been a SETPEER
-        // with higher or the same epoch including the migrated out slot range.
         let get_local = self
             .broker
             .get_host(address.clone())
@@ -139,7 +134,7 @@ fn generate_proxy_db_map(proxy: Host) -> HostDBMap {
     HostDBMap::new(db_map)
 }
 
-// sub_command should be SETDB or SETPEER
+// sub_command should be SETDB
 fn send_meta<C: RedisClient>(
     client: C,
     sub_command: String,
