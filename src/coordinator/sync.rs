@@ -172,6 +172,15 @@ fn generate_repl_meta_cmd_args(host: Host, flags: DBMapFlags) -> Vec<String> {
     let mut masters = Vec::new();
     let mut replicas = Vec::new();
 
+    for free_node in host.get_free_nodes().iter() {
+        // For free nodes we use empty cluster name.
+        masters.push(MasterMeta {
+            db_name: String::new(),
+            master_node_address: free_node.clone(),
+            replicas: Vec::new(),
+        })
+    }
+
     for node in host.into_nodes().into_iter() {
         let role = node.get_role();
         let meta = node.get_repl_meta();

@@ -30,6 +30,7 @@ pub enum MigrationType {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct MetaStore {
+    global_epoch: u64,
     clusters: HashMap<String, Cluster>,
     // proxy_address => nodes and cluster_name
     all_nodes: HashMap<String, NodeResource>,
@@ -40,6 +41,7 @@ pub struct MetaStore {
 impl Default for MetaStore {
     fn default() -> Self {
         Self {
+            global_epoch: 0,
             clusters: HashMap::new(),
             all_nodes: HashMap::new(),
             failed_proxies: HashMap::new(),
@@ -61,12 +63,9 @@ macro_rules! try_state {
 }
 
 impl MetaStore {
-    pub fn get_max_epoch(&self) -> u64 {
-        self.clusters
-            .values()
-            .map(Cluster::get_epoch)
-            .max()
-            .unwrap_or(0)
+    pub fn bump_global_epoch(&mut self) -> u64 {
+        self.global_epoch += 1;
+        self.global_epoch
     }
 
     pub fn get_hosts(&self) -> Vec<String> {
@@ -76,28 +75,34 @@ impl MetaStore {
     pub fn get_host_by_address(&self, address: &str) -> Option<Host> {
         let all_nodes = &self.all_nodes;
         let clusters = &self.clusters;
-        all_nodes
-            .get(address)
-            .and_then(|node_resource| node_resource.cluster_name.clone())
-            .and_then(|cluster_name| clusters.get(&cluster_name))
-            .map(|cluster| {
-                let epoch = cluster.get_epoch();
-                let nodes = cluster
-                    .get_nodes()
-                    .iter()
-                    .filter(|node| node.get_proxy_address() == address)
-                    .cloned()
-                    .collect();
-                Host::new(address.to_string(), epoch, nodes, Vec::new())
-            })
-            .or_else(|| {
-                Some(Host::new(
-                    address.to_string(),
-                    self.get_max_epoch() + 1,
-                    vec![],
-                    vec![],
-                ))
-            })
+        all_nodes.get(address).and_then(|node_resource| {
+            node_resource
+                .cluster_name
+                .clone()
+                .and_then(|cluster_name| clusters.get(&cluster_name))
+                .map(|cluster| {
+                    let epoch = cluster.get_epoch();
+                    let nodes = cluster
+                        .get_nodes()
+                        .iter()
+                        .filter(|node| node.get_proxy_address() == address)
+                        .cloned()
+                        .collect();
+                    Host::new(address.to_string(), epoch, nodes, Vec::new())
+                })
+                .or_else(|| {
+                    Some(Host::new(
+                        address.to_string(),
+                        self.global_epoch,
+                        vec![],
+                        node_resource
+                            .node_addresses
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<String>>(),
+                    ))
+                })
+        })
     }
 
     pub fn get_cluster_names(&self) -> Vec<String> {
@@ -110,6 +115,7 @@ impl MetaStore {
 
     pub fn add_failure(&mut self, address: String, _reporter_id: String) {
         let now = Utc::now();
+        self.bump_global_epoch();
         self.failures.insert(address, now.timestamp());
     }
 
@@ -128,6 +134,8 @@ impl MetaStore {
         proxy_address: String,
         nodes: Vec<String>,
     ) -> Result<(), MetaStoreError> {
+        self.bump_global_epoch();
+
         let node_resource = self
             .all_nodes
             .entry(proxy_address.clone())
@@ -148,6 +156,7 @@ impl MetaStore {
             .remove(&proxy_address)
             .map(|_| ())
             .unwrap_or(());
+
         Ok(())
     }
 
@@ -182,7 +191,7 @@ impl MetaStore {
             nodes.push(node);
         }
 
-        let cluster = Cluster::new(cluster_name.clone(), self.get_max_epoch() + 1, nodes);
+        let cluster = Cluster::new(cluster_name.clone(), self.bump_global_epoch(), nodes);
         self.clusters.insert(cluster_name, cluster);
         Ok(())
     }
@@ -203,6 +212,8 @@ impl MetaStore {
                 ),
             }
         }
+
+        self.bump_global_epoch();
         Ok(())
     }
 
@@ -212,15 +223,20 @@ impl MetaStore {
         }
 
         let node_slots = self.consume_node_slot(&cluster_name)?;
+        let new_epoch = self.bump_global_epoch();
+
         let cluster = self
             .clusters
             .get_mut(&cluster_name)
             .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
+
         let mut nodes = vec![];
         for node_slot in node_slots.into_iter() {
             let node = try_state!(Self::add_node(cluster, node_slot));
             nodes.push(node);
         }
+        cluster.set_epoch(new_epoch);
+
         Ok(nodes)
     }
 
@@ -240,7 +256,6 @@ impl MetaStore {
         );
 
         cluster.add_node(new_node.clone());
-        cluster.bump_epoch();
 
         Ok(new_node)
     }
@@ -259,6 +274,7 @@ impl MetaStore {
         proxy_address: &str,
         force: bool,
     ) -> Result<(), MetaStoreError> {
+        let new_epoch = self.bump_global_epoch();
         let cluster = self
             .clusters
             .get_mut(cluster_name)
@@ -285,7 +301,7 @@ impl MetaStore {
                 .ok_or_else(|| MetaStoreError::NodeNotFound)?;
         }
 
-        cluster.bump_epoch();
+        cluster.set_epoch(new_epoch);
 
         try_state!(Self::set_node_free(&mut self.all_nodes, &proxy_address,));
         Ok(())
@@ -308,10 +324,14 @@ impl MetaStore {
             .ok_or_else(|| MetaStoreError::HostResourceNotFound)?;
         self.failed_proxies
             .insert(failed_proxy_address.to_string(), node_addresses);
+
+        self.bump_global_epoch();
         Ok(())
     }
 
     pub fn remove_proxy(&mut self, proxy_address: String) -> Result<(), MetaStoreError> {
+        self.bump_global_epoch();
+
         let all_nodes = &mut self.all_nodes;
         let failed_proxies = &mut self.failed_proxies;
         match all_nodes.get_mut(&proxy_address) {
@@ -351,6 +371,8 @@ impl MetaStore {
         dst_node_address: String,
         migration_type: MigrationType,
     ) -> Result<(), MetaStoreError> {
+        let new_epoch = self.bump_global_epoch();
+
         let cluster = self
             .clusters
             .get_mut(&cluster_name)
@@ -383,7 +405,7 @@ impl MetaStore {
             return Err(MetaStoreError::SameHost);
         }
 
-        cluster.bump_epoch();
+        cluster.set_epoch(new_epoch);
 
         let migration_meta = MigrationMeta {
             epoch: cluster.get_epoch(),
@@ -447,6 +469,8 @@ impl MetaStore {
             slot_range,
         } = task;
 
+        let new_epoch = self.bump_global_epoch();
+
         let cluster = self
             .clusters
             .get_mut(&db_name)
@@ -497,7 +521,7 @@ impl MetaStore {
             }
         }
 
-        cluster.bump_epoch();
+        cluster.set_epoch(new_epoch);
 
         Ok(())
     }
@@ -508,6 +532,8 @@ impl MetaStore {
         src_node_address: String,
         dst_node_address: String,
     ) -> Result<(), MetaStoreError> {
+        let new_epoch = self.bump_global_epoch();
+
         let cluster = self
             .clusters
             .get_mut(&cluster_name)
@@ -559,7 +585,7 @@ impl MetaStore {
                 },
             )?;
 
-        cluster.bump_epoch();
+        cluster.set_epoch(new_epoch);
 
         Ok(())
     }
@@ -570,6 +596,8 @@ impl MetaStore {
         master_node_address: String,
         replica_node_address: String,
     ) -> Result<(), MetaStoreError> {
+        let new_epoch = self.bump_global_epoch();
+
         let cluster = self
             .clusters
             .get_mut(&cluster_name)
@@ -628,7 +656,7 @@ impl MetaStore {
             replica.get_mut_repl().set_role(Role::Replica);
         }
 
-        cluster.bump_epoch();
+        cluster.set_epoch(new_epoch);
         Ok(())
     }
 
@@ -976,6 +1004,8 @@ impl MetaStore {
         cluster_name: &str,
         node_address: &str,
     ) -> Result<Node, MetaStoreError> {
+        let new_epoch = self.bump_global_epoch();
+
         let cluster = self
             .clusters
             .get_mut(cluster_name)
@@ -1004,7 +1034,7 @@ impl MetaStore {
             .cloned()
             .ok_or_else(|| MetaStoreError::NodeNotFound));
 
-        cluster.bump_epoch();
+        cluster.set_epoch(new_epoch);
 
         try_state!(Self::change_migration_peer(
             cluster,
@@ -1169,12 +1199,14 @@ impl MetaStore {
                 node_address,
             } = node_slot;
 
+            let new_epoch = self.bump_global_epoch();
+
             let cluster = try_state!(self
                 .clusters
                 .get_mut(node.get_cluster_name())
                 .ok_or(MetaStoreError::ClusterNotFound));
 
-            cluster.bump_epoch();
+            cluster.set_epoch(new_epoch);
 
             info!(
                 "start to replace {:?} with {} {}",

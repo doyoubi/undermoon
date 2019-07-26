@@ -349,8 +349,8 @@ impl Cluster {
     pub fn add_node(&mut self, node: Node) {
         self.nodes.push(node);
     }
-    pub fn bump_epoch(&mut self) {
-        self.epoch += 1;
+    pub fn set_epoch(&mut self, epoch: u64) {
+        self.epoch = epoch
     }
     pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
         let node = match self
@@ -411,9 +411,6 @@ impl Host {
 
     pub fn add_node(&mut self, node: Node) {
         self.nodes.push(node);
-    }
-    pub fn bump_epoch(&mut self) {
-        self.epoch += 1;
     }
     pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
         let node = match self
