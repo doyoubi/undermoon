@@ -81,7 +81,8 @@ If the host(or proxy) exists:
                 "end": 5000,
                 "tag": "None"
             }, ...]
-        }, ...]
+        }, ...],
+        "free_nodes": ["127.0.0.1:7004"]
     }
 }
 If not:
