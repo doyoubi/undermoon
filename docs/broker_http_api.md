@@ -82,7 +82,16 @@ If the host(or proxy) exists:
                 "tag": "None"
             }, ...]
         }, ...],
-        "free_nodes": ["127.0.0.1:7004"]
+        "free_nodes": ["127.0.0.1:7004"],
+        "peers": [{
+            "proxy_address": "127.0.0.1:6001",
+            "cluster_name": "cluster_name1",
+            "slots": [{
+                "start": 0,
+                "end": 5000,
+                "tag": "None"
+            }, ...]
+        }, ...]
     }
 }
 If not:

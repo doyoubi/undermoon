@@ -20,10 +20,6 @@ pub trait MetaDataBroker: ThreadSafe {
         &self,
         address: String,
     ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send>;
-    fn get_peer(
-        &self,
-        address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send>;
     fn add_failure(
         &self,
         address: String,
