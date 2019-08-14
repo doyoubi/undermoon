@@ -1,11 +1,9 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use common::cluster::{Cluster, Host, Node, ReplMeta, Role};
+use common::cluster::{Cluster, Host};
 use common::utils::ThreadSafe;
 use futures::{future, stream, Future, Stream};
-use itertools::Itertools;
 use reqwest::r#async as request_async; // async is a keyword later
 use serde_derive::Deserialize;
-use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct HttpMetaBroker {
@@ -129,61 +127,6 @@ impl MetaDataBroker for HttpMetaBroker {
                         MetaDataBrokerError::InvalidReply
                     })
             });
-        Box::new(host_fut)
-    }
-
-    fn get_peer(
-        &self,
-        address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
-        debug!("get peer {}", address);
-        let address_clone1 = address.clone();
-        let self_clone = self.clone();
-        let host_fut = self.get_host(address).and_then(move |host| -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
-            let (epoch, clusters) = match host {
-                None => return Box::new(future::ok(None)),
-                Some(host) => (
-                    host.get_epoch(),
-                    host.get_nodes().iter()
-                        .map(|node| node.get_cluster_name().clone()).collect::<HashSet<String>>()
-                ),
-            };
-
-            let s = stream::iter_ok(clusters);
-            let f = s.map(move |cluster_name| self_clone.get_cluster(cluster_name))
-                .buffer_unordered(1000)  // try buffering all
-                .filter_map(|a| a)
-                .map(|cluster| {
-                    let cluster_name = cluster.get_name().clone();
-                    // Ignore replicas
-                    cluster.into_nodes()
-                        .into_iter()
-                        .filter(|n| n.get_role() == Role::Master)
-                        .group_by(|node| node.get_proxy_address().clone()).into_iter()
-                        .map(|(proxy_address, nodes)| {
-                            // Collect all slots from masters.
-                            let slots = nodes.map(Node::into_slots).flatten().collect();
-                            // proxy as node
-                            let repl_meta = ReplMeta::new(Role::Master, vec![]);
-                            Node::new(proxy_address.clone(), proxy_address, cluster_name.clone(), slots, repl_meta)
-                        })
-                        .collect::<Vec<Node>>()
-                })
-                .collect()
-                .map(move |nested_nodes| {
-                    let address_clone2 = address_clone1.clone();
-                    let nodes = nested_nodes.into_iter()
-                        .flatten()
-                        .filter(move |node| {
-                            node.get_proxy_address().ne(&address_clone1)
-                        })
-                        .collect::<Vec<Node>>();
-                    debug!("get peer meta {} {} {:?}", address_clone2, epoch, nodes);
-                    // These nodes are actually proxies.
-                    Host::new(address_clone2, epoch, nodes, Vec::new())
-                });
-            Box::new(f.map(Some))
-        });
         Box::new(host_fut)
     }
 

@@ -177,12 +177,6 @@ mod tests {
         ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
             Box::new(future::ok(None))
         }
-        fn get_peer(
-            &self,
-            _address: String,
-        ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
-            Box::new(future::ok(None))
-        }
         fn add_failure(
             &self,
             address: String,

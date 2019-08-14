@@ -377,20 +377,35 @@ impl Cluster {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PeerProxy {
+    pub proxy_address: String,
+    pub cluster_name: String,
+    pub slots: Vec<SlotRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Host {
     address: String,
     epoch: u64,
     nodes: Vec<Node>,
     free_nodes: Vec<String>,
+    peers: Vec<PeerProxy>,
 }
 
 impl Host {
-    pub fn new(address: String, epoch: u64, nodes: Vec<Node>, free_nodes: Vec<String>) -> Self {
+    pub fn new(
+        address: String,
+        epoch: u64,
+        nodes: Vec<Node>,
+        free_nodes: Vec<String>,
+        peers: Vec<PeerProxy>,
+    ) -> Self {
         Self {
             address,
             epoch,
             nodes,
             free_nodes,
+            peers,
         }
     }
     pub fn get_address(&self) -> &String {
@@ -423,6 +438,9 @@ impl Host {
         };
         self.nodes.retain(|node| node.get_address() != node_address);
         Some(node)
+    }
+    pub fn get_peers(&self) -> &Vec<PeerProxy> {
+        &self.peers
     }
 }
 
@@ -515,7 +533,12 @@ mod tests {
                     "slots": []
                 }
             ],
-            "free_nodes": []
+            "free_nodes": [],
+            "peers": [{
+                "proxy_address": "server_proxy2:6002",
+                "cluster_name": "mydb",
+                "slots": [{"start": 5462, "end": 10000, "tag": "None"}]
+            }]
         }"#;
         let host: Host = match serde_json::from_str(host_str) {
             Ok(h) => h,
@@ -560,6 +583,15 @@ mod tests {
                 ),
             ],
             Vec::new(),
+            vec![PeerProxy {
+                proxy_address: "server_proxy2:6002".to_string(),
+                cluster_name: "mydb".to_string(),
+                slots: vec![SlotRange {
+                    start: 5462,
+                    end: 10000,
+                    tag: SlotRangeTag::None,
+                }],
+            }],
         );
         assert_eq!(expected_host, host);
     }

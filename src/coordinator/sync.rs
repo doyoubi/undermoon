@@ -1,5 +1,5 @@
 use super::broker::MetaDataBroker;
-use super::core::{CoordinateError, HostMeta, HostMetaRetriever, HostMetaSender};
+use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
 use common::cluster::{Host, Role, SlotRange};
 use common::db::{DBMapFlags, HostDBMap, ProxyDBMeta};
 use common::utils::OLD_EPOCH_REPLY;
@@ -20,19 +20,15 @@ impl<F: RedisClientFactory> HostMetaRespSender<F> {
 }
 
 impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
-    fn send_meta(
-        &self,
-        host: HostMeta,
-    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let HostMeta { local, peer } = host;
-        let address = local.get_address().clone();
+    fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+        let address = host.get_address().clone();
 
         let client_fut = self
             .client_factory
             .create_client(address)
             .map_err(CoordinateError::Redis);
 
-        let local_host_with_only_masters = filter_host_masters(local.clone());
+        let host_with_only_masters = filter_host_masters(host.clone());
         Box::new(
             client_fut
                 .and_then(move |client| {
@@ -40,7 +36,7 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
                     send_meta(
                         client,
                         "SETREPL".to_string(),
-                        generate_repl_meta_cmd_args(local, DBMapFlags { force: false }),
+                        generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
                     )
                 })
                 .and_then(|client| {
@@ -49,8 +45,7 @@ impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
                         "SETDB".to_string(),
                         generate_host_meta_cmd_args(
                             DBMapFlags { force: false },
-                            local_host_with_only_masters,
-                            peer,
+                            host_with_only_masters,
                         ),
                     )
                 })
@@ -63,13 +58,14 @@ fn filter_host_masters(host: Host) -> Host {
     let address = host.get_address().clone();
     let epoch = host.get_epoch();
     let free_nodes = host.get_free_nodes().clone();
+    let peers = host.get_peers().clone();
     let masters = host
         .into_nodes()
         .into_iter()
         .filter(|node| node.get_role() == Role::Master)
         .collect();
 
-    Host::new(address, epoch, masters, free_nodes)
+    Host::new(address, epoch, masters, free_nodes, peers)
 }
 
 pub struct BrokerMetaRetriever<B: MetaDataBroker> {
@@ -86,53 +82,40 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
     fn get_host_meta(
         &self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<HostMeta>, Error = CoordinateError> + Send> {
-        let get_local = self
-            .broker
-            .get_host(address.clone())
-            .map_err(CoordinateError::MetaData);
-        let get_peer = self
-            .broker
-            .get_peer(address)
-            .map_err(CoordinateError::MetaData);
-        Box::new(get_local.and_then(|l| {
-            get_peer.map(move |p| {
-                if let (Some(local), Some(peer)) = (l, p) {
-                    // If requesting two read operation from different stateless broker proxy,
-                    // we might still have a stale SETDB.
-                    // Check this explicitly.
-                    if local.get_epoch() == peer.get_epoch() {
-                        return Some(HostMeta { local, peer });
-                    }
-                    debug!("local.epoch > peer.epoch. Drop it.")
-                }
-                None
-            })
-        }))
+    ) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send> {
+        Box::new(
+            self.broker
+                .get_host(address.clone())
+                .map_err(CoordinateError::MetaData),
+        )
     }
 }
 
-fn generate_host_meta_cmd_args(
-    flags: DBMapFlags,
-    local_proxy: Host,
-    peer_proxy: Host,
-) -> Vec<String> {
-    let epoch = local_proxy.get_epoch();
-    let local = generate_proxy_db_map(local_proxy);
-    let peer = generate_proxy_db_map(peer_proxy);
-    let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer);
-    proxy_db_meta.to_args()
-}
+fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
+    let epoch = proxy.get_epoch();
 
-fn generate_proxy_db_map(proxy: Host) -> HostDBMap {
     let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+
+    for peer_proxy in proxy.get_peers().iter() {
+        let dbs = db_map
+            .entry(peer_proxy.cluster_name.clone())
+            .or_insert_with(HashMap::new);
+        dbs.insert(peer_proxy.proxy_address.clone(), peer_proxy.slots.clone());
+    }
+    let peer = HostDBMap::new(db_map);
+
+    let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+
     for node in proxy.into_nodes() {
         let dbs = db_map
             .entry(node.get_cluster_name().clone())
             .or_insert_with(HashMap::new);
         dbs.insert(node.get_address().clone(), node.into_slots().clone());
     }
-    HostDBMap::new(db_map)
+    let local = HostDBMap::new(db_map);
+
+    let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer);
+    proxy_db_meta.to_args()
 }
 
 // sub_command should be SETDB

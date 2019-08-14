@@ -1,5 +1,5 @@
 use ::common::cluster::{
-    Cluster, Host, MigrationTaskMeta, Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
+    Cluster, Host, MigrationTaskMeta, Node, PeerProxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
 };
 use ::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -81,6 +81,7 @@ impl MetaStore {
                 .clone()
                 .and_then(|cluster_name| clusters.get(&cluster_name))
                 .map(|cluster| {
+                    let cluster_name = cluster.get_name().clone();
                     let epoch = cluster.get_epoch();
                     let nodes = cluster
                         .get_nodes()
@@ -88,7 +89,26 @@ impl MetaStore {
                         .filter(|node| node.get_proxy_address() == address)
                         .cloned()
                         .collect();
-                    Host::new(address.to_string(), epoch, nodes, Vec::new())
+                    let peers = cluster
+                        .get_nodes()
+                        .iter()
+                        .filter(|n| {
+                            n.get_role() == Role::Master && n.get_proxy_address() != address
+                        })
+                        .cloned()
+                        .group_by(|node| node.get_proxy_address().clone())
+                        .into_iter()
+                        .map(|(proxy_address, nodes)| {
+                            // Collect all slots from masters.
+                            let slots = nodes.map(Node::into_slots).flatten().collect();
+                            PeerProxy {
+                                proxy_address,
+                                cluster_name: cluster_name.clone(),
+                                slots,
+                            }
+                        })
+                        .collect();
+                    Host::new(address.to_string(), epoch, nodes, Vec::new(), peers)
                 })
                 .or_else(|| {
                     Some(Host::new(
@@ -100,6 +120,7 @@ impl MetaStore {
                             .iter()
                             .cloned()
                             .collect::<Vec<String>>(),
+                        vec![],
                     ))
                 })
         })
