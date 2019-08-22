@@ -63,7 +63,7 @@ pub trait ImportingTask: ThreadSafe {
 }
 
 pub struct MigrationConfig {
-    lag_threshold: AtomicU64,
+    offset_threshold: AtomicU64,
     max_blocking_time: AtomicU64,
     min_blocking_time: AtomicU64,
     max_redirection_time: AtomicU64,
@@ -73,7 +73,7 @@ pub struct MigrationConfig {
 impl Default for MigrationConfig {
     fn default() -> Self {
         Self {
-            lag_threshold: AtomicU64::new(50000),
+            offset_threshold: AtomicU64::new(50000),
             max_blocking_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes, should leave some time for replication
             min_blocking_time: AtomicU64::new(100),            // 100ms
             max_redirection_time: AtomicU64::new(5000), // 5s, to wait for coordinator to update meta
@@ -83,18 +83,8 @@ impl Default for MigrationConfig {
 }
 
 impl MigrationConfig {
-    //    pub fn set_lag_threshold(&self, lag_threshold: u64) {
-    //        self.lag_threshold.store(lag_threshold, Ordering::SeqCst)
-    //    }
-    //    pub fn set_max_blocking_time(&self, replication_timeout: u64) {
-    //        self.max_blocking_time
-    //            .store(replication_timeout, Ordering::SeqCst)
-    //    }
-    //    pub fn set_min_block_time(&self, block_time: u64) {
-    //        self.min_blocking_time.store(block_time, Ordering::SeqCst)
-    //    }
-    pub fn get_lag_threshold(&self) -> u64 {
-        self.lag_threshold.load(Ordering::SeqCst)
+    pub fn get_offset_threshold(&self) -> u64 {
+        self.offset_threshold.load(Ordering::SeqCst)
     }
     pub fn get_max_blocking_time(&self) -> u64 {
         self.max_blocking_time.load(Ordering::SeqCst)
