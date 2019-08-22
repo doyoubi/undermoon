@@ -83,11 +83,13 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     fn replica_state_ready(
         states: &[ReplicaState],
         meta: &MigrationMeta,
-        lag_threshold: u64,
+        master_repl_offset: u64,
+        offset_threshold: u64,
     ) -> bool {
         for state in states.iter() {
             if format!("{}:{}", state.ip, state.port) == meta.dst_node_address
-                && state.lag < lag_threshold
+                && master_repl_offset >= state.offset
+                && (master_repl_offset - state.offset) < offset_threshold
             {
                 return true;
             }
@@ -111,10 +113,15 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                     }
                 };
                 match extract_replicas_from_replication_info(info) {
-                    Ok(states) => {
+                    Ok((master_repl_offset, states)) => {
                         // Put config inside this closure to make dynamically change possible.
-                        let lag_threshold = config.get_lag_threshold();
-                        if Self::replica_state_ready(&states, &meta, lag_threshold) {
+                        let offset_threshold = config.get_offset_threshold();
+                        if Self::replica_state_ready(
+                            &states,
+                            &meta,
+                            master_repl_offset,
+                            offset_threshold,
+                        ) {
                             info!("replication for migration is done {:?}", states);
                             Err(RedisClientError::Done)
                         } else {
@@ -594,10 +601,15 @@ impl ReplicaState {
     }
 }
 
-fn extract_replicas_from_replication_info(info: String) -> Result<Vec<ReplicaState>, ()> {
+fn extract_replicas_from_replication_info(info: String) -> Result<(u64, Vec<ReplicaState>), ()> {
+    let mut master_repl_offset: u64 = 0;
     let mut states = Vec::new();
     let lines = info.split("\r\n");
     for line in lines {
+        if line.starts_with("master_repl_offset") {
+            master_repl_offset = parse_info_int(line)?;
+            continue;
+        }
         if !line.starts_with("slave") {
             continue;
         }
@@ -606,7 +618,13 @@ fn extract_replicas_from_replication_info(info: String) -> Result<Vec<ReplicaSta
         let value = kv.next().ok_or(())?.to_string();
         states.push(ReplicaState::parse_replica_meta(value)?);
     }
-    Ok(states)
+    Ok((master_repl_offset, states))
+}
+
+fn parse_info_int(line: &str) -> Result<u64, ()> {
+    let mut kv = line.split(':');
+    let _field = kv.next().ok_or(())?;
+    kv.next().ok_or(())?.parse::<u64>().map_err(|_| ())
 }
 
 #[cfg(test)]
@@ -649,8 +667,10 @@ repl_backlog_active:1\r
 repl_backlog_size:1048576\r
 repl_backlog_first_byte_offset:1\r
 repl_backlog_histlen:56\r";
-        let states = extract_replicas_from_replication_info(replication_info.to_string())
-            .expect("test_parse_replication");
+        let (master_repl_offset, states) =
+            extract_replicas_from_replication_info(replication_info.to_string())
+                .expect("test_parse_replication");
+        assert_eq!(master_repl_offset, 56);
         assert_eq!(states.len(), 2);
     }
 }
