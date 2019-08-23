@@ -175,9 +175,8 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     }
 
     fn commit_switch(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
-        self.state.set_state(MigrationState::SwitchStarted);
-
         let state = self.state.clone();
+        let state_clone = self.state.clone();
         let client_factory = self.client_factory.clone();
 
         let mut cmd = vec!["UMCTL".to_string(), "TMPSWITCH".to_string()];
@@ -219,7 +218,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             }
         };
 
-        keep_connecting_and_sending(
+        let keep_sending = keep_connecting_and_sending(
             client_factory,
             self.meta.dst_proxy_address.clone(),
             cmd,
@@ -229,7 +228,11 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         .then(|result| {
             error!("commit_switch failed {:?}", result);
             Ok(())
-        })
+        });
+
+        future::ok(())
+            .map(move |()| state_clone.set_state(MigrationState::SwitchStarted))
+            .and_then(|()| keep_sending)
     }
 
     fn release_queue(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
