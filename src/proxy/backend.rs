@@ -91,81 +91,98 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
     type Task = T;
 
     fn send(&self, cmd_task: T) -> Result<(), BackendError> {
-        let need_init = self.node.read().unwrap().is_none();
-        // Race condition here. Multiple threads might be creating new connection at the same time.
-        // Maybe it's just fine. If not, lock the creating connection phrase.
-        if need_init {
-            let node_arc = self.node.clone();
-            let address = match revolve_first_address(&self.addr) {
-                Some(address) => address,
-                None => return Err(BackendError::InvalidAddress),
-            };
+        let retry_times = 3;
+        let mut cmd_task = cmd_task;
 
-            let config = self.config.clone();
+        for _ in 0..retry_times {
+            let need_init = self.node.read().unwrap().is_none();
+            // Race condition here. Multiple threads might be creating new connection at the same time.
+            // Maybe it's just fine. If not, lock the creating connection phrase.
+            if need_init {
+                let node_arc = self.node.clone();
+                let address = match revolve_first_address(&self.addr) {
+                    Some(address) => address,
+                    None => return Err(BackendError::InvalidAddress),
+                };
 
-            let sock = TcpStream::connect(&address);
-            let fut = sock.then(move |res| {
-                debug!("sock result: {:?}", res);
-                match res {
-                    Ok(sock) => {
-                        let (node, reader_handler, writer_handler) =
-                            BackendNode::<T>::new(sock, ReplyCommitHandler {}, config.clone());
-                        let (reader_handler, writer_handler) =
-                            new_future_group(reader_handler, writer_handler);
+                let config = self.config.clone();
 
-                        let (spawn_new, res) = {
-                            let mut guard = node_arc.write().unwrap();
-                            let empty = guard.is_none();
-                            let inner_node = guard.get_or_insert(node);
-                            (empty, inner_node.send(cmd_task))
-                        };
+                let sock = TcpStream::connect(&address);
+                let fut = sock.then(move |res| {
+                    debug!("sock result: {:?}", res);
+                    match res {
+                        Ok(sock) => {
+                            let (node, reader_handler, writer_handler) =
+                                BackendNode::<T>::new(sock, ReplyCommitHandler {}, config.clone());
+                            let (reader_handler, writer_handler) =
+                                new_future_group(reader_handler, writer_handler);
 
-                        if let Err(e) = res {
-                            error!("failed to forward cmd {:?}", e);
+                            let (spawn_new, res) = {
+                                let mut guard = node_arc.write().unwrap();
+                                let empty = guard.is_none();
+                                let inner_node = guard.get_or_insert(node);
+                                (
+                                    empty,
+                                    inner_node
+                                        .send(cmd_task)
+                                        .map_err(|_e| BackendError::Canceled),
+                                )
+                            };
+
+                            if let Err(e) = res {
+                                error!("failed to forward cmd {:?}", e);
+                            }
+
+                            if spawn_new {
+                                tokio::spawn(
+                                    reader_handler
+                                        .map(|()| error!("backend read IO closed"))
+                                        .map_err(|e| error!("backend read IO error {:?}", e)),
+                                );
+                                tokio::spawn(
+                                    writer_handler
+                                        .map(|()| error!("backend write IO closed"))
+                                        .map_err(|e| error!("backend write IO error {:?}", e)),
+                                );
+                            }
+                            future::ok(())
                         }
-
-                        if spawn_new {
-                            tokio::spawn(
-                                reader_handler
-                                    .map(|()| error!("backend read IO closed"))
-                                    .map_err(|e| error!("backend read IO error {:?}", e)),
-                            );
-                            tokio::spawn(
-                                writer_handler
-                                    .map(|()| error!("backend write IO closed"))
-                                    .map_err(|e| error!("backend write IO error {:?}", e)),
-                            );
+                        Err(e) => {
+                            error!("sock err: {:?}", e);
+                            cmd_task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
+                            future::err(())
                         }
-                        future::ok(())
                     }
-                    Err(e) => {
-                        error!("sock err: {:?}", e);
-                        cmd_task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
-                        future::err(())
-                    }
+                });
+                // If this future fails, cmd_task will be lost. Let itself send back an error response.
+                tokio::spawn(fut);
+                return Ok(());
+            }
+
+            let res = match self.node.read().unwrap().as_ref() {
+                Some(n) => n.send(cmd_task),
+                None => {
+                    cmd_task.set_result(Err(CommandError::InnerError));
+                    return Err(BackendError::NodeNotFound);
                 }
-            });
-            // If this future fails, cmd_task will be lost. Let itself send back an error response.
-            tokio::spawn(fut);
-            return Ok(());
+            };
+            cmd_task = match res {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    // if it fails, remove this connection.
+                    {
+                        let mut node = self.node.write().unwrap();
+                        if let Some(true) = node.as_ref().map(BackendNode::is_closed) {
+                            node.take();
+                        }
+                    }
+                    error!("reset backend connection {}", *self.addr);
+                    e.into_inner()
+                }
+            };
         }
 
-        let res = match self.node.read().unwrap().as_ref() {
-            Some(n) => n.send(cmd_task),
-            None => {
-                cmd_task.set_result(Err(CommandError::InnerError));
-                return Err(BackendError::NodeNotFound);
-            }
-        };
-        match res {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // if it fails, remove this connection.
-                self.node.write().unwrap().take();
-                error!("reset backend connecton {:?}", e);
-                Err(e)
-            }
-        }
+        Err(BackendError::Canceled)
     }
 }
 
@@ -174,6 +191,15 @@ pub struct ReplyCommitHandler {}
 
 impl<T: CmdTask> ReplyHandler<T> for ReplyCommitHandler {
     fn handle_reply(&self, _cmd_task: T, _result: BackendResult) {}
+}
+
+#[derive(Debug)]
+pub struct BackendSendError<T>(T);
+
+impl<T> BackendSendError<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
 }
 
 pub struct BackendNode<T: CmdTask> {
@@ -196,14 +222,18 @@ impl<T: CmdTask> BackendNode<T> {
         (Self { tx }, reader_handler, writer_handler)
     }
 
-    pub fn send(&self, cmd_task: T) -> Result<(), BackendError> {
+    pub fn send(&self, cmd_task: T) -> Result<(), BackendSendError<T>> {
         cmd_task
             .get_slowlog()
             .log_event(TaskEvent::SentToWritingQueue);
         self.tx
             .unbounded_send(cmd_task)
             .map(|_| ())
-            .map_err(|_e| BackendError::Canceled)
+            .map_err(|e| BackendSendError(e.into_inner()))
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.tx.is_closed()
     }
 }
 
