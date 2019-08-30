@@ -173,7 +173,7 @@ impl RedisClient for PooledRedisClient {
                     }
                 }
             } else if err.is_elapsed() {
-                error!("redis client error {:?}", err);
+                error!("redis client timeout error {:?}", err);
                 RedisClientError::Timeout
             } else if err.is_timer() {
                 error!("redis client timer error {:?}", err);

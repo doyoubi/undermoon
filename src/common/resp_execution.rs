@@ -96,45 +96,71 @@ pub fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
     Ok(())
 }
 
-pub struct I64Retriever {
+pub struct I64Retriever<F: RedisClientFactory> {
     data: Arc<atomic::AtomicI64>,
-    stop_signal: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
+    client_factory: Arc<F>,
+    address: String,
+    cmd: Vec<String>,
+    interval: Duration,
 }
 
-impl I64Retriever {
-    pub fn new<F: RedisClientFactory, Func>(
+impl<F: RedisClientFactory> I64Retriever<F> {
+    pub fn new(
         init_data: i64,
         client_factory: Arc<F>,
         address: String,
         cmd: Vec<String>,
         interval: Duration,
-        handle_func: Func,
-    ) -> (Self, impl Future<Item = (), Error = RedisClientError>)
-    where
-        Func: Clone + Fn(Resp, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>,
-    {
+    ) -> Self {
         let (sender, receiver) = oneshot::channel();
         let data = Arc::new(atomic::AtomicI64::new(init_data));
-        let data_clone = data.clone();
 
-        let handle_result =
-            move |resp: Resp| -> Result<(), RedisClientError> { handle_func(resp, &data_clone) };
-
-        let sending =
-            keep_connecting_and_sending(client_factory, address, cmd, interval, handle_result);
-        let fut = receiver
-            .map_err(|_| RedisClientError::Done)
-            .select(sending)
-            .map(|_| ())
-            .map_err(|_| RedisClientError::Done);
-
-        let stop_signal = AtomicOption::new(Box::new(sender));
-        let retriever = Self { data, stop_signal };
-        (retriever, fut)
+        let stop_signal_sender = AtomicOption::new(Box::new(sender));
+        let stop_signal_receiver = AtomicOption::new(Box::new(receiver));
+        Self {
+            data,
+            stop_signal_sender,
+            stop_signal_receiver,
+            client_factory,
+            address,
+            cmd,
+            interval,
+        }
     }
 
     pub fn get_data(&self) -> i64 {
         self.data.load(atomic::Ordering::SeqCst)
+    }
+
+    pub fn start<Func>(&self, handle_func: Func)
+    where
+        Func: Fn(Resp, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
+            + Clone
+            + Send
+            + 'static,
+    {
+        if let Some(stop_signal_receiver) = self.stop_signal_receiver.take(atomic::Ordering::SeqCst)
+        {
+            let data_clone = self.data.clone();
+            let handle_result = move |resp: Resp| -> Result<(), RedisClientError> {
+                handle_func(resp, &data_clone)
+            };
+            let sending = keep_connecting_and_sending(
+                self.client_factory.clone(),
+                self.address.clone(),
+                self.cmd.clone(),
+                self.interval,
+                handle_result,
+            );
+            let fut = stop_signal_receiver
+                .map_err(|_| ())
+                .select(sending.map_err(|_| ()))
+                .map(|_| ())
+                .map_err(|_| ());
+            tokio::spawn(fut);
+        }
     }
 
     pub fn stop(&self) {
@@ -144,14 +170,14 @@ impl I64Retriever {
     }
 
     pub fn try_stop(&self) -> bool {
-        match self.stop_signal.take(atomic::Ordering::SeqCst) {
+        match self.stop_signal_sender.take(atomic::Ordering::SeqCst) {
             Some(sender) => sender.send(()).is_ok(),
             None => false,
         }
     }
 }
 
-impl Drop for I64Retriever {
+impl<F: RedisClientFactory> Drop for I64Retriever<F> {
     fn drop(&mut self) {
         self.stop()
     }

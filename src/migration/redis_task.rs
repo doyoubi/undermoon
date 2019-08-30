@@ -544,6 +544,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
         }
 
         self.redis_importing_controller.switch_to_master()?;
+        self.redis_importing_controller.wait_for_loading()?;
 
         if self.state.get_state() != MigrationState::SwitchCommitted {
             info!("importing node commit switch {:?}", self.meta);
@@ -649,7 +650,7 @@ mod tests {
         assert_eq!(meta.offset, 28);
         assert_eq!(meta.lag, 1);
 
-        let replication_info = "Replication\r
+        let replication_info = "# Replication\r
 role:master\r
 connected_slaves:1\r
 slave0:ip=127.0.0.1,port=6000,state=online,offset=233,lag=6699\r
@@ -661,7 +662,7 @@ second_repl_offset:-1\r
 repl_backlog_active:1\r
 repl_backlog_size:1048576\r
 repl_backlog_first_byte_offset:1\r
-repl_backlog_histlen:56\r";
+repl_backlog_histlen:56\r\n";
         let (master_repl_offset, states) =
             extract_replicas_from_replication_info(replication_info.to_string())
                 .expect("test_parse_replication");
