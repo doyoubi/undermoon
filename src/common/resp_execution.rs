@@ -1,8 +1,11 @@
+use atomic_option::AtomicOption;
+use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_timer::Delay;
 use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
 use std::iter;
 use std::str;
+use std::sync::atomic;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -91,6 +94,67 @@ pub fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
         error!("error reply: {}", err_str);
     }
     Ok(())
+}
+
+pub struct I64Retriever {
+    data: Arc<atomic::AtomicI64>,
+    stop_signal: AtomicOption<oneshot::Sender<()>>,
+}
+
+impl I64Retriever {
+    pub fn new<F: RedisClientFactory, Func>(
+        init_data: i64,
+        client_factory: Arc<F>,
+        address: String,
+        cmd: Vec<String>,
+        interval: Duration,
+        handle_func: Func,
+    ) -> (Self, impl Future<Item = (), Error = RedisClientError>)
+    where
+        Func: Clone + Fn(Resp, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>,
+    {
+        let (sender, receiver) = oneshot::channel();
+        let data = Arc::new(atomic::AtomicI64::new(init_data));
+        let data_clone = data.clone();
+
+        let handle_result =
+            move |resp: Resp| -> Result<(), RedisClientError> { handle_func(resp, &data_clone) };
+
+        let sending =
+            keep_connecting_and_sending(client_factory, address, cmd, interval, handle_result);
+        let fut = receiver
+            .map_err(|_| RedisClientError::Done)
+            .select(sending)
+            .map(|_| ())
+            .map_err(|_| RedisClientError::Done);
+
+        let stop_signal = AtomicOption::new(Box::new(sender));
+        let retriever = Self { data, stop_signal };
+        (retriever, fut)
+    }
+
+    pub fn get_data(&self) -> i64 {
+        self.data.load(atomic::Ordering::SeqCst)
+    }
+
+    pub fn stop(&self) {
+        if !self.try_stop() {
+            warn!("Failed to stop I64Retriever. Maybe it has been already stopped.");
+        }
+    }
+
+    pub fn try_stop(&self) -> bool {
+        match self.stop_signal.take(atomic::Ordering::SeqCst) {
+            Some(sender) => sender.send(()).is_ok(),
+            None => false,
+        }
+    }
+}
+
+impl Drop for I64Retriever {
+    fn drop(&mut self) {
+        self.stop()
+    }
 }
 
 #[cfg(test)]
