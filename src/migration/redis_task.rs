@@ -35,7 +35,8 @@ pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     cmd_task_receiver: Arc<
         crossbeam_channel::Receiver<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
     >,
-    stop_signal: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
@@ -53,6 +54,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         sender_factory: Arc<TSF>,
     ) -> Self {
         let (sender, receiver) = crossbeam_channel::unbounded();
+        let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         Self {
             config,
             meta,
@@ -64,12 +66,13 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             sender_factory,
             cmd_task_sender: sender,
             cmd_task_receiver: Arc::new(receiver),
-            stop_signal: AtomicOption::empty(),
+            stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
+            stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
         }
     }
 
     fn send_stop_signal(&self) -> Result<(), MigrationError> {
-        if let Some(sender) = self.stop_signal.take(Ordering::SeqCst) {
+        if let Some(sender) = self.stop_signal_sender.take(Ordering::SeqCst) {
             sender.send(()).map_err(|()| {
                 error!("failed to send stop signal");
                 MigrationError::Canceled
@@ -300,14 +303,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        let (sender, receiver) = oneshot::channel();
-        if self
-            .stop_signal
-            .try_store(Box::new(sender), Ordering::SeqCst)
-            .is_some()
-        {
-            return Box::new(future::err(MigrationError::AlreadyStarted));
-        }
+        let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
+            Some(r) => r,
+            None => return Box::new(future::err(MigrationError::AlreadyStarted)),
+        };
 
         let meta = self.meta.clone();
         let state = self.state.clone();
@@ -421,7 +420,8 @@ pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     sender_factory: Arc<TSF>,
-    stop_signal: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     redis_importing_controller: RedisImportingController<RCF>,
 }
 
@@ -438,12 +438,14 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImpor
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
     ) -> Self {
+        let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         Self {
             config,
             meta: meta.clone(),
             state: Arc::new(AtomicMigrationState::new()),
             sender_factory,
-            stop_signal: AtomicOption::empty(),
+            stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
+            stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             redis_importing_controller: RedisImportingController::new(
                 db_name,
                 meta.clone(),
@@ -471,7 +473,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImpor
     }
 
     fn send_stop_signal(&self) -> Result<(), MigrationError> {
-        if let Some(sender) = self.stop_signal.take(Ordering::SeqCst) {
+        if let Some(sender) = self.stop_signal_sender.take(Ordering::SeqCst) {
             sender.send(()).map_err(|()| {
                 error!("failed to send stop signal");
                 MigrationError::Canceled
@@ -496,14 +498,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        let (sender, receiver) = oneshot::channel();
-        if self
-            .stop_signal
-            .try_store(Box::new(sender), Ordering::SeqCst)
-            .is_some()
-        {
-            return Box::new(future::err(MigrationError::AlreadyStarted));
-        }
+        let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
+            Some(r) => r,
+            None => return Box::new(future::err(MigrationError::AlreadyStarted)),
+        };
 
         let meta = self.meta.clone();
 
