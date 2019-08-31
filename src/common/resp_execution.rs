@@ -9,15 +9,6 @@ use std::sync::atomic;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub fn keep_retrying_and_sending<F: RedisClientFactory>(
-    client_factory: Arc<F>,
-    address: String,
-    cmd: Vec<String>,
-    interval: Duration,
-) -> impl Future<Item = (), Error = RedisClientError> {
-    keep_connecting_and_sending(client_factory, address, cmd, interval, retry_handle_func)
-}
-
 pub fn keep_connecting_and_sending<F: RedisClientFactory, Func>(
     client_factory: Arc<F>,
     address: String,
@@ -134,7 +125,10 @@ impl<F: RedisClientFactory> I64Retriever<F> {
         self.data.load(atomic::Ordering::SeqCst)
     }
 
-    pub fn start<Func>(&self, handle_func: Func)
+    pub fn start<Func>(
+        &self,
+        handle_func: Func,
+    ) -> Option<Box<dyn Future<Item = (), Error = RedisClientError> + Send>>
     where
         Func: Fn(Resp, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
             + Clone
@@ -155,17 +149,22 @@ impl<F: RedisClientFactory> I64Retriever<F> {
                 handle_result,
             );
             let fut = stop_signal_receiver
-                .map_err(|_| ())
-                .select(sending.map_err(|_| ()))
+                .map_err(|_| RedisClientError::Cancelled)
+                .select(sending)
                 .map(|_| ())
-                .map_err(|_| ());
-            tokio::spawn(fut);
+                .map_err(|(e, _)| e);
+            Some(Box::new(fut))
+        } else {
+            None
         }
     }
 
-    pub fn stop(&self) {
+    pub fn stop(&self) -> bool {
         if !self.try_stop() {
-            warn!("Failed to stop I64Retriever. Maybe it has been already stopped.");
+            warn!("Failed to stop I64Retriever. Maybe it has been stopped.");
+            false
+        } else {
+            true
         }
     }
 
@@ -179,7 +178,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
 
 impl<F: RedisClientFactory> Drop for I64Retriever<F> {
     fn drop(&mut self) {
-        self.stop()
+        self.stop();
     }
 }
 

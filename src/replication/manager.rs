@@ -125,15 +125,19 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
             }
             for (key, master) in new_masters.into_iter() {
                 debug!("spawn master {} {}", key.0, key.1);
-                tokio::spawn(master.start().map_err(move |e| {
-                    error!("master replicator {} {} exit {:?}", key.0, key.1, e)
-                }));
+                if let Some(fut) = master.start() {
+                    tokio::spawn(fut.map_err(move |e| {
+                        error!("master replicator {} {} exit {:?}", key.0, key.1, e)
+                    }));
+                }
             }
             for (key, replica) in new_replicas.into_iter() {
                 debug!("spawn replica {} {}", key.0, key.1);
-                tokio::spawn(replica.start().map_err(move |e| {
-                    error!("replica replicator {} {} exit {:?}", key.0, key.1, e)
-                }));
+                if let Some(fut) = replica.start() {
+                    tokio::spawn(fut.map_err(move |e| {
+                        error!("replica replicator {} {} exit {:?}", key.0, key.1, e)
+                    }));
+                }
             }
             *replicators = (epoch, new_replicators);
         }

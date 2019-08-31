@@ -12,13 +12,13 @@ use std::str;
 // MasterReplicator and ReplicaReplicator work together remotely to manage the replication.
 
 pub trait MasterReplicator: ThreadSafe {
-    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn start(&self) -> Option<Box<dyn Future<Item = (), Error = ReplicatorError> + Send>>;
     fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &MasterMeta;
 }
 
 pub trait ReplicaReplicator: ThreadSafe {
-    fn start(&self) -> Box<dyn Future<Item = (), Error = ReplicatorError> + Send>;
+    fn start(&self) -> Option<Box<dyn Future<Item = (), Error = ReplicatorError> + Send>>;
     fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &ReplicaMeta;
 }
@@ -166,6 +166,7 @@ pub enum ReplicatorError {
     Canceled,
     RedisError(RedisClientError),
     Io(io::Error),
+    InvalidMeta,
 }
 
 impl fmt::Display for ReplicatorError {

@@ -5,7 +5,7 @@ use ::common::utils::extract_info_int_field;
 use ::protocol::{RedisClientError, RedisClientFactory, Resp};
 use ::replication::redis_replicator::{RedisMasterReplicator, RedisReplicaReplicator};
 use ::replication::replicator::{MasterMeta, ReplicaMeta, ReplicaReplicator, ReplicatorError};
-use futures::Future;
+use futures::{future, Future};
 use replication::replicator::MasterReplicator;
 use std::sync::atomic;
 use std::sync::Arc;
@@ -52,16 +52,19 @@ impl<F: RedisClientFactory> RedisImportingController<F> {
     }
 
     pub fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        let master_task = self.master_replicator.start();
-        Box::new(
-            self.replica_replicator
-                .start()
-                .then(move |result| {
-                    warn!("replica_replicator result {:?}", result);
-                    master_task
-                })
-                .map_err(MigrationError::ReplError),
-        )
+        if let Some(master_task) = self.master_replicator.start() {
+            Box::new(
+                self.replica_replicator
+                    .start()
+                    .then(move |result| {
+                        warn!("replica_replicator result {:?}", result);
+                        master_task
+                    })
+                    .map_err(MigrationError::ReplError),
+            )
+        } else {
+            Box::new(future::err(MigrationError::AlreadyStarted))
+        }
     }
 
     pub fn switch_to_master(&self) -> Result<(), MigrationError> {
@@ -79,8 +82,16 @@ impl<F: RedisClientFactory> RedisImportingController<F> {
     }
 
     pub fn wait_for_loading(&self) -> Result<(), MigrationError> {
-        // can be called for multiple times.
-        self.loading_retriever.start(Self::handle_info_persistence);
+        if let Some(fut) = self.loading_retriever.start(Self::handle_info_persistence) {
+            tokio::spawn(fut.map_err(|e| {
+                match e {
+                    RedisClientError::Done | RedisClientError::Cancelled => {
+                        info!("importing controller stopped")
+                    }
+                    err => error!("importing controller stopped with error: {:?}", err),
+                };
+            }));
+        }
 
         if self.loading_retriever.get_data() == 0 {
             Ok(())
