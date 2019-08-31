@@ -149,7 +149,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
                 handle_result,
             );
             let fut = stop_signal_receiver
-                .map_err(|_| RedisClientError::Cancelled)
+                .map_err(|_| RedisClientError::Canceled)
                 .select(sending)
                 .map(|_| ())
                 .map_err(|(e, _)| e);
@@ -161,7 +161,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
 
     pub fn stop(&self) -> bool {
         if !self.try_stop() {
-            warn!("Failed to stop I64Retriever. Maybe it has been stopped.");
+            debug!("Failed to stop I64Retriever. Maybe it has been stopped.");
             false
         } else {
             true

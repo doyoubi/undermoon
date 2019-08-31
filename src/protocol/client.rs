@@ -302,7 +302,7 @@ pub enum RedisClientError {
     InitError,
     Closed,
     Done,
-    Cancelled,
+    Canceled,
 }
 
 impl fmt::Display for RedisClientError {

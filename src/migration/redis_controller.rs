@@ -85,7 +85,7 @@ impl<F: RedisClientFactory> RedisImportingController<F> {
         if let Some(fut) = self.loading_retriever.start(Self::handle_info_persistence) {
             tokio::spawn(fut.map_err(|e| {
                 match e {
-                    RedisClientError::Done | RedisClientError::Cancelled => {
+                    RedisClientError::Done | RedisClientError::Canceled => {
                         info!("importing controller stopped")
                     }
                     err => error!("importing controller stopped with error: {:?}", err),
