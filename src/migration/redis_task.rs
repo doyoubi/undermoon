@@ -317,6 +317,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
         let migration_timeout = self.migration_timeout();
         let release_queue = self.release_queue();
         let release_queue2 = self.release_queue();
+        let release_queue3 = self.release_queue();
         let stop_redirection = self.stop_redirection();
         let stop_redirection2 = self.stop_redirection();
 
@@ -356,7 +357,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
                             error!("RedisMigratingTask stopped with error {:?} {:?}", err, meta)
                         }
                     }
-                    future::ok(())
+                    // The release_queue above might get interrupted by the UMCTL SETDB
+                    // from the coordinators which could result in dropping the buffered commands
+                    // without processing them.
+                    release_queue3
                 }),
         )
     }
