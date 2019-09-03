@@ -1,19 +1,13 @@
+use atomic_option::AtomicOption;
+use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_timer::Delay;
 use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
 use std::iter;
 use std::str;
+use std::sync::atomic;
 use std::sync::Arc;
 use std::time::Duration;
-
-pub fn keep_retrying_and_sending<F: RedisClientFactory>(
-    client_factory: Arc<F>,
-    address: String,
-    cmd: Vec<String>,
-    interval: Duration,
-) -> impl Future<Item = (), Error = RedisClientError> {
-    keep_connecting_and_sending(client_factory, address, cmd, interval, retry_handle_func)
-}
 
 pub fn keep_connecting_and_sending<F: RedisClientFactory, Func>(
     client_factory: Arc<F>,
@@ -91,6 +85,101 @@ pub fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
         error!("error reply: {}", err_str);
     }
     Ok(())
+}
+
+pub struct I64Retriever<F: RedisClientFactory> {
+    data: Arc<atomic::AtomicI64>,
+    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
+    client_factory: Arc<F>,
+    address: String,
+    cmd: Vec<String>,
+    interval: Duration,
+}
+
+impl<F: RedisClientFactory> I64Retriever<F> {
+    pub fn new(
+        init_data: i64,
+        client_factory: Arc<F>,
+        address: String,
+        cmd: Vec<String>,
+        interval: Duration,
+    ) -> Self {
+        let (sender, receiver) = oneshot::channel();
+        let data = Arc::new(atomic::AtomicI64::new(init_data));
+
+        let stop_signal_sender = AtomicOption::new(Box::new(sender));
+        let stop_signal_receiver = AtomicOption::new(Box::new(receiver));
+        Self {
+            data,
+            stop_signal_sender,
+            stop_signal_receiver,
+            client_factory,
+            address,
+            cmd,
+            interval,
+        }
+    }
+
+    pub fn get_data(&self) -> i64 {
+        self.data.load(atomic::Ordering::SeqCst)
+    }
+
+    pub fn start<Func>(
+        &self,
+        handle_func: Func,
+    ) -> Option<Box<dyn Future<Item = (), Error = RedisClientError> + Send>>
+    where
+        Func: Fn(Resp, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
+            + Clone
+            + Send
+            + 'static,
+    {
+        if let Some(stop_signal_receiver) = self.stop_signal_receiver.take(atomic::Ordering::SeqCst)
+        {
+            let data_clone = self.data.clone();
+            let handle_result = move |resp: Resp| -> Result<(), RedisClientError> {
+                handle_func(resp, &data_clone)
+            };
+            let sending = keep_connecting_and_sending(
+                self.client_factory.clone(),
+                self.address.clone(),
+                self.cmd.clone(),
+                self.interval,
+                handle_result,
+            );
+            let fut = stop_signal_receiver
+                .map_err(|_| RedisClientError::Canceled)
+                .select(sending)
+                .map(|_| ())
+                .map_err(|(e, _)| e);
+            Some(Box::new(fut))
+        } else {
+            None
+        }
+    }
+
+    pub fn stop(&self) -> bool {
+        if !self.try_stop() {
+            debug!("Failed to stop I64Retriever. Maybe it has been stopped.");
+            false
+        } else {
+            true
+        }
+    }
+
+    pub fn try_stop(&self) -> bool {
+        match self.stop_signal_sender.take(atomic::Ordering::SeqCst) {
+            Some(sender) => sender.send(()).is_ok(),
+            None => false,
+        }
+    }
+}
+
+impl<F: RedisClientFactory> Drop for I64Retriever<F> {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 #[cfg(test)]

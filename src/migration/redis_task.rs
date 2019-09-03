@@ -12,11 +12,10 @@ use ::proxy::database::DBSendError;
 use atomic_option::AtomicOption;
 use crossbeam_channel;
 use futures::sync::oneshot;
-use futures::{future, stream, Future, Stream};
+use futures::{future, Future};
 use futures_timer::Delay;
 use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
 use std::collections::HashMap;
-use std::iter;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -36,7 +35,8 @@ pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     cmd_task_receiver: Arc<
         crossbeam_channel::Receiver<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
     >,
-    stop_signal: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
@@ -54,6 +54,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         sender_factory: Arc<TSF>,
     ) -> Self {
         let (sender, receiver) = crossbeam_channel::unbounded();
+        let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         Self {
             config,
             meta,
@@ -65,12 +66,13 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             sender_factory,
             cmd_task_sender: sender,
             cmd_task_receiver: Arc::new(receiver),
-            stop_signal: AtomicOption::empty(),
+            stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
+            stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
         }
     }
 
     fn send_stop_signal(&self) -> Result<(), MigrationError> {
-        if let Some(sender) = self.stop_signal.take(Ordering::SeqCst) {
+        if let Some(sender) = self.stop_signal_sender.take(Ordering::SeqCst) {
             sender.send(()).map_err(|()| {
                 error!("failed to send stop signal");
                 MigrationError::Canceled
@@ -167,7 +169,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
                 info!("start to block request {:?}", meta);
                 state.set_state(MigrationState::Blocking);
             })
-            .and_then(move |()| Delay::new(min_blocking_time).map_err(MigrationError::Io))
+            .and_then(move |()| Delay::new(min_blocking_time))
             .then(|result| {
                 info!("blocking request done {:?}", result);
                 Ok(())
@@ -176,7 +178,6 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
 
     fn commit_switch(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
         let state = self.state.clone();
-        let state_clone = self.state.clone();
         let client_factory = self.client_factory.clone();
 
         let mut cmd = vec!["UMCTL".to_string(), "TMPSWITCH".to_string()];
@@ -209,7 +210,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             }
             reply => {
                 if state.get_state() != MigrationState::SwitchCommitted {
-                    info!("Migrationg node successfully switch {:?} {:?}", meta, reply);
+                    info!("Migration node successfully switch {:?} {:?}", meta, reply);
                 }
                 state.set_state(MigrationState::SwitchCommitted);
                 // Even we have already committed, the destination proxy might fail and reboot.
@@ -218,7 +219,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             }
         };
 
-        let keep_sending = keep_connecting_and_sending(
+        keep_connecting_and_sending(
             client_factory,
             self.meta.dst_proxy_address.clone(),
             cmd,
@@ -228,65 +229,42 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         .then(|result| {
             error!("commit_switch failed {:?}", result);
             Ok(())
-        });
+        })
+    }
 
-        future::ok(())
-            .map(move |()| state_clone.set_state(MigrationState::SwitchStarted))
-            .and_then(|()| keep_sending)
+    fn migration_timeout(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        let max_blocking_time = Duration::from_millis(self.config.get_max_blocking_time());
+        let state = self.state.clone();
+        Delay::new(max_blocking_time).then(move |result| {
+            info!(
+                "Commit status does not change for so long. Force it to commit. {:?}",
+                result
+            );
+            state.set_state(MigrationState::SwitchCommitted);
+            Ok(())
+        })
     }
 
     fn release_queue(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
-        let state = self.state.clone();
         let sender_factory = self.sender_factory.clone();
         let dst_proxy_address = self.meta.dst_proxy_address.clone();
         let cmd_task_receiver = self.cmd_task_receiver.clone();
 
-        let max_blocking_time = u128::from(self.config.get_max_blocking_time());
-
-        let s = stream::iter_ok(iter::repeat(()));
-        s.fold(
-            0,
-            move |lasting_time, ()| -> Box<dyn Future<Item = u128, Error = ()> + Send> {
-                let delay_time = if lasting_time > max_blocking_time {
-                    warn!("Commit status does not change for so long. Force commit.");
-                    state.set_state(MigrationState::SwitchCommitted);
-                    Duration::from_millis(0)
-                } else {
-                    Duration::from_millis(5)
-                };
-
-                if state.get_state() != MigrationState::SwitchCommitted {
-                    let acc_time = lasting_time + delay_time.as_millis();
-                    return Box::new(
-                        Delay::new(delay_time)
-                            .map(move |_| acc_time)
-                            .map_err(|_| ()),
-                    );
-                }
-
-                info!("start to drain waiting queue");
-                Self::drain_waiting_queue(
-                    sender_factory.clone(),
-                    dst_proxy_address.clone(),
-                    cmd_task_receiver.clone(),
-                );
-                info!("finished draining waiting queue");
-
-                Box::new(
-                    future::err(()), // stop
-                )
-            },
-        )
-        .then(|result: Result<u128, ()>| {
-            info!("release_queue done {:?}", result);
-            future::ok(())
+        future::ok(()).map(move |()| {
+            info!("start to drain waiting queue");
+            Self::drain_waiting_queue(
+                sender_factory.clone(),
+                dst_proxy_address.clone(),
+                cmd_task_receiver.clone(),
+            );
+            info!("Finished draining waiting queue. release_queue done");
         })
     }
 
-    fn stop_redirection(
-        redirection_stopped: Arc<AtomicBool>,
-        redirection_timeout: u64,
-    ) -> impl Future<Item = (), Error = MigrationError> + Send {
+    fn stop_redirection(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        let redirection_stopped = self.redirection_stopped.clone();
+        let redirection_timeout = self.config.get_max_redirection_time();
+
         let delay_time = Duration::from_millis(redirection_timeout);
         let delay = Delay::new(delay_time).map_err(MigrationError::Io);
         delay
@@ -325,31 +303,45 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        let (sender, receiver) = oneshot::channel();
-        if self
-            .stop_signal
-            .try_store(Box::new(sender), Ordering::SeqCst)
-            .is_some()
-        {
-            return Box::new(future::err(MigrationError::AlreadyStarted));
-        }
+        let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
+            Some(r) => r,
+            None => return Box::new(future::err(MigrationError::AlreadyStarted)),
+        };
 
         let meta = self.meta.clone();
-
-        let redirection_stopped = self.redirection_stopped.clone();
-        let redirection_timeout = self.config.get_max_redirection_time();
+        let state = self.state.clone();
 
         let check_phase = self.check_repl_state();
         let block_request = self.block_request();
         let commit_switch = self.commit_switch();
+        let migration_timeout = self.migration_timeout();
         let release_queue = self.release_queue();
-        let release_queue_or_timeout = release_queue
-            .and_then(move |()| Self::stop_redirection(redirection_stopped, redirection_timeout));
+        let release_queue2 = self.release_queue();
+        let release_queue3 = self.release_queue();
+        let stop_redirection = self.stop_redirection();
+        let stop_redirection2 = self.stop_redirection();
+
+        let (commit_sender, commit_receiver) = oneshot::channel();
+
         let migration_fut = check_phase
             .and_then(|()| block_request)
             .and_then(move |()| {
                 info!("start to commit {:?}", meta);
-                commit_switch.join(release_queue_or_timeout).map(|_| ())
+                state.set_state(MigrationState::SwitchStarted);
+
+                let normal_commit = commit_switch
+                    .map(|_| commit_sender.send(()).unwrap_or(()))
+                    .and_then(|_| release_queue)
+                    .and_then(|_| stop_redirection);
+                let timeout_commit = migration_timeout
+                    .and_then(|_| release_queue2)
+                    .and_then(|_| stop_redirection2);
+                let timeout_or_normal_commit = commit_receiver
+                    .map_err(|_| MigrationError::Canceled)
+                    .select(timeout_commit)
+                    .map(|_| ())
+                    .map_err(|_| MigrationError::Canceled);
+                normal_commit.join(timeout_or_normal_commit).map(|_| ())
             });
 
         let meta = self.meta.clone();
@@ -365,7 +357,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
                             error!("RedisMigratingTask stopped with error {:?} {:?}", err, meta)
                         }
                     }
-                    future::ok(())
+                    // The release_queue above might get interrupted by the UMCTL SETDB
+                    // from the coordinators which could result in dropping the buffered commands
+                    // without processing them.
+                    release_queue3
                 }),
         )
     }
@@ -429,7 +424,8 @@ pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     sender_factory: Arc<TSF>,
-    stop_signal: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
+    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     redis_importing_controller: RedisImportingController<RCF>,
 }
 
@@ -446,12 +442,14 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImpor
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
     ) -> Self {
+        let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         Self {
             config,
             meta: meta.clone(),
             state: Arc::new(AtomicMigrationState::new()),
             sender_factory,
-            stop_signal: AtomicOption::empty(),
+            stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
+            stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             redis_importing_controller: RedisImportingController::new(
                 db_name,
                 meta.clone(),
@@ -479,7 +477,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImpor
     }
 
     fn send_stop_signal(&self) -> Result<(), MigrationError> {
-        if let Some(sender) = self.stop_signal.take(Ordering::SeqCst) {
+        if let Some(sender) = self.stop_signal_sender.take(Ordering::SeqCst) {
             sender.send(()).map_err(|()| {
                 error!("failed to send stop signal");
                 MigrationError::Canceled
@@ -504,14 +502,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
     type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        let (sender, receiver) = oneshot::channel();
-        if self
-            .stop_signal
-            .try_store(Box::new(sender), Ordering::SeqCst)
-            .is_some()
-        {
-            return Box::new(future::err(MigrationError::AlreadyStarted));
-        }
+        let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
+            Some(r) => r,
+            None => return Box::new(future::err(MigrationError::AlreadyStarted)),
+        };
 
         let meta = self.meta.clone();
 
@@ -552,6 +546,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
         }
 
         self.redis_importing_controller.switch_to_master()?;
+        self.redis_importing_controller.wait_for_loading()?;
 
         if self.state.get_state() != MigrationState::SwitchCommitted {
             info!("importing node commit switch {:?}", self.meta);
@@ -657,7 +652,7 @@ mod tests {
         assert_eq!(meta.offset, 28);
         assert_eq!(meta.lag, 1);
 
-        let replication_info = "Replication\r
+        let replication_info = "# Replication\r
 role:master\r
 connected_slaves:1\r
 slave0:ip=127.0.0.1,port=6000,state=online,offset=233,lag=6699\r
@@ -669,7 +664,7 @@ second_repl_offset:-1\r
 repl_backlog_active:1\r
 repl_backlog_size:1048576\r
 repl_backlog_first_byte_offset:1\r
-repl_backlog_histlen:56\r";
+repl_backlog_histlen:56\r\n";
         let (master_repl_offset, states) =
             extract_replicas_from_replication_info(replication_info.to_string())
                 .expect("test_parse_replication");

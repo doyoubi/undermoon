@@ -72,6 +72,10 @@ where
         &self,
         new_tasks: Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
     ) {
+        if new_tasks.is_empty() {
+            return;
+        }
+
         for NewTask {
             db_name,
             epoch,
