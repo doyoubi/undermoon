@@ -1,4 +1,4 @@
-use super::command::{CommandError, CommandResult};
+use super::command::{CommandError, CommandResult, CmdType, DataCmdType};
 use super::service::ServerProxyConfig;
 use super::slowlog::{Slowlog, TaskEvent};
 use bytes::BytesMut;
@@ -7,7 +7,7 @@ use common::utils::{gen_moved, get_key, get_slot, revolve_first_address, ThreadS
 use futures::sync::mpsc;
 use futures::Sink;
 use futures::{future, Future, Stream};
-use protocol::{Array, DecodeError, Resp, RespCodec, RespPacket};
+use protocol::{Array, DecodeError, Resp, BulkStr, RespCodec, RespPacket};
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::error::Error;
@@ -20,8 +20,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
+use zstd;
 
-pub type BackendResult = Result<Resp, BackendError>;
+pub type BackendResult = Result<Box<RespPacket>, BackendError>;
 
 pub trait ReplyHandler<T: CmdTask>: Send + 'static {
     fn handle_reply(&self, cmd_task: T, result: BackendResult);
@@ -29,6 +30,8 @@ pub trait ReplyHandler<T: CmdTask>: Send + 'static {
 
 pub trait CmdTask: ThreadSafe + fmt::Debug {
     fn get_resp(&self) -> &Resp;
+    fn get_cmd_type(&self) -> CmdType;
+    fn get_data_cmd_type(&self) -> DataCmdType;
     fn set_result(self, result: CommandResult);
     fn drain_packet_data(&self) -> Option<BytesMut>;
 
@@ -186,11 +189,42 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
     }
 }
 
-// TODO: Remove this. Use handler to do some statistics.
 pub struct ReplyCommitHandler {}
 
 impl<T: CmdTask> ReplyHandler<T> for ReplyCommitHandler {
-    fn handle_reply(&self, _cmd_task: T, _result: BackendResult) {}
+    fn handle_reply(&self, cmd_task: T, result: BackendResult) {
+        let mut packet = match result {
+            Ok(pkt) => pkt,
+            Err(err) => {
+                return cmd_task.set_resp_result(Ok(Resp::Error(format!("backend failed to handle task: {:?}", err).into_bytes())));
+            }
+        };
+
+        let data_cmd_type = cmd_task.get_data_cmd_type();
+        match data_cmd_type {
+            DataCmdType::GET | DataCmdType::GETSET => {
+                let compressed = if let Resp::Bulk(BulkStr::Str(s)) = packet.get_resp() {
+                    let compressed = match zstd::decode_all(s.as_slice()) {
+                        Ok(c) => c,
+                        Err(err) => {
+                            warn!("failed to compress returned bulk string {:?}", err);
+                            return cmd_task.set_resp_result(Ok(Resp::Bulk(BulkStr::Nil)));
+                        }
+                    };
+                    Some(compressed)
+                } else {
+                    None
+                };
+                if let Some(c) = compressed {
+                    if !packet.change_bulk_str(c) {
+                        return cmd_task.set_resp_result(Ok(Resp::Error("failed to change returned bulk string".to_string().into_bytes())));
+                    }
+                }
+            }
+            _ => (),
+        }
+        cmd_task.set_result(Ok(packet))
+    }
 }
 
 #[derive(Debug)]
@@ -342,8 +376,7 @@ where
             .and_then(|(task_opt, rx)| match task_opt {
                 Some(task) => {
                     task.get_slowlog().log_event(TaskEvent::ReceivedFromBackend);
-                    task.set_result(Ok(packet));
-                    // TODO: call handler
+                    handler.handle_reply(task, Ok(packet));
                     future::ok((handler, rx.into_future()))
                 }
                 None => future::err(BackendError::Canceled),

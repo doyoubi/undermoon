@@ -2,6 +2,7 @@ use super::decoder::DecodeError;
 use super::encoder::encode_resp;
 use super::resp::Resp;
 use super::stateless::{parse_resp, ParseError};
+use ::common::utils::{change_bulk_array_element, change_bulk_str};
 use atomic_option::AtomicOption;
 use bytes::BytesMut;
 use std::fmt;
@@ -32,8 +33,28 @@ impl RespPacket {
         &self.resp
     }
 
+    pub fn get_mut_resp(&mut self) -> &mut Resp {
+        &mut self.resp
+    }
+
     pub fn drain_data(&self) -> Option<BytesMut> {
         self.data.take(Ordering::SeqCst).map(|data| *data)
+    }
+
+    pub fn change_bulk_array_element(&mut self, index: usize, data: Vec<u8>) -> bool {
+        let success = change_bulk_array_element(&mut self.resp, index, data);
+        if success {
+            self.data.take(Ordering::SeqCst);
+        }
+        success
+    }
+
+    pub fn change_bulk_str(&mut self, data: Vec<u8>) -> bool {
+        let r = change_bulk_str(&mut self.resp, data);
+        if r {
+            self.data.take(Ordering::SeqCst);
+        }
+        r
     }
 }
 

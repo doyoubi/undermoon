@@ -1,10 +1,10 @@
 use super::slowlog::Slowlog;
-use ::common::utils::get_key;
+use ::common::utils::{get_key, get_command_element};
 use atomic_option::AtomicOption;
 use bytes::BytesMut;
 use futures::sync::oneshot;
 use futures::{future, Future};
-use protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket};
+use protocol::{BinSafeStr, Resp, RespPacket};
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -13,7 +13,7 @@ use std::str;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmdType {
     Ping,
     Info,
@@ -28,46 +28,9 @@ pub enum CmdType {
     Config,
 }
 
-#[derive(Debug)]
-pub struct Command {
-    request: Box<RespPacket>,
-}
-
-impl Command {
-    pub fn new(request: Box<RespPacket>) -> Self {
-        Command { request }
-    }
-
-    pub fn drain_packet_data(&self) -> Option<BytesMut> {
-        self.request.drain_data()
-    }
-
-    pub fn get_resp(&self) -> &Resp {
-        self.request.get_resp()
-    }
-
-    pub fn get_type(&self) -> CmdType {
-        let resps = match self.get_resp() {
-            Resp::Arr(Array::Arr(ref resps)) => resps,
-            _ => return CmdType::Invalid,
-        };
-
-        let first_resp = resps.first();
-        let resp = match first_resp {
-            Some(ref resp) => resp,
-            None => return CmdType::Invalid,
-        };
-
-        let first = match resp {
-            Resp::Bulk(BulkStr::Str(ref first)) => first,
-            _ => return CmdType::Invalid,
-        };
-
-        let cmd_name = match str::from_utf8(first) {
-            Ok(cmd_name) => cmd_name.to_uppercase(),
-            Err(_) => return CmdType::Invalid,
-        };
-
+impl CmdType {
+    fn from_cmd_name(cmd_name: &str) -> Self {
+        let cmd_name = cmd_name.to_uppercase();
         if cmd_name.eq("PING") {
             CmdType::Ping
         } else if cmd_name.eq("INFO") {
@@ -88,6 +51,136 @@ impl Command {
             CmdType::Config
         } else {
             CmdType::Others
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum DataCmdType {
+    APPEND,
+    BITCOUNT,
+    BITFIELD,
+    BITOP,
+    BITPOS,
+    DECR,
+    DECRBY,
+    GET,
+    GETBIT,
+    GETRANGE,
+    GETSET,
+    INCR,
+    INCRBY,
+    INCRBYFLOAT,
+    MGET,
+    MSET,
+    MSETNX,
+    PSETEX,
+    SET,
+    SETBIT,
+    SETEX,
+    SETNX,
+    SETRANGE,
+    STRLEN,
+    Others,
+}
+
+impl DataCmdType {
+    fn from_cmd_name(cmd_name: &str) -> Self {
+        let cmd_name = cmd_name.to_uppercase();
+        match cmd_name.as_str() {
+            "APPEND" => DataCmdType::APPEND,
+            "BITCOUNT" => DataCmdType::BITCOUNT,
+            "BITFIELD" => DataCmdType::BITFIELD,
+            "BITOP" => DataCmdType::BITOP,
+            "BITPOS" => DataCmdType::BITPOS,
+            "DECR" => DataCmdType::DECR,
+            "DECRBY" => DataCmdType::DECRBY,
+            "GET" => DataCmdType::GET,
+            "GETBIT" => DataCmdType::GETBIT,
+            "GETRANGE" => DataCmdType::GETRANGE,
+            "GETSET" => DataCmdType::GETSET,
+            "INCR" => DataCmdType::INCR,
+            "INCRBY" => DataCmdType::INCRBY,
+            "INCRBYFLOAT" => DataCmdType::INCRBYFLOAT,
+            "MGET" => DataCmdType::MGET,
+            "MSET" => DataCmdType::MSET,
+            "MSETNX" => DataCmdType::MSETNX,
+            "PSETEX" => DataCmdType::PSETEX,
+            "SET" => DataCmdType::SET,
+            "SETBIT" => DataCmdType::SETBIT,
+            "SETEX" => DataCmdType::SETEX,
+            "SETNX" => DataCmdType::SETNX,
+            "SETRANGE" => DataCmdType::SETRANGE,
+            "STRLEN" => DataCmdType::STRLEN,
+            _ => DataCmdType::Others,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Command {
+    request: Box<RespPacket>,
+    cmd_type: CmdType,
+    data_cmd_type: DataCmdType,
+}
+
+impl Command {
+    pub fn new(request: Box<RespPacket>) -> Self {
+        let (cmd_type, data_cmd_type) = Self::gen_type(request.get_resp());
+        Command {
+            request,
+            cmd_type,
+            data_cmd_type,
+        }
+    }
+
+    pub fn drain_packet_data(&self) -> Option<BytesMut> {
+        self.request.drain_data()
+    }
+
+    pub fn get_resp(&self) -> &Resp {
+        self.request.get_resp()
+    }
+
+    pub fn get_command_element(&self, index: usize) -> Option<&[u8]> {
+        get_command_element(self.get_resp(), index)
+    }
+
+    pub fn get_command_name(&self)-> Option<&str> {
+        Self::extract_command_name(&self.request.get_resp())
+    }
+
+    fn extract_command_name(resp: &Resp) -> Option<&str> {
+        let first = get_command_element(resp, 0)?;
+        match str::from_utf8(first) {
+            Ok(cmd_name) => Some(cmd_name),
+            Err(_) => None,
+        }
+    }
+
+    pub fn change_element(&mut self, index: usize, data: Vec<u8>) -> bool {
+        self.request.change_bulk_array_element(index, data)
+    }
+
+    pub fn get_type(&self) -> CmdType {
+        self.cmd_type
+    }
+
+    pub fn get_data_cmd_type(&self) -> DataCmdType {
+        self.data_cmd_type
+    }
+
+    pub fn gen_type(resp: &Resp) -> (CmdType, DataCmdType) {
+        let cmd_name = match Self::extract_command_name(resp) {
+            Some(cmd_name) => cmd_name,
+            None => return (CmdType::Invalid, DataCmdType::Others),
+        };
+
+        let cmd_type = CmdType::from_cmd_name(&cmd_name);
+        if cmd_type != CmdType::Others {
+            (cmd_type, DataCmdType::Others)
+        } else {
+            (cmd_type, DataCmdType::from_cmd_name(&cmd_name))
         }
     }
 
@@ -143,6 +236,10 @@ pub fn new_command_pair(cmd: Command) -> (CmdReplySender, CmdReplyReceiver) {
 impl CmdReplySender {
     pub fn get_cmd(&self) -> &Command {
         &self.cmd
+    }
+
+    pub fn get_mut_cmd(&mut self) -> &mut Command {
+        &mut self.cmd
     }
 
     pub fn send(&self, res: TaskResult) -> Result<(), CommandError> {

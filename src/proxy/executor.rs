@@ -1,5 +1,5 @@
 use super::backend::CmdTask;
-use super::command::CmdType;
+use super::command::{CmdType, DataCmdType};
 use super::database::{DBError, DBTag};
 use super::manager::MetaManager;
 use super::service::ServerProxyConfig;
@@ -11,7 +11,7 @@ use atoi::atoi;
 use caseless;
 use common::db::ProxyDBMeta;
 use common::utils::{
-    get_element, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
+    get_element, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY
 };
 use protocol::{Array, BulkStr, RedisClientFactory, Resp};
 use replication::replicator::ReplicatorMeta;
@@ -332,6 +332,34 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 "invalid config sub-command".to_string().into_bytes(),
             )))
+        }
+    }
+
+    fn compress_cmd(&self, cmd_ctx: CmdCtx) -> Result<CmdCtx, CmdCtx> {
+        let index = match cmd_ctx.get_data_cmd_type() {
+            DataCmdType::GETSET | DataCmdType::SET | DataCmdType::SETNX  => 2,
+            DataCmdType::PSETEX | DataCmdType::SETEX => 3,
+            _ => return Ok(cmd_ctx),
+        };
+
+        let value = match cmd_ctx.get_cmd().get_command_element(index) {
+            Some(e) => e,
+            None => return Err(cmd_ctx),
+        };
+
+        let compressed = match zstd::encode_all(value, 1) {
+            Ok(c) => c,
+            Err(err) => {
+                warn!("failed to compress value {:?}", err);
+                return Err(cmd_ctx);
+            }
+        };
+
+        let mut cmd_ctx = cmd_ctx;
+        if cmd_ctx.change_cmd_element(index, compressed) {
+            Ok(cmd_ctx)
+        } else {
+            Err(cmd_ctx)
         }
     }
 }

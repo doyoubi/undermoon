@@ -63,6 +63,47 @@ pub fn get_commands(resp: &Resp) -> Option<Vec<String>> {
     }
 }
 
+pub fn get_command_element(resp: &Resp, index: usize) -> Option<&[u8]> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => {
+            resps.iter().nth(index).and_then(|resp | {
+                match resp {
+                    Resp::Bulk(BulkStr::Str(s)) => Some(s.as_slice()),
+                    _ => None,
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
+pub fn change_bulk_array_element(resp: &mut Resp, index: usize, data: Vec<u8>) -> bool {
+    match resp {
+        Resp::Arr(Array::Arr(ref mut resps)) => {
+            Some(true) == resps.iter_mut().nth(index).map(|resp| {
+                match resp {
+                    Resp::Bulk(BulkStr::Str(s)) => {
+                        *s = data;
+                        true
+                    },
+                    _ => false,
+                }
+            })
+        }
+        _ => false,
+    }
+}
+
+pub fn change_bulk_str(resp: &mut Resp, data: Vec<u8>) -> bool {
+    match resp {
+        Resp::Bulk(BulkStr::Str(s)) => {
+            *s = data;
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn gen_moved(slot: usize, addr: String) -> String {
     format!("MOVED {} {}", slot, addr)
 }
