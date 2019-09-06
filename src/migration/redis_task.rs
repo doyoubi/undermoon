@@ -233,15 +233,30 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     }
 
     fn migration_timeout(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
-        let max_blocking_time = Duration::from_millis(self.config.get_max_blocking_time());
+        let max_migration_time = Duration::from_millis(self.config.get_max_migration_time());
         let state = self.state.clone();
-        Delay::new(max_blocking_time).then(move |result| {
+        Delay::new(max_migration_time).then(move |result| {
             info!(
-                "Commit status does not change for so long. Force it to commit. {:?}",
+                "Migration was running so long. Force it to commit. {:?}",
                 result
             );
             state.set_state(MigrationState::SwitchCommitted);
             Ok(())
+        })
+    }
+
+    fn blocking_timeout(&self) -> impl Future<Item = (), Error = MigrationError> + Send {
+        let max_blocking_time = Duration::from_millis(self.config.get_max_blocking_time());
+        let state = self.state.clone();
+        future::ok(()).and_then(move |()| {
+            Delay::new(max_blocking_time).then(move |result| {
+                info!(
+                    "Commit status does not change for so long. Force it to commit. {:?}",
+                    result
+                );
+                state.set_state(MigrationState::SwitchCommitted);
+                Ok(())
+            })
         })
     }
 
@@ -311,10 +326,11 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
         let meta = self.meta.clone();
         let state = self.state.clone();
 
+        let migration_timeout = self.migration_timeout();
         let check_phase = self.check_repl_state();
         let block_request = self.block_request();
         let commit_switch = self.commit_switch();
-        let migration_timeout = self.migration_timeout();
+        let blocking_timeout = self.blocking_timeout();
         let release_queue = self.release_queue();
         let release_queue2 = self.release_queue();
         let release_queue3 = self.release_queue();
@@ -333,7 +349,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
                     .map(|_| commit_sender.send(()).unwrap_or(()))
                     .and_then(|_| release_queue)
                     .and_then(|_| stop_redirection);
-                let timeout_commit = migration_timeout
+                let timeout_commit = blocking_timeout
                     .and_then(|_| release_queue2)
                     .and_then(|_| stop_redirection2);
                 let timeout_or_normal_commit = commit_receiver
@@ -344,12 +360,17 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
                 normal_commit.join(timeout_or_normal_commit).map(|_| ())
             });
 
+        let migration_or_timeout = migration_fut
+            .select(migration_timeout)
+            .map(|_| ())
+            .map_err(|_| MigrationError::Canceled);
+
         let meta = self.meta.clone();
 
         Box::new(
             receiver
                 .map_err(|_| MigrationError::Canceled)
-                .select(migration_fut)
+                .select(migration_or_timeout)
                 .then(move |result| {
                     match result {
                         Ok(_) => warn!("RedisMigratingTask stopped {:?}", meta),
@@ -462,8 +483,8 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImpor
         &self,
     ) -> impl Future<Item = (), Error = MigrationError> + Send {
         let state = self.state.clone();
-        let max_blocking_time = self.config.get_max_blocking_time();
-        let delay_time = Duration::from_millis(max_blocking_time);
+        let max_migration_time = self.config.get_max_migration_time();
+        let delay_time = Duration::from_millis(max_migration_time);
         let delay = Delay::new(delay_time).map_err(MigrationError::Io);
         delay.then(move |result| {
             if let Err(err) = result {

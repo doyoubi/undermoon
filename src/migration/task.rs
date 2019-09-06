@@ -64,6 +64,7 @@ pub trait ImportingTask: ThreadSafe {
 
 pub struct MigrationConfig {
     offset_threshold: AtomicU64,
+    max_migration_time: AtomicU64,
     max_blocking_time: AtomicU64,
     min_blocking_time: AtomicU64,
     max_redirection_time: AtomicU64,
@@ -74,8 +75,9 @@ impl Default for MigrationConfig {
     fn default() -> Self {
         Self {
             offset_threshold: AtomicU64::new(50000),
-            max_blocking_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes, should leave some time for replication
-            min_blocking_time: AtomicU64::new(100),            // 100ms
+            max_migration_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes, should leave some time for replication
+            max_blocking_time: AtomicU64::new(10_000),          // 10 seconds waiting for commit
+            min_blocking_time: AtomicU64::new(100),             // 100ms
             max_redirection_time: AtomicU64::new(5000), // 5s, to wait for coordinator to update meta
             switch_retry_interval: AtomicU64::new(10),  // 10ms
         }
@@ -85,6 +87,9 @@ impl Default for MigrationConfig {
 impl MigrationConfig {
     pub fn get_offset_threshold(&self) -> u64 {
         self.offset_threshold.load(Ordering::SeqCst)
+    }
+    pub fn get_max_migration_time(&self) -> u64 {
+        self.max_migration_time.load(Ordering::SeqCst)
     }
     pub fn get_max_blocking_time(&self) -> u64 {
         self.max_blocking_time.load(Ordering::SeqCst)
