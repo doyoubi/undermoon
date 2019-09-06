@@ -290,7 +290,7 @@ where
             writer.send(Box::new(item)).then(|res| {
                 task.get_slowlog().log_event(TaskEvent::SentToBackend);
 
-                let fut: Box<Future<Item = _, Error = BackendError> + Send> = match res {
+                let fut: Box<dyn Future<Item = _, Error = BackendError> + Send> = match res {
                     Ok(writer) => {
                         let fut = tx.send(task).map(move |tx| (writer, tx)).map_err(|e| {
                             error!("backend handle_write rx closed {:?}", e);
@@ -372,7 +372,7 @@ impl Error for BackendError {
         "backend error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             BackendError::Io(err) => Some(err),
             _ => None,

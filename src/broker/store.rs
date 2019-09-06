@@ -1350,7 +1350,7 @@ impl Error for InconsistentError {
         }
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         None
     }
 }
@@ -1413,7 +1413,7 @@ impl Error for MetaStoreError {
         }
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         None
     }
 }

@@ -180,7 +180,7 @@ impl Error for ReplicatorError {
         "replicator error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             ReplicatorError::Io(err) => Some(err),
             _ => None,

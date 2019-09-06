@@ -72,11 +72,11 @@ def replace_proxy(cluster_name, master=True):
 cluster_name = 'mydb'
 init_hosts()
 add_cluster(cluster_name)
-add_node(cluster_name)
-print(get_cluster(cluster_name))
-
-migrate_slots(cluster_name)
-
-replace_proxy(cluster_name)
-replace_proxy(cluster_name, False)
-print(get_cluster(cluster_name))
+# add_node(cluster_name)
+# print(get_cluster(cluster_name))
+#
+# migrate_slots(cluster_name)
+#
+# replace_proxy(cluster_name)
+# replace_proxy(cluster_name, False)
+# print(get_cluster(cluster_name))

@@ -154,7 +154,7 @@ impl Error for MigrationError {
         "migration error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             MigrationError::Io(err) => Some(err),
             MigrationError::ReplError(err) => Some(err),

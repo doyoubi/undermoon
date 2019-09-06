@@ -29,7 +29,7 @@ impl Error for DBError {
         "db error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         None
     }
 }
@@ -400,7 +400,7 @@ impl<T: CmdTask> Error for DBSendError<T> {
         }
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             DBSendError::MissingKey => None,
             DBSendError::DBNotFound(_) => None,

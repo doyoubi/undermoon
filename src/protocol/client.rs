@@ -316,7 +316,7 @@ impl Error for RedisClientError {
         "client error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             RedisClientError::Io(err) => Some(err),
             _ => None,

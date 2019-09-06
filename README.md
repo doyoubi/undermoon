@@ -201,19 +201,26 @@ This is where the `Coordinator` comes in.
 Undermoon also provides a `Coordinator` to do something similar to the `checker.py` above in example (3).
 It will keep checking the server-side proxies and do failover.
 However, `Coordinator` itself does not store any data. It is a stateless service backed by a HTTP broker maintaining the meta data.
-You can implement this HTTP broker yourself and there's a working in progress [Golang implementation](https://github.com/doyoubi/overmoon).
+You can implement this HTTP broker yourself and there's a [Golang implementation](https://github.com/doyoubi/overmoon).
 
 ![architecture](docs/architecture.svg)
 
-Here's an example for Coordinator working with a simple in-memory broker.
+Here's an example for Coordinator working with the `overmoon` above.
 
 ```bash
-$ make docker-mem-broker
+# Clone the `overmoon` repo and get into it.
+$ make build-docker
+```
+
+```bash
+# Go back to this `undermoon` repo.
+$ make docker-overmoon
 ```
 
 Then init the basic metadata.
 ```bash
-$ python examples/mem-broker/init.py
+$ pip install requests
+$ python examples/overmoon/init.py
 ```
 
 Before connecting to the cluster, you need to add these hosts to you `/etc/hosts`:
@@ -229,7 +236,7 @@ Before connecting to the cluster, you need to add these hosts to you `/etc/hosts
 
 Now get the metadata:
 ```bash
-$ curl localhost:7799/api/metadata | python -m json.tool
+$ curl localhost:7799/api/clusters/meta/mydb | python -m json.tool
 ```
 
 Pickup the randomly chosen proxies (in `proxy_address` field) for the cluster `mydb` and connect to them.
@@ -245,7 +252,7 @@ mydb________________server_proxy2:6002__ server_proxy2:6002 master - 0 0 5 conne
 Note that this example also supports replica for backing up your data. For simplicity, `CLUSTER NODES` does not show you the replica nodes.
 You can find them via `UMCTL INFOREPL`.
 
-It also supports slots migration. See `examples/mem-broker/init.py` for more details.
+It also supports slots migration. See `examples/overmoon/init.py` for more details.
 
 
 ## API
@@ -288,7 +295,7 @@ This project is still under testing but has **NOT** been well tested in producti
 - ~~Implement AUTH command to select database~~ (done)
 - ~~Implement meta data manipulation api~~ (done)
 - ~~Basic coordinator implementation~~ (done)
-- ~~Implement Redis Replication Protocol~~ (just use redis replication directly)
+- Implement Redis Replication Protocol
 - ~~Support slot migration via replication~~ (done)
 - ~~Optimize RESP parsing~~ (done)
 - ~~Implement CLUSTER SLOTS~~ (done)
@@ -304,3 +311,5 @@ This project is still under testing but has **NOT** been well tested in producti
 - ~~Support dynamic configuration by CONFIG command~~
 - ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
 - Recover peer meta after reboot to support redirection.
+- Syscall batching
+- String Compression
