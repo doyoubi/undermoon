@@ -6,7 +6,7 @@ use super::task::{
 use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::resp_execution::keep_connecting_and_sending;
 use ::common::utils::{ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
-use ::common::version::UNDERMOON_VERSION;
+use ::common::version::UNDERMOON_MIGRATION_VERSION;
 use ::protocol::{BulkStr, RedisClientError, RedisClientFactory, Resp};
 use ::proxy::database::DBSendError;
 use atomic_option::AtomicOption;
@@ -182,7 +182,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
 
         let mut cmd = vec!["UMCTL".to_string(), "TMPSWITCH".to_string()];
         let arg = SwitchArg {
-            version: UNDERMOON_VERSION.to_string(),
+            version: UNDERMOON_MIGRATION_VERSION.to_string(),
             meta: MigrationTaskMeta {
                 db_name: self.db_name.clone(),
                 slot_range: SlotRange {
@@ -541,7 +541,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
     }
 
     fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError> {
-        if switch_arg.version != UNDERMOON_VERSION {
+        if switch_arg.version != UNDERMOON_MIGRATION_VERSION {
             return Err(MigrationError::IncompatibleVersion);
         }
 
