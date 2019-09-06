@@ -1,4 +1,4 @@
-use super::command::{CommandError, CommandResult, CmdType, DataCmdType};
+use super::command::{CmdType, CommandError, CommandResult, DataCmdType};
 use super::service::ServerProxyConfig;
 use super::slowlog::{Slowlog, TaskEvent};
 use bytes::BytesMut;

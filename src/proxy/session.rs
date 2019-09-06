@@ -1,7 +1,8 @@
 use super::backend::CmdTask;
 use super::command::TaskReply;
 use super::command::{
-    new_command_pair, CmdReplyReceiver, CmdReplySender, Command, CommandError, CommandResult, CmdType, DataCmdType,
+    new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
+    CommandResult, DataCmdType,
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};

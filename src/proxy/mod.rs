@@ -1,5 +1,6 @@
 pub mod backend;
 mod command;
+mod compress;
 pub mod database;
 pub mod executor;
 mod manager;
