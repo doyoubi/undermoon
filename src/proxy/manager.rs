@@ -3,6 +3,7 @@ use super::backend::{
     RecoverableBackendNodeFactory, RedirectionSenderFactory,
 };
 use super::database::{DBError, DBSendError, DatabaseMap};
+use super::reply::ReplyCommitHandlerFactory;
 use super::service::ServerProxyConfig;
 use super::session::CmdCtx;
 use super::slowlog::TaskEvent;
@@ -33,21 +34,27 @@ pub struct MetaManager<F: RedisClientFactory> {
     // between replication metadata and other metadata, we should put that
     // inside meta_map.
     meta_map: ArcSwap<
-        MetaMap<CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>>,
+        MetaMap<
+            CachedSenderFactory<
+                RRSenderGroupFactory<RecoverableBackendNodeFactory<ReplyCommitHandlerFactory>>,
+            >,
+        >,
     >,
     epoch: AtomicU64,
     lock: Mutex<()>, // This is the write lock for `epoch`, `db`, and `task`.
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, RedirectionSenderFactory<CmdCtx>>,
-    sender_factory:
-        CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<CmdCtx>>>,
+    sender_factory: CachedSenderFactory<
+        RRSenderGroupFactory<RecoverableBackendNodeFactory<ReplyCommitHandlerFactory>>,
+    >,
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
     pub fn new(config: Arc<ServerProxyConfig>, client_factory: Arc<F>) -> Self {
+        let reply_handler_factory = Arc::new(ReplyCommitHandlerFactory::new(Arc::new(())));
         let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
             config.backend_conn_num,
-            RecoverableBackendNodeFactory::new(config.clone()),
+            RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory),
         ));
         let db_map = DatabaseMap::default();
         let migration_map = MigrationMap::new();

@@ -1,5 +1,5 @@
 use super::slowlog::Slowlog;
-use ::common::utils::{get_key, get_command_element};
+use ::common::utils::{get_command_element, get_key};
 use atomic_option::AtomicOption;
 use bytes::BytesMut;
 use futures::sync::oneshot;
@@ -146,7 +146,7 @@ impl Command {
         get_command_element(self.get_resp(), index)
     }
 
-    pub fn get_command_name(&self)-> Option<&str> {
+    pub fn get_command_name(&self) -> Option<&str> {
         Self::extract_command_name(&self.request.get_resp())
     }
 

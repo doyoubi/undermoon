@@ -65,14 +65,10 @@ pub fn get_commands(resp: &Resp) -> Option<Vec<String>> {
 
 pub fn get_command_element(resp: &Resp, index: usize) -> Option<&[u8]> {
     match resp {
-        Resp::Arr(Array::Arr(ref resps)) => {
-            resps.iter().nth(index).and_then(|resp | {
-                match resp {
-                    Resp::Bulk(BulkStr::Str(s)) => Some(s.as_slice()),
-                    _ => None,
-                }
-            })
-        }
+        Resp::Arr(Array::Arr(ref resps)) => resps.get(index).and_then(|resp| match resp {
+            Resp::Bulk(BulkStr::Str(s)) => Some(s.as_slice()),
+            _ => None,
+        }),
         _ => None,
     }
 }
@@ -80,15 +76,14 @@ pub fn get_command_element(resp: &Resp, index: usize) -> Option<&[u8]> {
 pub fn change_bulk_array_element(resp: &mut Resp, index: usize, data: Vec<u8>) -> bool {
     match resp {
         Resp::Arr(Array::Arr(ref mut resps)) => {
-            Some(true) == resps.iter_mut().nth(index).map(|resp| {
-                match resp {
+            Some(true)
+                == resps.get_mut(index).map(|resp| match resp {
                     Resp::Bulk(BulkStr::Str(s)) => {
                         *s = data;
                         true
-                    },
+                    }
                     _ => false,
-                }
-            })
+                })
         }
         _ => false,
     }

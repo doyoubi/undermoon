@@ -1,7 +1,7 @@
 use super::backend::CmdTask;
 use super::command::TaskReply;
 use super::command::{
-    new_command_pair, CmdReplyReceiver, CmdReplySender, Command, CommandError, CommandResult,
+    new_command_pair, CmdReplyReceiver, CmdReplySender, Command, CommandError, CommandResult, CmdType, DataCmdType,
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
@@ -17,7 +17,6 @@ use std::io;
 use std::sync;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
-use proxy::command::{DataCmdType, CmdType};
 
 pub trait CmdHandler {
     fn handle_cmd(&self, sender: CmdReplySender);
