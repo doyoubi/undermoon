@@ -29,7 +29,7 @@ impl Error for DecodeError {
         "decode error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             DecodeError::Io(err) => Some(err),
             _ => None,
@@ -57,7 +57,7 @@ fn bytes_to_int(bytes: &[u8]) -> Result<i64, DecodeError> {
         _ => 1,
     };
     it.fold(Ok(0), |sum, i| match *i as char {
-        '0'...'9' => sum.map(|s| s * 10 + i64::from(i - ZERO)),
+        '0'..='9' => sum.map(|s| s * 10 + i64::from(i - ZERO)),
         _ => Err(DecodeError::InvalidProtocol),
     })
     .map(|i| i * f)
@@ -119,7 +119,7 @@ where
     read_exact(reader, vec![0; 1])
         .map_err(DecodeError::Io)
         .and_then(|(reader, prefix)| {
-            let bf: Box<Future<Item = (R, Resp), Error = DecodeError> + Send> = match prefix[0]
+            let bf: Box<dyn Future<Item = (R, Resp), Error = DecodeError> + Send> = match prefix[0]
                 as char
             {
                 '$' => Box::new(
@@ -193,7 +193,12 @@ mod tests {
             -233,
             bytes_to_int("-233".as_bytes()).expect("test_bytes_to_int")
         );
-        assert!(bytes_to_int("233a".as_bytes()).is_err())
+        assert!(bytes_to_int("233a".as_bytes()).is_err());
+
+        assert_eq!(
+            bytes_to_int("1234567890".as_bytes()).expect("test_bytes_to_int"),
+            1234567890_i64
+        );
     }
 
     #[test]

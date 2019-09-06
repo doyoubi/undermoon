@@ -131,7 +131,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
 }
 
 impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
-    fn start(&self) -> Option<Box<Future<Item = (), Error = ReplicatorError> + Send>> {
+    fn start(&self) -> Option<Box<dyn Future<Item = (), Error = ReplicatorError> + Send>> {
         let meta = self.meta.clone();
         self.role_sync.start(Self::handle_result).map(|f| {
             let fut: Box<dyn Future<Item = (), Error = ReplicatorError> + Send> =

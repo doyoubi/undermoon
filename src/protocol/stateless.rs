@@ -26,7 +26,7 @@ impl Error for ParseError {
         "decode error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             ParseError::Io(err) => Some(err),
             _ => None,

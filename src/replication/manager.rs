@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{atomic, Arc, RwLock};
 use tokio;
 
-type ReplicatorRecord = Either<Arc<MasterReplicator>, Arc<ReplicaReplicator>>;
+type ReplicatorRecord = Either<Arc<dyn MasterReplicator>, Arc<dyn ReplicaReplicator>>;
 type ReplicatorMap = HashMap<(String, String), ReplicatorRecord>;
 
 pub struct ReplicatorManager<F: RedisClientFactory> {

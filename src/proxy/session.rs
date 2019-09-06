@@ -260,7 +260,7 @@ impl Error for SessionError {
         "session error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             SessionError::Io(err) => Some(err),
             SessionError::CmdErr(err) => Some(err),

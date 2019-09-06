@@ -58,7 +58,7 @@ impl Error for MetaDataBrokerError {
         "broker error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             MetaDataBrokerError::Io(err) => Some(err),
             _ => None,
@@ -84,7 +84,7 @@ impl Error for MetaManipulationBrokerError {
         "broker error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             MetaManipulationBrokerError::Io(err) => Some(err),
             _ => None,

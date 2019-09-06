@@ -192,7 +192,7 @@ impl Error for CommandError {
         "command error"
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match self {
             CommandError::Io(err) => Some(err),
             _ => None,

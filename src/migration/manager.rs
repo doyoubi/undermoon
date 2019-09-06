@@ -14,7 +14,7 @@ use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-type TaskRecord<T> = Either<Arc<MigratingTask<Task = T>>, Arc<ImportingTask<Task = T>>>;
+type TaskRecord<T> = Either<Arc<dyn MigratingTask<Task = T>>, Arc<dyn ImportingTask<Task = T>>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
 type TaskMap<T> = HashMap<String, DBTask<T>>;
 type NewMigrationTuple<TSF> = (
