@@ -1,6 +1,7 @@
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ClusterConfig {
@@ -31,7 +32,7 @@ impl ClusterConfig {
             _ => {
                 if field.starts_with("migration_") {
                     let f = field
-                        .splitn(2, '-')
+                        .splitn(2, '_')
                         .nth(1)
                         .ok_or_else(|| ConfigError::FieldNotFound)?;
                     return self.migration_config.set_field(f, value);
@@ -41,6 +42,42 @@ impl ClusterConfig {
             }
         }
         Ok(())
+    }
+
+    pub fn to_str_map(&self) -> HashMap<String, String> {
+        vec![
+            (
+                "compression_strategy",
+                self.compression_strategy.to_str().to_string(),
+            ),
+            (
+                "migration_offset_threshold",
+                self.migration_config.offset_threshold.to_string(),
+            ),
+            (
+                "migration_max_migration_time",
+                self.migration_config.max_migration_time.to_string(),
+            ),
+            (
+                "migration_max_blocking_time",
+                self.migration_config.max_blocking_time.to_string(),
+            ),
+            (
+                "migration_min_blocking_time",
+                self.migration_config.min_blocking_time.to_string(),
+            ),
+            (
+                "migration_max_redirection_time",
+                self.migration_config.max_redirection_time.to_string(),
+            ),
+            (
+                "migration_switch_retry_interval",
+                self.migration_config.switch_retry_interval.to_string(),
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect()
     }
 }
 
@@ -101,45 +138,14 @@ impl<'de> Deserialize<'de> for CompressionStrategy {
     }
 }
 
-#[derive(Debug)]
-pub struct AtomicCompressionStrategy {
-    inner: AtomicU8,
-}
-
-impl Default for AtomicCompressionStrategy {
-    fn default() -> Self {
-        Self::new(CompressionStrategy::Disabled)
-    }
-}
-
-impl AtomicCompressionStrategy {
-    pub fn new(strategy: CompressionStrategy) -> Self {
-        Self {
-            inner: AtomicU8::new(strategy as u8),
-        }
-    }
-
-    pub fn set_strategy(&self, strategy: CompressionStrategy) {
-        self.inner.store(strategy as u8, Ordering::SeqCst);
-    }
-
-    pub fn get_strategy(&self) -> CompressionStrategy {
-        match self.inner.load(Ordering::SeqCst) {
-            0 => CompressionStrategy::Disabled,
-            1 => CompressionStrategy::SetGetOnly,
-            _ => CompressionStrategy::AllowAll,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct MigrationConfig {
-    offset_threshold: u64,
-    max_migration_time: u64,
-    max_blocking_time: u64,
-    min_blocking_time: u64,
-    max_redirection_time: u64,
-    switch_retry_interval: u64,
+    pub offset_threshold: u64,
+    pub max_migration_time: u64,
+    pub max_blocking_time: u64,
+    pub min_blocking_time: u64,
+    pub max_redirection_time: u64,
+    pub switch_retry_interval: u64,
 }
 
 impl MigrationConfig {
@@ -247,26 +253,32 @@ impl AtomicMigrationConfig {
         self.switch_retry_interval.load(Ordering::SeqCst)
     }
 
+    #[allow(dead_code)]
     pub fn set_offset_threshold(&self, offset_threshold: u64) {
         self.offset_threshold
             .store(offset_threshold, Ordering::SeqCst)
     }
+    #[allow(dead_code)]
     pub fn set_max_migration_time(&self, max_migration_time: u64) {
         self.max_migration_time
             .store(max_migration_time, Ordering::SeqCst)
     }
+    #[allow(dead_code)]
     pub fn set_max_blocking_time(&self, max_blocking_time: u64) {
         self.max_blocking_time
             .store(max_blocking_time, Ordering::SeqCst)
     }
+    #[allow(dead_code)]
     pub fn set_min_blocking_time(&self, min_blocking_time: u64) {
         self.min_blocking_time
             .store(min_blocking_time, Ordering::SeqCst)
     }
+    #[allow(dead_code)]
     pub fn set_max_redirection_time(&self, max_redirection_time: u64) {
         self.max_redirection_time
             .store(max_redirection_time, Ordering::SeqCst)
     }
+    #[allow(dead_code)]
     pub fn set_switch_retry_interval(&self, switch_retry_interval: u64) {
         self.switch_retry_interval
             .store(switch_retry_interval, Ordering::SeqCst)
@@ -278,4 +290,24 @@ pub enum ConfigError {
     ReadonlyField,
     FieldNotFound,
     InvalidValue,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_set_field() {
+        let mut migration_config = MigrationConfig::default();
+        migration_config
+            .set_field("offset_threshold", "233")
+            .expect("test_config_set_field");
+        assert_eq!(migration_config.offset_threshold, 233);
+
+        let mut cluster_config = ClusterConfig::default();
+        cluster_config
+            .set_field("migration_offset_threshold", "666")
+            .expect("test_config_set_field");
+        assert_eq!(cluster_config.migration_config.offset_threshold, 666);
+    }
 }
