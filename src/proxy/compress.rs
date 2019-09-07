@@ -5,45 +5,8 @@ use ::protocol::{BulkStr, Resp, RespPacket};
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use zstd;
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum CompressionStrategy {
-    Disabled = 0,
-    // Only allow SET, SETEX, PSETEX, SETNX, GET, GETSET commands for String data type
-    // as once compression is enabled other commands will get the wrong result.
-    SetGetOnly = 1,
-    // Allow all the String commands. User need to use lua script to
-    // bypass the compression.
-    AllowAll = 2,
-}
-
-#[derive(Debug)]
-pub struct AtomicCompressionStrategy {
-    inner: AtomicU8,
-}
-
-impl AtomicCompressionStrategy {
-    pub fn new() -> Self {
-        Self {
-            inner: AtomicU8::new(CompressionStrategy::Disabled as u8),
-        }
-    }
-
-    pub fn set_strategy(&self, strategy: CompressionStrategy) {
-        self.inner.store(strategy as u8, Ordering::SeqCst);
-    }
-
-    pub fn get_strategy(&self) -> CompressionStrategy {
-        match self.inner.load(Ordering::SeqCst) {
-            0 => CompressionStrategy::Disabled,
-            1 => CompressionStrategy::SetGetOnly,
-            _ => CompressionStrategy::AllowAll,
-        }
-    }
-}
 
 pub struct CmdCompressor {
     clusters_config: Arc<()>,
@@ -58,14 +21,24 @@ impl CmdCompressor {
         let index = match cmd_ctx.get_data_cmd_type() {
             DataCmdType::GETSET | DataCmdType::SET | DataCmdType::SETNX => 2,
             DataCmdType::PSETEX | DataCmdType::SETEX => 3,
-            DataCmdType::APPEND | DataCmdType::BITCOUNT | DataCmdType::BITFIELD |
-            DataCmdType::BITOP | DataCmdType::BITPOS | DataCmdType::DECR |
-            DataCmdType::DECRBY | DataCmdType::GETBIT | DataCmdType::GETRANGE |
-            DataCmdType::INCR | DataCmdType::INCRBY | DataCmdType::INCRBYFLOAT |
-            DataCmdType::MGET | DataCmdType::MSET | DataCmdType::MSETNX |
-            DataCmdType::SETBIT | DataCmdType::SETRANGE | DataCmdType::STRLEN => {
-                return Err(CompressionError::RestrictedCmd)
-            }
+            DataCmdType::APPEND
+            | DataCmdType::BITCOUNT
+            | DataCmdType::BITFIELD
+            | DataCmdType::BITOP
+            | DataCmdType::BITPOS
+            | DataCmdType::DECR
+            | DataCmdType::DECRBY
+            | DataCmdType::GETBIT
+            | DataCmdType::GETRANGE
+            | DataCmdType::INCR
+            | DataCmdType::INCRBY
+            | DataCmdType::INCRBYFLOAT
+            | DataCmdType::MGET
+            | DataCmdType::MSET
+            | DataCmdType::MSETNX
+            | DataCmdType::SETBIT
+            | DataCmdType::SETRANGE
+            | DataCmdType::STRLEN => return Err(CompressionError::RestrictedCmd),
             _ => return Ok(()),
         };
 

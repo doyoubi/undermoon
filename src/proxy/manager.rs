@@ -8,8 +8,9 @@ use super::service::ServerProxyConfig;
 use super::session::CmdCtx;
 use super::slowlog::TaskEvent;
 use ::common::cluster::{MigrationTaskMeta, SlotRangeTag};
+use ::common::config::AtomicMigrationConfig;
 use ::migration::manager::{MigrationManager, MigrationMap, SwitchError};
-use ::migration::task::{MigrationConfig, SwitchArg};
+use ::migration::task::SwitchArg;
 use arc_swap::ArcSwap;
 use common::db::ProxyDBMeta;
 use protocol::{RedisClientFactory, Resp};
@@ -63,7 +64,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             migration_map,
         };
         let redirection_sender_factory = Arc::new(RedirectionSenderFactory::default());
-        let migration_config = Arc::new(MigrationConfig::default());
+        let migration_config = Arc::new(AtomicMigrationConfig::default());
         Self {
             config,
             meta_map: ArcSwap::new(Arc::new(meta_map)),

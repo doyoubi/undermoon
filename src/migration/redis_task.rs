@@ -1,9 +1,9 @@
 use super::redis_controller::RedisImportingController;
 use super::task::{
-    AtomicMigrationState, ImportingTask, MigratingTask, MigrationConfig, MigrationError,
-    MigrationState, SwitchArg,
+    AtomicMigrationState, ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg,
 };
 use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
+use ::common::config::AtomicMigrationConfig;
 use ::common::resp_execution::keep_connecting_and_sending;
 use ::common::utils::{ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
 use ::common::version::UNDERMOON_MIGRATION_VERSION;
@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
-    config: Arc<MigrationConfig>,
+    config: Arc<AtomicMigrationConfig>,
     db_name: String,
     slot_range: (usize, usize),
     meta: MigrationMeta,
@@ -46,7 +46,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigratingTask<RCF, TSF> {
     pub fn new(
-        config: Arc<MigrationConfig>,
+        config: Arc<AtomicMigrationConfig>,
         db_name: String,
         slot_range: (usize, usize),
         meta: MigrationMeta,
@@ -441,7 +441,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
 }
 
 pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
-    config: Arc<MigrationConfig>,
+    config: Arc<AtomicMigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     sender_factory: Arc<TSF>,
@@ -457,7 +457,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImportingTask<RCF, TSF> {
     pub fn new(
-        config: Arc<MigrationConfig>,
+        config: Arc<AtomicMigrationConfig>,
         db_name: String,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,

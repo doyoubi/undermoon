@@ -1,5 +1,6 @@
 use super::cluster::{SlotRange, SlotRangeTag};
 use super::utils::{has_flags, CmdParseError};
+use ::common::config::ClusterConfig;
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::iter::Peekable;
@@ -44,6 +45,7 @@ impl DBMapFlags {
 }
 
 const PEER_PREFIX: &str = "PEER";
+const CONFIG_PREFIX: &str = "CONFIG";
 
 #[derive(Debug, Clone)]
 pub struct ProxyDBMeta {
@@ -51,15 +53,23 @@ pub struct ProxyDBMeta {
     flags: DBMapFlags,
     local: HostDBMap,
     peer: HostDBMap,
+    clusters_config: ClusterConfigMap,
 }
 
 impl ProxyDBMeta {
-    pub fn new(epoch: u64, flags: DBMapFlags, local: HostDBMap, peer: HostDBMap) -> Self {
+    pub fn new(
+        epoch: u64,
+        flags: DBMapFlags,
+        local: HostDBMap,
+        peer: HostDBMap,
+        clusters_config: ClusterConfigMap,
+    ) -> Self {
         Self {
             epoch,
             flags,
             local,
             peer,
+            clusters_config,
         }
     }
 
@@ -76,6 +86,10 @@ impl ProxyDBMeta {
     }
     pub fn get_peer(&self) -> &HostDBMap {
         &self.peer
+    }
+
+    pub fn get_configs(&self) -> &ClusterConfigMap {
+        &self.clusters_config
     }
 
     pub fn from_resp(resp: &Resp) -> Result<Self, CmdParseError> {
@@ -108,11 +122,12 @@ impl ProxyDBMeta {
 
         let local = HostDBMap::parse(it)?;
         let mut peer = HostDBMap::new(HashMap::new());
+        let mut clusters_config = ClusterConfigMap::default();
         while let Some(token) = it.next() {
-            if token.to_uppercase() == PEER_PREFIX {
-                peer = HostDBMap::parse(it)?;
-            } else {
-                return Err(CmdParseError {});
+            match token.to_uppercase().as_str() {
+                PEER_PREFIX => peer = HostDBMap::parse(it)?,
+                CONFIG_PREFIX => clusters_config = ClusterConfigMap::parse(it)?,
+                _ => return Err(CmdParseError {}),
             }
         }
 
@@ -121,6 +136,7 @@ impl ProxyDBMeta {
             flags,
             local,
             peer,
+            clusters_config,
         })
     }
 
@@ -199,7 +215,7 @@ impl HostDBMap {
             match it.peek() {
                 Some(first_token) => {
                     let prefix = first_token.to_uppercase();
-                    if prefix == PEER_PREFIX {
+                    if prefix == PEER_PREFIX || prefix == CONFIG_PREFIX {
                         break;
                     }
                 }
@@ -230,6 +246,67 @@ impl HostDBMap {
         It: Iterator<Item = String>,
     {
         SlotRange::from_strings(it).ok_or_else(|| CmdParseError {})
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClusterConfigMap {
+    config_map: HashMap<String, ClusterConfig>,
+}
+
+impl Default for ClusterConfigMap {
+    fn default() -> Self {
+        Self {
+            config_map: HashMap::new(),
+        }
+    }
+}
+
+impl ClusterConfigMap {
+    pub fn get(&self, dbname: &str) -> ClusterConfig {
+        self.config_map
+            .get(dbname)
+            .cloned()
+            .unwrap_or_else(ClusterConfig::default)
+    }
+
+    fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
+    where
+        It: Iterator<Item = String>,
+    {
+        let mut config_map = HashMap::new();
+
+        // To workaround lifetime problem.
+        #[allow(clippy::while_let_loop)]
+        loop {
+            match it.peek() {
+                Some(first_token) => {
+                    let prefix = first_token.to_uppercase();
+                    if prefix == PEER_PREFIX || prefix == CONFIG_PREFIX {
+                        break;
+                    }
+                }
+                None => break,
+            }
+
+            let (dbname, field, value) = try_parse!(Self::parse_config(it));
+            let mut cluster_config = config_map
+                .entry(dbname)
+                .or_insert_with(ClusterConfig::default);
+            cluster_config.set_field(field, value);
+        }
+
+        Ok(Self { config_map })
+    }
+
+    fn parse_config<It>(it: &mut It) -> Result<(String, String, String), CmdParseError>
+    where
+        It: Iterator<Item = String>,
+    {
+        let dbname = try_get!(it.next());
+        let field = try_get!(it.next());
+        let value = try_get!(it.next());
+        Ok((dbname, field, value))
     }
 }
 

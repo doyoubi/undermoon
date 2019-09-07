@@ -1,6 +1,7 @@
 use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{ImportingTask, MigratingTask, MigrationConfig};
+use super::task::{ImportingTask, MigratingTask};
 use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
+use ::common::config::AtomicMigrationConfig;
 use ::common::db::HostDBMap;
 use ::common::utils::{get_key, get_slot, ThreadSafe};
 use ::protocol::RedisClientFactory;
@@ -34,7 +35,7 @@ pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory +
 where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
-    config: Arc<MigrationConfig>,
+    config: Arc<AtomicMigrationConfig>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
 }
@@ -44,7 +45,7 @@ where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
     pub fn new(
-        config: Arc<MigrationConfig>,
+        config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
     ) -> Self {
@@ -223,7 +224,7 @@ where
     pub fn update_from_old_task_map<RCF>(
         &self,
         local_db_map: &HostDBMap,
-        config: Arc<MigrationConfig>,
+        config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
     ) -> (
