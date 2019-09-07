@@ -1,19 +1,19 @@
 use super::backend::{BackendResult, CmdTask, CmdTaskHandler, CmdTaskHandlerFactory};
 use super::compress::{CmdReplyDecompressor, CompressionError};
+use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
 use ::common::utils::ThreadSafe;
 use ::protocol::{BulkStr, Resp};
-use std::sync::Arc;
 
 pub struct ReplyCommitHandlerFactory {
-    clusters_config: Arc<()>,
+    meta_map: SharedMetaMap,
 }
 
 impl ThreadSafe for ReplyCommitHandlerFactory {}
 
 impl ReplyCommitHandlerFactory {
-    pub fn new(clusters_config: Arc<()>) -> Self {
-        Self { clusters_config }
+    pub fn new(meta_map: SharedMetaMap) -> Self {
+        Self { meta_map }
     }
 }
 
@@ -22,7 +22,7 @@ impl CmdTaskHandlerFactory for ReplyCommitHandlerFactory {
 
     fn create(&self) -> Self::Handler {
         ReplyCommitHandler {
-            decompressor: CmdReplyDecompressor::new(self.clusters_config.clone()),
+            decompressor: CmdReplyDecompressor::new(self.meta_map.clone()),
         }
     }
 }

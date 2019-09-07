@@ -263,6 +263,10 @@ impl Default for ClusterConfigMap {
 }
 
 impl ClusterConfigMap {
+    pub fn new(config_map: HashMap<String, ClusterConfig>) -> Self {
+        Self { config_map }
+    }
+
     pub fn get(&self, dbname: &str) -> ClusterConfig {
         self.config_map
             .get(dbname)
@@ -290,10 +294,10 @@ impl ClusterConfigMap {
             }
 
             let (dbname, field, value) = try_parse!(Self::parse_config(it));
-            let mut cluster_config = config_map
+            let cluster_config = config_map
                 .entry(dbname)
                 .or_insert_with(ClusterConfig::default);
-            cluster_config.set_field(field, value);
+            cluster_config.set_field(&field, &value);
         }
 
         Ok(Self { config_map })

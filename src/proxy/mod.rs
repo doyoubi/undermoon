@@ -3,7 +3,7 @@ mod command;
 mod compress;
 pub mod database;
 pub mod executor;
-mod manager;
+pub mod manager;
 mod reply;
 pub mod service;
 pub mod session;

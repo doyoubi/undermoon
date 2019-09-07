@@ -20,35 +20,27 @@ impl Default for ClusterConfig {
 }
 
 impl ClusterConfig {
-    pub fn set_field(&mut self, field: String, value: String) {
+    pub fn set_field(&mut self, field: &str, value: &str) -> Result<(), ConfigError> {
         let field = field.to_lowercase();
-    }
-}
-
-pub struct AtomicClusterConfig {
-    compression_strategy: AtomicCompressionStrategy,
-    migration_config: AtomicMigrationConfig,
-}
-
-impl Default for AtomicClusterConfig {
-    fn default() -> Self {
-        Self {
-            compression_strategy: AtomicCompressionStrategy::default(),
-            migration_config: AtomicMigrationConfig::default(),
+        match field.as_str() {
+            "compression_strategy" => {
+                let strategy = CompressionStrategy::from_str(&value)
+                    .ok_or_else(|| ConfigError::InvalidValue)?;
+                self.compression_strategy = strategy;
+            }
+            _ => {
+                if field.starts_with("migration_") {
+                    let f = field
+                        .splitn(2, '-')
+                        .nth(1)
+                        .ok_or_else(|| ConfigError::FieldNotFound)?;
+                    return self.migration_config.set_field(f, value);
+                } else {
+                    return Err(ConfigError::FieldNotFound);
+                }
+            }
         }
-    }
-}
-
-impl AtomicClusterConfig {
-    pub fn from_cluster_config(cluster_config: ClusterConfig) -> Self {
-        let ClusterConfig {
-            compression_strategy,
-            migration_config,
-        } = cluster_config;
-        Self {
-            compression_strategy: AtomicCompressionStrategy::new(compression_strategy),
-            migration_config: AtomicMigrationConfig::from_config(migration_config),
-        }
+        Ok(())
     }
 }
 
@@ -150,6 +142,52 @@ pub struct MigrationConfig {
     switch_retry_interval: u64,
 }
 
+impl MigrationConfig {
+    fn set_field(&mut self, field: &str, value: &str) -> Result<(), ConfigError> {
+        let field = field.to_lowercase();
+        match field.as_str() {
+            "offset_threshold" => {
+                let v = value
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.offset_threshold = v;
+            }
+            "max_migration_time" => {
+                let v = value
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.max_migration_time = v;
+            }
+            "max_blocking_time" => {
+                let v = value
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.max_blocking_time = v;
+            }
+            "min_blocking_time" => {
+                let v = value
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.min_blocking_time = v;
+            }
+            "max_redirection_time" => {
+                let v = value
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.max_redirection_time = v;
+            }
+            "switch_retry_interval" => {
+                let v = value
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.switch_retry_interval = v;
+            }
+            _ => return Err(ConfigError::FieldNotFound),
+        }
+        Ok(())
+    }
+}
+
 impl Default for MigrationConfig {
     fn default() -> Self {
         Self {
@@ -233,4 +271,11 @@ impl AtomicMigrationConfig {
         self.switch_retry_interval
             .store(switch_retry_interval, Ordering::SeqCst)
     }
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    ReadonlyField,
+    FieldNotFound,
+    InvalidValue,
 }

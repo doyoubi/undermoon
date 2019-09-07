@@ -1,7 +1,7 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
 use common::cluster::{Host, Role, SlotRange};
-use common::db::{DBMapFlags, HostDBMap, ProxyDBMeta};
+use common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
 use common::utils::OLD_EPOCH_REPLY;
 use futures::{future, Future};
 use protocol::{RedisClient, RedisClientFactory, Resp};
@@ -59,13 +59,14 @@ fn filter_host_masters(host: Host) -> Host {
     let epoch = host.get_epoch();
     let free_nodes = host.get_free_nodes().clone();
     let peers = host.get_peers().clone();
+    let clusters_config = host.get_clusters_config().clone();
     let masters = host
         .into_nodes()
         .into_iter()
         .filter(|node| node.get_role() == Role::Master)
         .collect();
 
-    Host::new(address, epoch, masters, free_nodes, peers)
+    Host::new(address, epoch, masters, free_nodes, peers, clusters_config)
 }
 
 pub struct BrokerMetaRetriever<B: MetaDataBroker> {
@@ -93,6 +94,7 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
 
 fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
     let epoch = proxy.get_epoch();
+    let clusters_config = ClusterConfigMap::new(proxy.get_clusters_config().clone());
 
     let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
 
@@ -114,7 +116,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
     }
     let local = HostDBMap::new(db_map);
 
-    let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer);
+    let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer, clusters_config);
     proxy_db_meta.to_args()
 }
 

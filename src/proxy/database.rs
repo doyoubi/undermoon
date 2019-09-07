@@ -188,6 +188,10 @@ where
         }
         None
     }
+
+    pub fn get_config(&self, dbname: &str) -> Option<&ClusterConfig> {
+        self.local_dbs.get(dbname).map(|db| &db.config)
+    }
 }
 
 // We combine the nodes and slot_map to let them fit into

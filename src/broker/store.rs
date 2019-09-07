@@ -108,7 +108,14 @@ impl MetaStore {
                             }
                         })
                         .collect();
-                    Host::new(address.to_string(), epoch, nodes, Vec::new(), peers)
+                    Host::new(
+                        address.to_string(),
+                        epoch,
+                        nodes,
+                        Vec::new(),
+                        peers,
+                        HashMap::new(),
+                    )
                 })
                 .or_else(|| {
                     Some(Host::new(
@@ -121,6 +128,7 @@ impl MetaStore {
                             .cloned()
                             .collect::<Vec<String>>(),
                         vec![],
+                        HashMap::new(),
                     ))
                 })
         })

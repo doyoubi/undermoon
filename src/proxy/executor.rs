@@ -2,7 +2,7 @@ use super::backend::CmdTask;
 use super::command::CmdType;
 use super::compress::{CmdCompressor, CompressionError};
 use super::database::{DBError, DBTag};
-use super::manager::MetaManager;
+use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
@@ -38,12 +38,14 @@ impl<F: RedisClientFactory> SharedForwardHandler<F> {
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
+        meta_map: SharedMetaMap,
     ) -> Self {
         Self {
             handler: sync::Arc::new(ForwardHandler::new(
                 config,
                 client_factory,
                 slow_request_logger,
+                meta_map,
             )),
         }
     }
@@ -67,12 +69,13 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
+        meta_map: SharedMetaMap,
     ) -> Self {
         Self {
             config: config.clone(),
-            manager: MetaManager::new(config, client_factory),
+            manager: MetaManager::new(config, client_factory, meta_map.clone()),
             slow_request_logger,
-            compressor: CmdCompressor::new(Arc::new(())),
+            compressor: CmdCompressor::new(meta_map),
         }
     }
 }
@@ -341,7 +344,9 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     fn handle_data_cmd(&self, cmd_ctx: CmdCtx) {
         let mut cmd_ctx = cmd_ctx;
         match self.compressor.try_compressing_cmd_ctx(&mut cmd_ctx) {
-            Ok(()) | Err(CompressionError::UnsupportedCmdType) => (),
+            Ok(())
+            | Err(CompressionError::UnsupportedCmdType)
+            | Err(CompressionError::Disabled) => (),
             Err(CompressionError::InvalidRequest) | Err(CompressionError::InvalidResp) => {
                 return cmd_ctx
                     .set_resp_result(Ok(Resp::Error("invalid command".to_string().into_bytes())));

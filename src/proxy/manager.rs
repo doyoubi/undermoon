@@ -2,7 +2,7 @@ use super::backend::{
     CachedSenderFactory, CmdTaskSender, CmdTaskSenderFactory, RRSenderGroupFactory,
     RecoverableBackendNodeFactory, RedirectionSenderFactory,
 };
-use super::database::{DBError, DBSendError, DatabaseMap};
+use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
 use super::reply::ReplyCommitHandlerFactory;
 use super::service::ServerProxyConfig;
 use super::session::CmdCtx;
@@ -15,13 +15,12 @@ use arc_swap::ArcSwap;
 use common::db::ProxyDBMeta;
 use protocol::{RedisClientFactory, Resp};
 use proxy::backend::CmdTask;
-use proxy::database::{DBTag, DEFAULT_DB};
 use replication::manager::ReplicatorManager;
 use replication::replicator::ReplicatorMeta;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-struct MetaMap<F: CmdTaskSenderFactory>
+pub struct MetaMap<F: CmdTaskSenderFactory>
 where
     <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
 {
@@ -29,18 +28,41 @@ where
     migration_map: MigrationMap<RedirectionSenderFactory<CmdCtx>>,
 }
 
-pub struct MetaManager<F: RedisClientFactory> {
-    config: Arc<ServerProxyConfig>,
-    // Now replicator is not in meta_map, if later we need consistency
-    // between replication metadata and other metadata, we should put that
-    // inside meta_map.
-    meta_map: ArcSwap<
+impl<F: CmdTaskSenderFactory> MetaMap<F>
+where
+    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+{
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        let db_map = DatabaseMap::default();
+        let migration_map = MigrationMap::new();
+        Self {
+            db_map,
+            migration_map,
+        }
+    }
+
+    pub fn get_db_map(&self) -> &DatabaseMap<F> {
+        &self.db_map
+    }
+}
+
+pub type SharedMetaMap = Arc<
+    ArcSwap<
         MetaMap<
             CachedSenderFactory<
                 RRSenderGroupFactory<RecoverableBackendNodeFactory<ReplyCommitHandlerFactory>>,
             >,
         >,
     >,
+>;
+
+pub struct MetaManager<F: RedisClientFactory> {
+    config: Arc<ServerProxyConfig>,
+    // Now replicator is not in meta_map, if later we need consistency
+    // between replication metadata and other metadata, we should put that
+    // inside meta_map.
+    meta_map: SharedMetaMap,
     epoch: AtomicU64,
     lock: Mutex<()>, // This is the write lock for `epoch`, `db`, and `task`.
     replicator_manager: ReplicatorManager<F>,
@@ -51,23 +73,21 @@ pub struct MetaManager<F: RedisClientFactory> {
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
-    pub fn new(config: Arc<ServerProxyConfig>, client_factory: Arc<F>) -> Self {
-        let reply_handler_factory = Arc::new(ReplyCommitHandlerFactory::new(Arc::new(())));
+    pub fn new(
+        config: Arc<ServerProxyConfig>,
+        client_factory: Arc<F>,
+        meta_map: SharedMetaMap,
+    ) -> Self {
+        let reply_handler_factory = Arc::new(ReplyCommitHandlerFactory::new(meta_map.clone()));
         let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
             config.backend_conn_num,
             RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory),
         ));
-        let db_map = DatabaseMap::default();
-        let migration_map = MigrationMap::new();
-        let meta_map = MetaMap {
-            db_map,
-            migration_map,
-        };
         let redirection_sender_factory = Arc::new(RedirectionSenderFactory::default());
         let migration_config = Arc::new(AtomicMigrationConfig::default());
         Self {
             config,
-            meta_map: ArcSwap::new(Arc::new(meta_map)),
+            meta_map,
             epoch: AtomicU64::new(0),
             lock: Mutex::new(()),
             replicator_manager: ReplicatorManager::new(client_factory.clone()),

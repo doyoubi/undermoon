@@ -1,23 +1,31 @@
 use super::backend::CmdTask;
 use super::command::DataCmdType;
+use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
 use ::protocol::{BulkStr, Resp, RespPacket};
+use common::config::{ClusterConfig, CompressionStrategy};
+use proxy::database::DBTag;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::Arc;
 use zstd;
 
 pub struct CmdCompressor {
-    clusters_config: Arc<()>,
+    meta_map: SharedMetaMap,
 }
 
 impl CmdCompressor {
-    pub fn new(clusters_config: Arc<()>) -> Self {
-        Self { clusters_config }
+    pub fn new(meta_map: SharedMetaMap) -> Self {
+        Self { meta_map }
     }
 
     pub fn try_compressing_cmd_ctx(&self, cmd_ctx: &mut CmdCtx) -> Result<(), CompressionError> {
+        let strategy = get_strategy(&cmd_ctx.get_db_name(), &self.meta_map);
+
+        if strategy == CompressionStrategy::Disabled {
+            return Err(CompressionError::Disabled);
+        }
+
         let index = match cmd_ctx.get_data_cmd_type() {
             DataCmdType::GETSET | DataCmdType::SET | DataCmdType::SETNX => 2,
             DataCmdType::PSETEX | DataCmdType::SETEX => 3,
@@ -38,7 +46,10 @@ impl CmdCompressor {
             | DataCmdType::MSETNX
             | DataCmdType::SETBIT
             | DataCmdType::SETRANGE
-            | DataCmdType::STRLEN => return Err(CompressionError::RestrictedCmd),
+            | DataCmdType::STRLEN => match strategy {
+                CompressionStrategy::SetGetOnly => return Err(CompressionError::RestrictedCmd),
+                _ => return Err(CompressionError::UnsupportedCmdType),
+            },
             _ => return Ok(()),
         };
 
@@ -63,12 +74,12 @@ impl CmdCompressor {
 }
 
 pub struct CmdReplyDecompressor {
-    clusters_config: Arc<()>,
+    meta_map: SharedMetaMap,
 }
 
 impl CmdReplyDecompressor {
-    pub fn new(clusters_config: Arc<()>) -> Self {
-        Self { clusters_config }
+    pub fn new(meta_map: SharedMetaMap) -> Self {
+        Self { meta_map }
     }
 
     pub fn decompress(
@@ -76,6 +87,12 @@ impl CmdReplyDecompressor {
         cmd_ctx: &CmdCtx,
         packet: &mut RespPacket,
     ) -> Result<(), CompressionError> {
+        let strategy = get_strategy(&cmd_ctx.get_db_name(), &self.meta_map);
+
+        if strategy == CompressionStrategy::Disabled {
+            return Err(CompressionError::Disabled);
+        }
+
         let data_cmd_type = cmd_ctx.get_data_cmd_type();
         match data_cmd_type {
             DataCmdType::GET | DataCmdType::GETSET => {
@@ -102,11 +119,23 @@ impl CmdReplyDecompressor {
     }
 }
 
+fn get_strategy(dbname: &str, meta_map: &SharedMetaMap) -> CompressionStrategy {
+    let meta_map = meta_map.lease();
+    match meta_map.get_db_map().get_config(&dbname) {
+        Some(config) => config.compression_strategy,
+        None => {
+            warn!("failed to get config from {}. Use default config.", dbname);
+            ClusterConfig::default().compression_strategy
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum CompressionError {
     Io(io::Error),
     InvalidRequest,
     InvalidResp,
+    Disabled,
     UnsupportedCmdType,
     RestrictedCmd,
 }

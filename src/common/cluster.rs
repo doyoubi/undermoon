@@ -1,6 +1,8 @@
 use super::utils::{IMPORTING_TAG, MIGRATING_TAG};
+use common::config::ClusterConfig;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationMeta {
@@ -390,6 +392,8 @@ pub struct Host {
     nodes: Vec<Node>,
     free_nodes: Vec<String>,
     peers: Vec<PeerProxy>,
+    #[serde(default)]
+    clusters_config: HashMap<String, ClusterConfig>,
 }
 
 impl Host {
@@ -399,6 +403,7 @@ impl Host {
         nodes: Vec<Node>,
         free_nodes: Vec<String>,
         peers: Vec<PeerProxy>,
+        clusters_config: HashMap<String, ClusterConfig>,
     ) -> Self {
         Self {
             address,
@@ -406,6 +411,7 @@ impl Host {
             nodes,
             free_nodes,
             peers,
+            clusters_config,
         }
     }
     pub fn get_address(&self) -> &String {
@@ -441,6 +447,10 @@ impl Host {
     }
     pub fn get_peers(&self) -> &Vec<PeerProxy> {
         &self.peers
+    }
+
+    pub fn get_clusters_config(&self) -> &HashMap<String, ClusterConfig> {
+        &self.clusters_config
     }
 }
 
@@ -592,6 +602,7 @@ mod tests {
                     tag: SlotRangeTag::None,
                 }],
             }],
+            HashMap::new(),
         );
         assert_eq!(expected_host, host);
     }
