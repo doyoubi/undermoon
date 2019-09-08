@@ -257,7 +257,7 @@ It also supports slots migration. See `examples/overmoon/init.py` for more detai
 
 ## API
 ### Server-side Proxy Commands
-#### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...] [PEER [dbname1 ip:port slot_range...]]
+#### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...] [PEER [dbname1 ip:port slot_range...]] [CONFIG [dbname1 field value...]]
 
 Sets the mapping relationship between the server-side proxy and its corresponding redis instances behind it.
 

@@ -44,6 +44,7 @@ impl RespPacket {
     pub fn change_bulk_array_element(&mut self, index: usize, data: Vec<u8>) -> bool {
         let success = change_bulk_array_element(&mut self.resp, index, data);
         if success {
+            // clear the cache
             self.data.take(Ordering::SeqCst);
         }
         success
@@ -52,6 +53,7 @@ impl RespPacket {
     pub fn change_bulk_str(&mut self, data: Vec<u8>) -> bool {
         let r = change_bulk_str(&mut self.resp, data);
         if r {
+            // clear the cache
             self.data.take(Ordering::SeqCst);
         }
         r

@@ -45,7 +45,9 @@ impl CmdTaskHandler for ReplyCommitHandler {
         };
 
         match self.decompressor.decompress(&cmd_ctx, &mut packet) {
-            Ok(()) | Err(CompressionError::UnsupportedCmdType) => (),
+            Ok(())
+            | Err(CompressionError::UnsupportedCmdType)
+            | Err(CompressionError::Disabled) => (),
             Err(err) => {
                 warn!(
                     "failed to decompress: {:?}. Force to return nil bulk string",

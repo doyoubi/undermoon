@@ -456,6 +456,7 @@ impl Host {
 
 #[cfg(test)]
 mod tests {
+    use super::super::config::CompressionStrategy;
     use super::*;
     use serde_json;
 
@@ -548,7 +549,12 @@ mod tests {
                 "proxy_address": "server_proxy2:6002",
                 "cluster_name": "mydb",
                 "slots": [{"start": 5462, "end": 10000, "tag": "None"}]
-            }]
+            }],
+            "clusters_config": {
+                "mydb": {
+                    "compression_strategy": "set_get_only"
+                }
+            }
         }"#;
         let host: Host = match serde_json::from_str(host_str) {
             Ok(h) => h,
@@ -557,6 +563,12 @@ mod tests {
                 panic!(e);
             }
         };
+
+        let mut config = ClusterConfig::default();
+        config.compression_strategy = CompressionStrategy::SetGetOnly;
+        let mut clusters_config = HashMap::new();
+        clusters_config.insert("mydb".to_string(), config);
+
         let expected_host = Host::new(
             "server_proxy1:6001".to_string(),
             1,
@@ -602,7 +614,7 @@ mod tests {
                     tag: SlotRangeTag::None,
                 }],
             }],
-            HashMap::new(),
+            clusters_config,
         );
         assert_eq!(expected_host, host);
     }

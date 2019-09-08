@@ -126,7 +126,12 @@ impl ProxyDBMeta {
         while let Some(token) = it.next() {
             match token.to_uppercase().as_str() {
                 PEER_PREFIX => peer = HostDBMap::parse(it)?,
-                CONFIG_PREFIX => clusters_config = ClusterConfigMap::parse(it)?,
+                CONFIG_PREFIX => match ClusterConfigMap::parse(it) {
+                    Ok(c) => clusters_config = c,
+                    Err(_) => {
+                        error!("invalid cluster config from UMCTL SETDB. Ignore this error to protect the core functionality.");
+                    }
+                },
                 _ => return Err(CmdParseError {}),
             }
         }
@@ -765,5 +770,33 @@ mod tests {
         args.sort();
         db_args.sort();
         assert_eq!(args, db_args);
+    }
+
+    #[test]
+    fn test_parse_proxy_db_meta_without_peer() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "CONFIG",
+            "dbname",
+            "compression_strategy",
+            "set_get_only",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        let db_meta = ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta_without_peer");
+        assert_eq!(db_meta.epoch, 233);
+        assert!(db_meta.flags.force);
+        assert_eq!(
+            db_meta.get_configs().get("dbname").compression_strategy,
+            CompressionStrategy::SetGetOnly
+        );
     }
 }

@@ -76,14 +76,7 @@ pub fn get_command_element(resp: &Resp, index: usize) -> Option<&[u8]> {
 pub fn change_bulk_array_element(resp: &mut Resp, index: usize, data: Vec<u8>) -> bool {
     match resp {
         Resp::Arr(Array::Arr(ref mut resps)) => {
-            Some(true)
-                == resps.get_mut(index).map(|resp| match resp {
-                    Resp::Bulk(BulkStr::Str(s)) => {
-                        *s = data;
-                        true
-                    }
-                    _ => false,
-                })
+            Some(true) == resps.get_mut(index).map(|resp| change_bulk_str(resp, data))
         }
         _ => false,
     }

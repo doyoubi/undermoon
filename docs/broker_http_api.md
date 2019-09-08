@@ -91,7 +91,12 @@ If the host(or proxy) exists:
                 "end": 5000,
                 "tag": "None"
             }, ...]
-        }, ...]
+        }, ...],
+        "clusters_config": {
+            "cluster_name1": {
+                "compression_strategy": "disabled"
+            }
+        }
     }
 }
 If not:
