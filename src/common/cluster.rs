@@ -329,11 +329,18 @@ pub struct Cluster {
     name: String,
     epoch: u64,
     nodes: Vec<Node>,
+    #[serde(default)]
+    config: ClusterConfig,
 }
 
 impl Cluster {
-    pub fn new(name: String, epoch: u64, nodes: Vec<Node>) -> Self {
-        Self { name, epoch, nodes }
+    pub fn new(name: String, epoch: u64, nodes: Vec<Node>, config: ClusterConfig) -> Self {
+        Self {
+            name,
+            epoch,
+            nodes,
+            config,
+        }
     }
     pub fn get_name(&self) -> &String {
         &self.name

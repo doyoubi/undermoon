@@ -39,7 +39,10 @@ If the cluster exists:
                 "end": 5000,
                 "tag": "None"
             }, ...]
-        }, ...]
+        }, ...],
+        "config": {
+            "compression_strategy": "disabled"
+        }
     }
 }
 

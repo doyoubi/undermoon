@@ -2,6 +2,7 @@ use ::common::cluster::{
     Cluster, Host, MigrationTaskMeta, Node, PeerProxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
 };
 use ::common::utils::SLOT_NUM;
+use ::common::config::ClusterConfig;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use common::cluster::{MigrationMeta, Role};
 use itertools::Itertools;
@@ -220,7 +221,12 @@ impl MetaStore {
             nodes.push(node);
         }
 
-        let cluster = Cluster::new(cluster_name.clone(), self.bump_global_epoch(), nodes);
+        let cluster = Cluster::new(
+            cluster_name.clone(),
+            self.bump_global_epoch(),
+            nodes,
+            ClusterConfig::default(),
+        );
         self.clusters.insert(cluster_name, cluster);
         Ok(())
     }
