@@ -92,7 +92,9 @@ impl ProxyDBMeta {
         &self.clusters_config
     }
 
-    pub fn from_resp(resp: &Resp) -> Result<Self, CmdParseError> {
+    pub fn from_resp(
+        resp: &Resp,
+    ) -> Result<(Self, Result<(), ParseExtendedMetaError>), CmdParseError> {
         let arr = match resp {
             Resp::Arr(Array::Arr(ref arr)) => arr,
             _ => return Err(CmdParseError {}),
@@ -111,7 +113,9 @@ impl ProxyDBMeta {
         Self::parse(&mut it)
     }
 
-    pub fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
+    pub fn parse<It>(
+        it: &mut Peekable<It>,
+    ) -> Result<(Self, Result<(), ParseExtendedMetaError>), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
@@ -123,26 +127,36 @@ impl ProxyDBMeta {
         let local = HostDBMap::parse(it)?;
         let mut peer = HostDBMap::new(HashMap::new());
         let mut clusters_config = ClusterConfigMap::default();
+        let mut extended_meta_result = Ok(());
+
         while let Some(token) = it.next() {
             match token.to_uppercase().as_str() {
                 PEER_PREFIX => peer = HostDBMap::parse(it)?,
                 CONFIG_PREFIX => match ClusterConfigMap::parse(it) {
                     Ok(c) => clusters_config = c,
                     Err(_) => {
-                        error!("invalid cluster config from UMCTL SETDB. Ignore this error to protect the core functionality.");
+                        if local.get_map().is_empty() || peer.get_map().is_empty() {
+                            return Err(CmdParseError {});
+                        } else {
+                            error!("invalid cluster config from UMCTL SETDB but the local and peer metadata are complete. Ignore this error to protect the core functionality.");
+                            extended_meta_result = Err(ParseExtendedMetaError {})
+                        }
                     }
                 },
                 _ => return Err(CmdParseError {}),
             }
         }
 
-        Ok(Self {
-            epoch,
-            flags,
-            local,
-            peer,
-            clusters_config,
-        })
+        Ok((
+            Self {
+                epoch,
+                flags,
+                local,
+                peer,
+                clusters_config,
+            },
+            extended_meta_result,
+        ))
     }
 
     pub fn to_args(&self) -> Vec<String> {
@@ -313,6 +327,7 @@ impl ClusterConfigMap {
                 .or_insert_with(ClusterConfig::default);
             if let Err(err) = cluster_config.set_field(&field, &value) {
                 warn!("failed to set config field {:?}", err);
+                return Err(CmdParseError {});
             }
         }
 
@@ -341,6 +356,9 @@ impl ClusterConfigMap {
         args
     }
 }
+
+#[derive(Debug)]
+pub struct ParseExtendedMetaError {}
 
 #[cfg(test)]
 mod tests {
@@ -675,7 +693,9 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        let db_meta = ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta");
+        let (db_meta, extended_res) =
+            ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta");
+        assert!(extended_res.is_ok());
         assert_eq!(db_meta.epoch, 233);
         assert!(db_meta.flags.force);
         let local = db_meta.local.get_map();
@@ -791,12 +811,95 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        let db_meta = ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta_without_peer");
+        let (db_meta, extended_res) =
+            ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta_without_peer");
+        assert!(extended_res.is_ok());
         assert_eq!(db_meta.epoch, 233);
         assert!(db_meta.flags.force);
         assert_eq!(
             db_meta.get_configs().get("dbname").compression_strategy,
             CompressionStrategy::SetGetOnly
         );
+    }
+
+    #[test]
+    fn test_missing_config_db() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "PEER",
+            "dbname",
+            "127.0.0.2:7001",
+            "2001-3000",
+            "CONFIG",
+            // "dbname", missing dbname
+            "compression_strategy",
+            "set_get_only",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        let (db_meta, extended_res) = ProxyDBMeta::parse(&mut it).expect("test_missing_config_db");
+        assert!(extended_res.is_err());
+        assert_eq!(db_meta.epoch, 233);
+        assert!(db_meta.flags.force);
+    }
+
+    #[test]
+    fn test_invalid_config_field() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "PEER",
+            "dbname",
+            "127.0.0.2:7001",
+            "2001-3000",
+            "CONFIG",
+            "dbname",
+            "config_field_that_does_not_exist",
+            "invalid_value",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        let (db_meta, extended_res) =
+            ProxyDBMeta::parse(&mut it).expect("test_invalid_config_field");
+        assert!(extended_res.is_err());
+        assert_eq!(db_meta.epoch, 233);
+        assert!(db_meta.flags.force);
+    }
+
+    #[test]
+    fn test_incomplete_main_meta_with_config_err() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "CONFIG",
+            "dbname",
+            "config_field_that_does_not_exist",
+            "invalid_value",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        assert!(ProxyDBMeta::parse(&mut it).is_err());
     }
 }

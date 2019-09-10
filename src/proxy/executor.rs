@@ -176,8 +176,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_umctl_setdb(&self, cmd_ctx: CmdCtx) {
-        let db_meta = match ProxyDBMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
-            Ok(db_meta) => db_meta,
+        let (db_meta, extended_res) = match ProxyDBMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(r) => r,
             Err(_) => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Invalid arguments").into_bytes(),
@@ -187,10 +187,17 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         };
 
         match self.manager.set_meta(db_meta) {
-            Ok(()) => {
-                debug!("Successfully update local meta data");
-                cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
-            }
+            Ok(()) => match extended_res {
+                Ok(()) => {
+                    debug!("Successfully update local meta data");
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
+                }
+                Err(_) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple(
+                        "WARNING: ignored invalid config".to_string().into_bytes(),
+                    )));
+                }
+            },
             Err(err) => match err {
                 DBError::OldEpoch => cmd_ctx
                     .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),

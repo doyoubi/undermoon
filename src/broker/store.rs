@@ -1,8 +1,8 @@
 use ::common::cluster::{
     Cluster, Host, MigrationTaskMeta, Node, PeerProxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
 };
-use ::common::utils::SLOT_NUM;
 use ::common::config::ClusterConfig;
+use ::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use common::cluster::{MigrationMeta, Role};
 use itertools::Itertools;

@@ -153,6 +153,7 @@ pub fn extract_info_field(resp: &Resp, field: &str) -> Result<String, String> {
     Err(format!("field {} not found", field))
 }
 
+pub const OK_REPLY: &str = "OK";
 pub const OLD_EPOCH_REPLY: &str = "OLD_EPOCH";
 pub const TRY_AGAIN_REPLY: &str = "TRY_AGAIN";
 pub const NOT_READY_FOR_SWITCHING_REPLY: &str = "NOT_READY_FOR_SWITCHING";

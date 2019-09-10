@@ -2,7 +2,7 @@ use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
 use common::cluster::{Host, Role, SlotRange};
 use common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
-use common::utils::OLD_EPOCH_REPLY;
+use common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
 use futures::{future, Future};
 use protocol::{RedisClient, RedisClientFactory, Resp};
 use replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
@@ -143,6 +143,12 @@ fn send_meta<C: RedisClient>(
                     error!("failed to send meta, invalid reply {:?}", err_str);
                     future::err(CoordinateError::InvalidReply)
                 }
+            }
+            Resp::Simple(s) => {
+                if s != OK_REPLY.as_bytes() {
+                    warn!("unexpected reply: {:?}", s);
+                }
+                future::ok(client)
             }
             reply => {
                 debug!("Successfully set meta {} {:?}", sub_command, reply);
