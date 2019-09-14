@@ -285,9 +285,6 @@ Sets the replication metadata to server-side proxies. This API supports multiple
 ### HTTP Broker API
 Refer to [HTTP API documentation](./docs/broker_http_api.md).
 
-## Current Status
-This project is still under testing but has **NOT** been well tested in production environment yet.
-
 ## TODO
 - ~~Basic proxy implementation~~ (done)
 - ~~Multiple backend connections~~ (done)

@@ -13,6 +13,7 @@ use common::db::ProxyDBMeta;
 use common::utils::{
     get_element, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
 };
+use common::version::UNDERMOON_VERSION;
 use protocol::{Array, BulkStr, RedisClientFactory, Resp};
 use replication::replicator::ReplicatorMeta;
 use std::str;
@@ -350,7 +351,12 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Info => cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(
-                format!("version:dev\r\n\r\n{}", self.manager.info()).into_bytes(),
+                format!(
+                    "version:{}\r\n\r\n{}",
+                    UNDERMOON_VERSION,
+                    self.manager.info()
+                )
+                .into_bytes(),
             )))),
             CmdType::Auth => self.handle_auth(cmd_ctx),
             CmdType::Quit => {
