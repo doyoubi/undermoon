@@ -63,6 +63,35 @@ pub fn get_commands(resp: &Resp) -> Option<Vec<String>> {
     }
 }
 
+pub fn get_command_element(resp: &Resp, index: usize) -> Option<&[u8]> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => resps.get(index).and_then(|resp| match resp {
+            Resp::Bulk(BulkStr::Str(s)) => Some(s.as_slice()),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+pub fn change_bulk_array_element(resp: &mut Resp, index: usize, data: Vec<u8>) -> bool {
+    match resp {
+        Resp::Arr(Array::Arr(ref mut resps)) => {
+            Some(true) == resps.get_mut(index).map(|resp| change_bulk_str(resp, data))
+        }
+        _ => false,
+    }
+}
+
+pub fn change_bulk_str(resp: &mut Resp, data: Vec<u8>) -> bool {
+    match resp {
+        Resp::Bulk(BulkStr::Str(s)) => {
+            *s = data;
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn gen_moved(slot: usize, addr: String) -> String {
     format!("MOVED {} {}", slot, addr)
 }
@@ -124,6 +153,7 @@ pub fn extract_info_field(resp: &Resp, field: &str) -> Result<String, String> {
     Err(format!("field {} not found", field))
 }
 
+pub const OK_REPLY: &str = "OK";
 pub const OLD_EPOCH_REPLY: &str = "OLD_EPOCH";
 pub const TRY_AGAIN_REPLY: &str = "TRY_AGAIN";
 pub const NOT_READY_FOR_SWITCHING_REPLY: &str = "NOT_READY_FOR_SWITCHING";

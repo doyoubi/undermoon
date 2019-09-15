@@ -2,6 +2,7 @@ use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
 use common::cluster::{SlotRange, SlotRangeTag};
+use common::config::ClusterConfig;
 use common::db::ProxyDBMeta;
 use common::utils::{gen_moved, get_key, get_slot};
 use protocol::{Array, BulkStr, Resp};
@@ -68,11 +69,13 @@ where
 
         let mut local_dbs = HashMap::new();
         for (db_name, slot_ranges) in db_meta.get_local().get_map().iter() {
+            let config = db_meta.get_configs().get(db_name);
             let db = Database::from_slot_map(
                 sender_factory,
                 db_name.clone(),
                 epoch,
                 slot_ranges.clone(),
+                config,
             );
             local_dbs.insert(db_name.clone(), db);
         }
@@ -185,6 +188,10 @@ where
         }
         None
     }
+
+    pub fn get_config(&self, dbname: &str) -> Option<&ClusterConfig> {
+        self.local_dbs.get(dbname).map(|db| &db.config)
+    }
 }
 
 // We combine the nodes and slot_map to let them fit into
@@ -200,6 +207,7 @@ pub struct Database<F: CmdTaskSenderFactory> {
     epoch: u64,
     local_db: LocalDB<F::Sender>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
+    config: ClusterConfig,
 }
 
 impl<F: CmdTaskSenderFactory> Database<F> {
@@ -208,6 +216,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
         name: String,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
+        config: ClusterConfig,
     ) -> Database<F> {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
@@ -222,6 +231,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
             epoch,
             local_db,
             slot_ranges: slot_map,
+            config,
         }
     }
 

@@ -1,7 +1,8 @@
 use super::backend::CmdTask;
 use super::command::TaskReply;
 use super::command::{
-    new_command_pair, CmdReplyReceiver, CmdReplySender, Command, CommandError, CommandResult,
+    new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
+    CommandResult, DataCmdType,
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
@@ -53,6 +54,10 @@ impl CmdCtx {
     pub fn get_cmd(&self) -> &Command {
         self.reply_sender.get_cmd()
     }
+
+    pub fn change_cmd_element(&mut self, index: usize, data: Vec<u8>) -> bool {
+        self.reply_sender.get_mut_cmd().change_element(index, data)
+    }
 }
 
 // Make sure that ctx will always be sent back.
@@ -65,6 +70,14 @@ impl Drop for CmdCtx {
 impl CmdTask for CmdCtx {
     fn get_resp(&self) -> &Resp {
         self.reply_sender.get_cmd().get_resp()
+    }
+
+    fn get_cmd_type(&self) -> CmdType {
+        self.reply_sender.get_cmd().get_type()
+    }
+
+    fn get_data_cmd_type(&self) -> DataCmdType {
+        self.reply_sender.get_cmd().get_data_cmd_type()
     }
 
     fn set_result(self, result: CommandResult) {

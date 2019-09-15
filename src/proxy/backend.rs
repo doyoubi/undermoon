@@ -1,4 +1,4 @@
-use super::command::{CommandError, CommandResult};
+use super::command::{CmdType, CommandError, CommandResult, DataCmdType};
 use super::service::ServerProxyConfig;
 use super::slowlog::{Slowlog, TaskEvent};
 use bytes::BytesMut;
@@ -15,20 +15,30 @@ use std::fmt;
 use std::io;
 use std::marker::PhantomData;
 use std::result::Result;
-use std::sync;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
 
-pub type BackendResult = Result<Resp, BackendError>;
+pub type BackendResult = Result<Box<RespPacket>, BackendError>;
 
-pub trait ReplyHandler<T: CmdTask>: Send + 'static {
-    fn handle_reply(&self, cmd_task: T, result: BackendResult);
+pub trait CmdTaskHandler: Send + 'static {
+    type Task: CmdTask;
+
+    fn handle_task(&self, cmd_task: Self::Task, result: BackendResult);
+}
+
+pub trait CmdTaskHandlerFactory: ThreadSafe {
+    type Handler: CmdTaskHandler;
+
+    fn create(&self) -> Self::Handler;
 }
 
 pub trait CmdTask: ThreadSafe + fmt::Debug {
     fn get_resp(&self) -> &Resp;
+    fn get_cmd_type(&self) -> CmdType;
+    fn get_data_cmd_type(&self) -> DataCmdType;
     fn set_result(self, result: CommandResult);
     fn drain_packet_data(&self) -> Option<BytesMut>;
 
@@ -55,42 +65,44 @@ pub trait CmdTaskSenderFactory {
 }
 
 // TODO: change to use AtomicOption
-pub struct RecoverableBackendNode<T: CmdTask> {
-    addr: sync::Arc<String>,
-    node: sync::Arc<sync::RwLock<Option<BackendNode<T>>>>,
-    config: sync::Arc<ServerProxyConfig>,
+pub struct RecoverableBackendNode<F: CmdTaskHandlerFactory> {
+    addr: Arc<String>,
+    node: Arc<RwLock<Option<BackendNode<<F as CmdTaskHandlerFactory>::Handler>>>>,
+    config: Arc<ServerProxyConfig>,
+    handler_factory: Arc<F>,
 }
 
-pub struct RecoverableBackendNodeFactory<T: CmdTask> {
-    phantom: PhantomData<T>,
-    config: sync::Arc<ServerProxyConfig>,
+pub struct RecoverableBackendNodeFactory<F: CmdTaskHandlerFactory> {
+    config: Arc<ServerProxyConfig>,
+    handler_factory: Arc<F>,
 }
 
-impl<T: CmdTask> RecoverableBackendNodeFactory<T> {
-    pub fn new(config: sync::Arc<ServerProxyConfig>) -> Self {
+impl<F: CmdTaskHandlerFactory> RecoverableBackendNodeFactory<F> {
+    pub fn new(config: Arc<ServerProxyConfig>, handler_factory: Arc<F>) -> Self {
         Self {
-            phantom: PhantomData,
             config,
+            handler_factory,
         }
     }
 }
 
-impl<T: CmdTask> CmdTaskSenderFactory for RecoverableBackendNodeFactory<T> {
-    type Sender = RecoverableBackendNode<T>;
+impl<F: CmdTaskHandlerFactory> CmdTaskSenderFactory for RecoverableBackendNodeFactory<F> {
+    type Sender = RecoverableBackendNode<F>;
 
     fn create(&self, address: String) -> Self::Sender {
         Self::Sender {
-            addr: sync::Arc::new(address),
-            node: sync::Arc::new(sync::RwLock::new(None)),
+            addr: Arc::new(address),
+            node: Arc::new(RwLock::new(None)),
             config: self.config.clone(),
+            handler_factory: self.handler_factory.clone(),
         }
     }
 }
 
-impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
-    type Task = T;
+impl<F: CmdTaskHandlerFactory> CmdTaskSender for RecoverableBackendNode<F> {
+    type Task = <<F as CmdTaskHandlerFactory>::Handler as CmdTaskHandler>::Task;
 
-    fn send(&self, cmd_task: T) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         let retry_times = 3;
         let mut cmd_task = cmd_task;
 
@@ -106,6 +118,7 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
                 };
 
                 let config = self.config.clone();
+                let handler = Box::new(self.handler_factory.create());
 
                 let sock = TcpStream::connect(&address);
                 let fut = sock.then(move |res| {
@@ -113,7 +126,7 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
                     match res {
                         Ok(sock) => {
                             let (node, reader_handler, writer_handler) =
-                                BackendNode::<T>::new(sock, ReplyCommitHandler {}, config.clone());
+                                BackendNode::<F::Handler>::new(sock, handler, config.clone());
                             let (reader_handler, writer_handler) =
                                 new_future_group(reader_handler, writer_handler);
 
@@ -186,13 +199,6 @@ impl<T: CmdTask> CmdTaskSender for RecoverableBackendNode<T> {
     }
 }
 
-// TODO: Remove this. Use handler to do some statistics.
-pub struct ReplyCommitHandler {}
-
-impl<T: CmdTask> ReplyHandler<T> for ReplyCommitHandler {
-    fn handle_reply(&self, _cmd_task: T, _result: BackendResult) {}
-}
-
 #[derive(Debug)]
 pub struct BackendSendError<T>(T);
 
@@ -202,17 +208,17 @@ impl<T> BackendSendError<T> {
     }
 }
 
-pub struct BackendNode<T: CmdTask> {
-    tx: mpsc::UnboundedSender<T>,
+pub struct BackendNode<H: CmdTaskHandler> {
+    tx: mpsc::UnboundedSender<H::Task>,
 }
 
-impl<T: CmdTask> BackendNode<T> {
-    pub fn new<H: ReplyHandler<T>>(
+impl<H: CmdTaskHandler> BackendNode<H> {
+    pub fn new(
         sock: TcpStream,
-        handler: H,
-        config: sync::Arc<ServerProxyConfig>,
+        handler: Box<H>,
+        config: Arc<ServerProxyConfig>,
     ) -> (
-        BackendNode<T>,
+        BackendNode<H>,
         impl Future<Item = (), Error = BackendError> + Send,
         impl Future<Item = (), Error = BackendError> + Send,
     ) {
@@ -222,7 +228,7 @@ impl<T: CmdTask> BackendNode<T> {
         (Self { tx }, reader_handler, writer_handler)
     }
 
-    pub fn send(&self, cmd_task: T) -> Result<(), BackendSendError<T>> {
+    pub fn send(&self, cmd_task: H::Task) -> Result<(), BackendSendError<H::Task>> {
         cmd_task
             .get_slowlog()
             .log_event(TaskEvent::SentToWritingQueue);
@@ -237,9 +243,9 @@ impl<T: CmdTask> BackendNode<T> {
     }
 }
 
-pub fn handle_backend<H, T>(
-    handler: H,
-    task_receiver: mpsc::UnboundedReceiver<T>,
+pub fn handle_backend<H>(
+    handler: Box<H>,
+    task_receiver: mpsc::UnboundedReceiver<H::Task>,
     sock: TcpStream,
     channel_size: usize,
 ) -> (
@@ -247,8 +253,7 @@ pub fn handle_backend<H, T>(
     impl Future<Item = (), Error = BackendError> + Send,
 )
 where
-    H: ReplyHandler<T>,
-    T: CmdTask,
+    H: CmdTaskHandler,
 {
     let (writer, reader) = RespCodec {}.framed(sock).split();
 
@@ -310,15 +315,14 @@ where
         .map(|_| ())
 }
 
-fn handle_read<H, T, R>(
-    handler: H,
+fn handle_read<H, R>(
+    handler: Box<H>,
     reader: R,
-    rx: mpsc::Receiver<T>,
+    rx: mpsc::Receiver<H::Task>,
 ) -> impl Future<Item = (), Error = BackendError> + Send
 where
     R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static,
-    H: ReplyHandler<T>,
-    T: CmdTask,
+    H: CmdTaskHandler,
 {
     let rx = rx.into_future();
     reader
@@ -342,8 +346,7 @@ where
             .and_then(|(task_opt, rx)| match task_opt {
                 Some(task) => {
                     task.get_slowlog().log_event(TaskEvent::ReceivedFromBackend);
-                    task.set_result(Ok(packet));
-                    // TODO: call handler
+                    handler.handle_task(task, Ok(packet));
                     future::ok((handler, rx.into_future()))
                 }
                 None => future::err(BackendError::Canceled),
@@ -428,20 +431,20 @@ impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
 }
 
 pub struct CachedSender<S: CmdTaskSender> {
-    inner_sender: sync::Arc<S>,
+    inner_sender: Arc<S>,
 }
 
 // TODO: support cleanup here to avoid memory leak.
 pub struct CachedSenderFactory<F: CmdTaskSenderFactory> {
     inner_factory: F,
-    cached_senders: sync::Arc<sync::RwLock<HashMap<String, sync::Arc<F::Sender>>>>,
+    cached_senders: Arc<RwLock<HashMap<String, Arc<F::Sender>>>>,
 }
 
 impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
     pub fn new(inner_factory: F) -> Self {
         Self {
             inner_factory,
-            cached_senders: sync::Arc::new(sync::RwLock::new(HashMap::new())),
+            cached_senders: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -457,7 +460,7 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
         }
 
         // Acceptable race condition here. Multiple threads might be creating at the same time.
-        let inner_sender = sync::Arc::new(self.inner_factory.create(address.clone()));
+        let inner_sender = Arc::new(self.inner_factory.create(address.clone()));
         let inner_sender_clone = {
             let mut guard = self.cached_senders.write().unwrap();
             guard.entry(address).or_insert(inner_sender).clone()

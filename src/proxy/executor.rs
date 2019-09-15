@@ -1,7 +1,8 @@
 use super::backend::CmdTask;
 use super::command::CmdType;
+use super::compress::{CmdCompressor, CompressionError};
 use super::database::{DBError, DBTag};
-use super::manager::MetaManager;
+use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
@@ -38,12 +39,14 @@ impl<F: RedisClientFactory> SharedForwardHandler<F> {
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
+        meta_map: SharedMetaMap,
     ) -> Self {
         Self {
             handler: sync::Arc::new(ForwardHandler::new(
                 config,
                 client_factory,
                 slow_request_logger,
+                meta_map,
             )),
         }
     }
@@ -59,6 +62,7 @@ pub struct ForwardHandler<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,
     manager: MetaManager<F>,
     slow_request_logger: Arc<SlowRequestLogger>,
+    compressor: CmdCompressor,
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
@@ -66,11 +70,13 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
+        meta_map: SharedMetaMap,
     ) -> Self {
         Self {
             config: config.clone(),
-            manager: MetaManager::new(config, client_factory),
+            manager: MetaManager::new(config, client_factory, meta_map.clone()),
             slow_request_logger,
+            compressor: CmdCompressor::new(meta_map),
         }
     }
 }
@@ -171,8 +177,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_umctl_setdb(&self, cmd_ctx: CmdCtx) {
-        let db_meta = match ProxyDBMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
-            Ok(db_meta) => db_meta,
+        let (db_meta, extended_res) = match ProxyDBMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+            Ok(r) => r,
             Err(_) => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Invalid arguments").into_bytes(),
@@ -182,10 +188,17 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         };
 
         match self.manager.set_meta(db_meta) {
-            Ok(()) => {
-                debug!("Successfully update local meta data");
-                cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
-            }
+            Ok(()) => match extended_res {
+                Ok(()) => {
+                    debug!("Successfully update local meta data");
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
+                }
+                Err(_) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple(
+                        "WARNING: ignored invalid config".to_string().into_bytes(),
+                    )));
+                }
+            },
             Err(err) => match err {
                 DBError::OldEpoch => cmd_ctx
                     .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
@@ -335,6 +348,29 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             )))
         }
     }
+
+    fn handle_data_cmd(&self, cmd_ctx: CmdCtx) {
+        let mut cmd_ctx = cmd_ctx;
+        match self.compressor.try_compressing_cmd_ctx(&mut cmd_ctx) {
+            Ok(())
+            | Err(CompressionError::UnsupportedCmdType)
+            | Err(CompressionError::Disabled) => (),
+            Err(CompressionError::InvalidRequest) | Err(CompressionError::InvalidResp) => {
+                return cmd_ctx
+                    .set_resp_result(Ok(Resp::Error("invalid command".to_string().into_bytes())));
+            }
+            Err(CompressionError::RestrictedCmd) => {
+                let err_msg = "unsupported string command when compression is enabled";
+                return cmd_ctx.set_resp_result(Ok(Resp::Error(err_msg.to_string().into_bytes())));
+            }
+            Err(CompressionError::Io(err)) => {
+                return cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    format!("failed to compress data: {:?}", err).into_bytes(),
+                )));
+            }
+        }
+        self.manager.send(cmd_ctx)
+    }
 }
 
 impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
@@ -344,7 +380,6 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             cmd_ctx = self.manager.try_select_db(cmd_ctx);
         }
 
-        //        debug!("get command {:?}", cmd_ctx.get_cmd());
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {
             CmdType::Ping => {
@@ -369,7 +404,7 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             CmdType::Select => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
-            CmdType::Others => self.manager.send(cmd_ctx),
+            CmdType::Others => self.handle_data_cmd(cmd_ctx),
             CmdType::Invalid => cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid command").into_bytes(),
             ))),

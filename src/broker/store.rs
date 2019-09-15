@@ -1,6 +1,7 @@
 use ::common::cluster::{
     Cluster, Host, MigrationTaskMeta, Node, PeerProxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
 };
+use ::common::config::ClusterConfig;
 use ::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use common::cluster::{MigrationMeta, Role};
@@ -108,7 +109,14 @@ impl MetaStore {
                             }
                         })
                         .collect();
-                    Host::new(address.to_string(), epoch, nodes, Vec::new(), peers)
+                    Host::new(
+                        address.to_string(),
+                        epoch,
+                        nodes,
+                        Vec::new(),
+                        peers,
+                        HashMap::new(),
+                    )
                 })
                 .or_else(|| {
                     Some(Host::new(
@@ -121,6 +129,7 @@ impl MetaStore {
                             .cloned()
                             .collect::<Vec<String>>(),
                         vec![],
+                        HashMap::new(),
                     ))
                 })
         })
@@ -212,7 +221,12 @@ impl MetaStore {
             nodes.push(node);
         }
 
-        let cluster = Cluster::new(cluster_name.clone(), self.bump_global_epoch(), nodes);
+        let cluster = Cluster::new(
+            cluster_name.clone(),
+            self.bump_global_epoch(),
+            nodes,
+            ClusterConfig::default(),
+        );
         self.clusters.insert(cluster_name, cluster);
         Ok(())
     }

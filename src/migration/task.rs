@@ -8,7 +8,7 @@ use replication::replicator::ReplicatorError;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MigrationState {
@@ -60,49 +60,6 @@ pub trait ImportingTask: ThreadSafe {
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
     fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError>;
-}
-
-pub struct MigrationConfig {
-    offset_threshold: AtomicU64,
-    max_migration_time: AtomicU64,
-    max_blocking_time: AtomicU64,
-    min_blocking_time: AtomicU64,
-    max_redirection_time: AtomicU64,
-    switch_retry_interval: AtomicU64,
-}
-
-impl Default for MigrationConfig {
-    fn default() -> Self {
-        Self {
-            offset_threshold: AtomicU64::new(50000),
-            max_migration_time: AtomicU64::new(10 * 60 * 1000), // 10 minutes, should leave some time for replication
-            max_blocking_time: AtomicU64::new(10_000),          // 10 seconds waiting for commit
-            min_blocking_time: AtomicU64::new(100),             // 100ms
-            max_redirection_time: AtomicU64::new(5000), // 5s, to wait for coordinator to update meta
-            switch_retry_interval: AtomicU64::new(10),  // 10ms
-        }
-    }
-}
-
-impl MigrationConfig {
-    pub fn get_offset_threshold(&self) -> u64 {
-        self.offset_threshold.load(Ordering::SeqCst)
-    }
-    pub fn get_max_migration_time(&self) -> u64 {
-        self.max_migration_time.load(Ordering::SeqCst)
-    }
-    pub fn get_max_blocking_time(&self) -> u64 {
-        self.max_blocking_time.load(Ordering::SeqCst)
-    }
-    pub fn get_min_blocking_time(&self) -> u64 {
-        self.min_blocking_time.load(Ordering::SeqCst)
-    }
-    pub fn get_max_redirection_time(&self) -> u64 {
-        self.max_redirection_time.load(Ordering::SeqCst)
-    }
-    pub fn get_switch_retry_interval(&self) -> u64 {
-        self.switch_retry_interval.load(Ordering::SeqCst)
-    }
 }
 
 pub struct SwitchArg {

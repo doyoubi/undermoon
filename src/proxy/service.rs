@@ -1,19 +1,13 @@
 use super::session::CmdCtxHandler;
 use super::session::{handle_conn, Session};
 use super::slowlog::SlowRequestLogger;
+use common::config::ConfigError;
 use common::future_group::new_future_group;
 use common::utils::{revolve_first_address, ThreadSafe};
 use futures::{future, Future, Stream};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-
-#[derive(Debug)]
-pub enum ConfigError {
-    ReadonlyField,
-    FieldNotFound,
-    InvalidValue,
-}
 
 #[derive(Debug)]
 pub struct ServerProxyConfig {

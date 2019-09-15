@@ -2,15 +2,18 @@ extern crate tokio;
 extern crate undermoon;
 #[macro_use]
 extern crate log;
+extern crate arc_swap;
 extern crate config;
 extern crate env_logger;
 
+use arc_swap::ArcSwap;
 use std::env;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
 use undermoon::protocol::PooledRedisClientFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
+use undermoon::proxy::manager::MetaMap;
 use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 use undermoon::proxy::slowlog::SlowRequestLogger;
 
@@ -63,10 +66,12 @@ fn main() {
     let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
 
     let slow_request_logger = Arc::new(SlowRequestLogger::new(config.clone()));
+    let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::new())));
     let forward_handler = SharedForwardHandler::new(
         config.clone(),
         Arc::new(client_factory),
         slow_request_logger.clone(),
+        meta_map.clone(),
     );
     let server = ServerProxyService::new(config.clone(), forward_handler, slow_request_logger);
 

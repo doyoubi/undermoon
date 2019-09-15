@@ -1,5 +1,6 @@
 use super::cluster::{SlotRange, SlotRangeTag};
 use super::utils::{has_flags, CmdParseError};
+use ::common::config::ClusterConfig;
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::iter::Peekable;
@@ -44,6 +45,7 @@ impl DBMapFlags {
 }
 
 const PEER_PREFIX: &str = "PEER";
+const CONFIG_PREFIX: &str = "CONFIG";
 
 #[derive(Debug, Clone)]
 pub struct ProxyDBMeta {
@@ -51,15 +53,23 @@ pub struct ProxyDBMeta {
     flags: DBMapFlags,
     local: HostDBMap,
     peer: HostDBMap,
+    clusters_config: ClusterConfigMap,
 }
 
 impl ProxyDBMeta {
-    pub fn new(epoch: u64, flags: DBMapFlags, local: HostDBMap, peer: HostDBMap) -> Self {
+    pub fn new(
+        epoch: u64,
+        flags: DBMapFlags,
+        local: HostDBMap,
+        peer: HostDBMap,
+        clusters_config: ClusterConfigMap,
+    ) -> Self {
         Self {
             epoch,
             flags,
             local,
             peer,
+            clusters_config,
         }
     }
 
@@ -78,7 +88,13 @@ impl ProxyDBMeta {
         &self.peer
     }
 
-    pub fn from_resp(resp: &Resp) -> Result<Self, CmdParseError> {
+    pub fn get_configs(&self) -> &ClusterConfigMap {
+        &self.clusters_config
+    }
+
+    pub fn from_resp(
+        resp: &Resp,
+    ) -> Result<(Self, Result<(), ParseExtendedMetaError>), CmdParseError> {
         let arr = match resp {
             Resp::Arr(Array::Arr(ref arr)) => arr,
             _ => return Err(CmdParseError {}),
@@ -97,7 +113,9 @@ impl ProxyDBMeta {
         Self::parse(&mut it)
     }
 
-    pub fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
+    pub fn parse<It>(
+        it: &mut Peekable<It>,
+    ) -> Result<(Self, Result<(), ParseExtendedMetaError>), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
@@ -108,30 +126,52 @@ impl ProxyDBMeta {
 
         let local = HostDBMap::parse(it)?;
         let mut peer = HostDBMap::new(HashMap::new());
+        let mut clusters_config = ClusterConfigMap::default();
+        let mut extended_meta_result = Ok(());
+
         while let Some(token) = it.next() {
-            if token.to_uppercase() == PEER_PREFIX {
-                peer = HostDBMap::parse(it)?;
-            } else {
-                return Err(CmdParseError {});
+            match token.to_uppercase().as_str() {
+                PEER_PREFIX => peer = HostDBMap::parse(it)?,
+                CONFIG_PREFIX => match ClusterConfigMap::parse(it) {
+                    Ok(c) => clusters_config = c,
+                    Err(_) => {
+                        if local.get_map().is_empty() || peer.get_map().is_empty() {
+                            return Err(CmdParseError {});
+                        } else {
+                            error!("invalid cluster config from UMCTL SETDB but the local and peer metadata are complete. Ignore this error to protect the core functionality.");
+                            extended_meta_result = Err(ParseExtendedMetaError {})
+                        }
+                    }
+                },
+                _ => return Err(CmdParseError {}),
             }
         }
 
-        Ok(Self {
-            epoch,
-            flags,
-            local,
-            peer,
-        })
+        Ok((
+            Self {
+                epoch,
+                flags,
+                local,
+                peer,
+                clusters_config,
+            },
+            extended_meta_result,
+        ))
     }
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![self.epoch.to_string(), self.flags.to_arg()];
         let local = self.local.db_map_to_args();
         let peer = self.peer.db_map_to_args();
+        let config = self.clusters_config.to_args();
         args.extend_from_slice(&local);
         if !peer.is_empty() {
             args.push(PEER_PREFIX.to_string());
             args.extend_from_slice(&peer);
+        }
+        if !config.is_empty() {
+            args.push(CONFIG_PREFIX.to_string());
+            args.extend_from_slice(&config);
         }
         args
     }
@@ -199,7 +239,7 @@ impl HostDBMap {
             match it.peek() {
                 Some(first_token) => {
                     let prefix = first_token.to_uppercase();
-                    if prefix == PEER_PREFIX {
+                    if prefix == PEER_PREFIX || prefix == CONFIG_PREFIX {
                         break;
                     }
                 }
@@ -233,8 +273,96 @@ impl HostDBMap {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ClusterConfigMap {
+    config_map: HashMap<String, ClusterConfig>,
+}
+
+impl Default for ClusterConfigMap {
+    fn default() -> Self {
+        Self {
+            config_map: HashMap::new(),
+        }
+    }
+}
+
+impl ClusterConfigMap {
+    pub fn new(config_map: HashMap<String, ClusterConfig>) -> Self {
+        Self { config_map }
+    }
+
+    pub fn get(&self, dbname: &str) -> ClusterConfig {
+        self.config_map
+            .get(dbname)
+            .cloned()
+            .unwrap_or_else(ClusterConfig::default)
+    }
+
+    pub fn get_map(&self) -> &HashMap<String, ClusterConfig> {
+        &self.config_map
+    }
+
+    fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
+    where
+        It: Iterator<Item = String>,
+    {
+        let mut config_map = HashMap::new();
+
+        // To workaround lifetime problem.
+        #[allow(clippy::while_let_loop)]
+        loop {
+            match it.peek() {
+                Some(first_token) => {
+                    let prefix = first_token.to_uppercase();
+                    if prefix == PEER_PREFIX || prefix == CONFIG_PREFIX {
+                        break;
+                    }
+                }
+                None => break,
+            }
+
+            let (dbname, field, value) = try_parse!(Self::parse_config(it));
+            let cluster_config = config_map
+                .entry(dbname)
+                .or_insert_with(ClusterConfig::default);
+            if let Err(err) = cluster_config.set_field(&field, &value) {
+                warn!("failed to set config field {:?}", err);
+                return Err(CmdParseError {});
+            }
+        }
+
+        Ok(Self { config_map })
+    }
+
+    fn parse_config<It>(it: &mut It) -> Result<(String, String, String), CmdParseError>
+    where
+        It: Iterator<Item = String>,
+    {
+        let dbname = try_get!(it.next());
+        let field = try_get!(it.next());
+        let value = try_get!(it.next());
+        Ok((dbname, field, value))
+    }
+
+    pub fn to_args(&self) -> Vec<String> {
+        let mut args = vec![];
+        for (db_name, config) in &self.config_map {
+            for (k, v) in config.to_str_map().into_iter() {
+                args.push(db_name.clone());
+                args.push(k);
+                args.push(v);
+            }
+        }
+        args
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseExtendedMetaError {}
+
 #[cfg(test)]
 mod tests {
+    use super::super::config::CompressionStrategy;
     use super::*;
 
     #[test]
@@ -403,6 +531,99 @@ mod tests {
     }
 
     #[test]
+    fn test_clusters_config() {
+        let args = vec![
+            "mydb",
+            "compression_strategy",
+            "allow_all",
+            "otherdb",
+            "migration_offset_threshold",
+            "233",
+            "mydb",
+            "migration_max_migration_time",
+            "666",
+        ];
+        let mut it = args.iter().map(|s| s.to_string()).peekable();
+        let clusters_config = ClusterConfigMap::parse(&mut it).expect("test_clusters_config");
+        assert_eq!(clusters_config.config_map.len(), 2);
+        assert_eq!(
+            clusters_config
+                .config_map
+                .get("mydb")
+                .expect("test_clusters_config")
+                .compression_strategy,
+            CompressionStrategy::AllowAll
+        );
+        assert_eq!(
+            clusters_config
+                .config_map
+                .get("mydb")
+                .expect("test_clusters_config")
+                .migration_config
+                .max_migration_time,
+            666
+        );
+        assert_eq!(
+            clusters_config
+                .config_map
+                .get("otherdb")
+                .expect("test_clusters_config")
+                .migration_config
+                .offset_threshold,
+            233
+        );
+
+        let mut result_args = clusters_config.to_args();
+        result_args.sort();
+        let mut full_args = vec![
+            "mydb",
+            "compression_strategy",
+            "allow_all",
+            "mydb",
+            "migration_offset_threshold",
+            "50000",
+            "mydb",
+            "migration_max_migration_time",
+            "666",
+            "mydb",
+            "migration_max_blocking_time",
+            "10000",
+            "mydb",
+            "migration_min_blocking_time",
+            "100",
+            "mydb",
+            "migration_max_redirection_time",
+            "5000",
+            "mydb",
+            "migration_switch_retry_interval",
+            "10",
+            "otherdb",
+            "compression_strategy",
+            "disabled",
+            "otherdb",
+            "migration_offset_threshold",
+            "233",
+            "otherdb",
+            "migration_max_migration_time",
+            "600000",
+            "otherdb",
+            "migration_max_blocking_time",
+            "10000",
+            "otherdb",
+            "migration_min_blocking_time",
+            "100",
+            "otherdb",
+            "migration_max_redirection_time",
+            "5000",
+            "otherdb",
+            "migration_switch_retry_interval",
+            "10",
+        ];
+        full_args.sort();
+        assert_eq!(result_args, full_args);
+    }
+
+    #[test]
     fn test_to_map() {
         let arguments = vec![
             "dbname",
@@ -461,6 +682,10 @@ mod tests {
             "dbname",
             "127.0.0.2:7002",
             "3001-4000",
+            "CONFIG",
+            "dbname",
+            "compression_strategy",
+            "set_get_only",
         ];
         let mut it = arguments
             .clone()
@@ -468,11 +693,14 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        let db_meta = ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta");
+        let (db_meta, extended_res) =
+            ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta");
+        assert!(extended_res.is_ok());
         assert_eq!(db_meta.epoch, 233);
         assert!(db_meta.flags.force);
-        let local = &db_meta.local.get_map();
-        let peer = &db_meta.peer.get_map();
+        let local = db_meta.local.get_map();
+        let peer = db_meta.peer.get_map();
+        let config = db_meta.clusters_config.get_map();
         assert_eq!(local.len(), 1);
         assert_eq!(
             local.get("dbname").expect("test_parse_proxy_db_meta").len(),
@@ -525,11 +753,153 @@ mod tests {
                 .start,
             3001
         );
+        assert_eq!(config.len(), 1);
+        assert_eq!(
+            config
+                .get("dbname")
+                .expect("test_parse_proxy_db_meta")
+                .compression_strategy,
+            CompressionStrategy::SetGetOnly
+        );
 
         let mut args = db_meta.to_args();
         let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
+        let extended = vec![
+            "dbname",
+            "migration_offset_threshold",
+            "50000",
+            "dbname",
+            "migration_max_migration_time",
+            "600000",
+            "dbname",
+            "migration_max_blocking_time",
+            "10000",
+            "dbname",
+            "migration_min_blocking_time",
+            "100",
+            "dbname",
+            "migration_max_redirection_time",
+            "5000",
+            "dbname",
+            "migration_switch_retry_interval",
+            "10",
+        ]
+        .into_iter()
+        .map(|s| s.to_string());
+        db_args.extend(extended);
         args.sort();
         db_args.sort();
         assert_eq!(args, db_args);
+    }
+
+    #[test]
+    fn test_parse_proxy_db_meta_without_peer() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "CONFIG",
+            "dbname",
+            "compression_strategy",
+            "set_get_only",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        let (db_meta, extended_res) =
+            ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta_without_peer");
+        assert!(extended_res.is_ok());
+        assert_eq!(db_meta.epoch, 233);
+        assert!(db_meta.flags.force);
+        assert_eq!(
+            db_meta.get_configs().get("dbname").compression_strategy,
+            CompressionStrategy::SetGetOnly
+        );
+    }
+
+    #[test]
+    fn test_missing_config_db() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "PEER",
+            "dbname",
+            "127.0.0.2:7001",
+            "2001-3000",
+            "CONFIG",
+            // "dbname", missing dbname
+            "compression_strategy",
+            "set_get_only",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        let (db_meta, extended_res) = ProxyDBMeta::parse(&mut it).expect("test_missing_config_db");
+        assert!(extended_res.is_err());
+        assert_eq!(db_meta.epoch, 233);
+        assert!(db_meta.flags.force);
+    }
+
+    #[test]
+    fn test_invalid_config_field() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "PEER",
+            "dbname",
+            "127.0.0.2:7001",
+            "2001-3000",
+            "CONFIG",
+            "dbname",
+            "config_field_that_does_not_exist",
+            "invalid_value",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        let (db_meta, extended_res) =
+            ProxyDBMeta::parse(&mut it).expect("test_invalid_config_field");
+        assert!(extended_res.is_err());
+        assert_eq!(db_meta.epoch, 233);
+        assert!(db_meta.flags.force);
+    }
+
+    #[test]
+    fn test_incomplete_main_meta_with_config_err() {
+        let arguments = vec![
+            "233",
+            "FORCE",
+            "dbname",
+            "127.0.0.1:7000",
+            "0-1000",
+            "CONFIG",
+            "dbname",
+            "config_field_that_does_not_exist",
+            "invalid_value",
+        ];
+        let mut it = arguments
+            .clone()
+            .into_iter()
+            .map(|s| s.to_string())
+            .peekable();
+
+        assert!(ProxyDBMeta::parse(&mut it).is_err());
     }
 }
