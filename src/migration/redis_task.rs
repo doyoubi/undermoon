@@ -4,7 +4,7 @@ use super::task::{
 };
 use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::config::AtomicMigrationConfig;
-use ::common::resp_execution::keep_connecting_and_sending;
+use ::common::resp_execution::keep_connecting_and_sending_cmd;
 use ::common::utils::{ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
 use ::common::version::UNDERMOON_MIGRATION_VERSION;
 use ::protocol::{BulkStr, RedisClientError, RedisClientFactory, Resp};
@@ -147,7 +147,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         };
 
         let cmd = vec!["INFO".to_string(), "REPLICATION".to_string()];
-        keep_connecting_and_sending(
+        keep_connecting_and_sending_cmd(
             client_factory,
             self.meta.src_node_address.clone(),
             cmd,
@@ -219,7 +219,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
             }
         };
 
-        keep_connecting_and_sending(
+        keep_connecting_and_sending_cmd(
             client_factory,
             self.meta.dst_proxy_address.clone(),
             cmd,

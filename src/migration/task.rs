@@ -1,5 +1,6 @@
 use ::common::cluster::MigrationTaskMeta;
-use ::common::utils::{get_commands, ThreadSafe};
+use ::common::future_group::FutureAutoStopHandle;
+use ::common::utils::{get_resp_strings, ThreadSafe};
 use ::protocol::Resp;
 use ::proxy::backend::CmdTask;
 use ::proxy::database::DBSendError;
@@ -62,6 +63,24 @@ pub trait ImportingTask: ThreadSafe {
     fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError>;
 }
 
+pub trait MigratingPostTask: ThreadSafe {
+    fn start(
+        &self,
+    ) -> (
+        Box<dyn Future<Item = (), Error = MigrationError> + Send>,
+        FutureAutoStopHandle,
+    );
+}
+
+pub trait ImportingPostTask: ThreadSafe {
+    fn start(
+        &self,
+    ) -> (
+        Box<dyn Future<Item = (), Error = MigrationError> + Send>,
+        FutureAutoStopHandle,
+    );
+}
+
 pub struct SwitchArg {
     pub version: String,
     pub meta: MigrationTaskMeta,
@@ -86,7 +105,7 @@ impl SwitchArg {
 }
 
 pub fn parse_tmp_switch_command(resp: &Resp) -> Option<SwitchArg> {
-    let command = get_commands(resp)?;
+    let command = get_resp_strings(resp)?;
     let mut it = command.into_iter();
     // Skip UMCTL TMPSWITCH
     it.next()?;

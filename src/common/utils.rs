@@ -45,19 +45,35 @@ pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
     get_element(resp, 1)
 }
 
-pub fn get_commands(resp: &Resp) -> Option<Vec<String>> {
+pub fn get_resp_bytes(resp: &Resp) -> Option<Vec<Vec<u8>>> {
     match resp {
         Resp::Arr(Array::Arr(ref resps)) => {
-            let mut commands = vec![];
+            let mut strs = vec![];
             for resp in resps.iter() {
                 match resp {
-                    Resp::Bulk(BulkStr::Str(s)) => {
-                        commands.push(str::from_utf8(s).ok()?.to_string())
-                    }
+                    Resp::Bulk(BulkStr::Str(s)) => strs.push(s.clone()),
+                    Resp::Simple(s) => strs.push(s.clone()),
                     _ => return None,
                 }
             }
-            Some(commands)
+            Some(strs)
+        }
+        _ => None,
+    }
+}
+
+pub fn get_resp_strings(resp: &Resp) -> Option<Vec<String>> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => {
+            let mut strs = vec![];
+            for resp in resps.iter() {
+                match resp {
+                    Resp::Bulk(BulkStr::Str(s)) => strs.push(str::from_utf8(s).ok()?.to_string()),
+                    Resp::Simple(s) => strs.push(str::from_utf8(s).ok()?.to_string()),
+                    _ => return None,
+                }
+            }
+            Some(strs)
         }
         _ => None,
     }

@@ -9,7 +9,7 @@ use std::sync::atomic;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub fn keep_connecting_and_sending<F: RedisClientFactory, Func>(
+pub fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
     client_factory: Arc<F>,
     address: String,
     cmd: Vec<String>,
@@ -87,6 +87,67 @@ pub fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
     Ok(())
 }
 
+pub fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory, Func>(
+    data: T,
+    client_factory: Arc<F>,
+    address: String,
+    interval: Duration,
+    send_func: Func,
+) -> impl Future<Item = T, Error = RedisClientError> + Send
+where
+    Func: Clone
+        + Send
+        + Fn(
+            T,
+            F::Client,
+        ) -> Box<dyn Future<Item = (T, F::Client), Error = RedisClientError> + Send>,
+{
+    let infinite_stream = stream::iter_ok(iter::repeat(()));
+    infinite_stream.fold(data, move |data, ()| {
+        let client_fut = client_factory.create_client(address.clone());
+        let send_func_clone = send_func.clone();
+        let interval_clone = interval;
+        let data_clone = data.clone();
+        client_fut
+            .map_err(move |err| (data_clone, err))
+            .and_then(move |client| keep_sending(data, client, interval_clone, send_func_clone))
+            .then(move |result| match result {
+                Ok(data) => future::ok(data),
+                Err((_, RedisClientError::Done)) => {
+                    info!("stop keep sending");
+                    future::err(RedisClientError::Done)
+                }
+                Err((data, e)) => {
+                    error!("failed to send {:?}. Try again.", e,);
+                    future::ok(data)
+                }
+            })
+    })
+}
+
+pub fn keep_sending<T: Clone + Send, C: RedisClient, Func>(
+    data: T,
+    client: C,
+    interval: Duration,
+    send_func: Func,
+) -> impl Future<Item = T, Error = (T, RedisClientError)> + Send
+where
+    Func: Send + Fn(T, C) -> Box<dyn Future<Item = (T, C), Error = RedisClientError> + Send>,
+{
+    let infinite_stream = stream::iter_ok(iter::repeat(()));
+    infinite_stream
+        .fold((data, client), move |(data, client), ()| {
+            let data_clone = data.clone();
+            let exec_fut = send_func(data, client);
+            let delay = Delay::new(interval).map_err(RedisClientError::Io);
+            exec_fut
+                .join(delay)
+                .map(|((data, client), ())| (data, client))
+                .map_err(move |err| (data_clone, err))
+        })
+        .map(|(data, _client)| data)
+}
+
 pub struct I64Retriever<F: RedisClientFactory> {
     data: Arc<atomic::AtomicI64>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
@@ -141,7 +202,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
             let handle_result = move |resp: Resp| -> Result<(), RedisClientError> {
                 handle_func(resp, &data_clone)
             };
-            let sending = keep_connecting_and_sending(
+            let sending = keep_connecting_and_sending_cmd(
                 self.client_factory.clone(),
                 self.address.clone(),
                 self.cmd.clone(),
@@ -292,7 +353,7 @@ mod tests {
             }
         };
         let factory = Arc::new(DummyClientFactory::new(counter.clone()));
-        let res = keep_connecting_and_sending(
+        let res = keep_connecting_and_sending_cmd(
             factory,
             "host:port".to_string(),
             vec![],
