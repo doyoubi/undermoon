@@ -146,6 +146,7 @@ pub struct MigrationConfig {
     pub min_blocking_time: u64,
     pub max_redirection_time: u64,
     pub switch_retry_interval: u64,
+    pub delete_rate: u64,
 }
 
 impl MigrationConfig {
@@ -188,6 +189,12 @@ impl MigrationConfig {
                     .map_err(|_| ConfigError::InvalidValue)?;
                 self.switch_retry_interval = v;
             }
+            "delete_rate" => {
+                let v = value
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                self.delete_rate = v;
+            }
             _ => return Err(ConfigError::FieldNotFound),
         }
         Ok(())
@@ -203,6 +210,7 @@ impl Default for MigrationConfig {
             min_blocking_time: 100,             // 100ms
             max_redirection_time: 5000,         // 5s, to wait for coordinator to update meta
             switch_retry_interval: 10,          // 10ms
+            delete_rate: 10000,                 // 10000 qps
         }
     }
 }
@@ -214,6 +222,7 @@ pub struct AtomicMigrationConfig {
     min_blocking_time: AtomicU64,
     max_redirection_time: AtomicU64,
     switch_retry_interval: AtomicU64,
+    delete_rate: AtomicU64,
 }
 
 impl Default for AtomicMigrationConfig {
@@ -231,6 +240,7 @@ impl AtomicMigrationConfig {
             min_blocking_time: AtomicU64::new(config.min_blocking_time),
             max_redirection_time: AtomicU64::new(config.max_redirection_time),
             switch_retry_interval: AtomicU64::new(config.switch_retry_interval),
+            delete_rate: AtomicU64::new(config.delete_rate),
         }
     }
 
@@ -251,6 +261,9 @@ impl AtomicMigrationConfig {
     }
     pub fn get_switch_retry_interval(&self) -> u64 {
         self.switch_retry_interval.load(Ordering::SeqCst)
+    }
+    pub fn get_delete_rate(&self) -> u64 {
+        self.delete_rate.load(Ordering::SeqCst)
     }
 
     #[allow(dead_code)]
@@ -282,6 +295,10 @@ impl AtomicMigrationConfig {
     pub fn set_switch_retry_interval(&self, switch_retry_interval: u64) {
         self.switch_retry_interval
             .store(switch_retry_interval, Ordering::SeqCst)
+    }
+    #[allow(dead_code)]
+    pub fn set_delete_rate(&self, delete_rate: u64) {
+        self.delete_rate.store(delete_rate, Ordering::SeqCst)
     }
 }
 

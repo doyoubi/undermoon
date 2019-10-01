@@ -11,6 +11,7 @@ use ::proxy::database::{DBSendError, DBTag};
 use ::proxy::slowlog::TaskEvent;
 use futures::Future;
 use itertools::Either;
+use migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -113,6 +114,42 @@ where
             }
         }
         info!("spawn finished");
+    }
+
+    pub fn create_new_deleting_task_map(
+        &self,
+        old_deleting_task_map: &DeleteKeysTaskMap,
+        local_db_map: &HostDBMap,
+        left_slots_after_change: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+    ) -> (DeleteKeysTaskMap, Vec<Arc<DeleteKeysTask>>) {
+        old_deleting_task_map.update_from_old_task_map(
+            local_db_map,
+            left_slots_after_change,
+            self.config.clone(),
+            self.client_factory.clone(),
+        )
+    }
+
+    pub fn run_deleting_tasks(&self, new_tasks: Vec<Arc<DeleteKeysTask>>) {
+        if new_tasks.is_empty() {
+            return;
+        }
+
+        for task in new_tasks.into_iter() {
+            if let Some(fut) = task.start() {
+                let address = task.get_address();
+                tokio::spawn(
+                    fut.map(move |()| info!("deleting keys for {} stopped", address))
+                        .map_err(move |e| match e {
+                            MigrationError::Canceled => {
+                                info!("task for deleting keys get canceled")
+                            }
+                            _ => error!("task for deleting keys exit with error {:?}", e),
+                        }),
+                );
+            }
+        }
+        info!("spawn finished for deleting keys");
     }
 }
 
@@ -219,6 +256,48 @@ where
             }
             None => Err(DBSendError::SlotNotFound(cmd_task)),
         }
+    }
+
+    pub fn get_left_slots_after_change(
+        &self,
+        new_migration_map: &Self,
+        new_db_map: &HostDBMap,
+    ) -> HashMap<String, HashMap<String, Vec<SlotRange>>> {
+        let mut left_slots = HashMap::new();
+        for (dbname, db) in self.task_map.iter() {
+            let nodes = match new_db_map.get_map().get(dbname) {
+                Some(nodes) => nodes,
+                None => continue,
+            };
+
+            for task_meta in db.keys() {
+                if new_migration_map
+                    .task_map
+                    .get(dbname)
+                    .and_then(|db_task_map| db_task_map.get(task_meta))
+                    .is_some()
+                {
+                    // task is still running, ignore it.
+                    continue;
+                }
+
+                let tag = &task_meta.slot_range.tag;
+                let address = match tag {
+                    SlotRangeTag::None => continue,
+                    SlotRangeTag::Importing(meta) => &meta.dst_node_address,
+                    SlotRangeTag::Migrating(meta) => &meta.src_node_address,
+                };
+                let slots = match nodes.get(address) {
+                    Some(slots) => slots,
+                    None => continue,
+                };
+                left_slots
+                    .entry(dbname.clone())
+                    .or_insert_with(HashMap::new)
+                    .insert(address.clone(), slots.clone());
+            }
+        }
+        left_slots
     }
 
     pub fn update_from_old_task_map<RCF>(

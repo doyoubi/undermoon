@@ -1,5 +1,4 @@
 use ::common::cluster::MigrationTaskMeta;
-use ::common::future_group::FutureAutoStopHandle;
 use ::common::utils::{get_resp_strings, ThreadSafe};
 use ::protocol::Resp;
 use ::proxy::backend::CmdTask;
@@ -61,24 +60,6 @@ pub trait ImportingTask: ThreadSafe {
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
     fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError>;
-}
-
-pub trait MigratingPostTask: ThreadSafe {
-    fn start(
-        &self,
-    ) -> (
-        Box<dyn Future<Item = (), Error = MigrationError> + Send>,
-        FutureAutoStopHandle,
-    );
-}
-
-pub trait ImportingPostTask: ThreadSafe {
-    fn start(
-        &self,
-    ) -> (
-        Box<dyn Future<Item = (), Error = MigrationError> + Send>,
-        FutureAutoStopHandle,
-    );
 }
 
 pub struct SwitchArg {

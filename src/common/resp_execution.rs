@@ -114,7 +114,7 @@ where
             .then(move |result| match result {
                 Ok(data) => future::ok(data),
                 Err((_, RedisClientError::Done)) => {
-                    info!("stop keep sending");
+                    info!("Done. Stop keep sending.");
                     future::err(RedisClientError::Done)
                 }
                 Err((data, e)) => {

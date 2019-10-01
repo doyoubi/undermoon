@@ -9,6 +9,7 @@ use super::session::CmdCtx;
 use super::slowlog::TaskEvent;
 use ::common::cluster::{MigrationTaskMeta, SlotRangeTag};
 use ::common::config::AtomicMigrationConfig;
+use ::migration::delete_keys::DeleteKeysTaskMap;
 use ::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use ::migration::task::SwitchArg;
 use arc_swap::ArcSwap;
@@ -26,6 +27,7 @@ where
 {
     db_map: DatabaseMap<F>,
     migration_map: MigrationMap<RedirectionSenderFactory<CmdCtx>>,
+    deleting_task_map: DeleteKeysTaskMap,
 }
 
 impl<F: CmdTaskSenderFactory> MetaMap<F>
@@ -36,9 +38,11 @@ where
     pub fn new() -> Self {
         let db_map = DatabaseMap::default();
         let migration_map = MigrationMap::new();
+        let deleting_task_map = DeleteKeysTaskMap::new();
         Self {
             db_map,
             migration_map,
+            deleting_task_map,
         }
     }
 
@@ -132,13 +136,25 @@ impl<F: RedisClientFactory> MetaManager<F> {
         let db_map = DatabaseMap::from_db_map(&db_meta, sender_factory);
         let (migration_map, new_tasks) = migration_manager
             .create_new_migration_map(&old_meta_map.migration_map, db_meta.get_local());
+        let left_slots_after_change = old_meta_map
+            .migration_map
+            .get_left_slots_after_change(&migration_map, db_meta.get_local());
+        let (deleting_task_map, new_deleting_tasks) = migration_manager
+            .create_new_deleting_task_map(
+                &old_meta_map.deleting_task_map,
+                db_meta.get_local(),
+                left_slots_after_change,
+            );
         self.meta_map.store(Arc::new(MetaMap {
             db_map,
             migration_map,
+            deleting_task_map,
         }));
         self.epoch.store(db_meta.get_epoch(), Ordering::SeqCst);
 
         self.migration_manager.run_tasks(new_tasks);
+        self.migration_manager
+            .run_deleting_tasks(new_deleting_tasks);
         debug!("Successfully update db meta data");
 
         Ok(())
@@ -156,7 +172,11 @@ impl<F: RedisClientFactory> MetaManager<F> {
         let meta_map = self.meta_map.load();
         let db_info = meta_map.db_map.info();
         let mgr_info = meta_map.migration_map.info();
-        format!("# DB\r\n{}\r\n# Migration\r\n{}\r\n", db_info, mgr_info)
+        let del_info = meta_map.deleting_task_map.info();
+        format!(
+            "# DB\r\n{}\r\n# Migration\r\n{}\r\n{}\r\n",
+            db_info, mgr_info, del_info
+        )
     }
 
     pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
