@@ -2044,7 +2044,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "undermoon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "actix-web 0.7.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "arc-swap 0.3.11 (registry+https://github.com/rust-lang/crates.io-index)",
