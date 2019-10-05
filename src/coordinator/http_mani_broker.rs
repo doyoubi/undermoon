@@ -83,7 +83,7 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
             .and_then(|response| {
                 let status = response.status();
                 let fut: Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send> =
-                    if status.is_success() {
+                    if status.is_success() || status.as_u16() == 404 {
                         Box::new(future::ok(()))
                     } else {
                         error!("Failed to commit migration status code {:?}", status);

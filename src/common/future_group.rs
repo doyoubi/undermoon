@@ -61,3 +61,62 @@ impl<F: Future> Future for FutureGroupHandle<F> {
         }
     }
 }
+
+impl<F: Future> Drop for FutureGroupHandle<F> {
+    fn drop(&mut self) {
+        self.signal_sender
+            .take()
+            .and_then(|sender| sender.send(()).ok())
+            .unwrap_or_else(|| debug!("FutureGroupHandle already closed"))
+    }
+}
+
+pub fn new_auto_drop_future<F: Future>(future: F) -> (FutureAutoStop<F>, FutureAutoStopHandle) {
+    let (s, r) = oneshot::channel();
+    let handle = FutureAutoStopHandle {
+        signal_sender: Some(s),
+    };
+    let fut = FutureAutoStop {
+        inner: future,
+        signal_receiver: r,
+    };
+    (fut, handle)
+}
+
+pub struct FutureAutoStop<F: Future> {
+    inner: F,
+    signal_receiver: oneshot::Receiver<()>,
+}
+
+pub struct FutureAutoStopHandle {
+    signal_sender: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for FutureAutoStopHandle {
+    fn drop(&mut self) {
+        self.signal_sender
+            .take()
+            .and_then(|sender| sender.send(()).ok())
+            .unwrap_or_else(|| debug!("FutureAutoStopHandle already closed"))
+    }
+}
+
+impl<F: Future> Future for FutureAutoStop<F> {
+    type Item = ();
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let inner = &mut self.inner;
+        let signal_receiver = &mut self.signal_receiver;
+
+        match inner.poll() {
+            Ok(Async::NotReady) => (),
+            Ok(Async::Ready(_)) => return Ok(Async::Ready(())),
+            Err(e) => return Err(e),
+        }
+        match signal_receiver.poll() {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            _ => Ok(Async::Ready(())),
+        }
+    }
+}
