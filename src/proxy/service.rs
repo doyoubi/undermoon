@@ -20,6 +20,12 @@ pub struct ServerProxyConfig {
     pub session_channel_size: usize,
     pub backend_channel_size: usize,
     pub backend_conn_num: usize,
+    pub backend_batch_min_time: usize,
+    pub backend_batch_max_time: usize,
+    pub backend_batch_buf: usize,
+    pub session_batch_min_time: usize,
+    pub session_batch_max_time: usize,
+    pub session_batch_buf: usize,
 }
 
 impl ServerProxyConfig {
@@ -37,6 +43,12 @@ impl ServerProxyConfig {
                 .slowlog_log_slower_than
                 .load(Ordering::SeqCst)
                 .to_string()),
+            "backend_batch_min_time" => Ok(self.backend_batch_min_time.to_string()),
+            "backend_batch_max_time" => Ok(self.backend_batch_max_time.to_string()),
+            "backend_batch_buf" => Ok(self.backend_batch_buf.to_string()),
+            "session_batch_min_time" => Ok(self.session_batch_min_time.to_string()),
+            "session_batch_max_time" => Ok(self.session_batch_max_time.to_string()),
+            "session_batch_buf" => Ok(self.session_batch_buf.to_string()),
             _ => Err(ConfigError::FieldNotFound),
         }
     }
@@ -59,6 +71,12 @@ impl ServerProxyConfig {
                     .store(int_value, Ordering::SeqCst);
                 Ok(())
             }
+            "backend_batch_max_time" => Err(ConfigError::ReadonlyField),
+            "backend_batch_min_time" => Err(ConfigError::ReadonlyField),
+            "backend_batch_buf" => Err(ConfigError::ReadonlyField),
+            "session_batch_min_time" => Err(ConfigError::ReadonlyField),
+            "session_batch_max_time" => Err(ConfigError::ReadonlyField),
+            "session_batch_buf" => Err(ConfigError::ReadonlyField),
             _ => Err(ConfigError::FieldNotFound),
         }
     }
@@ -138,6 +156,9 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                         )),
                         sock,
                         config.session_channel_size,
+                        config.session_batch_min_time,
+                        config.session_batch_max_time,
+                        config.session_batch_buf,
                     );
                     let (reader_handler, writer_handler) =
                         new_future_group(reader_handler, writer_handler);

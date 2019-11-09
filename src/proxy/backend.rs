@@ -1,12 +1,13 @@
 use super::command::{CmdType, CommandError, CommandResult, DataCmdType};
 use super::service::ServerProxyConfig;
 use super::slowlog::{Slowlog, TaskEvent};
+use crate::common::batching::Chunks;
 use bytes::BytesMut;
 use common::future_group::new_future_group;
 use common::utils::{gen_moved, get_key, get_slot, revolve_first_address, ThreadSafe};
 use futures::sync::mpsc;
 use futures::Sink;
-use futures::{future, Future, Stream};
+use futures::{future, stream, Future, Stream};
 use protocol::{Array, DecodeError, Resp, RespCodec, RespPacket};
 use std::boxed::Box;
 use std::collections::HashMap;
@@ -17,6 +18,7 @@ use std::marker::PhantomData;
 use std::result::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
@@ -223,8 +225,15 @@ impl<H: CmdTaskHandler> BackendNode<H> {
         impl Future<Item = (), Error = BackendError> + Send,
     ) {
         let (tx, rx) = mpsc::unbounded();
-        let (reader_handler, writer_handler) =
-            handle_backend(handler, rx, sock, config.backend_channel_size);
+        let (reader_handler, writer_handler) = handle_backend(
+            handler,
+            rx,
+            sock,
+            config.backend_channel_size,
+            config.backend_batch_min_time,
+            config.backend_batch_max_time,
+            config.backend_batch_buf,
+        );
         (Self { tx }, reader_handler, writer_handler)
     }
 
@@ -248,6 +257,9 @@ pub fn handle_backend<H>(
     task_receiver: mpsc::UnboundedReceiver<H::Task>,
     sock: TcpStream,
     channel_size: usize,
+    backend_batch_min_time: usize,
+    backend_batch_max_time: usize,
+    backend_batch_buf: usize,
 ) -> (
     impl Future<Item = (), Error = BackendError> + Send,
     impl Future<Item = (), Error = BackendError> + Send,
@@ -259,58 +271,98 @@ where
 
     let (tx, rx) = mpsc::channel(channel_size);
 
+    let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
+    let batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
+    let task_receiver = Chunks::new(
+        task_receiver,
+        backend_batch_buf,
+        batch_min_time,
+        batch_max_time,
+    )
+    .map_err(|_| ());
+
     let writer_handler = handle_write(task_receiver, writer, tx);
     let reader_handler = handle_read(handler, reader, rx);
 
+    // May need to use future_group. The tx <=> rx between them may not be able to shutdown futures.
     (reader_handler, writer_handler)
 }
 
-fn handle_write<W, T>(
-    task_receiver: mpsc::UnboundedReceiver<T>,
+fn handle_write<S, W, T>(
+    task_receiver: S,
     writer: W,
     tx: mpsc::Sender<T>,
 ) -> impl Future<Item = (), Error = BackendError> + Send
 where
+    S: Stream<Item = Vec<T>, Error = ()> + Send + 'static,
     W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static,
     T: CmdTask,
 {
     task_receiver
         .map_err(|()| BackendError::Canceled)
-        .fold((writer, tx), |(writer, tx), task| {
-            task.get_slowlog()
-                .log_event(TaskEvent::WritingQueueReceived);
+        .fold((writer, tx), |(writer, tx), tasks| {
+            for task in tasks.iter() {
+                task.get_slowlog()
+                    .log_event(TaskEvent::WritingQueueReceived);
+            }
 
-            let item = match task.drain_packet_data() {
-                Some(data) => {
-                    // Tricky code here. The nil array will be ignored when encoded.
-                    // TODO: Refactor it by using enum to differentiate this two packet type.
-                    RespPacket::new_with_buf(Resp::Arr(Array::Nil), data)
-                }
-                None => {
-                    // TODO: remove the clone
-                    let resp = task.get_resp().clone();
-                    RespPacket::new(resp)
-                }
-            };
-            writer.send(Box::new(item)).then(|res| {
-                task.get_slowlog().log_event(TaskEvent::SentToBackend);
+            let items: Vec<Box<RespPacket>> = tasks
+                .iter()
+                .map(|task| match task.drain_packet_data() {
+                    Some(data) => {
+                        // Tricky code here. The nil array will be ignored when encoded.
+                        // TODO: Refactor it by using enum to differentiate this two packet type.
+                        RespPacket::new_with_buf(Resp::Arr(Array::Nil), data)
+                    }
+                    None => {
+                        // TODO: remove the clone
+                        let resp = task.get_resp().clone();
+                        RespPacket::new(resp)
+                    }
+                })
+                .map(Box::new)
+                .collect();
 
-                let fut: Box<dyn Future<Item = _, Error = BackendError> + Send> = match res {
-                    Ok(writer) => {
-                        let fut = tx.send(task).map(move |tx| (writer, tx)).map_err(|e| {
-                            error!("backend handle_write rx closed {:?}", e);
-                            BackendError::Canceled
-                        });
-                        Box::new(fut)
+            writer
+                .send_all(stream::iter_ok::<_, io::Error>(items))
+                .then(move |res| {
+                    for task in tasks.iter() {
+                        task.get_slowlog().log_event(TaskEvent::SentToBackend);
                     }
-                    Err(e) => {
-                        error!("Failed to write");
-                        task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
-                        Box::new(future::err(BackendError::Io(e)))
-                    }
-                };
-                fut
-            })
+
+                    let fut: Box<dyn Future<Item = _, Error = BackendError> + Send> = match res {
+                        Ok((writer, empty_stream)) => {
+                            debug_assert!(empty_stream
+                                .collect()
+                                .wait()
+                                .expect("invalid empty_stream")
+                                .is_empty());
+                            let fut = tx
+                                .send_all(stream::iter_ok(tasks))
+                                .map(move |(tx, empty_stream)| {
+                                    debug_assert!(empty_stream
+                                        .collect()
+                                        .wait()
+                                        .expect("invalid empty_stream")
+                                        .is_empty());
+                                    (writer, tx)
+                                })
+                                .map_err(|e| {
+                                    error!("backend handle_write rx closed {:?}", e);
+                                    BackendError::Canceled
+                                });
+                            Box::new(fut)
+                        }
+                        Err(e) => {
+                            error!("Failed to write");
+                            for task in tasks {
+                                task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
+                            }
+                            Box::new(future::err(BackendError::Io(e)))
+                        }
+                    };
+                    fut
+                })
         })
         .map(|_| ())
 }

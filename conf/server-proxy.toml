@@ -18,3 +18,11 @@ session_channel_size = 4096
 backend_channel_size = 4096
 
 backend_conn_num = 16
+
+# Batching syscall
+backend_batch_min_time = 20000
+backend_batch_max_time = 400000
+backend_batch_buf = 10
+session_batch_min_time = 20000
+session_batch_max_time = 400000
+session_batch_buf = 10

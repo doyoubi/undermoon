@@ -8,14 +8,16 @@ use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use ::common::utils::ThreadSafe;
 use bytes::BytesMut;
+use common::batching;
 use futures::sync::mpsc;
-use futures::{Future, Sink, Stream};
+use futures::{future, stream, Future, Sink, Stream};
 use protocol::{DecodeError, Resp, RespCodec, RespPacket};
 use std::boxed::Box;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync;
+use std::time::Duration;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
 
@@ -146,6 +148,9 @@ pub fn handle_conn<H>(
     handler: sync::Arc<H>,
     sock: TcpStream,
     channel_size: usize,
+    session_batch_min_time: usize,
+    session_batch_max_time: usize,
+    session_batch_buf: usize,
 ) -> (
     impl Future<Item = (), Error = SessionError> + Send,
     impl Future<Item = (), Error = SessionError> + Send,
@@ -158,7 +163,14 @@ where
     let (tx, rx) = mpsc::channel(channel_size);
 
     let reader_handler = handle_read(handler.clone(), reader, tx);
-    let writer_handler = handle_write(handler, writer, rx);
+    let writer_handler = handle_write(
+        handler,
+        writer,
+        rx,
+        session_batch_min_time,
+        session_batch_max_time,
+        session_batch_buf,
+    );
 
     (reader_handler, writer_handler)
 }
@@ -207,50 +219,59 @@ fn handle_write<H, W>(
     handler: sync::Arc<H>,
     writer: W,
     rx: mpsc::Receiver<CmdReplyReceiver>,
+    session_batch_min_time: usize,
+    session_batch_max_time: usize,
+    session_batch_buf: usize,
 ) -> impl Future<Item = (), Error = SessionError> + Send
 where
     H: CmdHandler + Send + Sync + 'static,
     W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static,
 {
-    rx.map_err(|()| SessionError::Canceled)
-        .fold((handler, writer), |(handler, writer), reply_receiver| {
-            handle_write_resp(handler, writer, reply_receiver)
-        })
-        .map(|_| ())
-}
+    let handler_clone = handler.clone();
+    let packets_stream = rx
+        .map_err(|()| SessionError::Canceled)
+        .and_then(|reply_receiver| reply_receiver.wait_response().map_err(SessionError::CmdErr))
+        .then(move |res| match res {
+            Ok(task_reply) => {
+                let (packet, slowlog) = (*task_reply).into_inner();
+                slowlog.log_event(TaskEvent::WaitDone);
+                handler_clone.handle_slowlog(slowlog);
+                future::ok(packet)
+            }
+            Err(e) => {
+                let err_msg = format!("Err cmd error {:?}", e);
+                error!("{}", err_msg);
+                let resp = Resp::Error(err_msg.into_bytes());
+                future::ok(Box::new(RespPacket::new(resp)))
+            }
+        });
 
-fn handle_write_resp<H, W>(
-    handler: sync::Arc<H>,
-    writer: W,
-    reply_receiver: CmdReplyReceiver,
-) -> impl Future<Item = (sync::Arc<H>, W), Error = SessionError> + Send
-where
-    H: CmdHandler + Send + Sync + 'static,
-    W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static,
-{
-    reply_receiver
-        .wait_response()
-        .map_err(SessionError::CmdErr)
-        .then(|res| {
-            let packet = match res {
-                Ok(task_reply) => {
-                    let (packet, slowlog) = (*task_reply).into_inner();
-                    slowlog.log_event(TaskEvent::WaitDone);
-                    handler.handle_slowlog(slowlog);
-                    packet
-                }
-                Err(e) => {
-                    let err_msg = format!("Err cmd error {:?}", e);
-                    error!("{}", err_msg);
-                    let resp = Resp::Error(err_msg.into_bytes());
-                    Box::new(RespPacket::new(resp))
-                }
-            };
-            writer
-                .send(packet)
-                .map_err(SessionError::Io)
-                .map(|writer| (handler, writer))
-        })
+    let batch_min_time = Duration::from_nanos(session_batch_min_time as u64);
+    let batch_max_time = Duration::from_nanos(session_batch_max_time as u64);
+    batching::Chunks::new(
+        packets_stream,
+        session_batch_buf,
+        batch_min_time,
+        batch_max_time,
+    )
+    .map_err(|err: batching::Error<SessionError>| {
+        error!("batching error {:?}", err);
+        SessionError::Canceled
+    })
+    .fold((handler, writer), |(handler, writer), packets| {
+        writer
+            .send_all(stream::iter_ok::<_, io::Error>(packets))
+            .map_err(SessionError::Io)
+            .map(|(writer, empty_stream)| {
+                debug_assert!(empty_stream
+                    .collect()
+                    .wait()
+                    .expect("invalid empty_stream")
+                    .is_empty());
+                (handler, writer)
+            })
+    })
+    .map(|_| ())
 }
 
 #[derive(Debug)]
