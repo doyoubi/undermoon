@@ -247,5 +247,4 @@ mod tests {
         let args = encode_repl_meta(meta.clone()).join(" ");
         assert_eq!(args, "233 NOFLAG master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299")
     }
-
 }

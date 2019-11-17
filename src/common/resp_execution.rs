@@ -97,10 +97,7 @@ pub fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory, Func>
 where
     Func: Clone
         + Send
-        + Fn(
-            T,
-            F::Client,
-        ) -> Box<dyn Future<Item = (T, F::Client), Error = RedisClientError> + Send>,
+        + Fn(T, F::Client) -> Box<dyn Future<Item = (T, F::Client), Error = RedisClientError> + Send>,
 {
     let infinite_stream = stream::iter_ok(iter::repeat(()));
     infinite_stream.fold(data, move |data, ()| {

@@ -497,8 +497,8 @@ fn gen_cluster_slots_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::iter::repeat;
     use ::common::cluster::MigrationMeta;
+    use std::iter::repeat;
 
     fn gen_testing_slot_ranges(address: &str) -> HashMap<String, Vec<SlotRange>> {
         let mut slot_ranges = HashMap::new();
