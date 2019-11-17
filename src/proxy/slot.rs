@@ -65,7 +65,7 @@ impl SlotMapData {
 
     pub fn get(&self, slot: usize) -> Option<String> {
         let addr_index = self.slot_arr.get(slot).and_then(|opt| *opt)?;
-        self.addrs.get(addr_index).and_then(|s| Some(s.clone()))
+        self.addrs.get(addr_index).cloned()
     }
 }
 
