@@ -432,8 +432,8 @@ fn gen_cluster_nodes_helper(
     name_seg.truncate(20);
     for (addr, ranges) in slot_ranges {
         let mut addr_seg = format!("{:_<20}", addr);
-        let id = format!("{}{}", name_seg, addr_seg);
         addr_seg.truncate(20);
+        let id = format!("{}{}", name_seg, addr_seg);
 
         let mut slot_range_str = String::new();
         let slot_range = ranges
@@ -497,12 +497,13 @@ fn gen_cluster_slots_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::iter::repeat;
     use ::common::cluster::MigrationMeta;
 
-    fn gen_testing_slot_ranges() -> HashMap<String, Vec<SlotRange>> {
+    fn gen_testing_slot_ranges(address: &str) -> HashMap<String, Vec<SlotRange>> {
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(
-            "127.0.0.1:5299".to_string(),
+            address.to_string(),
             vec![
                 SlotRange {
                     start: 0,
@@ -540,9 +541,17 @@ mod tests {
 
     #[test]
     fn test_gen_cluster_nodes() {
-        let slot_ranges = gen_testing_slot_ranges();
+        let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
         let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
         assert_eq!(output, "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
+    }
+
+    #[test]
+    fn test_gen_cluster_nodes_with_long_address() {
+        let long_address: String = repeat('x').take(50).collect();
+        let slot_ranges = gen_testing_slot_ranges(&long_address);
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        assert_eq!(output, format!("testdb______________xxxxxxxxxxxxxxxxxxxx {} master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
     #[test]
@@ -557,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_gen_cluster_slots() {
-        let slot_ranges = gen_testing_slot_ranges();
+        let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
         let output = gen_cluster_slots_helper(&slot_ranges).expect("test_gen_cluster_slots");
         let slot_range1 = Resp::Arr(Array::Arr(vec![
             Resp::Integer(0.to_string().into_bytes()),
