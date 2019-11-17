@@ -53,6 +53,20 @@ fn gen_conf() -> ServerProxyConfig {
             .get::<usize>("backend_channel_size")
             .unwrap_or_else(|_| 4096),
         backend_conn_num: s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 16),
+        backend_batch_min_time: s
+            .get::<usize>("backend_batch_min_time")
+            .unwrap_or_else(|_| 20000),
+        backend_batch_max_time: s
+            .get::<usize>("backend_batch_max_time")
+            .unwrap_or_else(|_| 400_000),
+        backend_batch_buf: s.get::<usize>("backend_batch_buf").unwrap_or_else(|_| 10),
+        session_batch_min_time: s
+            .get::<usize>("session_batch_min_time")
+            .unwrap_or_else(|_| 20000),
+        session_batch_max_time: s
+            .get::<usize>("session_batch_max_time")
+            .unwrap_or_else(|_| 400_000),
+        session_batch_buf: s.get::<usize>("session_batch_buf").unwrap_or_else(|_| 10),
     }
 }
 

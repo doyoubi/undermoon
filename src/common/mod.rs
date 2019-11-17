@@ -1,3 +1,4 @@
+pub mod batching;
 pub mod cluster;
 pub mod config;
 pub mod db;
