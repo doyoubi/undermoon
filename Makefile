@@ -34,6 +34,17 @@ docker-build-image:
 	sh scripts/dkrebuild.sh
 	docker image build -f examples/Dockerfile-undermoon -t undermoon .
 
+docker-build-release:
+	docker image build -f examples/Dockerfile-builder-release -t undermoon_builder .
+	mkdir -p ./examples/target_volume/release
+	docker rm undermoon-builder-container || true
+	docker create -it --name undermoon-builder-container undermoon_builder bash
+	docker cp undermoon-build-container:/undermoon/target/release/server_proxy ./examples/target_volume/release/
+	docker cp undermoon-build-container:/undermoon/target/release/coordinator ./examples/target_volume/release/
+	docker cp undermoon-build-container:/undermoon/target/release/mem_broker ./examples/target_volume/release/
+	docker rm undermoon-builder-container
+	docker image build -f examples/Dockerfile-undermoon-release -t undermoon .
+
 docker-rebuild-bin:
 	sh scripts/dkrebuild.sh
 
