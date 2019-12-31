@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::iter::Iterator;
+use crc64::crc64;
 
 pub const DEFAULT_DB: &str = "admin";
 
@@ -431,9 +432,9 @@ fn gen_cluster_nodes_helper(
     let mut name_seg = format!("{:_<20}", name);
     name_seg.truncate(20);
     for (addr, ranges) in slot_ranges {
-        let mut addr_seg = format!("{:_<20}", addr);
-        addr_seg.truncate(20);
-        let id = format!("{}{}", name_seg, addr_seg);
+        let mut addr_hash_seg = format!("{:_<20x}", crc64(0, addr.as_bytes()));
+        addr_hash_seg.truncate(20);
+        let id = format!("{}{}", name_seg, addr_hash_seg);
 
         let mut slot_range_str = String::new();
         let slot_range = ranges
@@ -543,7 +544,7 @@ mod tests {
     fn test_gen_cluster_nodes() {
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
         let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
-        assert_eq!(output, "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
+        assert_eq!(output, "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
     }
 
     #[test]
@@ -551,7 +552,7 @@ mod tests {
         let long_address: String = repeat('x').take(50).collect();
         let slot_ranges = gen_testing_slot_ranges(&long_address);
         let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
-        assert_eq!(output, format!("testdb______________xxxxxxxxxxxxxxxxxxxx {} master - 0 0 233 connected 0-100 300\n", long_address));
+        assert_eq!(output, format!("testdb______________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
     #[test]
@@ -560,7 +561,7 @@ mod tests {
         let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
         assert_eq!(
             output,
-            "testdb______________127.0.0.1:5299______ 127.0.0.1:5299 master - 0 0 233 connected\n"
+            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
         );
     }
 
