@@ -5,12 +5,12 @@ use common::cluster::{SlotRange, SlotRangeTag};
 use common::config::ClusterConfig;
 use common::db::ProxyDBMeta;
 use common::utils::{gen_moved, get_key, get_slot};
+use crc64::crc64;
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::iter::Iterator;
-use crc64::crc64;
 
 pub const DEFAULT_DB: &str = "admin";
 
