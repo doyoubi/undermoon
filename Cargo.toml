@@ -15,10 +15,6 @@ path="src/bin/coordinator.rs"
 name="mem_broker"
 path="src/bin/mem_broker.rs"
 
-[[bin]]
-name="test_http_broker"
-path="src/bin/test_http_broker.rs"
-
 [dependencies]
 bytes = "0.4.12"
 tokio = "0.1"
@@ -28,6 +24,7 @@ tokio-timer = "0.2.10"
 futures = "0.1.28"
 atomic-option = "0.1"
 crc16 = "0.4.0"
+crc64 = "1.0.0"
 caseless = "0.2.1"
 arc-swap = "0.3.11"
 reqwest = "0.9.9"
