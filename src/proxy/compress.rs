@@ -123,10 +123,7 @@ fn get_strategy(dbname: &str, meta_map: &SharedMetaMap) -> CompressionStrategy {
     let meta_map = meta_map.lease();
     match meta_map.get_db_map().get_config(&dbname) {
         Some(config) => config.compression_strategy,
-        None => {
-            warn!("failed to get config from {}. Use default config.", dbname);
-            ClusterConfig::default().compression_strategy
-        }
+        None => ClusterConfig::default().compression_strategy,
     }
 }
 
