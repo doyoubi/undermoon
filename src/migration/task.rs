@@ -16,6 +16,12 @@ pub enum MigrationState {
     Blocking = 1,
     SwitchStarted = 2,
     SwitchCommitted = 3,
+    // The states above are for migration protocol v2.
+    PreCheck = 4,
+    PreBlocking = 5,
+    PreSwitch = 6,
+    Scanning = 7,
+    FinalSwitch = 8,
 }
 
 #[derive(Debug)]
