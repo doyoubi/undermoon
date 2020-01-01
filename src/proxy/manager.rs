@@ -11,6 +11,7 @@ use ::common::cluster::{MigrationTaskMeta, SlotRangeTag};
 use ::common::config::AtomicMigrationConfig;
 use ::migration::delete_keys::DeleteKeysTaskMap;
 use ::migration::manager::{MigrationManager, MigrationMap, SwitchError};
+use ::migration::task::MgrSubCmd;
 use ::migration::task::SwitchArg;
 use arc_swap::ArcSwap;
 use common::db::ProxyDBMeta;
@@ -179,7 +180,11 @@ impl<F: RedisClientFactory> MetaManager<F> {
         )
     }
 
-    pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
+    pub fn handle_switch(
+        &self,
+        switch_arg: SwitchArg,
+        sub_cmd: MgrSubCmd,
+    ) -> Result<(), SwitchError> {
         let mut task_meta = switch_arg.meta.clone();
 
         // The stored meta is with importing tag.
@@ -198,13 +203,17 @@ impl<F: RedisClientFactory> MetaManager<F> {
             return Err(SwitchError::NotReady);
         }
 
-        self.meta_map
-            .load()
-            .migration_map
-            .commit_importing(SwitchArg {
-                version: switch_arg.version,
-                meta: task_meta,
-            })
+        match sub_cmd {
+            MgrSubCmd::PreCheck => Ok(()),
+            MgrSubCmd::PreSwitch => Ok(()), // TODO: switch
+            MgrSubCmd::FinalSwitch => self.meta_map.load().migration_map.handle_switch(
+                SwitchArg {
+                    version: switch_arg.version,
+                    meta: task_meta,
+                },
+                sub_cmd,
+            ),
+        }
     }
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {

@@ -561,7 +561,15 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
             .map_err(|_e| DBSendError::MigrationError)
     }
 
-    fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError> {
+    fn get_state(&self) -> MigrationState {
+        self.state.get_state()
+    }
+
+    fn handle_switch(
+        &self,
+        switch_arg: SwitchArg,
+        sub_cmd: MgrSubCmd,
+    ) -> Result<(), MigrationError> {
         if switch_arg.version != UNDERMOON_MIGRATION_VERSION {
             return Err(MigrationError::IncompatibleVersion);
         }

@@ -165,6 +165,13 @@ pub fn extract_info_field(resp: &Resp, field: &str) -> Result<String, String> {
     Err(format!("field {} not found", field))
 }
 
+pub fn pretty_print_bytes(data: &[u8]) -> String {
+    match str::from_utf8(data) {
+        Ok(s) => s.to_string(),
+        Err(_) => format!("{:?}", data),
+    }
+}
+
 pub const OK_REPLY: &str = "OK";
 pub const OLD_EPOCH_REPLY: &str = "OLD_EPOCH";
 pub const TRY_AGAIN_REPLY: &str = "TRY_AGAIN";

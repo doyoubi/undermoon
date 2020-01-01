@@ -1,4 +1,4 @@
-use super::redis_task::{RedisImportingTask, RedisMigratingTask};
+use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask};
 use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::config::AtomicMigrationConfig;
@@ -12,6 +12,7 @@ use ::proxy::slowlog::TaskEvent;
 use futures::Future;
 use itertools::Either;
 use migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
+use migration::task::MgrSubCmd;
 use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,7 +39,7 @@ where
 {
     config: Arc<AtomicMigrationConfig>,
     client_factory: Arc<RCF>,
-    sender_factory: Arc<TSF>,
+    redirection_sender_factory: Arc<TSF>,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigrationManager<RCF, TSF>
@@ -48,12 +49,12 @@ where
     pub fn new(
         config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
-        sender_factory: Arc<TSF>,
+        redirection_sender_factory: Arc<TSF>,
     ) -> Self {
         Self {
             config,
             client_factory,
-            sender_factory,
+            redirection_sender_factory,
         }
     }
 
@@ -66,7 +67,7 @@ where
             local_db_map,
             self.config.clone(),
             self.client_factory.clone(),
-            self.sender_factory.clone(),
+            self.redirection_sender_factory.clone(),
         )
     }
 
@@ -305,7 +306,7 @@ where
         local_db_map: &HostDBMap,
         config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
-        sender_factory: Arc<TSF>,
+        redirection_sender_factory: Arc<TSF>,
     ) -> (
         Self,
         Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
@@ -386,13 +387,13 @@ where
                                 continue;
                             }
 
-                            let task = Arc::new(RedisMigratingTask::new(
+                            let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
                                 db_name.clone(),
                                 (slot_range.start, slot_range.end),
                                 meta.clone(),
                                 client_factory.clone(),
-                                sender_factory.clone(),
+                                redirection_sender_factory.clone(),
                             ));
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),
@@ -425,12 +426,12 @@ where
                                 continue;
                             }
 
-                            let task = Arc::new(RedisImportingTask::new(
+                            let task = Arc::new(RedisScanImportingTask::new(
                                 config.clone(),
                                 db_name.clone(),
                                 meta.clone(),
                                 client_factory.clone(),
-                                sender_factory.clone(),
+                                redirection_sender_factory.clone(),
                             ));
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),
@@ -461,7 +462,11 @@ where
         )
     }
 
-    pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
+    pub fn handle_switch(
+        &self,
+        switch_arg: SwitchArg,
+        sub_cmd: MgrSubCmd,
+    ) -> Result<(), SwitchError> {
         if let Some(tasks) = self.task_map.get(&switch_arg.meta.db_name) {
             debug!(
                 "found tasks for db {} {}",
@@ -480,10 +485,12 @@ where
                         return Err(SwitchError::PeerMigrating);
                     }
                     Either::Right(importing_task) => {
-                        return importing_task.commit(switch_arg).map_err(|e| match e {
-                            MigrationError::NotReady => SwitchError::NotReady,
-                            others => SwitchError::MgrErr(others),
-                        });
+                        return importing_task.handle_switch(switch_arg, sub_cmd).map_err(
+                            |e| match e {
+                                MigrationError::NotReady => SwitchError::NotReady,
+                                others => SwitchError::MgrErr(others),
+                            },
+                        );
                     }
                 }
             }

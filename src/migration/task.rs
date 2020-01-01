@@ -1,14 +1,35 @@
 use ::common::cluster::MigrationTaskMeta;
-use ::common::utils::{get_resp_strings, ThreadSafe};
-use ::protocol::Resp;
+use ::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
 use ::proxy::backend::CmdTask;
 use ::proxy::database::DBSendError;
 use futures::Future;
+use itertools::Itertools;
+use protocol::{
+    Array, BinSafeStr, BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp,
+};
 use replication::replicator::ReplicatorError;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::str;
+use std::sync::atomic::{AtomicU16, Ordering};
+
+#[derive(Debug)]
+pub enum MgrSubCmd {
+    PreCheck,
+    PreSwitch,
+    FinalSwitch,
+}
+
+impl MgrSubCmd {
+    pub fn as_str(&self) -> &str {
+        match self {
+            &Self::PreCheck => "PRECHECK",
+            &Self::PreSwitch => "PRESWITCH",
+            &Self::FinalSwitch => "FINALSWITCH",
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MigrationState {
@@ -16,7 +37,7 @@ pub enum MigrationState {
     Blocking = 1,
     SwitchStarted = 2,
     SwitchCommitted = 3,
-    // The states above are for migration protocol v2.
+    // The states below are for migration protocol v2.
     PreCheck = 4,
     PreBlocking = 5,
     PreSwitch = 6,
@@ -26,18 +47,18 @@ pub enum MigrationState {
 
 #[derive(Debug)]
 pub struct AtomicMigrationState {
-    inner: AtomicU8,
+    inner: AtomicU16,
 }
 
 impl AtomicMigrationState {
     pub fn new() -> Self {
         Self {
-            inner: AtomicU8::new(MigrationState::TransferringData as u8),
+            inner: AtomicU16::new(MigrationState::TransferringData as u16),
         }
     }
 
     pub fn set_state(&self, state: MigrationState) {
-        self.inner.store(state as u8, Ordering::SeqCst);
+        self.inner.store(state as u16, Ordering::SeqCst);
     }
 
     pub fn get_state(&self) -> MigrationState {
@@ -65,7 +86,12 @@ pub trait ImportingTask: ThreadSafe {
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
-    fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError>;
+    fn get_state(&self) -> MigrationState;
+    fn handle_switch(
+        &self,
+        switch_arg: SwitchArg,
+        sub_cmd: MgrSubCmd,
+    ) -> Result<(), MigrationError>;
 }
 
 pub struct SwitchArg {
@@ -91,7 +117,7 @@ impl SwitchArg {
     }
 }
 
-pub fn parse_tmp_switch_command(resp: &Resp) -> Option<SwitchArg> {
+pub fn parse_switch_command(resp: &Resp) -> Option<SwitchArg> {
     let command = get_resp_strings(resp)?;
     let mut it = command.into_iter();
     // Skip UMCTL TMPSWITCH
@@ -108,6 +134,7 @@ pub enum MigrationError {
     Canceled,
     NotReady,
     ReplError(ReplicatorError),
+    RedisClient(RedisClientError),
     Io(io::Error),
 }
 
@@ -126,6 +153,54 @@ impl Error for MigrationError {
         match self {
             MigrationError::Io(err) => Some(err),
             MigrationError::ReplError(err) => Some(err),
+            MigrationError::RedisClient(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SlotRangeArray {
+    pub ranges: Vec<(usize, usize)>,
+}
+
+impl SlotRangeArray {
+    pub fn is_key_inside(&self, key: &[u8]) -> bool {
+        let slot = get_slot(key);
+        for (start, end) in self.ranges.iter() {
+            if slot >= *start && slot <= *end {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn info(&self) -> String {
+        self.ranges
+            .iter()
+            .map(|(start, end)| format!("{}-{}", start, end))
+            .join(",")
+    }
+}
+
+pub struct ScanResponse {
+    pub next_index: u64,
+    pub keys: Vec<BinSafeStr>,
+}
+
+impl ScanResponse {
+    pub fn parse_scan(resp: Resp) -> Option<ScanResponse> {
+        match resp {
+            Resp::Arr(Array::Arr(ref resps)) => {
+                let index_data = resps.get(0).and_then(|resp| match resp {
+                    Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
+                    Resp::Simple(ref s) => Some(s.clone()),
+                    _ => None,
+                })?;
+                let next_index = str::from_utf8(index_data.as_slice()).ok()?.parse().ok()?;
+                let keys = get_resp_bytes(resps.get(1)?)?;
+                Some(ScanResponse { next_index, keys })
+            }
             _ => None,
         }
     }
