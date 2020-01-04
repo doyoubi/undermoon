@@ -108,11 +108,12 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
                 Resp::Error(err_str) => {
                     if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
                         debug!("pre_check not ready, try again {:?}", meta)
+                    } else {
+                        error!(
+                            "failed to check: {:?}",
+                            pretty_print_bytes(err_str.as_slice())
+                        );
                     }
-                    error!(
-                        "failed to check: {:?}",
-                        pretty_print_bytes(err_str.as_slice())
-                    );
                     Ok(())
                 }
                 reply => {
@@ -297,7 +298,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
             Some(r) => r,
             None => return Box::new(future::err(MigrationError::AlreadyStarted)),
         };
-        Box::new(future::ok(()))
+        Box::new(self.run())
     }
 
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {

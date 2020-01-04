@@ -19,6 +19,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+const PEXPIRE_NO_EXPIRE: &str = "-1";
+const RESTORE_NO_EXPIRE: &str = "0";
+const BUSYKEY_ERROR: &str = "BUSYKEY";
 const DATA_QUEUE_SIZE: usize = 4096;
 
 #[derive(Clone)]
@@ -111,13 +114,23 @@ impl ScanMigrationTask {
             .fold((sender, None), move |(sender, client_opt), entry| {
                 let DataEntry {
                     key,
-                    pttl,
+                    mut pttl,
                     raw_data,
                 } = entry.clone();
+                let expire_time = if pttl == PEXPIRE_NO_EXPIRE.as_bytes() {
+                    RESTORE_NO_EXPIRE.as_bytes().into()
+                } else {
+                    pttl
+                };
                 let client_factory2 = client_factory.clone();
                 let sender = sender.clone();
                 let sender2 = sender.clone();
-                let restore_cmd = vec!["RESTORE".to_string().into_bytes(), key, pttl, raw_data];
+                let restore_cmd = vec![
+                    "RESTORE".to_string().into_bytes(),
+                    key,
+                    expire_time,
+                    raw_data,
+                ];
                 let interval = Duration::from_nanos(0);
                 keep_connecting_and_sending_cmd_with_cached_client(
                     client_opt,
@@ -145,7 +158,13 @@ impl ScanMigrationTask {
 
     fn handle_forward(resp: Resp) -> Result<(), RedisClientError> {
         match resp {
-            Resp::Error(_) => Err(RedisClientError::InvalidReply),
+            Resp::Error(err_msg) => {
+                if &err_msg[..BUSYKEY_ERROR.as_bytes().len()] == BUSYKEY_ERROR.as_bytes() {
+                    Err(RedisClientError::Done)
+                } else {
+                    Err(RedisClientError::InvalidReply)
+                }
+            },
             _ => Err(RedisClientError::Done),
         }
     }

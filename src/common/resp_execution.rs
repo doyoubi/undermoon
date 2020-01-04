@@ -1,3 +1,4 @@
+use ::common::utils::pretty_print_bytes;
 use atomic_option::AtomicOption;
 use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
@@ -37,13 +38,16 @@ where
             .then(move |result| match result {
                 Ok(client) => future::ok(Some(client)),
                 Err(RedisClientError::Done) => {
-                    info!("stop keep sending commands {:?}", cmd_clone2);
                     future::err(RedisClientError::Done)
                 }
                 Err(e) => {
                     error!(
                         "failed to send commands {:?} {:?}. Try again.",
-                        e, cmd_clone2
+                        e,
+                        cmd_clone2
+                            .iter()
+                            .map(|b| pretty_print_bytes(&b))
+                            .collect::<Vec<String>>()
                     );
                     future::ok(None)
                 }
@@ -136,7 +140,7 @@ where
                     future::err(RedisClientError::Done)
                 }
                 Err((data, e)) => {
-                    error!("failed to send {:?}. Try again.", e,);
+                    error!("failed to send {:?}. Try again.", e);
                     future::ok(data)
                 }
             })
