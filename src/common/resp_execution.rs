@@ -22,37 +22,44 @@ where
     Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
 {
     let infinite_stream = stream::iter_ok(iter::repeat(()));
-    infinite_stream.fold(client, move |client_opt, ()| {
-        let client_factory_clone = client_factory.clone();
-        let address_clone = address.clone();
-        let client_fut = future::result(client_opt.ok_or_else(|| ()))
-            .or_else(move |()| client_factory_clone.create_client(address_clone));
-        let cmd_clone = cmd.clone();
-        let cmd_clone2 = cmd.clone();
-        let interval_clone = interval;
-        let handle_result_clone = handle_result.clone();
-        client_fut
-            .and_then(move |client| {
-                keep_sending_cmd(client, cmd_clone, interval_clone, handle_result_clone)
-            })
-            .then(move |result| match result {
-                Ok(client) => future::ok(Some(client)),
-                Err(RedisClientError::Done) => {
-                    future::err(RedisClientError::Done)
-                }
-                Err(e) => {
-                    error!(
-                        "failed to send commands {:?} {:?}. Try again.",
-                        e,
-                        cmd_clone2
-                            .iter()
-                            .map(|b| pretty_print_bytes(&b))
-                            .collect::<Vec<String>>()
-                    );
-                    future::ok(None)
-                }
-            })
-    })
+    infinite_stream
+        .fold(client, move |client_opt, ()| {
+            let client_factory_clone = client_factory.clone();
+            let address_clone = address.clone();
+            let client_fut = future::result(client_opt.ok_or_else(|| ()))
+                .or_else(move |()| client_factory_clone.create_client(address_clone));
+            let cmd_clone = cmd.clone();
+            let cmd_clone2 = cmd.clone();
+            let interval_clone = interval;
+            let handle_result_clone = handle_result.clone();
+            client_fut
+                .map_err(|err| (None, err))
+                .and_then(move |client| {
+                    keep_sending_cmd(client, cmd_clone, interval_clone, handle_result_clone)
+                })
+                .then(move |result| match result {
+                    Ok(client) => future::ok(Some(client)),
+                    Err((client_opt, RedisClientError::Done)) => {
+                        future::err((client_opt, RedisClientError::Done))
+                    }
+                    Err(e) => {
+                        error!(
+                            "failed to send commands {:?} {:?}. Try again.",
+                            e,
+                            cmd_clone2
+                                .iter()
+                                .map(|b| pretty_print_bytes(&b))
+                                .collect::<Vec<String>>()
+                        );
+                        future::ok(None)
+                    }
+                })
+        })
+        .then(|result| match result {
+            Ok(client_opt) => future::ok(client_opt),
+            Err((client_opt, RedisClientError::Done)) => future::ok(client_opt),
+            Err((_, others)) => future::err(others),
+        })
 }
 
 pub fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
@@ -81,7 +88,7 @@ pub fn keep_sending_cmd<C: RedisClient, Func>(
     cmd: Vec<Vec<u8>>,
     interval: Duration,
     handle_result: Func,
-) -> impl Future<Item = C, Error = RedisClientError>
+) -> impl Future<Item = C, Error = (Option<C>, RedisClientError)>
 where
     Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
 {
@@ -92,12 +99,17 @@ where
             .execute(cmd.clone())
             .map_err(|e| {
                 error!("failed to send: {}", e);
-                e
+                (None, e)
             })
             .and_then(move |(client, response)| {
-                future::result(handle_result_clone(response).map(|()| client))
+                let res = match handle_result_clone(response) {
+                    Ok(()) => Ok(client),
+                    Err(RedisClientError::Done) => Err((Some(client), RedisClientError::Done)),
+                    Err(err) => Err((None, err)),
+                };
+                future::result(res)
             });
-        let delay = Delay::new(interval).map_err(RedisClientError::Io);
+        let delay = Delay::new(interval).map_err(|ioerr| (None, RedisClientError::Io(ioerr)));
         exec_fut.join(delay).map(move |(client, ())| client)
     })
 }
@@ -383,7 +395,7 @@ mod tests {
             handler,
         )
         .wait();
-        assert!(res.is_err());
+        assert!(res.is_ok());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
         assert_eq!(retry_counter_clone.count.load(Ordering::SeqCst), 2);
     }

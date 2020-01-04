@@ -6,16 +6,19 @@ use common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use common::resp_execution::{
     keep_connecting_and_sending, keep_connecting_and_sending_cmd_with_cached_client,
 };
+use common::utils::pretty_print_bytes;
 use futures::sync::{mpsc, oneshot};
 use futures::Sink;
 use futures::{future, Future};
 use futures::{stream, Stream};
+use futures_timer::Delay;
 use protocol::{
     Array, BinSafeStr, BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp,
 };
 use std::collections::HashMap;
+use std::iter;
 use std::str;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,9 +57,11 @@ impl ScanMigrationTask {
         };
         let (data_sender, data_receiver) = mpsc::channel(DATA_QUEUE_SIZE);
         let (stop_sender, stop_receiver) = oneshot::channel();
+        let counter = Arc::new(AtomicI64::new(0));
         let (producer_fut, producer_handle) = Self::gen_producer(
             data_sender.clone(),
             stop_sender,
+            counter.clone(),
             src_address.clone(),
             slot_ranges.clone(),
             client_factory.clone(),
@@ -65,6 +70,7 @@ impl ScanMigrationTask {
         let (consumer_fut, consumer_handle) = Self::gen_consumer(
             data_sender,
             stop_receiver,
+            counter,
             data_receiver,
             dst_address.clone(),
             client_factory,
@@ -89,6 +95,7 @@ impl ScanMigrationTask {
     fn gen_consumer<F: RedisClientFactory>(
         sender: mpsc::Sender<DataEntry>,
         stop_receiver: oneshot::Receiver<()>,
+        counter: Arc<AtomicI64>,
         receiver: mpsc::Receiver<DataEntry>,
         address: String,
         client_factory: Arc<F>,
@@ -97,7 +104,14 @@ impl ScanMigrationTask {
         FutureAutoStopHandle,
     ) {
         let interval = Duration::from_nanos(0);
-        let send = Self::forward_entries(sender, receiver, stop_receiver, address, client_factory);
+        let send = Self::forward_entries(
+            sender,
+            receiver,
+            stop_receiver,
+            counter,
+            address,
+            client_factory,
+        );
         let (send, handle) = new_auto_drop_future(send);
         (Box::new(send.map_err(|_| MigrationError::Canceled)), handle)
     }
@@ -106,12 +120,15 @@ impl ScanMigrationTask {
         sender: mpsc::Sender<DataEntry>,
         receiver: mpsc::Receiver<DataEntry>,
         stop_receiver: oneshot::Receiver<()>,
+        counter: Arc<AtomicI64>,
         address: String,
         client_factory: Arc<F>,
     ) -> impl Future<Item = (), Error = RedisClientError> {
+        let counter_clone = counter.clone();
         let forward = receiver
             .map_err(|()| RedisClientError::Canceled)
             .fold((sender, None), move |(sender, client_opt), entry| {
+                let counter = counter_clone.clone();
                 let DataEntry {
                     key,
                     mut pttl,
@@ -140,7 +157,10 @@ impl ScanMigrationTask {
                     interval,
                     Self::handle_forward,
                 )
-                .map(move |client_opt| (sender, client_opt))
+                .map(move |client_opt| {
+                    counter.fetch_sub(1, Ordering::SeqCst);
+                    (sender, client_opt)
+                })
                 .or_else(move |_err| {
                     // If it fails, retry this entry.
                     sender2
@@ -150,8 +170,24 @@ impl ScanMigrationTask {
                 })
             })
             .map(|_| ());
+
+        let stop = stop_receiver.then(move |_| {
+            let s = stream::iter_ok(iter::repeat(()));
+            s.for_each(move |()| {
+                let interval = Duration::from_millis(100);
+                let fut: Box<dyn Future<Item = (), Error = ()> + Send> =
+                    if counter.load(Ordering::SeqCst) == 0 {
+                        Box::new(future::err(()))
+                    } else {
+                        Box::new(Delay::new(interval).map_err(|_| ()))
+                    };
+                fut
+            })
+            .then(|_| future::ok::<(), ()>(()))
+        });
+
         forward
-            .select(stop_receiver.map_err(|_| RedisClientError::Canceled))
+            .select(stop.map_err(|_| RedisClientError::Canceled))
             .map(|_| ())
             .map_err(|(err, _)| err)
     }
@@ -162,9 +198,10 @@ impl ScanMigrationTask {
                 if &err_msg[..BUSYKEY_ERROR.as_bytes().len()] == BUSYKEY_ERROR.as_bytes() {
                     Err(RedisClientError::Done)
                 } else {
+                    error!("RESTORE error: {:?}", pretty_print_bytes(&err_msg));
                     Err(RedisClientError::InvalidReply)
                 }
-            },
+            }
             _ => Err(RedisClientError::Done),
         }
     }
@@ -172,6 +209,7 @@ impl ScanMigrationTask {
     fn gen_producer<F: RedisClientFactory>(
         sender: mpsc::Sender<DataEntry>,
         stop_sender: oneshot::Sender<()>,
+        counter: Arc<AtomicI64>,
         address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
@@ -180,7 +218,7 @@ impl ScanMigrationTask {
         Box<dyn Future<Item = (), Error = MigrationError> + Send>,
         FutureAutoStopHandle,
     ) {
-        let data = (slot_ranges, 0, sender);
+        let data = (slot_ranges, 0, sender, counter);
         const SCAN_DEFAULT_SIZE: u64 = 10;
         let interval = Duration::from_nanos(1_000_000_000 / (scan_rate / SCAN_DEFAULT_SIZE));
         info!("scan and migrate keys with interval {:?}", interval);
@@ -202,15 +240,18 @@ impl ScanMigrationTask {
     }
 
     fn scan_and_migrate_keys<C: RedisClient>(
-        data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>),
+        data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
         client: C,
     ) -> Box<
         dyn Future<
-                Item = ((SlotRangeArray, u64, mpsc::Sender<DataEntry>), C),
+                Item = (
+                    (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
+                    C,
+                ),
                 Error = RedisClientError,
             > + Send,
     > {
-        let (slot_ranges, index, sender) = data;
+        let (slot_ranges, index, sender, counter) = data;
         let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
         let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
         let exec_fut = client
@@ -225,21 +266,23 @@ impl ScanMigrationTask {
                     let slot_ranges_clone = slot_ranges.clone();
                     Self::produce_entries(slot_ranges, keys, client).and_then(
                         move |(slot_ranges, client, entries)| {
+                            let entries_num = entries.len() as i64;
                             sender
                                 .send_all(stream::iter_ok(entries))
                                 .map(move |(sender, _entries)| {
-                                    (slot_ranges, next_index, client, sender)
+                                    counter.fetch_add(entries_num, Ordering::SeqCst);
+                                    (slot_ranges, next_index, client, sender, counter)
                                 })
                                 .map_err(|_err| RedisClientError::Canceled)
                         },
                     )
                 })
             })
-            .and_then(|(slot_ranges, next_index, client, sender)| {
+            .and_then(|(slot_ranges, next_index, client, sender, counter)| {
                 if next_index == 0 {
                     future::err(RedisClientError::Done)
                 } else {
-                    future::ok(((slot_ranges, next_index, sender), client))
+                    future::ok(((slot_ranges, next_index, sender, counter), client))
                 }
             });
         Box::new(exec_fut)
