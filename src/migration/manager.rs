@@ -504,10 +504,12 @@ where
         {
             for (_db_name, tasks) in self.task_map.iter() {
                 for (meta, task) in tasks.iter() {
-                    if let Either::Left(migrating_task) = task {
-                        if migrating_task.get_state() == MigrationState::SwitchCommitted {
-                            metadata.push(meta.clone());
-                        }
+                    let state = match task {
+                        Either::Left(migrating_task) => migrating_task.get_state(),
+                        Either::Right(importing_task) => importing_task.get_state(),
+                    };
+                    if state == MigrationState::SwitchCommitted {
+                        metadata.push(meta.clone());
                     }
                 }
             }

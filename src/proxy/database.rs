@@ -440,7 +440,9 @@ fn gen_cluster_nodes_helper(
         let slot_range = ranges
             .iter()
             .map(|range| match range.tag {
-                SlotRangeTag::Importing(ref _meta) => None,
+                // In the new migration protocol, after switching at the very beginning,
+                // the importing nodes will take care of all the migrating slots.
+                SlotRangeTag::Migrating(ref _meta) => None,
                 _ if range.start == range.end => Some(range.start.to_string()),
                 _ => Some(format!("{}-{}", range.start, range.end)),
             })
@@ -476,7 +478,9 @@ fn gen_cluster_slots_helper(
             .ok_or_else(|| format!("invalid address {}", addr))?;
 
         for slot_range in ranges {
-            if let SlotRangeTag::Importing(_) = slot_range.tag {
+            // In the new migration protocol, after switching at the very beginning,
+            // the importing nodes will take care of all the migrating slots.
+            if let SlotRangeTag::Migrating(_) = slot_range.tag {
                 continue;
             }
 
@@ -521,20 +525,26 @@ mod tests {
         slot_ranges
     }
 
-    fn gen_testing_impporting_slot_ranges() -> HashMap<String, Vec<SlotRange>> {
+    fn gen_testing_migration_slot_ranges(migrating: bool) -> HashMap<String, Vec<SlotRange>> {
         let mut slot_ranges = HashMap::new();
+        let meta = MigrationMeta {
+            epoch: 200,
+            src_proxy_address: "127.0.0.1:7000".to_string(),
+            src_node_address: "127.0.0.1:6379".to_string(),
+            dst_proxy_address: "127.0.0.1:7001".to_string(),
+            dst_node_address: "127.0.0.1:6380".to_string(),
+        };
+        let tag = if migrating {
+            SlotRangeTag::Migrating(meta)
+        } else {
+            SlotRangeTag::Importing(meta)
+        };
         slot_ranges.insert(
             "127.0.0.1:5299".to_string(),
             vec![SlotRange {
                 start: 0,
                 end: 1000,
-                tag: SlotRangeTag::Importing(MigrationMeta {
-                    epoch: 200,
-                    src_proxy_address: "127.0.0.1:7000".to_string(),
-                    src_node_address: "127.0.0.1:6379".to_string(),
-                    dst_proxy_address: "127.0.0.1:7001".to_string(),
-                    dst_node_address: "127.0.0.1:6380".to_string(),
-                }),
+                tag,
             }],
         );
         slot_ranges
@@ -557,7 +567,17 @@ mod tests {
 
     #[test]
     fn test_gen_importing_cluster_nodes() {
-        let slot_ranges = gen_testing_impporting_slot_ranges();
+        let slot_ranges = gen_testing_migration_slot_ranges(false);
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        assert_eq!(
+            output,
+            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+        );
+    }
+
+    #[test]
+    fn test_gen_migrating_cluster_nodes() {
+        let slot_ranges = gen_testing_migration_slot_ranges(true);
         let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
         assert_eq!(
             output,
@@ -592,8 +612,15 @@ mod tests {
 
     #[test]
     fn test_gen_importing_cluster_slots() {
-        let slot_ranges = gen_testing_impporting_slot_ranges();
+        let slot_ranges = gen_testing_migration_slot_ranges(false);
         let output = gen_cluster_slots_helper(&slot_ranges).expect("test_gen_cluster_slots");
-        assert_eq!(output, vec![]);
+        assert_eq!(output.len(), 1);
+    }
+
+    #[test]
+    fn test_gen_migrating_cluster_slots() {
+        let slot_ranges = gen_testing_migration_slot_ranges(true);
+        let output = gen_cluster_slots_helper(&slot_ranges).expect("test_gen_cluster_slots");
+        assert_eq!(output.len(), 0);
     }
 }
