@@ -14,14 +14,14 @@ use crossbeam_channel;
 use futures::sync::oneshot;
 use futures::{future, Future};
 use futures_timer::Delay;
-use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
+use proxy::backend::{ReqTaskSender, ReqTaskSenderFactory};
 use std::collections::HashMap;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
+pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> {
     config: Arc<AtomicMigrationConfig>,
     db_name: String,
     slot_range: (usize, usize),
@@ -31,20 +31,20 @@ pub struct RedisMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     cmd_task_sender:
-        crossbeam_channel::Sender<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+        crossbeam_channel::Sender<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
     cmd_task_receiver: Arc<
-        crossbeam_channel::Receiver<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+        crossbeam_channel::Receiver<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
     >,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> ThreadSafe
     for RedisMigratingTask<RCF, TSF>
 {
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigratingTask<RCF, TSF> {
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> RedisMigratingTask<RCF, TSF> {
     pub fn new(
         config: Arc<AtomicMigrationConfig>,
         db_name: String,
@@ -299,7 +299,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
         dst_proxy_address: String,
         cmd_task_receiver: Arc<
             crossbeam_channel::Receiver<
-                <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+                <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
             >,
         >,
     ) {
@@ -312,10 +312,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisMigra
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingTask
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> MigratingTask
     for RedisMigratingTask<RCF, TSF>
 {
-    type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
+    type Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
         let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
@@ -432,7 +432,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> Drop
     for RedisMigratingTask<RCF, TSF>
 {
     fn drop(&mut self) {
@@ -440,7 +440,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
     }
 }
 
-pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
+pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> {
     config: Arc<AtomicMigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
@@ -450,12 +450,12 @@ pub struct RedisImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory
     redis_importing_controller: RedisImportingController<RCF>,
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> ThreadSafe
     for RedisImportingTask<RCF, TSF>
 {
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImportingTask<RCF, TSF> {
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> RedisImportingTask<RCF, TSF> {
     pub fn new(
         config: Arc<AtomicMigrationConfig>,
         db_name: String,
@@ -509,7 +509,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> RedisImpor
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> Drop
     for RedisImportingTask<RCF, TSF>
 {
     fn drop(&mut self) {
@@ -517,10 +517,10 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingTask
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> ImportingTask
     for RedisImportingTask<RCF, TSF>
 {
-    type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
+    type Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
         let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {

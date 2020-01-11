@@ -1,11 +1,10 @@
 use super::backend::{
-    CachedSenderFactory, CmdTaskSender, CmdTaskSenderFactory, RRSenderGroupFactory,
-    RecoverableBackendNodeFactory, RedirectionSenderFactory,
+    gen_sender_factory, BackendSenderFactory, ReqTaskSender, ReqTaskSenderFactory,
 };
 use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
-use super::reply::ReplyCommitHandlerFactory;
+use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
-use super::session::CmdCtx;
+use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
 use ::common::cluster::{MigrationTaskMeta, SlotRangeTag};
 use ::common::config::AtomicMigrationConfig;
@@ -15,6 +14,7 @@ use ::migration::task::MgrSubCmd;
 use ::migration::task::SwitchArg;
 use arc_swap::ArcSwap;
 use common::db::ProxyDBMeta;
+use common::utils::ThreadSafe;
 use protocol::{RedisClientFactory, Resp};
 use proxy::backend::CmdTask;
 use replication::manager::ReplicatorManager;
@@ -22,18 +22,24 @@ use replication::replicator::ReplicatorMeta;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub struct MetaMap<F: CmdTaskSenderFactory>
+pub struct MetaMap<F: ReqTaskSenderFactory, MF>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    MF: ReqTaskSenderFactory + ThreadSafe,
+    <MF as ReqTaskSenderFactory>::Sender: ThreadSafe,
+    <<MF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
 {
     db_map: DatabaseMap<F>,
-    migration_map: MigrationMap<RedirectionSenderFactory<CmdCtx>>,
+    migration_map: MigrationMap<MF>,
     deleting_task_map: DeleteKeysTaskMap,
 }
 
-impl<F: CmdTaskSenderFactory> MetaMap<F>
+impl<F: ReqTaskSenderFactory, MF> MetaMap<F, MF>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    MF: ReqTaskSenderFactory + ThreadSafe,
+    <MF as ReqTaskSenderFactory>::Sender: ThreadSafe,
+    <<MF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
 {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
@@ -52,15 +58,9 @@ where
     }
 }
 
-pub type SharedMetaMap = Arc<
-    ArcSwap<
-        MetaMap<
-            CachedSenderFactory<
-                RRSenderGroupFactory<RecoverableBackendNodeFactory<ReplyCommitHandlerFactory>>,
-            >,
-        >,
-    >,
->;
+type SenderFactory = BackendSenderFactory<DecompressCommitHandlerFactory>;
+type MigrationSenderFactory = BackendSenderFactory<ReplyCommitHandlerFactory>;
+pub type SharedMetaMap = Arc<ArcSwap<MetaMap<SenderFactory, MigrationSenderFactory>>>;
 
 pub struct MetaManager<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,
@@ -71,10 +71,8 @@ pub struct MetaManager<F: RedisClientFactory> {
     epoch: AtomicU64,
     lock: Mutex<()>, // This is the write lock for `epoch`, `db`, and `task`.
     replicator_manager: ReplicatorManager<F>,
-    migration_manager: MigrationManager<F, RedirectionSenderFactory<CmdCtx>>,
-    sender_factory: CachedSenderFactory<
-        RRSenderGroupFactory<RecoverableBackendNodeFactory<ReplyCommitHandlerFactory>>,
-    >,
+    migration_manager: MigrationManager<F, MigrationSenderFactory, CmdCtxFactory>,
+    sender_factory: SenderFactory,
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
@@ -83,13 +81,15 @@ impl<F: RedisClientFactory> MetaManager<F> {
         client_factory: Arc<F>,
         meta_map: SharedMetaMap,
     ) -> Self {
-        let reply_handler_factory = Arc::new(ReplyCommitHandlerFactory::new(meta_map.clone()));
-        let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
-            config.backend_conn_num,
-            RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory),
+        let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
+        let sender_factory = gen_sender_factory(config.clone(), reply_handler_factory);
+        let migration_sender_factory = Arc::new(gen_sender_factory(
+            config.clone(),
+            Arc::new(ReplyCommitHandlerFactory::default()),
         ));
-        let redirection_sender_factory = Arc::new(RedirectionSenderFactory::default());
+        let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let migration_config = Arc::new(AtomicMigrationConfig::default());
+        let config_clone = config.clone();
         Self {
             config,
             meta_map,
@@ -97,9 +97,11 @@ impl<F: RedisClientFactory> MetaManager<F> {
             lock: Mutex::new(()),
             replicator_manager: ReplicatorManager::new(client_factory.clone()),
             migration_manager: MigrationManager::new(
+                config_clone,
                 migration_config,
                 client_factory,
-                redirection_sender_factory,
+                migration_sender_factory,
+                cmd_ctx_factory,
             ),
             sender_factory,
         }

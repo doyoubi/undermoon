@@ -9,45 +9,55 @@ use ::common::resp_execution::keep_connecting_and_sending_cmd;
 use ::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
 use ::common::version::UNDERMOON_MIGRATION_VERSION;
 use ::protocol::{RedisClientError, RedisClientFactory, Resp};
+use ::proxy::backend::ReqAdaptorSenderFactory;
 use ::proxy::database::DBSendError;
+use ::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use atomic_option::AtomicOption;
 use futures::sync::oneshot;
 use futures::{future, Future};
-use proxy::backend::{CmdTaskSender, CmdTaskSenderFactory};
+use proxy::backend::{
+    CmdTaskFactory, RedirectionSenderFactory, ReqTaskSender, ReqTaskSenderFactory,
+};
+use proxy::service::ServerProxyConfig;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 const SCAN_RATE: u64 = 1000;
 
-pub struct RedisScanMigratingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
-    config: Arc<AtomicMigrationConfig>,
+pub struct RedisScanMigratingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> {
+    config: Arc<ServerProxyConfig>,
+    mgr_config: Arc<AtomicMigrationConfig>,
     db_name: String,
     slot_range: (usize, usize),
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
-    redirection_sender_factory: Arc<TSF>,
+    sender_factory: Arc<TSF>,
+    redirection_sender_factory: ReqAdaptorSenderFactory<
+        RedirectionSenderFactory<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
+    >,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     task: ScanMigrationTask,
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> ThreadSafe
     for RedisScanMigratingTask<RCF, TSF>
 {
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
     RedisScanMigratingTask<RCF, TSF>
 {
     pub fn new(
-        config: Arc<AtomicMigrationConfig>,
+        config: Arc<ServerProxyConfig>,
+        mgr_config: Arc<AtomicMigrationConfig>,
         db_name: String,
         slot_range: (usize, usize),
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
-        redirection_sender_factory: Arc<TSF>,
+        sender_factory: Arc<TSF>,
     ) -> Self {
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let task = ScanMigrationTask::new(
@@ -57,11 +67,15 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
             client_factory.clone(),
             SCAN_RATE,
         );
+        let redirection_sender_factory =
+            ReqAdaptorSenderFactory::new(RedirectionSenderFactory::default());
         Self {
             config,
+            mgr_config,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
+            sender_factory,
             redirection_sender_factory,
             db_name,
             slot_range,
@@ -116,7 +130,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
                     }
                     Ok(())
                 }
-                reply => {
+                _reply => {
                     info!("pre_check done");
                     state.set_state(MigrationState::PreBlocking);
                     Err(RedisClientError::Done)
@@ -169,7 +183,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
                     );
                     Ok(())
                 }
-                reply => {
+                _reply => {
                     info!("pre_switch done");
                     state.set_state(MigrationState::Scanning);
                     Err(RedisClientError::Done)
@@ -235,13 +249,14 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
             match resp {
                 Resp::Error(err_str) => {
                     error!(
-                        "failed to switch: {:?}",
-                        pretty_print_bytes(err_str.as_slice())
+                        "failed to switch: {:?} {:?}",
+                        pretty_print_bytes(err_str.as_slice()),
+                        meta,
                     );
                     Ok(())
                 }
-                reply => {
-                    info!("final_switch done");
+                _reply => {
+                    info!("final_switch done: {:?}", meta);
                     state.set_state(MigrationState::SwitchCommitted);
                     Err(RedisClientError::Done)
                 }
@@ -288,17 +303,29 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingTask
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> MigratingTask
     for RedisScanMigratingTask<RCF, TSF>
 {
-    type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
+    type Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
         let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
             Some(r) => r,
             None => return Box::new(future::err(MigrationError::AlreadyStarted)),
         };
-        Box::new(self.run())
+
+        let meta = self.meta.clone();
+        let fut = self.run();
+
+        Box::new(
+            receiver
+                .map_err(|_| MigrationError::Canceled)
+                .select(fut)
+                .then(move |_| {
+                    warn!("Migrating tasks stopped {:?}", meta);
+                    future::ok(())
+                }),
+        )
     }
 
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
@@ -315,9 +342,9 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
 
         let redirection_sender = self
             .redirection_sender_factory
-            .create(self.meta.src_proxy_address.clone());
+            .create(self.meta.dst_proxy_address.clone());
         redirection_sender
-            .send(cmd_task)
+            .send(cmd_task.into())
             .map_err(|_e| DBSendError::MigrationError)
     }
 
@@ -326,7 +353,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigratingT
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
+impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> Drop
     for RedisScanMigratingTask<RCF, TSF>
 {
     fn drop(&mut self) {
@@ -334,40 +361,73 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
     }
 }
 
-pub struct RedisScanImportingTask<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> {
-    config: Arc<AtomicMigrationConfig>,
+pub struct RedisScanImportingTask<RCF, TSF, CTF>
+where
+    RCF: RedisClientFactory,
+    TSF: ReqTaskSenderFactory + ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+        + ThreadSafe,
+    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
+{
+    mgr_config: Arc<AtomicMigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
-    redirection_sender_factory: Arc<TSF>,
+    sender_factory: Arc<TSF>,
+    redirection_sender_factory: ReqAdaptorSenderFactory<
+        RedirectionSenderFactory<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
+    >,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
+    cmd_handler: RestoreDataCmdTaskHandler<CTF, <TSF as ReqTaskSenderFactory>::Sender>,
+    cmd_task_factory: Arc<CTF>,
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ThreadSafe
-    for RedisScanImportingTask<RCF, TSF>
+impl<RCF, TSF, CTF> ThreadSafe for RedisScanImportingTask<RCF, TSF, CTF>
+where
+    RCF: RedisClientFactory,
+    TSF: ReqTaskSenderFactory + ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+        + ThreadSafe,
+    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
 {
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
-    RedisScanImportingTask<RCF, TSF>
+impl<RCF, TSF, CTF> RedisScanImportingTask<RCF, TSF, CTF>
+where
+    RCF: RedisClientFactory,
+    TSF: ReqTaskSenderFactory + ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+        + ThreadSafe,
+    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
 {
     pub fn new(
-        config: Arc<AtomicMigrationConfig>,
-        db_name: String,
+        _config: Arc<ServerProxyConfig>,
+        mgr_config: Arc<AtomicMigrationConfig>,
+        _db_name: String,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
-        redirection_sender_factory: Arc<TSF>,
+        sender_factory: Arc<TSF>,
+        cmd_task_factory: Arc<CTF>,
     ) -> Self {
+        let src_sender = sender_factory.create(meta.src_node_address.clone());
+        let dst_sender = sender_factory.create(meta.dst_node_address.clone());
+        let cmd_handler =
+            RestoreDataCmdTaskHandler::new(src_sender, dst_sender, cmd_task_factory.clone());
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
+        let redirection_sender_factory =
+            ReqAdaptorSenderFactory::new(RedirectionSenderFactory::default());
         Self {
-            config,
+            mgr_config,
             meta: meta.clone(),
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
+            sender_factory,
             redirection_sender_factory,
             stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
+            cmd_handler,
+            cmd_task_factory,
         }
     }
 
@@ -383,18 +443,28 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> Drop
-    for RedisScanImportingTask<RCF, TSF>
+impl<RCF, TSF, CTF> Drop for RedisScanImportingTask<RCF, TSF, CTF>
+where
+    RCF: RedisClientFactory,
+    TSF: ReqTaskSenderFactory + ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+        + ThreadSafe,
+    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
 {
     fn drop(&mut self) {
         self.send_stop_signal().unwrap_or(())
     }
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingTask
-    for RedisScanImportingTask<RCF, TSF>
+impl<RCF, TSF, CTF> ImportingTask for RedisScanImportingTask<RCF, TSF, CTF>
+where
+    RCF: RedisClientFactory,
+    TSF: ReqTaskSenderFactory + ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+        + ThreadSafe,
+    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
 {
-    type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
+    type Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task;
 
     fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
         let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
@@ -402,7 +472,21 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
             None => return Box::new(future::err(MigrationError::AlreadyStarted)),
         };
 
-        Box::new(future::ok(()))
+        let meta = self.meta.clone();
+        let fut = self
+            .cmd_handler
+            .run_task_handler()
+            .map_err(|()| MigrationError::Canceled);
+
+        Box::new(
+            receiver
+                .map_err(|_| MigrationError::Canceled)
+                .select(fut)
+                .then(move |_| {
+                    warn!("Importing tasks stopped {:?}", meta);
+                    future::ok(())
+                }),
+        )
     }
 
     fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
@@ -415,11 +499,12 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> ImportingT
                 .redirection_sender_factory
                 .create(self.meta.src_proxy_address.clone());
             return redirection_sender
-                .send(cmd_task)
+                .send(cmd_task.into())
                 .map_err(|_e| DBSendError::MigrationError);
         }
 
-        Err(DBSendError::SlotNotFound(cmd_task))
+        self.cmd_handler.handle_cmd_task(cmd_task);
+        Ok(())
     }
 
     fn get_state(&self) -> MigrationState {

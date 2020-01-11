@@ -1,5 +1,5 @@
 use super::backend::CmdTask;
-use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
+use super::backend::{BackendError, ReqTaskSender, ReqTaskSenderFactory};
 use super::slot::SlotMap;
 use common::cluster::{SlotRange, SlotRangeTag};
 use common::config::ClusterConfig;
@@ -41,17 +41,17 @@ pub trait DBTag {
     fn set_db_name(&self, db: String);
 }
 
-pub struct DatabaseMap<F: CmdTaskSenderFactory>
+pub struct DatabaseMap<F: ReqTaskSenderFactory>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
 {
     local_dbs: HashMap<String, Database<F>>,
     remote_dbs: HashMap<String, RemoteDB>,
 }
 
-impl<F: CmdTaskSenderFactory> Default for DatabaseMap<F>
+impl<F: ReqTaskSenderFactory> Default for DatabaseMap<F>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
 {
     fn default() -> Self {
         Self {
@@ -61,9 +61,9 @@ where
     }
 }
 
-impl<F: CmdTaskSenderFactory> DatabaseMap<F>
+impl<F: ReqTaskSenderFactory> DatabaseMap<F>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
 {
     pub fn from_db_map(db_meta: &ProxyDBMeta, sender_factory: &F) -> Self {
         let epoch = db_meta.get_epoch();
@@ -110,8 +110,8 @@ where
 
     pub fn send(
         &self,
-        cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
+        cmd_task: <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>> {
         let db_name = cmd_task.get_db_name();
         let (cmd_task, db_exists) = match self.local_dbs.get(&db_name) {
             Some(db) => match db.send(cmd_task) {
@@ -198,12 +198,12 @@ where
 // We combine the nodes and slot_map to let them fit into
 // the same lock with a smaller critical section
 // compared to the one we need if splitting them.
-struct LocalDB<S: CmdTaskSender> {
+struct LocalDB<S: ReqTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
 }
 
-pub struct Database<F: CmdTaskSenderFactory> {
+pub struct Database<F: ReqTaskSenderFactory> {
     name: String,
     epoch: u64,
     local_db: LocalDB<F::Sender>,
@@ -211,7 +211,7 @@ pub struct Database<F: CmdTaskSenderFactory> {
     config: ClusterConfig,
 }
 
-impl<F: CmdTaskSenderFactory> Database<F> {
+impl<F: ReqTaskSenderFactory> Database<F> {
     pub fn from_slot_map(
         sender_factory: &F,
         name: String,
@@ -262,8 +262,8 @@ impl<F: CmdTaskSenderFactory> Database<F> {
 
     pub fn send(
         &self,
-        cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
+        cmd_task: <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
@@ -275,7 +275,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
 
         match self.local_db.slot_map.get_by_key(key) {
             Some(addr) => match self.local_db.nodes.get(&addr) {
-                Some(sender) => sender.send(cmd_task).map_err(DBSendError::Backend),
+                Some(sender) => sender.send(cmd_task.into()).map_err(DBSendError::Backend),
                 None => {
                     warn!("failed to get node");
                     Err(DBSendError::SlotNotFound(cmd_task))

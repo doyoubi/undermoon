@@ -1,7 +1,5 @@
 use super::task::{MigrationError, ScanResponse, SlotRangeArray};
 use atomic_option::AtomicOption;
-use common::cluster::SlotRange;
-use common::config::AtomicMigrationConfig;
 use common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use common::resp_execution::{
     keep_connecting_and_sending, keep_connecting_and_sending_cmd_with_cached_client,
@@ -12,10 +10,7 @@ use futures::Sink;
 use futures::{future, Future};
 use futures::{stream, Stream};
 use futures_timer::Delay;
-use protocol::{
-    Array, BinSafeStr, BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp,
-};
-use std::collections::HashMap;
+use protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp};
 use std::iter;
 use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -37,8 +32,6 @@ struct DataEntry {
 type MgrFut = Box<dyn Future<Item = (), Error = MigrationError> + Send>;
 
 pub struct ScanMigrationTask {
-    src_address: String,
-    dst_address: String,
     slot_ranges: SlotRangeArray,
     handle: AtomicOption<(FutureAutoStopHandle, FutureAutoStopHandle)>, // once this task get dropped, the future will stop.
     fut: AtomicOption<(MgrFut, MgrFut)>,
@@ -76,8 +69,6 @@ impl ScanMigrationTask {
             client_factory,
         );
         Self {
-            src_address,
-            dst_address,
             slot_ranges,
             handle: AtomicOption::new(Box::new((producer_handle, consumer_handle))),
             fut: AtomicOption::new(Box::new((producer_fut, consumer_fut))),
@@ -103,7 +94,6 @@ impl ScanMigrationTask {
         Box<dyn Future<Item = (), Error = MigrationError> + Send>,
         FutureAutoStopHandle,
     ) {
-        let interval = Duration::from_nanos(0);
         let send = Self::forward_entries(
             sender,
             receiver,
@@ -131,7 +121,7 @@ impl ScanMigrationTask {
                 let counter = counter_clone.clone();
                 let DataEntry {
                     key,
-                    mut pttl,
+                    pttl,
                     raw_data,
                 } = entry.clone();
                 let expire_time = if pttl == PEXPIRE_NO_EXPIRE.as_bytes() {
@@ -263,7 +253,6 @@ impl ScanMigrationTask {
                 .and_then(move |scan| {
                     let ScanResponse { next_index, keys } = scan;
 
-                    let slot_ranges_clone = slot_ranges.clone();
                     Self::produce_entries(slot_ranges, keys, client).and_then(
                         move |(slot_ranges, client, entries)| {
                             let entries_num = entries.len() as i64;
@@ -306,7 +295,9 @@ impl ScanMigrationTask {
                 .execute(pttl_cmd)
                 .and_then(|(client, resp)| {
                     let r = match resp {
-                        Resp::Integer(pttl) => Ok((client, pttl)),
+                        // -2 for key not eixsts
+                        Resp::Integer(pttl) if pttl == "-2".as_bytes() => Ok((client, None)),
+                        Resp::Integer(pttl) => Ok((client, Some(pttl))),
                         others => {
                             error!("failed to get PTTL: {:?}", others);
                             Err(RedisClientError::InvalidReply)
@@ -314,19 +305,21 @@ impl ScanMigrationTask {
                     };
                     future::result(r)
                 })
-                .and_then(move |(client, pttl)| {
+                .and_then(move |(client, pttl_opt)| {
                     let dump_cmd = vec!["DUMP".to_string().into_bytes(), key.clone()];
                     client.execute(dump_cmd).and_then(move |(client, resp)| {
-                        let r = match resp {
-                            Resp::Bulk(BulkStr::Str(raw_data)) => Ok((
+                        let r = match (resp, pttl_opt) {
+                            // This is the most possible case.
+                            (Resp::Bulk(BulkStr::Str(raw_data)), Some(pttl)) => Ok((
                                 client,
-                                DataEntry {
+                                Some(DataEntry {
                                     key,
                                     pttl,
                                     raw_data,
-                                },
+                                }),
                             )),
-                            others => {
+                            (Resp::Bulk(BulkStr::Nil), _) | (_, None) => Ok((client, None)),
+                            (others, _pttl_opt) => {
                                 error!("failed to dump data: {:?}", others);
                                 Err(RedisClientError::InvalidReply)
                             }
@@ -334,8 +327,10 @@ impl ScanMigrationTask {
                         future::result(r)
                     })
                 })
-                .map(move |(client, entry)| {
-                    entries.push(entry);
+                .map(move |(client, entry_opt)| {
+                    if let Some(entry) = entry_opt {
+                        entries.push(entry);
+                    }
                     (client, entries)
                 })
         })

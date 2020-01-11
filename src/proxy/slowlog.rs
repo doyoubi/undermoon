@@ -110,6 +110,10 @@ impl Slowlog {
         self.event_map
             .set_event_time(event, Utc::now().timestamp_nanos())
     }
+
+    pub fn get_session_id(&self) -> usize {
+        self.session_id
+    }
 }
 
 pub struct SlowRequestLogger {

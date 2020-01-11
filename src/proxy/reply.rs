@@ -1,37 +1,37 @@
-use super::backend::{BackendResult, CmdTask, CmdTaskHandler, CmdTaskHandlerFactory};
+use super::backend::{BackendResult, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory};
 use super::compress::{CmdReplyDecompressor, CompressionError};
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
 use ::common::utils::ThreadSafe;
 use ::protocol::{BulkStr, Resp};
 
-pub struct ReplyCommitHandlerFactory {
+pub struct DecompressCommitHandlerFactory {
     meta_map: SharedMetaMap,
 }
 
-impl ThreadSafe for ReplyCommitHandlerFactory {}
+impl ThreadSafe for DecompressCommitHandlerFactory {}
 
-impl ReplyCommitHandlerFactory {
+impl DecompressCommitHandlerFactory {
     pub fn new(meta_map: SharedMetaMap) -> Self {
         Self { meta_map }
     }
 }
 
-impl CmdTaskHandlerFactory for ReplyCommitHandlerFactory {
-    type Handler = ReplyCommitHandler;
+impl CmdTaskResultHandlerFactory for DecompressCommitHandlerFactory {
+    type Handler = DecompressCommitHandler;
 
     fn create(&self) -> Self::Handler {
-        ReplyCommitHandler {
+        DecompressCommitHandler {
             decompressor: CmdReplyDecompressor::new(self.meta_map.clone()),
         }
     }
 }
 
-pub struct ReplyCommitHandler {
+pub struct DecompressCommitHandler {
     decompressor: CmdReplyDecompressor,
 }
 
-impl CmdTaskHandler for ReplyCommitHandler {
+impl CmdTaskResultHandler for DecompressCommitHandler {
     type Task = CmdCtx;
 
     fn handle_task(&self, cmd_ctx: Self::Task, result: BackendResult) {
@@ -57,6 +57,42 @@ impl CmdTaskHandler for ReplyCommitHandler {
             }
         }
 
+        cmd_ctx.set_result(Ok(packet))
+    }
+}
+
+pub struct ReplyCommitHandlerFactory;
+
+impl ThreadSafe for ReplyCommitHandlerFactory {}
+
+impl Default for ReplyCommitHandlerFactory {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl CmdTaskResultHandlerFactory for ReplyCommitHandlerFactory {
+    type Handler = ReplyCommitHandler;
+
+    fn create(&self) -> Self::Handler {
+        ReplyCommitHandler
+    }
+}
+
+pub struct ReplyCommitHandler;
+
+impl CmdTaskResultHandler for ReplyCommitHandler {
+    type Task = CmdCtx;
+
+    fn handle_task(&self, cmd_ctx: Self::Task, result: BackendResult) {
+        let packet = match result {
+            Ok(pkt) => pkt,
+            Err(err) => {
+                return cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    format!("backend failed to handle task: {:?}", err).into_bytes(),
+                )));
+            }
+        };
         cmd_ctx.set_result(Ok(packet))
     }
 }

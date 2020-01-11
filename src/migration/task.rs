@@ -4,9 +4,7 @@ use ::proxy::backend::CmdTask;
 use ::proxy::database::DBSendError;
 use futures::Future;
 use itertools::Itertools;
-use protocol::{
-    Array, BinSafeStr, BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp,
-};
+use protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp};
 use replication::replicator::ReplicatorError;
 use std::error::Error;
 use std::fmt;
