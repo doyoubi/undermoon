@@ -4,7 +4,7 @@ use super::slot::SlotMap;
 use common::cluster::{SlotRange, SlotRangeTag};
 use common::config::ClusterConfig;
 use common::db::ProxyDBMeta;
-use common::utils::{gen_moved, get_key, get_slot};
+use common::utils::{gen_moved, get_slot};
 use crc64::crc64;
 use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
@@ -264,7 +264,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
         &self,
         cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
-        let key = match get_key(cmd_task.get_resp()) {
+        let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
@@ -273,7 +273,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
             }
         };
 
-        match self.local_db.slot_map.get_by_key(&key) {
+        match self.local_db.slot_map.get_by_key(key) {
             Some(addr) => match self.local_db.nodes.get(&addr) {
                 Some(sender) => sender.send(cmd_task).map_err(DBSendError::Backend),
                 None => {
@@ -352,7 +352,7 @@ impl RemoteDB {
     }
 
     pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), DBSendError<T>> {
-        let key = match get_key(cmd_task.get_resp()) {
+        let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
@@ -360,9 +360,9 @@ impl RemoteDB {
                 return Err(DBSendError::MissingKey);
             }
         };
-        match self.slot_map.get_by_key(&key) {
+        match self.slot_map.get_by_key(key) {
             Some(addr) => {
-                let resp = Resp::Error(gen_moved(get_slot(&key), addr).into_bytes());
+                let resp = Resp::Error(gen_moved(get_slot(key), addr).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
                 Ok(())
             }

@@ -83,7 +83,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
     fn handle_auth(&self, cmd_ctx: CmdCtx) {
-        let key = cmd_ctx.get_cmd().get_key();
+        let key = cmd_ctx.get_key();
         match key {
             None => cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Missing database name").into_bytes(),
@@ -123,23 +123,24 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn get_sub_command(cmd_ctx: CmdCtx, index: usize) -> Option<(CmdCtx, String)> {
-        match get_element(cmd_ctx.get_resp(), index) {
+        let sub_cmd = match get_element(cmd_ctx.get_resp(), index) {
             None => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Missing sub command").into_bytes(),
                 )));
-                None
+                return None;
             }
-            Some(ref k) => match str::from_utf8(k) {
-                Ok(sub_cmd) => Some((cmd_ctx, sub_cmd.to_string())),
+            Some(k) => match str::from_utf8(k) {
+                Ok(sub_cmd) => sub_cmd.to_string(),
                 Err(_) => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(
                         String::from("Invalid sub command").into_bytes(),
                     )));
-                    None
+                    return None;
                 }
             },
-        }
+        };
+        Some((cmd_ctx, sub_cmd))
     }
 
     fn handle_umctl(&self, cmd_ctx: CmdCtx) {

@@ -1,4 +1,4 @@
-use ::protocol::{Array, BinSafeStr, BulkStr, Resp};
+use ::protocol::{Array, BulkStr, Resp};
 use caseless;
 use crc16::{State, XMODEM};
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -30,19 +30,15 @@ pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
     }
 }
 
-pub fn get_element(resp: &Resp, index: usize) -> Option<BinSafeStr> {
+pub fn get_element(resp: &Resp, index: usize) -> Option<&[u8]> {
     match resp {
         Resp::Arr(Array::Arr(ref resps)) => resps.get(index).and_then(|resp| match resp {
-            Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
-            Resp::Simple(ref s) => Some(s.clone()),
+            Resp::Bulk(BulkStr::Str(ref s)) => Some(s.as_slice()),
+            Resp::Simple(ref s) => Some(s.as_slice()),
             _ => None,
         }),
         _ => None,
     }
-}
-
-pub fn get_key(resp: &Resp) -> Option<BinSafeStr> {
-    get_element(resp, 1)
 }
 
 pub fn get_resp_bytes(resp: &Resp) -> Option<Vec<Vec<u8>>> {

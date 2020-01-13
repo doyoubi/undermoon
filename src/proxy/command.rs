@@ -1,10 +1,10 @@
 use super::slowlog::Slowlog;
-use ::common::utils::{get_command_element, get_key};
+use ::common::utils::{get_command_element, get_element};
 use atomic_option::AtomicOption;
 use bytes::BytesMut;
 use futures::sync::oneshot;
 use futures::{future, Future};
-use protocol::{BinSafeStr, Resp, RespPacket};
+use protocol::{Resp, RespPacket};
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -81,6 +81,8 @@ pub enum DataCmdType {
     SETNX,
     SETRANGE,
     STRLEN,
+    EVAL,
+    EVALSHA,
     Others,
 }
 
@@ -112,6 +114,8 @@ impl DataCmdType {
             "SETNX" => DataCmdType::SETNX,
             "SETRANGE" => DataCmdType::SETRANGE,
             "STRLEN" => DataCmdType::STRLEN,
+            "EVAL" => DataCmdType::EVAL,
+            "EVALSHA" => DataCmdType::EVALSHA,
             _ => DataCmdType::Others,
         }
     }
@@ -184,8 +188,11 @@ impl Command {
         }
     }
 
-    pub fn get_key(&self) -> Option<BinSafeStr> {
-        get_key(self.get_resp())
+    pub fn get_key(&self) -> Option<&[u8]> {
+        match self.data_cmd_type {
+            DataCmdType::EVAL | DataCmdType::EVALSHA => get_element(self.get_resp(), 3),
+            _ => get_element(self.get_resp(), 1),
+        }
     }
 }
 
