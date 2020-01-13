@@ -3,7 +3,7 @@ use super::task::{ImportingTask, MigratingTask};
 use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
 use ::common::config::AtomicMigrationConfig;
 use ::common::db::HostDBMap;
-use ::common::utils::{get_key, get_slot, ThreadSafe};
+use ::common::utils::{get_slot, ThreadSafe};
 use ::protocol::RedisClientFactory;
 use ::protocol::Resp;
 use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
@@ -228,7 +228,7 @@ where
         let db_name = cmd_task.get_db_name();
         match task_map.get(&db_name) {
             Some(tasks) => {
-                let key = match get_key(cmd_task.get_resp()) {
+                let key = match cmd_task.get_key() {
                     Some(key) => key,
                     None => {
                         let resp = Resp::Error("missing key".to_string().into_bytes());
@@ -237,7 +237,7 @@ where
                     }
                 };
 
-                let slot = get_slot(&key);
+                let slot = get_slot(key);
 
                 for (meta, record) in tasks.iter() {
                     let slot_range_start = meta.slot_range.start;

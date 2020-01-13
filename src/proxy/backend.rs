@@ -4,7 +4,7 @@ use super::slowlog::{Slowlog, TaskEvent};
 use crate::common::batching::Chunks;
 use bytes::BytesMut;
 use common::future_group::new_future_group;
-use common::utils::{gen_moved, get_key, get_slot, revolve_first_address, ThreadSafe};
+use common::utils::{gen_moved, get_slot, revolve_first_address, ThreadSafe};
 use futures::sync::mpsc;
 use futures::Sink;
 use futures::{future, stream, Future, Stream};
@@ -38,6 +38,7 @@ pub trait CmdTaskHandlerFactory: ThreadSafe {
 }
 
 pub trait CmdTask: ThreadSafe + fmt::Debug {
+    fn get_key(&self) -> Option<&[u8]>;
     fn get_resp(&self) -> &Resp;
     fn get_cmd_type(&self) -> CmdType;
     fn get_data_cmd_type(&self) -> DataCmdType;
@@ -541,7 +542,7 @@ impl<T: CmdTask> CmdTaskSender for RedirectionSender<T> {
     type Task = T;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        let key = match get_key(cmd_task.get_resp()) {
+        let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
@@ -550,7 +551,7 @@ impl<T: CmdTask> CmdTaskSender for RedirectionSender<T> {
             }
         };
         let resp =
-            Resp::Error(gen_moved(get_slot(&key), self.redirection_address.clone()).into_bytes());
+            Resp::Error(gen_moved(get_slot(key), self.redirection_address.clone()).into_bytes());
         cmd_task.set_resp_result(Ok(resp));
         Ok(())
     }

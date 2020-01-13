@@ -70,6 +70,10 @@ impl Drop for CmdCtx {
 }
 
 impl CmdTask for CmdCtx {
+    fn get_key(&self) -> Option<&[u8]> {
+        self.get_cmd().get_key()
+    }
+
     fn get_resp(&self) -> &Resp {
         self.reply_sender.get_cmd().get_resp()
     }
