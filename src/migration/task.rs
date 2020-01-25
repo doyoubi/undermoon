@@ -51,7 +51,7 @@ pub struct AtomicMigrationState {
 impl AtomicMigrationState {
     pub fn new() -> Self {
         Self {
-            inner: AtomicU16::new(MigrationState::TransferringData as u16),
+            inner: AtomicU16::new(MigrationState::PreCheck as u16),
         }
     }
 
@@ -64,6 +64,12 @@ impl AtomicMigrationState {
             0 => MigrationState::TransferringData,
             1 => MigrationState::Blocking,
             2 => MigrationState::SwitchStarted,
+            3 => MigrationState::SwitchCommitted,
+            4 => MigrationState::PreCheck,
+            5 => MigrationState::PreBlocking,
+            6 => MigrationState::PreSwitch,
+            7 => MigrationState::Scanning,
+            8 => MigrationState::FinalSwitch,
             _ => MigrationState::SwitchCommitted,
         }
     }

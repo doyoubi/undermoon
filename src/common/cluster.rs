@@ -78,6 +78,12 @@ impl SlotRangeTag {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Range {
+    pub start: usize,
+    pub end: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SlotRange {
     pub start: usize,
@@ -162,6 +168,13 @@ impl SlotRange {
         let start = start_str.parse::<usize>().ok()?;
         let end = end_str.parse::<usize>().ok()?;
         Some((start, end))
+    }
+
+    pub fn to_range(&self) -> Range {
+        Range {
+            start: self.start,
+            end: self.end,
+        }
     }
 }
 

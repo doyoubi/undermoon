@@ -108,17 +108,23 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn gen_cluster_nodes(&self, db_name: String) -> String {
-        self.meta_map
-            .load()
-            .db_map
-            .gen_cluster_nodes(db_name, self.config.announce_address.clone())
+        let meta_map = self.meta_map.load();
+        let migration_states = meta_map.migration_map.get_states(&db_name);
+        meta_map.db_map.gen_cluster_nodes(
+            db_name,
+            self.config.announce_address.clone(),
+            &migration_states,
+        )
     }
 
     pub fn gen_cluster_slots(&self, db_name: String) -> Result<Resp, String> {
-        self.meta_map
-            .load()
-            .db_map
-            .gen_cluster_slots(db_name, self.config.announce_address.clone())
+        let meta_map = self.meta_map.load();
+        let migration_states = meta_map.migration_map.get_states(&db_name);
+        meta_map.db_map.gen_cluster_slots(
+            db_name,
+            self.config.announce_address.clone(),
+            &migration_states,
+        )
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
@@ -205,17 +211,13 @@ impl<F: RedisClientFactory> MetaManager<F> {
             return Err(SwitchError::NotReady);
         }
 
-        match sub_cmd {
-            MgrSubCmd::PreCheck => Ok(()),
-            MgrSubCmd::PreSwitch => Ok(()), // TODO: switch
-            MgrSubCmd::FinalSwitch => self.meta_map.load().migration_map.handle_switch(
-                SwitchArg {
-                    version: switch_arg.version,
-                    meta: task_meta,
-                },
-                sub_cmd,
-            ),
-        }
+        self.meta_map.load().migration_map.handle_switch(
+            SwitchArg {
+                version: switch_arg.version,
+                meta: task_meta,
+            },
+            sub_cmd,
+        )
     }
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {

@@ -1,6 +1,6 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
-use super::task::{ImportingTask, MigratingTask};
-use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
+use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
+use ::common::cluster::{MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
 use ::common::config::AtomicMigrationConfig;
 use ::common::db::HostDBMap;
 use ::common::utils::{get_slot, ThreadSafe};
@@ -13,7 +13,6 @@ use futures::Future;
 use itertools::Either;
 use migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use migration::task::MgrSubCmd;
-use migration::task::{MigrationError, MigrationState, SwitchArg};
 use proxy::service::ServerProxyConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -542,6 +541,20 @@ where
             }
         }
         metadata
+    }
+
+    pub fn get_states(&self, db_name: &str) -> HashMap<Range, MigrationState> {
+        let mut m = HashMap::new();
+        if let Some(tasks) = self.task_map.get(db_name) {
+            for (meta, task) in tasks.iter() {
+                let state = match task {
+                    Either::Left(migrating_task) => migrating_task.get_state(),
+                    Either::Right(importing_task) => importing_task.get_state(),
+                };
+                m.insert(meta.slot_range.to_range(), state);
+            }
+        }
+        m
     }
 }
 
