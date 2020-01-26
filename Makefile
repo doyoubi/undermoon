@@ -39,9 +39,9 @@ docker-build-release:
 	mkdir -p ./examples/target_volume/release
 	docker rm undermoon-builder-container || true
 	docker create -it --name undermoon-builder-container undermoon_builder bash
-	docker cp undermoon-build-container:/undermoon/target/release/server_proxy ./examples/target_volume/release/
-	docker cp undermoon-build-container:/undermoon/target/release/coordinator ./examples/target_volume/release/
-	docker cp undermoon-build-container:/undermoon/target/release/mem_broker ./examples/target_volume/release/
+	docker cp undermoon-builder-container:/undermoon/target/release/server_proxy ./examples/target_volume/release/
+	docker cp undermoon-builder-container:/undermoon/target/release/coordinator ./examples/target_volume/release/
+	docker cp undermoon-builder-container:/undermoon/target/release/mem_broker ./examples/target_volume/release/
 	docker rm undermoon-builder-container
 	docker image build -f examples/Dockerfile-undermoon-release -t undermoon .
 
