@@ -32,7 +32,6 @@ struct DataEntry {
 type MgrFut = Box<dyn Future<Item = (), Error = MigrationError> + Send>;
 
 pub struct ScanMigrationTask {
-    slot_ranges: SlotRangeArray,
     handle: AtomicOption<(FutureAutoStopHandle, FutureAutoStopHandle)>, // once this task get dropped, the future will stop.
     fut: AtomicOption<(MgrFut, MgrFut)>,
 }
@@ -69,7 +68,6 @@ impl ScanMigrationTask {
             client_factory,
         );
         Self {
-            slot_ranges,
             handle: AtomicOption::new(Box::new((producer_handle, consumer_handle))),
             fut: AtomicOption::new(Box::new((producer_fut, consumer_fut))),
         }

@@ -26,14 +26,13 @@ use std::time::Duration;
 const SCAN_RATE: u64 = 1000;
 
 pub struct RedisScanMigratingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> {
-    config: Arc<ServerProxyConfig>,
-    mgr_config: Arc<AtomicMigrationConfig>,
+    _mgr_config: Arc<AtomicMigrationConfig>,
     db_name: String,
     slot_range: (usize, usize),
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
-    sender_factory: Arc<TSF>,
+    _sender_factory: Arc<TSF>,
     redirection_sender_factory: ReqAdaptorSenderFactory<
         RedirectionSenderFactory<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
     >,
@@ -51,7 +50,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
     RedisScanMigratingTask<RCF, TSF>
 {
     pub fn new(
-        config: Arc<ServerProxyConfig>,
+        _config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         db_name: String,
         slot_range: (usize, usize),
@@ -70,12 +69,11 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
         let redirection_sender_factory =
             ReqAdaptorSenderFactory::new(RedirectionSenderFactory::default());
         Self {
-            config,
-            mgr_config,
+            _mgr_config: mgr_config,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
-            sender_factory,
+            _sender_factory: sender_factory,
             redirection_sender_factory,
             db_name,
             slot_range,
@@ -372,18 +370,18 @@ where
         + ThreadSafe,
     <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
 {
-    mgr_config: Arc<AtomicMigrationConfig>,
+    _mgr_config: Arc<AtomicMigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
-    client_factory: Arc<RCF>,
-    sender_factory: Arc<TSF>,
+    _client_factory: Arc<RCF>,
+    _sender_factory: Arc<TSF>,
     redirection_sender_factory: ReqAdaptorSenderFactory<
         RedirectionSenderFactory<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
     >,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     cmd_handler: RestoreDataCmdTaskHandler<CTF, <TSF as ReqTaskSenderFactory>::Sender>,
-    cmd_task_factory: Arc<CTF>,
+    _cmd_task_factory: Arc<CTF>,
 }
 
 impl<RCF, TSF, CTF> ThreadSafe for RedisScanImportingTask<RCF, TSF, CTF>
@@ -421,16 +419,16 @@ where
         let redirection_sender_factory =
             ReqAdaptorSenderFactory::new(RedirectionSenderFactory::default());
         Self {
-            mgr_config,
+            _mgr_config: mgr_config,
             meta: meta.clone(),
             state: Arc::new(AtomicMigrationState::new()),
-            client_factory,
-            sender_factory,
+            _client_factory: client_factory,
+            _sender_factory: sender_factory,
             redirection_sender_factory,
             stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             cmd_handler,
-            cmd_task_factory,
+            _cmd_task_factory: cmd_task_factory,
         }
     }
 

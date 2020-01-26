@@ -31,16 +31,12 @@ impl MgrSubCmd {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MigrationState {
-    TransferringData = 0,
-    Blocking = 1,
-    SwitchStarted = 2,
-    SwitchCommitted = 3,
-    // The states below are for migration protocol v2.
-    PreCheck = 4,
-    PreBlocking = 5,
-    PreSwitch = 6,
-    Scanning = 7,
-    FinalSwitch = 8,
+    PreCheck = 0,
+    PreBlocking = 1,
+    PreSwitch = 2,
+    Scanning = 3,
+    FinalSwitch = 4,
+    SwitchCommitted = 5,
 }
 
 #[derive(Debug)]
@@ -61,15 +57,11 @@ impl AtomicMigrationState {
 
     pub fn get_state(&self) -> MigrationState {
         match self.inner.load(Ordering::SeqCst) {
-            0 => MigrationState::TransferringData,
-            1 => MigrationState::Blocking,
-            2 => MigrationState::SwitchStarted,
-            3 => MigrationState::SwitchCommitted,
-            4 => MigrationState::PreCheck,
-            5 => MigrationState::PreBlocking,
-            6 => MigrationState::PreSwitch,
-            7 => MigrationState::Scanning,
-            8 => MigrationState::FinalSwitch,
+            0 => MigrationState::PreCheck,
+            1 => MigrationState::PreBlocking,
+            2 => MigrationState::PreSwitch,
+            3 => MigrationState::Scanning,
+            4 => MigrationState::FinalSwitch,
             _ => MigrationState::SwitchCommitted,
         }
     }
