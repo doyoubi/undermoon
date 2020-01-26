@@ -165,6 +165,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
 
     fn pre_block(&self) -> impl Future<Item = (), Error = MigrationError> {
         let state = self.state.clone();
+        // TODO: implement this.
         future::ok(()).map(move |()| {
             state.set_state(MigrationState::PreSwitch);
         })

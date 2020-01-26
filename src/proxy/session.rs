@@ -99,7 +99,7 @@ impl CmdTask for CmdCtx {
         let task_result = result.map(|packet| Box::new(TaskReply::new(packet, slowlog)));
         let res = self.reply_sender.send(task_result);
         if let Err(e) = res {
-            error!("Failed to send result {:?}", e);
+            error!("Failed to send result: {:?}", e);
         }
     }
 

@@ -417,6 +417,9 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             CmdType::UmCtl => self.handle_umctl(cmd_ctx),
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
             CmdType::Config => self.handle_config(cmd_ctx),
+            CmdType::Command => {
+                cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
+            }
         };
     }
 }

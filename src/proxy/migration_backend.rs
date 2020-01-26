@@ -319,9 +319,8 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
                 })
             })
             .for_each(move |item| {
-                if let Some((entry, state)) = item {
-                    // No need to wait for RESTORE
-                    let (_state, req_task, _reply_receiver) =
+                let fut: Box<dyn Future<Item = (), Error = ()> + Send> = if let Some((entry, state)) = item {
+                    let (_state, req_task, reply_receiver) =
                         MgrCmdStateRestoreForward::from_state_exists(
                             state,
                             entry,
@@ -330,8 +329,11 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
                     if let Err(err) = dst_sender.send(req_task) {
                         debug!("failed to send restore and forward: {:?}", err);
                     }
-                }
-                future::ok(())
+                    Box::new(reply_receiver.map(|_| ()).map_err(|_| ()))
+                } else {
+                    Box::new(future::ok(()))
+                };
+                fut
             })
     }
 

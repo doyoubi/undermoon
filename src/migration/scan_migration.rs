@@ -139,6 +139,8 @@ impl ScanMigrationTask {
                     raw_data,
                 ];
                 let interval = Duration::from_nanos(0);
+
+                // TODO: batch multiple entries to speed up migration.
                 keep_connecting_and_sending_cmd_with_cached_client(
                     client_opt,
                     client_factory2,

@@ -34,7 +34,7 @@ impl RespPacket {
     }
 
     pub fn into_resp(self) -> Resp {
-        let Self { resp, data } = self;
+        let Self { resp, .. } = self;
         resp
     }
 
