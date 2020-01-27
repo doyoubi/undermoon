@@ -49,14 +49,10 @@ impl<F: RedisClientFactory> MigrationStateChecker for MigrationStateRespChecker<
                 .and_then(move |client| {
                     let cmd = vec!["UMCTL".to_string(), "INFOMGR".to_string()];
                     debug!("sending UMCTL INFOMGR to {}", address);
-                    let address_clone = address.clone();
                     client
                         .execute(cmd.into_iter().map(String::into_bytes).collect())
                         .map_err(move |e| {
-                            error!(
-                                "failed to check the migration state {} {:?}",
-                                address_clone, e
-                            );
+                            error!("failed to check the migration state {} {:?}", address, e);
                             CoordinateError::Redis(e)
                         })
                         .and_then(move |(_client, resp)| match resp {

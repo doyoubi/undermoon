@@ -54,8 +54,8 @@ impl ScanMigrationTask {
             data_sender.clone(),
             stop_sender,
             counter.clone(),
-            src_address.clone(),
-            slot_ranges.clone(),
+            src_address,
+            slot_ranges,
             client_factory.clone(),
             scan_rate,
         );
@@ -64,7 +64,7 @@ impl ScanMigrationTask {
             stop_receiver,
             counter,
             data_receiver,
-            dst_address.clone(),
+            dst_address,
             client_factory,
         );
         Self {
@@ -128,7 +128,6 @@ impl ScanMigrationTask {
                     pttl
                 };
                 let client_factory2 = client_factory.clone();
-                let sender = sender.clone();
                 let sender2 = sender.clone();
                 let restore_cmd = vec![
                     "RESTORE".to_string().into_bytes(),
@@ -229,6 +228,8 @@ impl ScanMigrationTask {
         (Box::new(send), handle)
     }
 
+    // TODO: fix this
+    #[allow(clippy::type_complexity)]
     fn scan_and_migrate_keys<C: RedisClient>(
         data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
         client: C,
@@ -296,7 +297,7 @@ impl ScanMigrationTask {
                 .and_then(|(client, resp)| {
                     let r = match resp {
                         // -2 for key not eixsts
-                        Resp::Integer(pttl) if pttl == "-2".as_bytes() => Ok((client, None)),
+                        Resp::Integer(pttl) if pttl == b"-2" => Ok((client, None)),
                         Resp::Integer(pttl) => Ok((client, Some(pttl))),
                         others => {
                             error!("failed to get PTTL: {:?}", others);

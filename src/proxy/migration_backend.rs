@@ -128,7 +128,7 @@ fn data_entry_future(dump: ReplyFuture, pttl: ReplyFuture) -> DataEntryFuture {
         };
         let pttl_result = match pttl {
             // -2 for key not exists
-            Resp::Integer(pttl) if pttl.as_slice() != "-2".as_bytes() => Ok(Some(pttl)),
+            Resp::Integer(pttl) if pttl.as_slice() != b"-2" => Ok(Some(pttl)),
             Resp::Integer(_pttl) => Ok(None),
             _others => Err(CommandError::UnexpectedResponse),
         };

@@ -22,9 +22,9 @@ pub enum MgrSubCmd {
 impl MgrSubCmd {
     pub fn as_str(&self) -> &str {
         match self {
-            &Self::PreCheck => "PRECHECK",
-            &Self::PreSwitch => "PRESWITCH",
-            &Self::FinalSwitch => "FINALSWITCH",
+            Self::PreCheck => "PRECHECK",
+            Self::PreSwitch => "PRESWITCH",
+            Self::FinalSwitch => "FINALSWITCH",
         }
     }
 }

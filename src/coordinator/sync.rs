@@ -86,7 +86,7 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
     ) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send> {
         Box::new(
             self.broker
-                .get_host(address.clone())
+                .get_host(address)
                 .map_err(CoordinateError::MetaData),
         )
     }
@@ -116,7 +116,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
     }
     let local = HostDBMap::new(db_map);
 
-    let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer, clusters_config);
+    let proxy_db_meta = ProxyDBMeta::new(epoch, flags, local, peer, clusters_config);
     proxy_db_meta.to_args()
 }
 

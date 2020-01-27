@@ -89,7 +89,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             ))),
             Some(db_name) => match str::from_utf8(&db_name) {
                 Ok(ref db) => {
-                    cmd_ctx.set_db_name(db.to_string());
+                    cmd_ctx.set_db_name((*db).to_string());
                     cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
                 }
                 Err(_) => cmd_ctx.set_resp_result(Ok(Resp::Error(

@@ -137,7 +137,7 @@ impl RedisClient for PooledRedisClient {
         };
 
         let mut buf = Vec::new();
-        command_to_buf(&mut buf, command);
+        command_to_buf(&mut buf, command).expect("PooledRedisClient::execute");
         let conn = *conn;
         let RedisClientConnection { reader, writer } = conn;
 
