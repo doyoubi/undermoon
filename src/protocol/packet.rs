@@ -24,9 +24,9 @@ pub trait PacketDecoder {
         Self: Sized;
 }
 
-pub trait Packet: PacketEncoder + PacketDecoder {}
+pub trait Packet: PacketEncoder + PacketDecoder + From<RespVec> {}
 
-impl<T: PacketEncoder + PacketDecoder> Packet for T {}
+impl<T: PacketEncoder + PacketDecoder + From<RespVec>> Packet for T {}
 
 #[derive(Debug, Clone)]
 pub enum RespPacket {
@@ -94,6 +94,12 @@ impl RespPacket {
             *self = Self::Data(resp);
         }
         success
+    }
+}
+
+impl From<RespVec> for RespPacket {
+    fn from(resp: RespVec) -> Self {
+        RespPacket::from_resp_vec(resp)
     }
 }
 
@@ -201,5 +207,16 @@ impl<T: PacketDecoder> PacketDecoder for Box<T> {
         Self: Sized,
     {
         Ok(T::decode(buf)?.map(Box::new))
+    }
+}
+
+pub enum OptionalMulti<T> {
+    Simple(T),
+    Multi(Vec<T>),
+}
+
+impl<T: From<RespVec>> From<RespVec> for OptionalMulti<T> {
+    fn from(resp: RespVec) -> Self {
+        Self::Simple(T::from(resp))
     }
 }

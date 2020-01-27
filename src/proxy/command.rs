@@ -215,7 +215,7 @@ impl TaskReply {
     }
 }
 
-pub type CommandResult = Result<Box<RespPacket>, CommandError>;
+pub type CommandResult<T> = Result<Box<T>, CommandError>;
 pub type TaskResult = Result<Box<TaskReply>, CommandError>;
 
 pub struct CmdReplySender {

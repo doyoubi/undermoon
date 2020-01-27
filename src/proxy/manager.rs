@@ -237,7 +237,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             },
         };
 
-        cmd_ctx.get_slowlog().log_event(TaskEvent::SentToDB);
+        cmd_ctx.log_event(TaskEvent::SentToDB);
         let res = meta_map.db_map.send(cmd_ctx);
         if let Err(e) = res {
             warn!("Failed to forward cmd_ctx: {:?}", e)

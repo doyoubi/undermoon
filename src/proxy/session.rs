@@ -10,7 +10,7 @@ use ::common::utils::ThreadSafe;
 use common::batching;
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Sink, Stream};
-use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespSlice, RespVec};
+use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
 use std::boxed::Box;
 use std::error::Error;
 use std::fmt;
@@ -91,11 +91,7 @@ impl CmdTask for CmdCtx {
         self.get_cmd().get_key()
     }
 
-    fn get_resp_slice(&self) -> RespSlice {
-        self.reply_sender.get_cmd().get_resp_slice()
-    }
-
-    fn set_result(self, result: CommandResult) {
+    fn set_result(self, result: CommandResult<Self::Pkt>) {
         let slowlog = self.slowlog.clone();
         let task_result = result.map(|packet| Box::new(TaskReply::new(packet, slowlog)));
         let res = self.reply_sender.send(task_result);
@@ -108,8 +104,8 @@ impl CmdTask for CmdCtx {
         self.reply_sender.get_cmd().get_packet()
     }
 
-    fn get_slowlog(&self) -> &Slowlog {
-        &self.slowlog
+    fn log_event(&self, event: TaskEvent) {
+        self.slowlog.log_event(event);
     }
 }
 
@@ -183,7 +179,7 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, reply_sender: CmdReplySender) {
         let cmd_ctx = CmdCtx::new(self.db.clone(), reply_sender, self.session_id);
-        cmd_ctx.get_slowlog().log_event(TaskEvent::Created);
+        cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx);
     }
 
