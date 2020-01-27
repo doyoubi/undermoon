@@ -151,3 +151,51 @@ impl PacketDecoder for IndexedResp {
         }
     }
 }
+
+impl PacketEncoder for RespPacket {
+    fn encode<F>(self, mut f: F) -> io::Result<usize>
+    where
+        F: FnMut(&[u8]),
+    {
+        match self {
+            RespPacket::Indexed(indexed_resp) => {
+                let data = indexed_resp.get_data();
+                f(data);
+                Ok(data.len())
+            }
+            RespPacket::Data(resp) => {
+                let mut b = Vec::with_capacity(1024);
+                let size = encode_resp(&mut b, &resp)?;
+                f(&b);
+                Ok(size)
+            }
+        }
+    }
+}
+
+impl PacketDecoder for RespPacket {
+    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+    where
+        Self: Sized,
+    {
+        Ok(IndexedResp::decode(buf)?.map(RespPacket::Indexed))
+    }
+}
+
+impl<T: PacketEncoder> PacketEncoder for Box<T> {
+    fn encode<F>(self, f: F) -> io::Result<usize>
+    where
+        F: FnMut(&[u8]),
+    {
+        (*self).encode(f)
+    }
+}
+
+impl<T: PacketDecoder> PacketDecoder for Box<T> {
+    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+    where
+        Self: Sized,
+    {
+        Ok(T::decode(buf)?.map(Box::new))
+    }
+}

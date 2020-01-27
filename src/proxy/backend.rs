@@ -307,7 +307,7 @@ pub fn handle_backend<H>(
 where
     H: CmdTaskResultHandler,
 {
-    let (writer, reader) = RespCodec {}.framed(sock).split();
+    let (writer, reader) = RespCodec::default().framed(sock).split();
 
     let (tx, rx) = mpsc::channel(channel_size);
 

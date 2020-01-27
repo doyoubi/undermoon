@@ -204,7 +204,7 @@ pub fn handle_conn<H>(
 where
     H: CmdHandler + Send + Sync + 'static,
 {
-    let (writer, reader) = RespCodec {}.framed(sock).split();
+    let (writer, reader) = RespCodec::default().framed(sock).split();
 
     let (tx, rx) = mpsc::channel(channel_size);
 
