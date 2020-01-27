@@ -8,11 +8,11 @@ use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailure
 use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
 use super::recover::{BrokerProxyFailureRetriever, ReplaceNodeHandler};
 use super::sync::{BrokerMetaRetriever, HostMetaRespSender};
-use common::utils::ThreadSafe;
-use futures::future::select_all;
-use futures::{future, stream, Future, Stream};
+use crate::common::utils::ThreadSafe;
+use crate::protocol::RedisClientFactory;
+use futures01::future::select_all;
+use futures01::{future, stream, Future, Stream};
 use futures_timer::Delay;
-use protocol::RedisClientFactory;
 use std::iter;
 use std::sync::Arc;
 use std::time::Duration;

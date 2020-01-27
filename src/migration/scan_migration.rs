@@ -1,16 +1,16 @@
 use super::task::{MigrationError, ScanResponse, SlotRangeArray};
-use atomic_option::AtomicOption;
-use common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
-use common::resp_execution::{
+use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
+use crate::common::resp_execution::{
     keep_connecting_and_sending, keep_connecting_and_sending_cmd_with_cached_client,
 };
-use common::utils::pretty_print_bytes;
-use futures::sync::{mpsc, oneshot};
-use futures::Sink;
-use futures::{future, Future};
-use futures::{stream, Stream};
+use crate::common::utils::pretty_print_bytes;
+use crate::protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
+use atomic_option::AtomicOption;
+use futures01::sync::{mpsc, oneshot};
+use futures01::Sink;
+use futures01::{future, Future};
+use futures01::{stream, Stream};
 use futures_timer::Delay;
-use protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use std::iter;
 use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};

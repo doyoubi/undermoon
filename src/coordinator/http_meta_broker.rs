@@ -1,7 +1,7 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use common::cluster::{Cluster, Host};
-use common::utils::ThreadSafe;
-use futures::{future, stream, Future, Stream};
+use crate::common::cluster::{Cluster, Host};
+use crate::common::utils::ThreadSafe;
+use futures01::{future, stream, Future, Stream};
 use reqwest::r#async as request_async; // async is a keyword later
 use serde_derive::Deserialize;
 

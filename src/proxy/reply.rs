@@ -2,8 +2,8 @@ use super::backend::{BackendResult, CmdTask, CmdTaskResultHandler, CmdTaskResult
 use super::compress::{CmdReplyDecompressor, CompressionError};
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use ::common::utils::ThreadSafe;
-use protocol::{BulkStr, Resp};
+use crate::common::utils::ThreadSafe;
+use crate::protocol::{BulkStr, Resp};
 
 pub struct DecompressCommitHandlerFactory {
     meta_map: SharedMetaMap,

@@ -1,11 +1,11 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
-use common::cluster::{Host, Role, SlotRange};
-use common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
-use common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
-use futures::{future, Future};
-use protocol::{RedisClient, RedisClientFactory, Resp};
-use replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
+use crate::common::cluster::{Host, Role, SlotRange};
+use crate::common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
+use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
+use crate::protocol::{RedisClient, RedisClientFactory, Resp};
+use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
+use futures01::{future, Future};
 use std::collections::HashMap;
 use std::sync::Arc;
 

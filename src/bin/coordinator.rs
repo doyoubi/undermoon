@@ -7,8 +7,8 @@ extern crate log;
 extern crate config;
 extern crate env_logger;
 
-use futures::future::select_all;
-use futures::Future;
+use futures01::future::select_all;
+use futures01::Future;
 use reqwest::r#async as request_async; // async is a keyword later
 use std::env;
 use std::sync::Arc;

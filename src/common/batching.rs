@@ -3,8 +3,8 @@ use std::mem;
 use std::prelude::v1::*;
 use std::time::{Duration, Instant};
 
-use futures::stream::{Fuse, Stream};
-use futures::{Async, Future, Poll};
+use futures01::stream::{Fuse, Stream};
+use futures01::{Async, Future, Poll};
 use futures_timer::Delay;
 
 // This file is copied from `tokio-batch` with an additional timeout
@@ -180,7 +180,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::stream;
+    use futures01::stream;
     use std::io;
     use std::iter;
     use std::time::{Duration, Instant};

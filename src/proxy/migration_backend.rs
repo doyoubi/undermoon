@@ -1,12 +1,12 @@
 use super::backend::{BackendSenderFactory, CmdTask, CmdTaskFactory, ReqTask, ReqTaskSender};
 use super::command::CommandError;
 use super::reply::ReplyCommitHandlerFactory;
-use ::protocol::RespVec;
+use crate::common::utils::ThreadSafe;
+use crate::protocol::RespVec;
+use crate::protocol::{Array, BinSafeStr, BulkStr, Resp};
 use atomic_option::AtomicOption;
-use common::utils::ThreadSafe;
-use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::{future, Future, Stream};
-use protocol::{Array, BinSafeStr, BulkStr, Resp};
+use futures01::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures01::{future, Future, Stream};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -376,9 +376,9 @@ mod tests {
     use super::super::session::{CmdCtx, CmdCtxFactory};
     use super::*;
     use crate::protocol::RespPacket;
+    use crate::protocol::{BulkStr, Resp};
     use chashmap::CHashMap;
-    use futures::{future, Future};
-    use protocol::{BulkStr, Resp};
+    use futures01::{future, Future};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::RwLock;

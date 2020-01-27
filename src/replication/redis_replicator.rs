@@ -1,10 +1,10 @@
 use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError,
 };
-use common::resp_execution::{retry_handle_func, I64Retriever};
-use common::utils::{revolve_first_address, ThreadSafe};
-use futures::{future, Future};
-use protocol::{RedisClientError, RedisClientFactory, RespVec};
+use crate::common::resp_execution::{retry_handle_func, I64Retriever};
+use crate::common::utils::{revolve_first_address, ThreadSafe};
+use crate::protocol::{RedisClientError, RedisClientFactory, RespVec};
+use futures01::{future, Future};
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

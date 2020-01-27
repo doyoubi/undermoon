@@ -1,7 +1,7 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
-use common::cluster::{Host, MigrationTaskMeta};
-use common::utils::ThreadSafe;
-use futures::{future, Future, Stream};
+use crate::common::cluster::{Host, MigrationTaskMeta};
+use crate::common::utils::ThreadSafe;
+use futures01::{future, Future, Stream};
 use reqwest::r#async as request_async; // async is a keyword later
 
 #[derive(Clone)]

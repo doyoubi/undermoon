@@ -6,11 +6,11 @@ use super::command::{
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
-use ::common::utils::ThreadSafe;
-use common::batching;
-use futures::sync::mpsc;
-use futures::{future, stream, Future, Sink, Stream};
-use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
+use crate::common::batching;
+use crate::common::utils::ThreadSafe;
+use crate::protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
+use futures01::sync::mpsc;
+use futures01::{future, stream, Future, Sink, Stream};
 use std::boxed::Box;
 use std::error::Error;
 use std::fmt;

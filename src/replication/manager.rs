@@ -2,10 +2,10 @@ use super::redis_replicator::{RedisMasterReplicator, RedisReplicaReplicator};
 use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorMeta,
 };
-use futures::Future;
+use crate::protocol::RedisClientFactory;
+use crate::proxy::database::DBError;
+use futures01::Future;
 use itertools::Either;
-use protocol::RedisClientFactory;
-use proxy::database::DBError;
 use std::collections::HashMap;
 use std::sync::{atomic, Arc, RwLock};
 use tokio;

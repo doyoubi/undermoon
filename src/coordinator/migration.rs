@@ -1,9 +1,9 @@
 use super::broker::MetaManipulationBroker;
 use super::core::{CoordinateError, MigrationCommitter, MigrationStateChecker};
-use ::common::cluster::MigrationTaskMeta;
-use ::protocol::{RedisClient, RedisClientFactory, RespVec};
-use futures::{future, stream, Future, Stream};
-use protocol::{Array, BulkStr, Resp};
+use crate::common::cluster::MigrationTaskMeta;
+use crate::protocol::{Array, BulkStr, Resp};
+use crate::protocol::{RedisClient, RedisClientFactory, RespVec};
+use futures01::{future, stream, Future, Stream};
 use std::str;
 use std::sync::Arc;
 

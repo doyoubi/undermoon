@@ -1,7 +1,7 @@
 use super::resp::{ArrayVec, BinSafeStr, BulkStrVec, RespVec};
-use futures::{future, Future};
-use futures::{stream, Stream};
-use protocol::{Array, BulkStr, Resp};
+use crate::protocol::{Array, BulkStr, Resp};
+use futures01::{future, Future};
+use futures01::{stream, Stream};
 use std::boxed::Box;
 use std::cmp::max;
 use std::error::Error;
@@ -182,7 +182,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::{Array, BulkStr, Resp};
+    use crate::protocol::{Array, BulkStr, Resp};
     use std::str;
 
     #[test]

@@ -1,6 +1,6 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{CoordinateError, ProxyFailure, ProxyFailureHandler, ProxyFailureRetriever};
-use futures::{Future, Stream};
+use futures01::{Future, Stream};
 use std::sync::Arc;
 
 pub struct BrokerProxyFailureRetriever<B: MetaDataBroker> {

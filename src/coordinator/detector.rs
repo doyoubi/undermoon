@@ -1,7 +1,7 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, FailureChecker, FailureReporter, ProxiesRetriever};
-use futures::{future, Future, Stream};
-use protocol::{RedisClient, RedisClientFactory};
+use crate::protocol::{RedisClient, RedisClientFactory};
+use futures01::{future, Future, Stream};
 use std::sync::Arc;
 
 pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
@@ -95,10 +95,10 @@ mod tests {
     use super::super::broker::{MetaDataBroker, MetaDataBrokerError};
     use super::super::core::{FailureDetector, SeqFailureDetector};
     use super::*;
-    use common::cluster::{Cluster, Host};
-    use common::utils::ThreadSafe;
-    use futures::stream;
-    use protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp, RespVec};
+    use crate::common::cluster::{Cluster, Host};
+    use crate::common::utils::ThreadSafe;
+    use crate::protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp, RespVec};
+    use futures01::stream;
     use std::sync::{Arc, Mutex};
 
     const NODE1: &'static str = "127.0.0.1:7000";

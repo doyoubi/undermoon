@@ -1,6 +1,6 @@
-use common::cluster::{Cluster, Host, MigrationTaskMeta};
-use common::utils::ThreadSafe;
-use futures::{Future, Stream};
+use crate::common::cluster::{Cluster, Host, MigrationTaskMeta};
+use crate::common::utils::ThreadSafe;
+use futures01::{Future, Stream};
 use std::error::Error;
 use std::fmt;
 use std::io;

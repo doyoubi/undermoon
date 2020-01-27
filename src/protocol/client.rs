@@ -1,11 +1,11 @@
 use super::decoder::{decode_resp, DecodeError};
 use super::encoder::command_to_buf;
 use super::resp::{BinSafeStr, RespVec};
+use crate::common::utils::{revolve_first_address, ThreadSafe};
 use atomic_option::AtomicOption;
 use chashmap::CHashMap;
-use common::utils::{revolve_first_address, ThreadSafe};
 use crossbeam_channel;
-use futures::{future, Future};
+use futures01::{future, Future};
 use std::error::Error;
 use std::fmt;
 use std::io;

@@ -1,7 +1,7 @@
-use ::protocol::RespVec;
+use crate::protocol::RespVec;
+use crate::protocol::{Array, BulkStr, Resp};
 use caseless;
 use crc16::{State, XMODEM};
-use protocol::{Array, BulkStr, Resp};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
 

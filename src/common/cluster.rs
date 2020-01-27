@@ -1,5 +1,5 @@
 use super::utils::{IMPORTING_TAG, MIGRATING_TAG};
-use common::config::ClusterConfig;
+use crate::common::config::ClusterConfig;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;

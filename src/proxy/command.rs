@@ -1,8 +1,8 @@
 use super::slowlog::Slowlog;
+use crate::protocol::{RespPacket, RespSlice, RespVec};
 use atomic_option::AtomicOption;
-use futures::sync::oneshot;
-use futures::{future, Future};
-use protocol::{RespPacket, RespSlice, RespVec};
+use futures01::sync::oneshot;
+use futures01::{future, Future};
 use std::error::Error;
 use std::fmt;
 use std::io;

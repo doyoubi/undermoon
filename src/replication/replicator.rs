@@ -1,8 +1,8 @@
-use common::cluster::ReplPeer;
-use common::db::DBMapFlags;
-use common::utils::{CmdParseError, ThreadSafe};
-use futures::Future;
-use protocol::{Array, BulkStr, RedisClientError, Resp};
+use crate::common::cluster::ReplPeer;
+use crate::common::db::DBMapFlags;
+use crate::common::utils::{CmdParseError, ThreadSafe};
+use crate::protocol::{Array, BulkStr, RedisClientError, Resp};
+use futures01::Future;
 use std::error::Error;
 use std::fmt;
 use std::io;

@@ -3,23 +3,23 @@ use super::task::{
     AtomicMigrationState, ImportingTask, MgrSubCmd, MigratingTask, MigrationError, MigrationState,
     SwitchArg,
 };
-use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
-use ::common::config::AtomicMigrationConfig;
-use ::common::resp_execution::keep_connecting_and_sending_cmd;
-use ::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
-use ::common::version::UNDERMOON_MIGRATION_VERSION;
-use ::protocol::{RedisClientError, RedisClientFactory, Resp};
-use ::proxy::backend::ReqAdaptorSenderFactory;
-use ::proxy::database::DBSendError;
-use ::proxy::migration_backend::RestoreDataCmdTaskHandler;
-use atomic_option::AtomicOption;
-use futures::sync::oneshot;
-use futures::{future, Future};
-use protocol::RespVec;
-use proxy::backend::{
+use crate::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
+use crate::common::config::AtomicMigrationConfig;
+use crate::common::resp_execution::keep_connecting_and_sending_cmd;
+use crate::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
+use crate::common::version::UNDERMOON_MIGRATION_VERSION;
+use crate::protocol::RespVec;
+use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
+use crate::proxy::backend::ReqAdaptorSenderFactory;
+use crate::proxy::backend::{
     CmdTaskFactory, RedirectionSenderFactory, ReqTaskSender, ReqTaskSenderFactory,
 };
-use proxy::service::ServerProxyConfig;
+use crate::proxy::database::DBSendError;
+use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
+use crate::proxy::service::ServerProxyConfig;
+use atomic_option::AtomicOption;
+use futures01::sync::oneshot;
+use futures01::{future, Future};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;

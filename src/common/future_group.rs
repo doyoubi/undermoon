@@ -1,5 +1,5 @@
-use futures::sync::oneshot;
-use futures::{Async, Future, Poll};
+use futures01::sync::oneshot;
+use futures01::{Async, Future, Poll};
 
 pub fn new_future_group<FA: Future, FB: Future>(
     future1: FA,

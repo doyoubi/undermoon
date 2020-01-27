@@ -1,9 +1,9 @@
-use ::common::utils::pretty_print_bytes;
+use crate::common::utils::pretty_print_bytes;
+use crate::protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use atomic_option::AtomicOption;
-use futures::sync::oneshot;
-use futures::{future, stream, Future, Stream};
+use futures01::sync::oneshot;
+use futures01::{future, stream, Future, Stream};
 use futures_timer::Delay;
-use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use std::iter;
 use std::str;
 use std::sync::atomic;
@@ -282,10 +282,10 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use ::common::utils::ThreadSafe;
-    use ::protocol::BinSafeStr;
-    use futures::future;
-    use protocol::Resp;
+    use crate::common::utils::ThreadSafe;
+    use crate::protocol::BinSafeStr;
+    use crate::protocol::Resp;
+    use futures01::future;
 
     #[derive(Debug)]
     struct Counter {

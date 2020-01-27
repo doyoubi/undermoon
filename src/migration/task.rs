@@ -1,11 +1,11 @@
-use ::common::cluster::MigrationTaskMeta;
-use ::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
-use ::proxy::backend::CmdTask;
-use ::proxy::database::DBSendError;
-use futures::Future;
+use crate::common::cluster::MigrationTaskMeta;
+use crate::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
+use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
+use crate::proxy::backend::CmdTask;
+use crate::proxy::database::DBSendError;
+use crate::replication::replicator::ReplicatorError;
+use futures01::Future;
 use itertools::Itertools;
-use protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
-use replication::replicator::ReplicatorError;
 use std::error::Error;
 use std::fmt;
 use std::io;

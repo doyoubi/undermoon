@@ -1,7 +1,7 @@
 use super::cluster::{SlotRange, SlotRangeTag};
 use super::utils::{has_flags, CmdParseError};
-use ::common::config::ClusterConfig;
-use protocol::{Array, BulkStr, Resp};
+use crate::common::config::ClusterConfig;
+use crate::protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::str;

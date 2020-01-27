@@ -1,7 +1,7 @@
 use super::broker::{MetaDataBrokerError, MetaManipulationBrokerError};
-use common::cluster::{Host, MigrationTaskMeta};
-use futures::{future, Future, Stream};
-use protocol::RedisClientError;
+use crate::common::cluster::{Host, MigrationTaskMeta};
+use crate::protocol::RedisClientError;
+use futures01::{future, Future, Stream};
 use std::error::Error;
 use std::fmt;
 use std::io;

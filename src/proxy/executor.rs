@@ -6,16 +6,18 @@ use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
-use ::migration::manager::SwitchError;
-use ::migration::task::parse_switch_command;
-use ::migration::task::MgrSubCmd;
+use crate::common::db::ProxyDBMeta;
+use crate::common::utils::{
+    ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
+};
+use crate::common::version::UNDERMOON_VERSION;
+use crate::migration::manager::SwitchError;
+use crate::migration::task::parse_switch_command;
+use crate::migration::task::MgrSubCmd;
+use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
+use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use caseless;
-use common::db::ProxyDBMeta;
-use common::utils::{ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
-use common::version::UNDERMOON_VERSION;
-use protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
-use replication::replicator::ReplicatorMeta;
 use std::str;
 use std::sync::{self, Arc};
 
