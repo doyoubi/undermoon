@@ -1,6 +1,7 @@
-use super::resp::{Array, BinSafeStr, BulkStr, Resp};
+use super::resp::{ArrayVec, BinSafeStr, BulkStrVec, RespVec};
 use futures::{future, Future};
 use futures::{stream, Stream};
+use protocol::{Array, BulkStr, Resp};
 use std::boxed::Box;
 use std::cmp::max;
 use std::error::Error;
@@ -73,7 +74,7 @@ where
     })
 }
 
-fn decode_bulk_str<R>(reader: R) -> impl Future<Item = (R, BulkStr), Error = DecodeError> + Send
+fn decode_bulk_str<R>(reader: R) -> impl Future<Item = (R, BulkStrVec), Error = DecodeError> + Send
 where
     R: AsyncRead + io::BufRead + Send,
 {
@@ -112,45 +113,45 @@ where
         })
 }
 
-pub fn decode_resp<R>(reader: R) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
+pub fn decode_resp<R>(reader: R) -> impl Future<Item = (R, RespVec), Error = DecodeError> + Send
 where
     R: AsyncRead + io::BufRead + Send + 'static,
 {
     read_exact(reader, vec![0; 1])
         .map_err(DecodeError::Io)
         .and_then(|(reader, prefix)| {
-            let bf: Box<dyn Future<Item = (R, Resp), Error = DecodeError> + Send> = match prefix[0]
-                as char
-            {
-                '$' => Box::new(
-                    decode_bulk_str(reader)
-                        .and_then(|(reader, s)| future::ok((reader, Resp::Bulk(s)))),
-                ),
-                '+' => Box::new(
-                    decode_line(reader)
-                        .and_then(|(reader, s)| future::ok((reader, Resp::Simple(s)))),
-                ),
-                ':' => Box::new(
-                    decode_line(reader)
-                        .and_then(|(reader, s)| future::ok((reader, Resp::Integer(s)))),
-                ),
-                '-' => Box::new(
-                    decode_line(reader)
-                        .and_then(|(reader, s)| future::ok((reader, Resp::Error(s)))),
-                ),
-                '*' => Box::new(
-                    decode_array(reader).and_then(|(reader, a)| future::ok((reader, Resp::Arr(a)))),
-                ),
-                prefix => {
-                    error!("Unexpected prefix {:?}", prefix);
-                    Box::new(future::err(DecodeError::InvalidProtocol))
-                }
-            };
+            let bf: Box<dyn Future<Item = (R, RespVec), Error = DecodeError> + Send> =
+                match prefix[0] as char {
+                    '$' => Box::new(
+                        decode_bulk_str(reader)
+                            .and_then(|(reader, s)| future::ok((reader, Resp::Bulk(s)))),
+                    ),
+                    '+' => Box::new(
+                        decode_line(reader)
+                            .and_then(|(reader, s)| future::ok((reader, Resp::Simple(s)))),
+                    ),
+                    ':' => Box::new(
+                        decode_line(reader)
+                            .and_then(|(reader, s)| future::ok((reader, Resp::Integer(s)))),
+                    ),
+                    '-' => Box::new(
+                        decode_line(reader)
+                            .and_then(|(reader, s)| future::ok((reader, Resp::Error(s)))),
+                    ),
+                    '*' => Box::new(
+                        decode_array(reader)
+                            .and_then(|(reader, a)| future::ok((reader, Resp::Arr(a)))),
+                    ),
+                    prefix => {
+                        error!("Unexpected prefix {:?}", prefix);
+                        Box::new(future::err(DecodeError::InvalidProtocol))
+                    }
+                };
             bf
         })
 }
 
-fn decode_array<R>(reader: R) -> impl Future<Item = (R, Array), Error = DecodeError> + Send
+fn decode_array<R>(reader: R) -> impl Future<Item = (R, ArrayVec), Error = DecodeError> + Send
 where
     R: AsyncRead + io::BufRead + Send + 'static,
 {
@@ -181,6 +182,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::{Array, BulkStr, Resp};
     use std::str;
 
     #[test]

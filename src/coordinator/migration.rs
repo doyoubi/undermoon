@@ -1,8 +1,9 @@
 use super::broker::MetaManipulationBroker;
 use super::core::{CoordinateError, MigrationCommitter, MigrationStateChecker};
 use ::common::cluster::MigrationTaskMeta;
-use ::protocol::{Array, BulkStr, RedisClient, RedisClientFactory, Resp};
+use ::protocol::{RedisClient, RedisClientFactory, RespVec};
 use futures::{future, stream, Future, Stream};
+use protocol::{Array, BulkStr, Resp};
 use std::str;
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
         Self { client_factory }
     }
 
-    fn parse_migration_task_meta(element: &Resp) -> Option<MigrationTaskMeta> {
+    fn parse_migration_task_meta(element: &RespVec) -> Option<MigrationTaskMeta> {
         match element {
             Resp::Bulk(BulkStr::Str(s)) => {
                 let data = str::from_utf8(&s).ok()?;

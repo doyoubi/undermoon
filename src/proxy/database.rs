@@ -7,7 +7,7 @@ use common::db::ProxyDBMeta;
 use common::utils::{gen_moved, get_slot};
 use crc64::crc64;
 use migration::task::MigrationState;
-use protocol::{Array, BulkStr, Resp};
+use protocol::{Array, BulkStr, Resp, RespVec};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -168,7 +168,7 @@ where
         dbname: String,
         service_address: String,
         migration_states: &HashMap<Range, MigrationState>,
-    ) -> Result<Resp, String> {
+    ) -> Result<RespVec, String> {
         let mut local = self.local_dbs.get(&dbname).map_or(Ok(vec![]), |db| {
             db.gen_local_cluster_slots(service_address, migration_states)
         })?;
@@ -315,7 +315,7 @@ impl<F: ReqTaskSenderFactory> Database<F> {
         &self,
         service_address: String,
         migration_states: &HashMap<Range, MigrationState>,
-    ) -> Result<Vec<Resp>, String> {
+    ) -> Result<Vec<RespVec>, String> {
         let slots: Vec<SlotRange> = self
             .slot_ranges
             .values()
@@ -402,7 +402,7 @@ impl RemoteDB {
     pub fn gen_remote_cluster_slots(
         &self,
         migration_states: &HashMap<Range, MigrationState>,
-    ) -> Result<Vec<Resp>, String> {
+    ) -> Result<Vec<RespVec>, String> {
         gen_cluster_slots_helper(&self.slot_ranges, migration_states)
     }
 }
@@ -503,7 +503,7 @@ fn gen_cluster_nodes_helper(
 fn gen_cluster_slots_helper(
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<Range, MigrationState>,
-) -> Result<Vec<Resp>, String> {
+) -> Result<Vec<RespVec>, String> {
     let mut slot_range_element = Vec::new();
     for (addr, ranges) in slot_ranges {
         let mut segs = addr.split(':');
@@ -552,6 +552,7 @@ fn gen_cluster_slots_helper(
 mod tests {
     use super::*;
     use ::common::cluster::MigrationMeta;
+    use protocol::{Array, BulkStr};
     use std::iter::repeat;
 
     fn gen_testing_slot_ranges(address: &str) -> HashMap<String, Vec<SlotRange>> {

@@ -1,6 +1,6 @@
 use super::decoder::{decode_resp, DecodeError};
 use super::encoder::command_to_buf;
-use super::resp::{BinSafeStr, Resp};
+use super::resp::{BinSafeStr, RespVec};
 use atomic_option::AtomicOption;
 use chashmap::CHashMap;
 use common::utils::{revolve_first_address, ThreadSafe};
@@ -21,7 +21,7 @@ pub trait RedisClient: ThreadSafe + Sized + std::fmt::Debug {
     fn execute(
         self,
         command: Vec<BinSafeStr>,
-    ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send + 'static>;
+    ) -> Box<dyn Future<Item = (Self, RespVec), Error = RedisClientError> + Send + 'static>;
 }
 
 pub trait RedisClientFactory: ThreadSafe {
@@ -121,7 +121,7 @@ impl RedisClient for PooledRedisClient {
     fn execute(
         self,
         command: Vec<BinSafeStr>,
-    ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send + 'static> {
+    ) -> Box<dyn Future<Item = (Self, RespVec), Error = RedisClientError> + Send + 'static> {
         let (conn_handle, timeout) = self.destruct();
         let timeout_clone = timeout;
 

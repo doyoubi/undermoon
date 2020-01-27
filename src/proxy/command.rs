@@ -1,10 +1,8 @@
 use super::slowlog::Slowlog;
-use ::common::utils::{extract_command_name, get_command_element, get_element};
 use atomic_option::AtomicOption;
-use bytes::BytesMut;
 use futures::sync::oneshot;
 use futures::{future, Future};
-use protocol::{Resp, RespPacket};
+use protocol::{RespPacket, RespSlice, RespVec};
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -57,8 +55,8 @@ impl CmdType {
         }
     }
 
-    pub fn from_resp(resp: &Resp) -> Self {
-        let cmd_name = match extract_command_name(resp) {
+    pub fn from_packet(packet: &RespPacket) -> Self {
+        let cmd_name = match packet.get_command_name() {
             Some(cmd_name) => cmd_name,
             None => return CmdType::Invalid,
         };
@@ -132,8 +130,8 @@ impl DataCmdType {
         }
     }
 
-    pub fn from_resp(resp: &Resp) -> Self {
-        let cmd_name = match extract_command_name(resp) {
+    pub fn from_packet(packet: &RespPacket) -> Self {
+        let cmd_name = match packet.get_command_name() {
             Some(cmd_name) => cmd_name,
             None => return DataCmdType::Others,
         };
@@ -151,8 +149,8 @@ pub struct Command {
 
 impl Command {
     pub fn new(request: Box<RespPacket>) -> Self {
-        let cmd_type = CmdType::from_resp(request.get_resp());
-        let data_cmd_type = DataCmdType::from_resp(request.get_resp());
+        let cmd_type = CmdType::from_packet(&request);
+        let data_cmd_type = DataCmdType::from_packet(&request);
         Command {
             request,
             cmd_type,
@@ -160,20 +158,20 @@ impl Command {
         }
     }
 
-    pub fn drain_packet_data(&self) -> Option<BytesMut> {
-        self.request.drain_data()
+    pub fn get_packet(&self) -> RespPacket {
+        self.request.as_ref().clone()
     }
 
-    pub fn get_resp(&self) -> &Resp {
-        self.request.get_resp()
+    pub fn get_resp_slice(&self) -> RespSlice {
+        self.request.to_resp_slice()
     }
 
     pub fn get_command_element(&self, index: usize) -> Option<&[u8]> {
-        get_command_element(self.get_resp(), index)
+        self.request.get_array_element(index)
     }
 
     pub fn get_command_name(&self) -> Option<&str> {
-        extract_command_name(&self.request.get_resp())
+        self.request.get_command_name()
     }
 
     pub fn change_element(&mut self, index: usize, data: Vec<u8>) -> bool {
@@ -188,24 +186,10 @@ impl Command {
         self.data_cmd_type
     }
 
-    pub fn gen_type(resp: &Resp) -> (CmdType, DataCmdType) {
-        let cmd_name = match extract_command_name(resp) {
-            Some(cmd_name) => cmd_name,
-            None => return (CmdType::Invalid, DataCmdType::Others),
-        };
-
-        let cmd_type = CmdType::from_cmd_name(cmd_name);
-        if cmd_type != CmdType::Others {
-            (cmd_type, DataCmdType::Others)
-        } else {
-            (cmd_type, DataCmdType::from_cmd_name(cmd_name))
-        }
-    }
-
     pub fn get_key(&self) -> Option<&[u8]> {
         match self.data_cmd_type {
-            DataCmdType::EVAL | DataCmdType::EVALSHA => get_element(self.get_resp(), 3),
-            _ => get_element(self.get_resp(), 1),
+            DataCmdType::EVAL | DataCmdType::EVALSHA => self.get_command_element(3),
+            _ => self.get_command_element(1),
         }
     }
 }
@@ -225,9 +209,9 @@ impl TaskReply {
         (packet, slowlog)
     }
 
-    pub fn into_resp(self) -> Resp {
+    pub fn into_resp_vec(self) -> RespVec {
         let (packet, _) = self.into_inner();
-        packet.into_resp()
+        packet.into_resp_vec()
     }
 }
 

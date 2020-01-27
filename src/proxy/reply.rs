@@ -3,7 +3,7 @@ use super::compress::{CmdReplyDecompressor, CompressionError};
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
 use ::common::utils::ThreadSafe;
-use ::protocol::{BulkStr, Resp};
+use protocol::{BulkStr, Resp};
 
 pub struct DecompressCommitHandlerFactory {
     meta_map: SharedMetaMap,

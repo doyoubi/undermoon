@@ -15,6 +15,7 @@ use ::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use atomic_option::AtomicOption;
 use futures::sync::oneshot;
 use futures::{future, Future};
+use protocol::RespVec;
 use proxy::backend::{
     CmdTaskFactory, RedirectionSenderFactory, ReqTaskSender, ReqTaskSenderFactory,
 };
@@ -115,7 +116,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
     fn pre_check(&self) -> impl Future<Item = (), Error = MigrationError> {
         let state = self.state.clone();
         let meta = self.meta.clone();
-        let handle_pre_check = move |resp| -> Result<(), RedisClientError> {
+        let handle_pre_check = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
                     if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
@@ -172,7 +173,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
     fn pre_switch(&self) -> impl Future<Item = (), Error = MigrationError> {
         let state = self.state.clone();
         let meta = self.meta.clone();
-        let handle_pre_switch = move |resp| -> Result<(), RedisClientError> {
+        let handle_pre_switch = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
                     if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
@@ -246,7 +247,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
     fn final_switch(&self) -> impl Future<Item = (), Error = MigrationError> {
         let state = self.state.clone();
         let meta = self.meta.clone();
-        let handle_final_switch = move |resp| -> Result<(), RedisClientError> {
+        let handle_final_switch = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
                     error!(

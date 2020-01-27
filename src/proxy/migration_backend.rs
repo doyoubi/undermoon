@@ -1,18 +1,18 @@
 use super::backend::{BackendSenderFactory, CmdTask, CmdTaskFactory, ReqTask, ReqTaskSender};
 use super::command::CommandError;
 use super::reply::ReplyCommitHandlerFactory;
-use ::protocol::Resp;
+use ::protocol::RespVec;
 use atomic_option::AtomicOption;
 use common::utils::ThreadSafe;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{future, Future, Stream};
-use protocol::{Array, BinSafeStr, BulkStr};
+use protocol::{Array, BinSafeStr, BulkStr, Resp};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 const KEY_NOT_EXISTS: &str = "0";
 
-type ReplyFuture = Box<dyn Future<Item = Resp, Error = CommandError> + Send>;
+type ReplyFuture = Box<dyn Future<Item = RespVec, Error = CommandError> + Send>;
 type DataEntryFuture = Box<dyn Future<Item = Option<DataEntry>, Error = CommandError> + Send>;
 
 #[derive(Debug)]
@@ -34,7 +34,7 @@ impl<F: CmdTaskFactory> MgrCmdStateExists<F> {
         (state, task, reply_fut)
     }
 
-    fn gen_exists_resp(key: &[u8]) -> Resp {
+    fn gen_exists_resp(key: &[u8]) -> RespVec {
         let elements = vec![
             Resp::Bulk(BulkStr::Str("EXISTS".to_string().into_bytes())),
             Resp::Bulk(BulkStr::Str(key.into())),
@@ -92,7 +92,7 @@ impl<F: CmdTaskFactory> MgrCmdStateDumpPttl<F> {
         (state, task, entry_fut)
     }
 
-    fn gen_dump_resp(key: &[u8]) -> Resp {
+    fn gen_dump_resp(key: &[u8]) -> RespVec {
         let elements = vec![
             Resp::Bulk(BulkStr::Str("DUMP".to_string().into_bytes())),
             Resp::Bulk(BulkStr::Str(key.into())),
@@ -100,7 +100,7 @@ impl<F: CmdTaskFactory> MgrCmdStateDumpPttl<F> {
         Resp::Arr(Array::Arr(elements))
     }
 
-    fn gen_pttl_resp(key: &[u8]) -> Resp {
+    fn gen_pttl_resp(key: &[u8]) -> RespVec {
         let elements = vec![
             Resp::Bulk(BulkStr::Str("PTTL".to_string().into_bytes())),
             Resp::Bulk(BulkStr::Str(key.into())),
@@ -160,7 +160,7 @@ impl MgrCmdStateRestoreForward {
         (MgrCmdStateRestoreForward, task, restore_reply_fut)
     }
 
-    fn gen_restore_resp(key: &[u8], raw_data: BinSafeStr, pttl: BinSafeStr) -> Resp {
+    fn gen_restore_resp(key: &[u8], raw_data: BinSafeStr, pttl: BinSafeStr) -> RespVec {
         let elements = vec![
             Resp::Bulk(BulkStr::Str("RESTORE".to_string().into_bytes())),
             Resp::Bulk(BulkStr::Str(key.into())),
@@ -319,20 +319,21 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
                 })
             })
             .for_each(move |item| {
-                let fut: Box<dyn Future<Item = (), Error = ()> + Send> = if let Some((entry, state)) = item {
-                    let (_state, req_task, reply_receiver) =
-                        MgrCmdStateRestoreForward::from_state_exists(
-                            state,
-                            entry,
-                            &(*cmd_task_factory),
-                        );
-                    if let Err(err) = dst_sender.send(req_task) {
-                        debug!("failed to send restore and forward: {:?}", err);
-                    }
-                    Box::new(reply_receiver.map(|_| ()).map_err(|_| ()))
-                } else {
-                    Box::new(future::ok(()))
-                };
+                let fut: Box<dyn Future<Item = (), Error = ()> + Send> =
+                    if let Some((entry, state)) = item {
+                        let (_state, req_task, reply_receiver) =
+                            MgrCmdStateRestoreForward::from_state_exists(
+                                state,
+                                entry,
+                                &(*cmd_task_factory),
+                            );
+                        if let Err(err) = dst_sender.send(req_task) {
+                            debug!("failed to send restore and forward: {:?}", err);
+                        }
+                        Box::new(reply_receiver.map(|_| ()).map_err(|_| ()))
+                    } else {
+                        Box::new(future::ok(()))
+                    };
                 fut
             })
     }
@@ -374,9 +375,10 @@ mod tests {
     use super::super::command::{new_command_pair, CmdReplyReceiver, Command};
     use super::super::session::{CmdCtx, CmdCtxFactory};
     use super::*;
-    use crate::protocol::{Resp, RespPacket};
+    use crate::protocol::RespPacket;
     use chashmap::CHashMap;
     use futures::{future, Future};
+    use protocol::{BulkStr, Resp};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::RwLock;
@@ -514,7 +516,7 @@ mod tests {
             Resp::Bulk(BulkStr::Str("somekey".to_string().into())),
         ]));
         let db = Arc::new(RwLock::new("mydb".to_string()));
-        let packet = Box::new(RespPacket::new(resp));
+        let packet = Box::new(RespPacket::from_resp_vec(resp));
         let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));
         let cmd_ctx = CmdCtx::new(db, reply_sender, 0);
         (cmd_ctx, reply_receiver)
@@ -528,10 +530,10 @@ mod tests {
             .map_err(|err| error!("cmd err: {:?}", err))
             .and_then(|task_reply| {
                 let (packet, _) = task_reply.into_inner();
-                let s = match packet.get_resp() {
-                    Resp::Bulk(BulkStr::Str(s)) => s.clone(),
+                let s = match packet.to_resp_slice() {
+                    Resp::Bulk(BulkStr::Str(s)) => s.to_vec(),
                     Resp::Bulk(BulkStr::Nil) => "key_not_exists".to_string().into_bytes(),
-                    Resp::Error(err_str) => err_str.clone(),
+                    Resp::Error(err_str) => err_str.to_vec(),
                     others => format!("invalid_reply {:?}", others).into_bytes(),
                 };
                 future::ok(s)

@@ -1,8 +1,8 @@
-use super::resp::{Array, BinSafeStr, BulkStr, Resp};
+use super::resp::{Array, BinSafeStr, BulkStr, Resp, RespVec};
 use std::io;
 
 pub fn command_to_buf(buf: &mut Vec<u8>, command: Vec<BinSafeStr>) {
-    let arr: Vec<Resp> = command
+    let arr: Vec<RespVec> = command
         .into_iter()
         .map(|s| Resp::Bulk(BulkStr::Str(s)))
         .collect();
@@ -10,11 +10,11 @@ pub fn command_to_buf(buf: &mut Vec<u8>, command: Vec<BinSafeStr>) {
     resp_to_buf(buf, &resp);
 }
 
-pub fn resp_to_buf(buf: &mut Vec<u8>, resp: &Resp) {
+pub fn resp_to_buf(buf: &mut Vec<u8>, resp: &RespVec) {
     encode_resp(buf, resp).expect("resp_to_buf"); // TODO: remove expect
 }
 
-pub fn encode_resp<W>(writer: &mut W, resp: &Resp) -> io::Result<usize>
+pub fn encode_resp<W, T: AsRef<[u8]>>(writer: &mut W, resp: &Resp<T>) -> io::Result<usize>
 where
     W: io::Write,
 {
@@ -27,7 +27,7 @@ where
     }
 }
 
-fn encode_array<W>(writer: &mut W, array: &Array) -> io::Result<usize>
+fn encode_array<W, T: AsRef<[u8]>>(writer: &mut W, array: &Array<T>) -> io::Result<usize>
 where
     W: io::Write,
 {
@@ -43,7 +43,7 @@ where
     }
 }
 
-fn encode_bulk_str<W>(writer: &mut W, bulk_str: &BulkStr) -> io::Result<usize>
+fn encode_bulk_str<W, T: AsRef<[u8]>>(writer: &mut W, bulk_str: &BulkStr<T>) -> io::Result<usize>
 where
     W: io::Write,
 {
@@ -52,15 +52,19 @@ where
         BulkStr::Str(ref s) => Ok(encode_simple_element(
             writer,
             b"$",
-            &s.len().to_string().into_bytes(),
-        )? + writer.write(s)?
+            &s.as_ref().len().to_string().into_bytes(),
+        )? + writer.write(s.as_ref())?
             + writer.write(b"\r\n")?),
     }
 }
 
-fn encode_simple_element<W>(writer: &mut W, prefix: &[u8], s: &[u8]) -> io::Result<usize>
+fn encode_simple_element<W, T: AsRef<[u8]>>(
+    writer: &mut W,
+    prefix: &[u8],
+    b: T,
+) -> io::Result<usize>
 where
     W: io::Write,
 {
-    Ok(writer.write(prefix)? + writer.write(s)? + writer.write(b"\r\n")?)
+    Ok(writer.write(prefix)? + writer.write(b.as_ref())? + writer.write(b"\r\n")?)
 }

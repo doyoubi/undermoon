@@ -15,7 +15,7 @@ use ::migration::task::SwitchArg;
 use arc_swap::ArcSwap;
 use common::db::ProxyDBMeta;
 use common::utils::ThreadSafe;
-use protocol::{RedisClientFactory, Resp};
+use protocol::{RedisClientFactory, RespVec};
 use proxy::backend::CmdTask;
 use replication::manager::ReplicatorManager;
 use replication::replicator::ReplicatorMeta;
@@ -117,7 +117,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         )
     }
 
-    pub fn gen_cluster_slots(&self, db_name: String) -> Result<Resp, String> {
+    pub fn gen_cluster_slots(&self, db_name: String) -> Result<RespVec, String> {
         let meta_map = self.meta_map.load();
         let migration_states = meta_map.migration_map.get_states(&db_name);
         meta_map.db_map.gen_cluster_slots(

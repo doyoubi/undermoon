@@ -98,7 +98,7 @@ mod tests {
     use common::cluster::{Cluster, Host};
     use common::utils::ThreadSafe;
     use futures::stream;
-    use protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp};
+    use protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp, RespVec};
     use std::sync::{Arc, Mutex};
 
     const NODE1: &'static str = "127.0.0.1:7000";
@@ -115,7 +115,7 @@ mod tests {
         fn execute(
             self,
             _command: Vec<BinSafeStr>,
-        ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send> {
+        ) -> Box<dyn Future<Item = (Self, RespVec), Error = RedisClientError> + Send> {
             if self.address == NODE1 {
                 Box::new(future::ok((self, Resp::Arr(Array::Nil))))
             } else {

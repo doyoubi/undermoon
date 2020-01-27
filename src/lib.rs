@@ -26,6 +26,7 @@ extern crate chashmap;
 extern crate chrono;
 extern crate crossbeam_channel;
 extern crate itertools;
+extern crate memchr;
 extern crate zstd;
 
 pub mod broker;

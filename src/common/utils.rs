@@ -1,6 +1,7 @@
-use ::protocol::{Array, BulkStr, Resp};
+use ::protocol::RespVec;
 use caseless;
 use crc16::{State, XMODEM};
+use protocol::{Array, BulkStr, Resp};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
 
@@ -30,18 +31,7 @@ pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
     }
 }
 
-pub fn get_element(resp: &Resp, index: usize) -> Option<&[u8]> {
-    match resp {
-        Resp::Arr(Array::Arr(ref resps)) => resps.get(index).and_then(|resp| match resp {
-            Resp::Bulk(BulkStr::Str(ref s)) => Some(s.as_slice()),
-            Resp::Simple(ref s) => Some(s.as_slice()),
-            _ => None,
-        }),
-        _ => None,
-    }
-}
-
-pub fn get_resp_bytes(resp: &Resp) -> Option<Vec<Vec<u8>>> {
+pub fn get_resp_bytes(resp: &RespVec) -> Option<Vec<Vec<u8>>> {
     match resp {
         Resp::Arr(Array::Arr(ref resps)) => {
             let mut strs = vec![];
@@ -58,14 +48,16 @@ pub fn get_resp_bytes(resp: &Resp) -> Option<Vec<Vec<u8>>> {
     }
 }
 
-pub fn get_resp_strings(resp: &Resp) -> Option<Vec<String>> {
+pub fn get_resp_strings<T: AsRef<[u8]>>(resp: &Resp<T>) -> Option<Vec<String>> {
     match resp {
         Resp::Arr(Array::Arr(ref resps)) => {
             let mut strs = vec![];
             for resp in resps.iter() {
                 match resp {
-                    Resp::Bulk(BulkStr::Str(s)) => strs.push(str::from_utf8(s).ok()?.to_string()),
-                    Resp::Simple(s) => strs.push(str::from_utf8(s).ok()?.to_string()),
+                    Resp::Bulk(BulkStr::Str(s)) => {
+                        strs.push(str::from_utf8(s.as_ref()).ok()?.to_string())
+                    }
+                    Resp::Simple(s) => strs.push(str::from_utf8(s.as_ref()).ok()?.to_string()),
                     _ => return None,
                 }
             }
@@ -75,25 +67,17 @@ pub fn get_resp_strings(resp: &Resp) -> Option<Vec<String>> {
     }
 }
 
-pub fn get_command_element(resp: &Resp, index: usize) -> Option<&[u8]> {
+pub fn get_command_element<T: AsRef<[u8]>>(resp: &Resp<T>, index: usize) -> Option<&[u8]> {
     match resp {
         Resp::Arr(Array::Arr(ref resps)) => resps.get(index).and_then(|resp| match resp {
-            Resp::Bulk(BulkStr::Str(s)) => Some(s.as_slice()),
+            Resp::Bulk(BulkStr::Str(s)) => Some(s.as_ref()),
             _ => None,
         }),
         _ => None,
     }
 }
 
-pub fn extract_command_name(resp: &Resp) -> Option<&str> {
-    let first = get_command_element(resp, 0)?;
-    match str::from_utf8(first) {
-        Ok(cmd_name) => Some(cmd_name),
-        Err(_) => None,
-    }
-}
-
-pub fn change_bulk_array_element(resp: &mut Resp, index: usize, data: Vec<u8>) -> bool {
+pub fn change_bulk_array_element(resp: &mut RespVec, index: usize, data: Vec<u8>) -> bool {
     match resp {
         Resp::Arr(Array::Arr(ref mut resps)) => {
             Some(true) == resps.get_mut(index).map(|resp| change_bulk_str(resp, data))
@@ -102,7 +86,7 @@ pub fn change_bulk_array_element(resp: &mut Resp, index: usize, data: Vec<u8>) -
     }
 }
 
-pub fn change_bulk_str(resp: &mut Resp, data: Vec<u8>) -> bool {
+pub fn change_bulk_str(resp: &mut RespVec, data: Vec<u8>) -> bool {
     match resp {
         Resp::Bulk(BulkStr::Str(s)) => {
             *s = data;
