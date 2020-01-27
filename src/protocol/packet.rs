@@ -24,6 +24,10 @@ pub trait PacketDecoder {
         Self: Sized;
 }
 
+pub trait Packet: PacketEncoder + PacketDecoder {}
+
+impl<T: PacketEncoder + PacketDecoder> Packet for T {}
+
 #[derive(Debug, Clone)]
 pub enum RespPacket {
     Indexed(IndexedResp),

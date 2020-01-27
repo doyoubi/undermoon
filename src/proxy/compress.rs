@@ -1,4 +1,3 @@
-use super::backend::CmdTask;
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;

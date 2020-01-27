@@ -14,7 +14,7 @@ pub use self::codec::RespCodec;
 pub use self::decoder::{decode_resp, DecodeError};
 pub use self::encoder::{encode_resp, resp_to_buf};
 pub use self::fp::{RFunctor, VFunctor};
-pub use self::packet::{PacketDecoder, PacketEncoder, RespPacket};
+pub use self::packet::{Packet, PacketDecoder, PacketEncoder, RespPacket};
 pub use self::resp::{
     Array, ArrayBytes, ArrayIndex, ArraySlice, ArrayVec, BinSafeStr, BulkStr, BulkStrBytes,
     BulkStrIndex, BulkStrSlice, BulkStrVec, IndexedResp, Resp, RespBytes, RespIndex, RespSlice,

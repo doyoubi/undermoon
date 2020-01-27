@@ -67,6 +67,14 @@ impl CmdCtx {
     pub fn change_cmd_element(&mut self, index: usize, data: Vec<u8>) -> bool {
         self.reply_sender.get_mut_cmd().change_element(index, data)
     }
+
+    pub fn get_cmd_type(&self) -> CmdType {
+        self.reply_sender.get_cmd().get_type()
+    }
+
+    pub fn get_data_cmd_type(&self) -> DataCmdType {
+        self.reply_sender.get_cmd().get_data_cmd_type()
+    }
 }
 
 // Make sure that ctx will always be sent back.
@@ -77,20 +85,14 @@ impl Drop for CmdCtx {
 }
 
 impl CmdTask for CmdCtx {
+    type Pkt = RespPacket;
+
     fn get_key(&self) -> Option<&[u8]> {
         self.get_cmd().get_key()
     }
 
     fn get_resp_slice(&self) -> RespSlice {
         self.reply_sender.get_cmd().get_resp_slice()
-    }
-
-    fn get_cmd_type(&self) -> CmdType {
-        self.reply_sender.get_cmd().get_type()
-    }
-
-    fn get_data_cmd_type(&self) -> DataCmdType {
-        self.reply_sender.get_cmd().get_data_cmd_type()
     }
 
     fn set_result(self, result: CommandResult) {
@@ -102,7 +104,7 @@ impl CmdTask for CmdCtx {
         }
     }
 
-    fn get_packet(&self) -> RespPacket {
+    fn get_packet(&self) -> Self::Pkt {
         self.reply_sender.get_cmd().get_packet()
     }
 
