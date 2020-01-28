@@ -1,31 +1,32 @@
 use crate::common::cluster::{Cluster, Host, MigrationTaskMeta};
 use crate::common::utils::ThreadSafe;
-use futures01::{Future, Stream};
+use futures::{Future, Stream};
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::pin::Pin;
 
 pub trait MetaDataBroker: ThreadSafe {
     fn get_cluster_names(
         &self,
-    ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>>;
     fn get_cluster(
         &self,
         name: String,
-    ) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send>>;
     fn get_host_addresses(
         &self,
-    ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>>;
     fn get_host(
         &self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send>>;
     fn add_failure(
         &self,
         address: String,
         reporter_id: String,
-    ) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send>;
-    fn get_failures(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send>>;
+    fn get_failures(&self) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>>;
 }
 
 // Maybe we would want to support other database supporting redis protocol.
@@ -34,11 +35,11 @@ pub trait MetaManipulationBroker: ThreadSafe {
     fn replace_proxy(
         &self,
         failed_proxy_address: String,
-    ) -> Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send>>;
     fn commit_migration(
         &self,
         meta: MigrationTaskMeta,
-    ) -> Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send>>;
 }
 
 #[derive(Debug)]

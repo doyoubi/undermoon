@@ -3,8 +3,9 @@ use super::core::{CoordinateError, MigrationCommitter, MigrationStateChecker};
 use crate::common::cluster::MigrationTaskMeta;
 use crate::protocol::{Array, BulkStr, Resp};
 use crate::protocol::{RedisClient, RedisClientFactory, RespVec};
-use futures01::{future, stream, Future, Stream};
+use futures::{Future, FutureExt, TryFutureExt, stream, Stream};
 use std::str;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct MigrationStateRespChecker<F: RedisClientFactory> {
@@ -35,51 +36,46 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
     }
 }
 
+impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
+    async fn check_impl(
+        &self,
+        address: String,
+    ) -> Result<Vec<MigrationTaskMeta>, CoordinateError> {
+        let mut client = self.client_factory.create_client(address.clone()).await.map_err(CoordinateError::Redis)?;
+        let cmd = vec!["UMCTL".to_string(), "INFOMGR".to_string()].into_iter().map(String::into_bytes).collect();
+        let resp = client.execute(cmd).await.map_err(CoordinateError::Redis)?;
+
+        match resp {
+            Resp::Arr(Array::Arr(arr)) => {
+                let mut metadata = vec![];
+                for element in arr.into_iter() {
+                    match Self::parse_migration_task_meta(&element) {
+                        Some(meta) => metadata.push(meta),
+                        None => {
+                            error!(
+                                "failed to parse migration task meta data {:?}",
+                                element
+                            );
+                            return Err(CoordinateError::InvalidReply);
+                        }
+                    };
+                }
+                Ok(metadata)
+            }
+            reply => {
+                error!("failed to send meta, invalid reply {:?}", reply);
+                Err(CoordinateError::InvalidReply)
+            }
+        }
+    }
+}
+
 impl<F: RedisClientFactory> MigrationStateChecker for MigrationStateRespChecker<F> {
     fn check(
         &self,
         address: String,
-    ) -> Box<dyn Stream<Item = MigrationTaskMeta, Error = CoordinateError> + Send> {
-        let client_fut = self
-            .client_factory
-            .create_client(address.clone())
-            .map_err(CoordinateError::Redis);
-        Box::new(
-            client_fut
-                .and_then(move |client| {
-                    let cmd = vec!["UMCTL".to_string(), "INFOMGR".to_string()];
-                    debug!("sending UMCTL INFOMGR to {}", address);
-                    client
-                        .execute(cmd.into_iter().map(String::into_bytes).collect())
-                        .map_err(move |e| {
-                            error!("failed to check the migration state {} {:?}", address, e);
-                            CoordinateError::Redis(e)
-                        })
-                        .and_then(move |(_client, resp)| match resp {
-                            Resp::Arr(Array::Arr(arr)) => {
-                                let mut metadata = vec![];
-                                for element in arr.into_iter() {
-                                    match Self::parse_migration_task_meta(&element) {
-                                        Some(meta) => metadata.push(meta),
-                                        None => {
-                                            error!(
-                                                "failed to parse migration task meta data {:?}",
-                                                element
-                                            );
-                                            return future::err(CoordinateError::InvalidReply);
-                                        }
-                                    };
-                                }
-                                future::ok(stream::iter_ok(metadata))
-                            }
-                            reply => {
-                                error!("failed to send meta, invalid reply {:?}", reply);
-                                future::err(CoordinateError::InvalidReply)
-                            }
-                        })
-                })
-                .flatten_stream(),
-        )
+    ) -> Pin<Box<dyn Stream<Item = Result<MigrationTaskMeta, CoordinateError>> + Send>> {
+        Box::pin(self.check_impl(address).map(|addrs| stream::iter(addrs.map(Ok))).flatten_stream())
     }
 }
 
@@ -97,7 +93,7 @@ impl<MB: MetaManipulationBroker> MigrationCommitter for BrokerMigrationCommitter
     fn commit(
         &self,
         meta: MigrationTaskMeta,
-    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
         let meta_clone = meta.clone();
         Box::new(
             self.mani_broker

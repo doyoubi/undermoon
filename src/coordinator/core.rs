@@ -1,14 +1,15 @@
 use super::broker::{MetaDataBrokerError, MetaManipulationBrokerError};
 use crate::common::cluster::{Host, MigrationTaskMeta};
 use crate::protocol::RedisClientError;
-use futures01::{future, Future, Stream};
+use futures::{future, Future, TryFutureExt, Stream, StreamExt};
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
+use std::pin::Pin;
 
 pub trait ProxiesRetriever: Sync + Send + 'static {
-    fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
+    fn retrieve_proxies(&self) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send>>;
 }
 
 pub type ProxyFailure = String; // proxy address
@@ -17,12 +18,12 @@ pub trait FailureChecker: Sync + Send + 'static {
     fn check(
         &self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, CoordinateError>> + Send>>;
 }
 
 pub trait FailureReporter: Sync + Send + 'static {
     fn report(&self, address: String)
-        -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+        -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>>;
 }
 
 pub trait FailureDetector {
@@ -31,7 +32,7 @@ pub trait FailureDetector {
     type Reporter: FailureReporter;
 
     fn new(retriever: Self::Retriever, checker: Self::Checker, reporter: Self::Reporter) -> Self;
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
+    fn run(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>>;
 }
 
 pub struct SeqFailureDetector<
@@ -42,6 +43,51 @@ pub struct SeqFailureDetector<
     retriever: Retriever,
     checker: Arc<Checker>,
     reporter: Arc<Reporter>,
+}
+
+impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetector<T, C, P>
+{
+    async fn check_and_report(checker: &C, reporter: &P, address: String) -> Result<(), CoordinateError> {
+        let address = match checker.check(address).await? {
+            Some(addr) => addr,
+            None => return Ok(()),
+        };
+        if let Err(err) = reporter.report(address).await {
+            error!("failed to report failure: {:?}", err);
+            return Err(err)
+        }
+        Ok(())
+    }
+
+    async fn run_impl(&self) -> Result<(), CoordinateError> {
+        let checker = self.checker.clone();
+        let reporter = self.reporter.clone();
+        const BATCH_SIZE: usize = 30;
+
+        let mut res = Ok(());
+
+        for results in self.retriever.retrieve_proxies().chunks(BATCH_SIZE).next().await {
+            let mut proxies = vec![];
+            for r in results {
+                match r {
+                    Ok(proxy) => proxies.push(proxy),
+                    Err(err) => {
+                        error!("failed to get proxy: {:?}", err);
+                        res = Err(err);
+                    },
+                }
+            }
+            let futs: Vec<_> = proxies.into_iter().map(|address| Self::check_and_report(&checker, &reporter, address)).collect();
+            let results = future::join_all(futs).await;
+            for r in results.into_iter() {
+                if let Err(err) = r {
+                    error!("faild to check and report error: {:?}", err);
+                    res = Err(err);
+                }
+            }
+        }
+        res
+    }
 }
 
 impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
@@ -59,39 +105,22 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
         }
     }
 
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
-        let checker = self.checker.clone();
-        let reporter = self.reporter.clone();
-        Box::new(
-            self.retriever
-                .retrieve_proxies()
-                .map(move |address| checker.check(address))
-                .buffer_unordered(10)
-                .filter_map(|a| a)
-                .and_then(move |address| {
-                    error!("failed to ping {}", address);
-                    reporter.report(address).then(|res| {
-                        if let Err(e) = res {
-                            error!("failed to report failure: {:?}", e);
-                        }
-                        future::ok(())
-                    })
-                }),
-        )
+    fn run(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+        Box::pin(self.run_impl())
     }
 }
 
 pub trait ProxyFailureRetriever: Sync + Send + 'static {
     fn retrieve_proxy_failures(
         &self,
-    ) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send>;
+    ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send>>;
 }
 
 pub trait ProxyFailureHandler: Sync + Send + 'static {
     fn handle_proxy_failure(
         &self,
         proxy_failure: ProxyFailure,
-    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>>;
 }
 
 pub trait FailureHandler {
@@ -99,7 +128,7 @@ pub trait FailureHandler {
     type Handler: ProxyFailureHandler;
 
     fn new(proxy_failure_retriever: Self::PFRetriever, handler: Self::Handler) -> Self;
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
+    fn run(&self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send>>;
 }
 
 pub struct SeqFailureHandler<PFRetriever: ProxyFailureRetriever, Handler: ProxyFailureHandler> {
@@ -118,7 +147,7 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFai
         }
     }
 
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+    fn run(&self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send>> {
         let handler = self.handler.clone();
         Box::new(
             self.proxy_failure_retriever
@@ -137,14 +166,14 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFai
 }
 
 pub trait HostMetaSender: Sync + Send + 'static {
-    fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+    fn send_meta(&self, host: Host) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>>;
 }
 
 pub trait HostMetaRetriever: Sync + Send + 'static {
     fn get_host_meta(
         &self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, CoordinateError>> + Send>>;
 }
 
 pub trait HostMetaSynchronizer {
@@ -157,7 +186,7 @@ pub trait HostMetaSynchronizer {
         meta_retriever: Self::MRetriever,
         sender: Self::Sender,
     ) -> Self;
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
+    fn run(&self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send>>;
 }
 
 pub struct HostMetaRespSynchronizer<
@@ -189,7 +218,7 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynch
         }
     }
 
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+    fn run(&self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send>> {
         let meta_retriever = self.meta_retriever.clone();
         let sender = self.sender.clone();
         Box::new(
@@ -214,14 +243,14 @@ pub trait MigrationStateChecker: Sync + Send + 'static {
     fn check(
         &self,
         address: String,
-    ) -> Box<dyn Stream<Item = MigrationTaskMeta, Error = CoordinateError> + Send>;
+    ) -> Pin<Box<dyn Stream<Item = Result<MigrationTaskMeta, CoordinateError>> + Send>>;
 }
 
 pub trait MigrationCommitter: Sync + Send + 'static {
     fn commit(
         &self,
         meta: MigrationTaskMeta,
-    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>>;
 }
 
 pub trait MigrationStateSynchronizer: Sync + Send + 'static {
@@ -238,7 +267,7 @@ pub trait MigrationStateSynchronizer: Sync + Send + 'static {
         meta_retriever: Self::MRetriever,
         sender: Self::Sender,
     ) -> Self;
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send>;
+    fn run(&self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send>>;
 }
 
 pub struct SeqMigrationStateSynchronizer<
@@ -263,22 +292,21 @@ impl<
         S: HostMetaSender,
     > SeqMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
-    fn set_db_meta(
+    async fn set_db_meta(
         address: String,
         meta_retriever: Arc<MR>,
         sender: Arc<S>,
-    ) -> impl Future<Item = (), Error = CoordinateError> + Send + 'static {
-        meta_retriever.get_host_meta(address.clone()).and_then(move |host_opt| -> Box<dyn Future<Item=(), Error=CoordinateError> + Send + 'static> {
-            let host = match host_opt {
-                Some(host) => host,
-                None => {
-                    error!("host can't be found after committing migration {}", address);
-                    return Box::new(future::ok(()))
-                }
-            };
-            info!("sending meta after committing migration {}", address);
-            sender.send_meta(host)
-        })
+    ) -> Result<(), CoordinateError> {
+        let host_opt = meta_retriever.get_host_meta(address.clone()).await?;
+        let host = match host_opt {
+            Some(host) => host,
+            None => {
+                error!("host can't be found after committing migration {}", address);
+                return Ok(())
+            }
+        };
+        info!("sending meta after committing migration {}", address);
+        sender.send_meta(host).await
     }
 }
 
@@ -312,7 +340,7 @@ impl<
         }
     }
 
-    fn run(&self) -> Box<dyn Stream<Item = (), Error = CoordinateError> + Send> {
+    fn run(&self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send>> {
         let checker = self.checker.clone();
         let committer = self.committer.clone();
         let meta_retriever = self.meta_retriever.clone();
@@ -409,8 +437,8 @@ mod tests {
         fn check(
             &self,
             _address: String,
-        ) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send> {
-            Box::new(future::ok(None))
+        ) -> Pin<Box<dyn Future<Output = Result<Option<String>, CoordinateError>> + Send>> {
+            Box::pin(future::ok(None))
         }
     }
 

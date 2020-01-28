@@ -1,7 +1,8 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{CoordinateError, ProxyFailure, ProxyFailureHandler, ProxyFailureRetriever};
-use futures01::{Future, Stream};
+use futures::{Future, Stream, TryFutureExt, FutureExt};
 use std::sync::Arc;
+use std::pin::Pin;
 
 pub struct BrokerProxyFailureRetriever<B: MetaDataBroker> {
     broker: Arc<B>,
@@ -16,7 +17,7 @@ impl<B: MetaDataBroker> BrokerProxyFailureRetriever<B> {
 impl<B: MetaDataBroker> ProxyFailureRetriever for BrokerProxyFailureRetriever<B> {
     fn retrieve_proxy_failures(
         &self,
-    ) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send> {
+    ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send>> {
         Box::new(
             self.broker
                 .get_failures()
@@ -45,7 +46,7 @@ impl<DB: MetaDataBroker, MB: MetaManipulationBroker + Clone> ProxyFailureHandler
     fn handle_proxy_failure(
         &self,
         proxy_failure: ProxyFailure,
-    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
         Box::new(
             self.mani_broker
                 .replace_proxy(proxy_failure)

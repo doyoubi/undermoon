@@ -92,6 +92,7 @@ struct RedisClientConnectionHandle {
 pub struct PooledRedisClient {
     conn_handle: Option<RedisClientConnectionHandle>,
     timeout: Duration,
+    err: bool,
 }
 
 impl PooledRedisClient {
@@ -99,6 +100,7 @@ impl PooledRedisClient {
         Self {
             conn_handle: Some(conn_handle),
             timeout,
+            err: false,
         }
     }
 
@@ -130,14 +132,20 @@ impl PooledRedisClient {
         command: Vec<BinSafeStr>,
     ) -> Result<RespVec, RedisClientError> {
         let exec_cut = self.execute_cmd(command);
-        match time::timeout(self.timeout, exec_cut).await {
+        let r = match time::timeout(self.timeout, exec_cut).await {
             Err(err) => {
                 warn!("redis client timeout: {:?}", err);
                 Err(RedisClientError::Timeout)
             }
-            Ok(Err(err)) => Err(err),
+            Ok(Err(err)) => {
+                Err(err)
+            },
             Ok(Ok(resp)) => Ok(resp),
+        };
+        if r.is_err() {
+            self.err = true;
         }
+        r
     }
 }
 
@@ -145,6 +153,9 @@ impl ThreadSafe for PooledRedisClient {}
 
 impl Drop for PooledRedisClient {
     fn drop(&mut self) {
+        if self.err {
+            return;
+        }
         if let Some(conn_handle) = self.conn_handle.take() {
             let PoolItemHandle {
                 item: conn,

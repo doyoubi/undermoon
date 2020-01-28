@@ -10,12 +10,13 @@ use super::recover::{BrokerProxyFailureRetriever, ReplaceNodeHandler};
 use super::sync::{BrokerMetaRetriever, HostMetaRespSender};
 use crate::common::utils::ThreadSafe;
 use crate::protocol::RedisClientFactory;
-use futures01::future::select_all;
-use futures01::{future, stream, Future, Stream};
+use futures::future::select_all;
+use futures::{future, stream, Future, FutureExt, TryFutureExt, StreamExt};
 use futures_timer::Delay;
 use std::iter;
 use std::sync::Arc;
 use std::time::Duration;
+use std::pin::Pin;
 
 #[derive(Debug, Clone)]
 pub struct CoordinatorConfig {
@@ -54,7 +55,7 @@ impl<
         }
     }
 
-    pub fn run(&self) -> impl Future<Item = (), Error = CoordinateError> {
+    pub fn run(&self) -> impl Future<Output = Result<(), CoordinateError>> {
         info!("coordinator config: {:?}", self.config);
 
         select_all(vec![
@@ -116,8 +117,8 @@ impl<
         )
     }
 
-    fn loop_detect(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let s = stream::iter_ok(iter::repeat(()));
+    fn loop_detect(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
         let reporter_id = self.config.reporter_id.clone();
@@ -149,8 +150,8 @@ impl<
         )
     }
 
-    fn loop_host_sync(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let s = stream::iter_ok(iter::repeat(()));
+    fn loop_host_sync(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
         Box::new(
@@ -177,8 +178,8 @@ impl<
         )
     }
 
-    fn loop_failure_handler(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let s = stream::iter_ok(iter::repeat(()));
+    fn loop_failure_handler(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let mani_broker = self.mani_broker.clone();
         Box::new(
@@ -205,8 +206,8 @@ impl<
         )
     }
 
-    fn loop_migration_sync(&self) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let s = stream::iter_ok(iter::repeat(()));
+    fn loop_migration_sync(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let mani_broker = self.mani_broker.clone();
         let client_factory = self.client_factory.clone();
