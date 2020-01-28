@@ -6,7 +6,6 @@ use super::command::{
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
-use crate::common::batching;
 use crate::common::utils::ThreadSafe;
 use crate::protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
 use futures01::sync::mpsc;
@@ -17,7 +16,7 @@ use std::fmt;
 use std::io;
 use std::sync;
 use std::time::Duration;
-use tokio::codec::Decoder;
+use tokio_util::codec::Decoder;
 use tokio::net::TcpStream;
 
 pub trait CmdHandler {
@@ -265,7 +264,7 @@ fn handle_write<H, W>(
     rx: mpsc::Receiver<CmdReplyReceiver>,
     session_batch_min_time: usize,
     session_batch_max_time: usize,
-    session_batch_buf: usize,
+    _session_batch_buf: usize,
 ) -> impl Future<Item = (), Error = SessionError> + Send
 where
     H: CmdHandler + Send + Sync + 'static,
@@ -290,18 +289,19 @@ where
             }
         });
 
-    let batch_min_time = Duration::from_nanos(session_batch_min_time as u64);
-    let batch_max_time = Duration::from_nanos(session_batch_max_time as u64);
-    batching::Chunks::new(
-        packets_stream,
-        session_batch_buf,
-        batch_min_time,
-        batch_max_time,
-    )
-    .map_err(|err: batching::Error<SessionError>| {
-        error!("batching error {:?}", err);
-        SessionError::Canceled
-    })
+    let _batch_min_time = Duration::from_nanos(session_batch_min_time as u64);
+    let _batch_max_time = Duration::from_nanos(session_batch_max_time as u64);
+//    batching::Chunks::new(
+//        packets_stream,
+//        session_batch_buf,
+//        batch_min_time,
+//        batch_max_time,
+//    )
+    packets_stream
+//    .map_err(|err: batching::Error<SessionError>| {
+//        error!("batching error {:?}", err);
+//        SessionError::Canceled
+//    })
     .fold((handler, writer), |(handler, writer), packets| {
         writer
             .send_all(stream::iter_ok::<_, io::Error>(packets))

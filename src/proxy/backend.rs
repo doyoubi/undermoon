@@ -1,7 +1,6 @@
 use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::batching::Chunks;
 use crate::common::future_group::new_future_group;
 use crate::common::utils::{gen_moved, get_slot, revolve_first_address, ThreadSafe};
 use crate::protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
@@ -19,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio;
-use tokio::codec::Decoder;
+use tokio_util::codec::Decoder;
 use tokio::net::TcpStream;
 
 pub type BackendResult<T> = Result<Box<T>, BackendError>;
@@ -301,7 +300,7 @@ pub fn handle_backend<H>(
     channel_size: usize,
     backend_batch_min_time: usize,
     backend_batch_max_time: usize,
-    backend_batch_buf: usize,
+    _backend_batch_buf: usize,
 ) -> (
     impl Future<Item = (), Error = BackendError> + Send,
     impl Future<Item = (), Error = BackendError> + Send,
@@ -313,15 +312,16 @@ where
 
     let (tx, rx) = mpsc::channel(channel_size);
 
-    let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
-    let batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
-    let task_receiver = Chunks::new(
-        task_receiver,
-        backend_batch_buf,
-        batch_min_time,
-        batch_max_time,
-    )
-    .map_err(|_| ());
+    let _batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
+    let _batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
+//    let task_receiver = Chunks::new(
+//        task_receiver,
+//        backend_batch_buf,
+//        batch_min_time,
+//        batch_max_time,
+//    )
+//    .map_err(|_| ());
+    let task_receiver = task_receiver.map_err(|_| ());
 
     let writer_handler = handle_write(task_receiver, writer, tx);
     let reader_handler = handle_read(handler, reader, rx);

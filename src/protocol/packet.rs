@@ -143,6 +143,19 @@ impl<T: AsRef<[u8]>> PacketEncoder for Resp<T> {
     }
 }
 
+impl PacketDecoder for RespVec {
+    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+        where
+            Self: Sized,
+    {
+        let item = IndexedResp::decode(buf)?;
+        match item {
+            Some(resp) => Ok(Some(resp.to_resp_vec())),
+            None => return Ok(None),
+        }
+    }
+}
+
 impl PacketDecoder for IndexedResp {
     fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
     where

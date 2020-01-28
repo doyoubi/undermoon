@@ -109,7 +109,7 @@ where
                 };
                 future::result(res)
             });
-        let delay = Delay::new(interval).map_err(|ioerr| (None, RedisClientError::Io(ioerr)));
+        let delay = Delay::new(interval).map_err(|io_err| (None, RedisClientError::Io(io_err)));
         exec_fut.join(delay).map(move |(client, ())| client)
     })
 }

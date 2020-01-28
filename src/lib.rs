@@ -9,8 +9,6 @@ extern crate futures_timer;
 extern crate reqwest;
 extern crate serde;
 extern crate tokio;
-extern crate tokio_core;
-extern crate tokio_timer;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
