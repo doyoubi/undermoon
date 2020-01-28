@@ -100,6 +100,7 @@ mod tests {
     use crate::protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp, RespVec};
     use futures01::stream;
     use std::sync::{Arc, Mutex};
+    use std::pin::Pin;
 
     const NODE1: &'static str = "127.0.0.1:7000";
     const NODE2: &'static str = "127.0.0.1:7001";
@@ -113,9 +114,9 @@ mod tests {
 
     impl RedisClient for DummyClient {
         fn execute(
-            self,
+            &mut self,
             _command: Vec<BinSafeStr>,
-        ) -> Box<dyn Future<Item = (Self, RespVec), Error = RedisClientError> + Send> {
+        ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>> {
             if self.address == NODE1 {
                 Box::new(future::ok((self, Resp::Arr(Array::Nil))))
             } else {
@@ -134,7 +135,7 @@ mod tests {
         fn create_client(
             &self,
             address: String,
-        ) -> Box<dyn Future<Item = Self::Client, Error = RedisClientError> + Send> {
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>> {
             Box::new(future::ok(DummyClient { address }))
         }
     }

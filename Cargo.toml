@@ -21,7 +21,8 @@ bytes = "0.4.12"
 tokio = { version = "0.2", features = ["full"] }
 tokio-util = { version = "0.2", features = ["full"] }
 futures01 = "0.1.29"
-futures = "0.3.4"
+futures = { version = "0.3.4", features = ["compat"] }
+futures-timer = "3.0.1"
 atomic-option = "0.1"
 crc16 = "0.4.0"
 crc64 = "1.0.0"
@@ -35,7 +36,6 @@ log = "0.4"
 env_logger = "0.6.0"
 scopeguard = "1.0.0"
 itertools = "0.8.0"
-futures-timer = "0.1"
 futures-batch = "0.6.0"
 config = "0.9"
 btoi = "0.4.0"

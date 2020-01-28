@@ -16,7 +16,7 @@ use tokio::time;
 use tokio_util::codec::{Framed, Decoder};
 use crate::protocol::{RespCodec};
 
-pub trait RedisClient {
+pub trait RedisClient: Send {
     fn execute(
         &mut self,
         command: Vec<BinSafeStr>,
@@ -29,7 +29,7 @@ pub trait RedisClientFactory: ThreadSafe {
     fn create_client(
         &self,
         address: String,
-    ) -> Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>>;
 }
 
 #[derive(Debug)]
