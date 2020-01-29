@@ -12,7 +12,7 @@ use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTaskSender, ReqTaskSende
 use crate::proxy::database::{DBSendError, DBTag};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
-use futures01::Future;
+use futures::{TryFutureExt};
 use itertools::Either;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -116,8 +116,7 @@ where
                                     "master slot task {} {} {} {} exit {:?}",
                                     db_name, epoch, slot_range_start, slot_range_end, e
                                 )
-                            })
-                            .compat(),
+                            }),
                     );
                 }
                 Either::Right(importing_task) => {
@@ -133,8 +132,7 @@ where
                                     "replica slot task {} {} {}-{} exit {:?}",
                                     db_name, epoch, slot_range_start, slot_range_end, e
                                 )
-                            })
-                            .compat(),
+                            }),
                     );
                 }
             }
@@ -165,14 +163,13 @@ where
             if let Some(fut) = task.start() {
                 let address = task.get_address();
                 tokio::spawn(
-                    fut.map(move |()| info!("deleting keys for {} stopped", address))
+                    fut.map_ok(move |()| info!("deleting keys for {} stopped", address))
                         .map_err(move |e| match e {
                             MigrationError::Canceled => {
                                 info!("task for deleting keys get canceled")
                             }
                             _ => error!("task for deleting keys exit with error {:?}", e),
-                        })
-                        .compat(),
+                        }),
                 );
             }
         }

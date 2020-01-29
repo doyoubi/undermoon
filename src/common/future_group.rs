@@ -33,24 +33,24 @@ pub struct FutureGroupHandle<F: Future> {
 }
 
 impl<F: Future> Future for FutureGroupHandle<F> {
-    type Output = ();
+    type Output = GroupResult<F::Output>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         match this.inner.poll(cx) {
             Poll::Pending => (),
-            Poll::Ready(_) => {
+            Poll::Ready(output) => {
                 if let Some(sender) = this.signal_sender.take() {
                     if let Err(()) = sender.send(()) {
                         debug!("failed to signal");
                     }
                 }
-                return Poll::Ready(());
+                return Poll::Ready(GroupResult::Inner(output));
             }
         }
 
-        this.signal_receiver.poll(cx).map(|_| ())
+        this.signal_receiver.poll(cx).map(|_| GroupResult::Canceled)
     }
 }
 
@@ -98,16 +98,21 @@ impl Drop for FutureAutoStopHandle {
 }
 
 impl<F: Future> Future for FutureAutoStop<F> {
-    type Output = ();
+    type Output = GroupResult<F::Output>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         match this.inner.poll(cx) {
             Poll::Pending => (),
-            Poll::Ready(_) => return Poll::Ready(()),
+            Poll::Ready(output) => return Poll::Ready(GroupResult::Inner(output)),
         }
 
-        this.signal_receiver.poll(cx).map(|_| ())
+        this.signal_receiver.poll(cx).map(|_| GroupResult::Canceled)
     }
+}
+
+pub enum GroupResult<T> {
+    Inner(T),
+    Canceled,
 }

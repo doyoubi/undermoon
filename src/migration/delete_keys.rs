@@ -2,17 +2,18 @@ use super::task::{ScanResponse, SlotRangeArray};
 use crate::common::cluster::SlotRange;
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::HostDBMap;
-use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
+use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle, GroupResult};
 use crate::common::resp_execution::keep_connecting_and_sending;
 use crate::protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
 use atomic_option::AtomicOption;
-use futures::Future;
+use futures::{Future, FutureExt};
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use crate::migration::task::MigrationError;
 
 pub struct DeleteKeysTaskMap {
     task_map: HashMap<String, HashMap<String, Arc<DeleteKeysTask>>>,
@@ -98,7 +99,7 @@ pub struct DeleteKeysTask {
     address: String,
     slot_ranges: SlotRangeArray,
     _handle: FutureAutoStopHandle, // once this task get dropped, the future will stop.
-    fut: AtomicOption<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    fut: AtomicOption<Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>>,
 }
 
 impl DeleteKeysTask {
@@ -129,7 +130,7 @@ impl DeleteKeysTask {
         }
     }
 
-    pub fn start(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
+    pub fn start(&self) -> Option<Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>> {
         self.fut.take(Ordering::SeqCst).map(|t| *t)
     }
 
@@ -139,7 +140,7 @@ impl DeleteKeysTask {
         client_factory: Arc<F>,
         delete_rate: u64,
     ) -> (
-        Pin<Box<dyn Future<Output = ()> + Send>>,
+        Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>,
         FutureAutoStopHandle,
     ) {
         let data = (slot_ranges, 0);
@@ -154,6 +155,11 @@ impl DeleteKeysTask {
             Self::scan_and_delete_keys,
         );
         let (send, handle) = new_auto_drop_future(send);
+        let send = send.map(|group| match group {
+            GroupResult::Canceled => Err(MigrationError::Canceled),
+            GroupResult::Inner(Err(err)) => Err(MigrationError::RedisClient(err)),
+            GroupResult::Inner(Ok(_)) => Ok(()),
+        });
         (Box::pin(send), handle)
     }
 

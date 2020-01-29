@@ -83,6 +83,7 @@ struct PoolItemHandle<T> {
 type ClientCodec = RespCodec<Vec<BinSafeStr>, RespVec>;
 type RawConnHandle = PoolItemHandle<RedisClientConnection>;
 
+#[derive(Debug)]
 struct RedisClientConnectionHandle {
     frame: Framed<TcpStream, ClientCodec>,
     reclaim_sender: Arc<crossbeam_channel::Sender<RedisClientConnection>>,
@@ -156,7 +157,8 @@ impl Drop for PooledRedisClient {
                 frame,
                 reclaim_sender,
             } = conn_handle;
-            match reclaim_sender.try_send(frame.into_innter()) {
+            let conn = RedisClientConnection{sock: frame.into_inner()};
+            match reclaim_sender.try_send(conn) {
                 Ok(()) => (),
                 Err(crossbeam_channel::TrySendError::Full(_)) => debug!("pool is full"),
                 Err(crossbeam_channel::TrySendError::Disconnected(_)) => debug!("pool is down"),

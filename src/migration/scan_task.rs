@@ -232,11 +232,24 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             .start()
             .ok_or_else(|| MigrationError::AlreadyStarted)?;
 
-        tokio::spawn(producer);
-        consumer.await;
-        info!("migration consumer finished forwarding data");
-        state.set_state(MigrationState::FinalSwitch);
-        Ok(())
+        tokio::spawn(
+            producer
+                .map_ok(|()| info!("migration producer finished scanning"))
+                .map_err(|err| {
+                    error!("migration producer finished error: {:?}", err);
+                })
+        );
+        match consumer.await {
+            Ok(()) => {
+                state.set_state(MigrationState::FinalSwitch);
+                info!("migration consumer finished forwarding data");
+                Ok(())
+            }
+            Err(err) => {
+                error!("migration consumer finished error: {:?}", err);
+                Err(err)
+            }
+        }
     }
 
     async fn final_switch(&self) -> Result<(), MigrationError> {

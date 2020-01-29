@@ -1,5 +1,5 @@
 use super::task::{ScanResponse, SlotRangeArray};
-use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
+use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle, GroupResult};
 use crate::common::resp_execution::{
     keep_connecting_and_sending, keep_connecting_and_sending_cmd_with_cached_client,
 };
@@ -14,6 +14,7 @@ use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use crate::migration::task::MigrationError;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
@@ -27,7 +28,7 @@ struct DataEntry {
     raw_data: Vec<u8>,
 }
 
-type MgrFut = Pin<Box<dyn Future<Output = ()> + Send>>;
+type MgrFut = Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>;
 
 pub struct ScanMigrationTask {
     handle: AtomicOption<(FutureAutoStopHandle, FutureAutoStopHandle)>, // once this task get dropped, the future will stop.
@@ -87,7 +88,7 @@ impl ScanMigrationTask {
         address: String,
         client_factory: Arc<F>,
     ) -> (
-        Pin<Box<dyn Future<Output = ()> + Send>>,
+        Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>,
         FutureAutoStopHandle,
     ) {
         let send = Self::forward_entries(
@@ -99,6 +100,11 @@ impl ScanMigrationTask {
             client_factory,
         );
         let (send, handle) = new_auto_drop_future(send);
+        let send = send.map(|group| match group {
+            GroupResult::Canceled => Err(MigrationError::Canceled),
+            GroupResult::Inner(Err(err)) => Err(MigrationError::RedisClient(err)),
+            GroupResult::Inner(Ok(_)) => Ok(()),
+        });
         (Box::pin(send), handle)
     }
 
@@ -203,7 +209,7 @@ impl ScanMigrationTask {
         client_factory: Arc<F>,
         scan_rate: u64,
     ) -> (
-        Pin<Box<dyn Future<Output = ()> + Send>>,
+        Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>,
         FutureAutoStopHandle,
     ) {
         let data = (slot_ranges, 0, sender, counter);
@@ -221,14 +227,15 @@ impl ScanMigrationTask {
             Self::scan_and_migrate_keys,
         );
         let mut stop_sender = stop_sender;
-        let send = send.map(move |res| {
-            match res {
-                Ok(_) => info!("migration producer finished scanning"),
-                Err(err) => error!("migration producer finished error: {:?}", err),
-            }
-            stop_sender.send(())
-        });
         let (send, handle) = new_auto_drop_future(send);
+        let send = send.map(move |group| {
+            stop_sender.send(());
+            match group {
+                GroupResult::Canceled => Err(MigrationError::Canceled),
+                GroupResult::Inner(Err(err)) => Err(MigrationError::RedisClient(err)),
+                GroupResult::Inner(Ok(_)) => Ok(()),
+            }
+        });
         (Box::pin(send), handle)
     }
 
