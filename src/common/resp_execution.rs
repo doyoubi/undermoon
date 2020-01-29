@@ -1,14 +1,16 @@
 use crate::common::utils::pretty_print_bytes;
-use crate::protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec, BinSafeStr};
+use crate::protocol::{
+    BinSafeStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
+};
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
-use futures::{Future, FutureExt, select};
+use futures::{select, Future, FutureExt};
 use futures_timer::Delay;
+use std::pin::Pin;
 use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
 use std::time::Duration;
-use std::pin::Pin;
 
 pub async fn keep_connecting_and_sending_cmd_with_cached_client<F: RedisClientFactory, Func>(
     client: Option<F::Client>,
@@ -18,8 +20,8 @@ pub async fn keep_connecting_and_sending_cmd_with_cached_client<F: RedisClientFa
     interval: Duration,
     handle_result: Func,
 ) -> Result<Option<F::Client>, RedisClientError>
-    where
-        Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
+where
+    Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
     let mut client = client;
     loop {
@@ -31,7 +33,7 @@ pub async fn keep_connecting_and_sending_cmd_with_cached_client<F: RedisClientFa
         match keep_sending_cmd(&mut c, cmd.clone(), interval, handle_result.clone()).await {
             Ok(()) => {
                 client = Some(c);
-            },
+            }
             Err(RedisClientError::Done) => return Err(RedisClientError::Done),
             Err(err) => {
                 error!(
@@ -53,8 +55,8 @@ pub async fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
     interval: Duration,
     handle_result: Func,
 ) -> Result<Option<F::Client>, RedisClientError>
-    where
-        Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
+where
+    Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
     keep_connecting_and_sending_cmd_with_cached_client(
         None,
@@ -63,7 +65,8 @@ pub async fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
         cmd,
         interval,
         handle_result,
-    ).await
+    )
+    .await
 }
 
 pub async fn keep_sending_cmd<C: RedisClient, Func>(
@@ -72,8 +75,8 @@ pub async fn keep_sending_cmd<C: RedisClient, Func>(
     interval: Duration,
     handle_result: Func,
 ) -> Result<(), RedisClientError>
-    where
-        Func: Fn(RespVec) -> Result<(), RedisClientError>,
+where
+    Func: Fn(RespVec) -> Result<(), RedisClientError>,
 {
     loop {
         let response = match client.execute(cmd.clone()).await {
@@ -102,10 +105,13 @@ pub async fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory,
     interval: Duration,
     send_func: Func,
 ) -> Result<T, RedisClientError>
-    where
-        Func: Clone
+where
+    Func: Clone
         + Send
-        + Fn(T, &'static mut F::Client) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
+        + Fn(
+            T,
+            &'static mut F::Client,
+        ) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
 {
     let mut data = data;
     loop {
@@ -113,7 +119,7 @@ pub async fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory,
             Ok(client) => client,
             Err(err) => {
                 Delay::new(interval).await;
-                continue
+                continue;
             }
         };
         data = match keep_sending(data.clone(), &mut client, interval, send_func.clone()).await {
@@ -134,8 +140,9 @@ pub async fn keep_sending<T: Clone + Send, C: RedisClient, Func>(
     interval: Duration,
     send_func: Func,
 ) -> Result<T, (T, RedisClientError)>
-    where
-        Func: Send + Fn(T, &'static mut C) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
+where
+    Func: Send
+        + Fn(T, &'static mut C) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
 {
     let mut data = data;
     loop {
@@ -157,7 +164,7 @@ pub struct I64Retriever<F: RedisClientFactory> {
     interval: Duration,
 }
 
-impl<F: RedisClientFactory> I64Retriever<F>  {
+impl<F: RedisClientFactory> I64Retriever<F> {
     pub fn new(
         init_data: i64,
         client_factory: Arc<F>,
@@ -247,12 +254,12 @@ impl<F: RedisClientFactory> Drop for I64Retriever<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use futures::future;
-    use tokio::runtime::Runtime;
     use crate::common::utils::ThreadSafe;
     use crate::protocol::BinSafeStr;
     use crate::protocol::Resp;
+    use futures::future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::runtime::Runtime;
 
     #[derive(Debug)]
     struct Counter {
@@ -286,14 +293,13 @@ mod tests {
         fn execute(
             &mut self,
             _command: Vec<BinSafeStr>,
-        ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>>
-        {
+        ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>> {
             let client = self;
             if client.counter.count.load(Ordering::SeqCst) < client.counter.max_count {
                 client.counter.count.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async {Ok(Resp::Simple("OK".to_string().into_bytes()))})
+                Box::pin(async { Ok(Resp::Simple("OK".to_string().into_bytes())) })
             } else {
-                Box::pin(async {Err(RedisClientError::Closed)})
+                Box::pin(async { Err(RedisClientError::Closed) })
             }
         }
     }
@@ -316,8 +322,7 @@ mod tests {
         fn create_client(
             &self,
             _address: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>>
-        {
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>> {
             Box::pin(future::ok(DummyRedisClient::new(self.counter.clone())))
         }
     }
@@ -328,12 +333,7 @@ mod tests {
         let counter = Arc::new(Counter::new(3));
         let mut client = DummyRedisClient::new(counter.clone());
         let mut rt = Runtime::new().expect("test_keep_sending_cmd");
-        let fut = keep_sending_cmd(
-            &mut client,
-            vec![],
-            interval,
-            retry_handle_func,
-        );
+        let fut = keep_sending_cmd(&mut client, vec![], interval, retry_handle_func);
         let res = rt.block_on(fut);
         assert!(res.is_err());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);

@@ -1,8 +1,8 @@
 use futures::channel::oneshot;
-use futures::{Future};
 use futures::task::{Context, Poll};
-use std::pin::Pin;
+use futures::Future;
 use pin_project::{pin_project, pinned_drop};
+use std::pin::Pin;
 
 pub fn new_future_group<FA: Future, FB: Future>(
     future1: FA,
@@ -46,8 +46,8 @@ impl<F: Future> Future for FutureGroupHandle<F> {
                         debug!("failed to signal");
                     }
                 }
-                return Poll::Ready(())
-            },
+                return Poll::Ready(());
+            }
         }
 
         this.signal_receiver.poll(cx).map(|_| ())

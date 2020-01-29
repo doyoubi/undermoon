@@ -8,6 +8,7 @@ use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::utils::ThreadSafe;
 use crate::protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
+use futures::StreamExt;
 use futures01::sync::mpsc;
 use futures01::{future, stream, Future, Sink, Stream};
 use std::boxed::Box;
@@ -16,9 +17,8 @@ use std::fmt;
 use std::io;
 use std::sync;
 use std::time::Duration;
-use tokio_util::codec::Decoder;
 use tokio::net::TcpStream;
-use futures::StreamExt;
+use tokio_util::codec::Decoder;
 
 pub trait CmdHandler {
     fn handle_cmd(&self, sender: CmdReplySender);
@@ -292,12 +292,12 @@ where
 
     let _batch_min_time = Duration::from_nanos(session_batch_min_time as u64);
     let _batch_max_time = Duration::from_nanos(session_batch_max_time as u64);
-//    batching::Chunks::new(
-//        packets_stream,
-//        session_batch_buf,
-//        batch_min_time,
-//        batch_max_time,
-//    )
+    //    batching::Chunks::new(
+    //        packets_stream,
+    //        session_batch_buf,
+    //        batch_min_time,
+    //        batch_max_time,
+    //    )
     packets_stream
 //    .map_err(|err: batching::Error<SessionError>| {
 //        error!("batching error {:?}", err);

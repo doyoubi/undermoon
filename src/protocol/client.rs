@@ -1,5 +1,6 @@
 use super::resp::{BinSafeStr, RespVec};
 use crate::common::utils::{revolve_first_address, ThreadSafe};
+use crate::protocol::RespCodec;
 use atomic_option::AtomicOption;
 use chashmap::CHashMap;
 use crossbeam_channel;
@@ -13,8 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time;
-use tokio_util::codec::{Framed, Decoder};
-use crate::protocol::{RespCodec};
+use tokio_util::codec::{Decoder, Framed};
 
 pub trait RedisClient: Send {
     fn execute<'s>(
@@ -104,10 +104,7 @@ impl PooledRedisClient {
         }
     }
 
-    async fn execute_cmd(
-        &mut self,
-        command: Vec<BinSafeStr>,
-    ) -> Result<RespVec, RedisClientError> {
+    async fn execute_cmd(&mut self, command: Vec<BinSafeStr>) -> Result<RespVec, RedisClientError> {
         let frame = match &mut self.conn_handle {
             Some(RedisClientConnectionHandle { frame, .. }) => frame,
             None => {
@@ -122,7 +119,7 @@ impl PooledRedisClient {
             Some(Err(err)) => {
                 warn!("redis client failed to get reply: {:?}", err);
                 Err(RedisClientError::InvalidReply)
-            },
+            }
             None => Err(RedisClientError::Closed),
         }
     }
@@ -137,9 +134,7 @@ impl PooledRedisClient {
                 warn!("redis client timeout: {:?}", err);
                 Err(RedisClientError::Timeout)
             }
-            Ok(Err(err)) => {
-                Err(err)
-            },
+            Ok(Err(err)) => Err(err),
             Ok(Ok(resp)) => Ok(resp),
         };
         if r.is_err() {
@@ -200,8 +195,7 @@ impl PooledRedisClientFactory {
     async fn create_conn(
         &self,
         address: String,
-    ) -> Result<RedisClientConnection, RedisClientError>
-    {
+    ) -> Result<RedisClientConnection, RedisClientError> {
         let sock_address = match revolve_first_address(&address) {
             Some(address) => address,
             None => return Err(RedisClientError::InvalidAddress),
@@ -210,10 +204,13 @@ impl PooledRedisClientFactory {
             Ok(conn) => conn,
             Err(io_err) => return Err(RedisClientError::Io(io_err)),
         };
-        Ok(RedisClientConnection{sock})
+        Ok(RedisClientConnection { sock })
     }
 
-    async fn create_client_impl(&self, address: String) -> Result<PooledRedisClient, RedisClientError> {
+    async fn create_client_impl(
+        &self,
+        address: String,
+    ) -> Result<PooledRedisClient, RedisClientError> {
         let mut existing_conn: Option<RawConnHandle> = None;
         let new_reclaim_sender: AtomicOption<Arc<_>> = AtomicOption::empty();
 
@@ -240,15 +237,15 @@ impl PooledRedisClientFactory {
         );
 
         if let Some(conn_handle) = existing_conn.take() {
-            let PoolItemHandle{item, reclaim_sender} = conn_handle;
+            let PoolItemHandle {
+                item,
+                reclaim_sender,
+            } = conn_handle;
             let conn_handle = RedisClientConnectionHandle {
                 frame: ClientCodec::default().framed(item.into()),
                 reclaim_sender,
             };
-            return Ok(PooledRedisClient::new(
-                conn_handle,
-                self.timeout,
-            ));
+            return Ok(PooledRedisClient::new(conn_handle, self.timeout));
         }
 
         let timeout = self.timeout;

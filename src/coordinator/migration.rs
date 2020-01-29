@@ -3,9 +3,9 @@ use super::core::{CoordinateError, MigrationCommitter, MigrationStateChecker};
 use crate::common::cluster::MigrationTaskMeta;
 use crate::protocol::{Array, BulkStr, Resp};
 use crate::protocol::{RedisClient, RedisClientFactory, RespVec};
-use futures::{Future, FutureExt, TryFutureExt, stream, Stream};
-use std::str;
+use futures::{stream, Future, FutureExt, Stream, TryFutureExt};
 use std::pin::Pin;
+use std::str;
 use std::sync::Arc;
 
 pub struct MigrationStateRespChecker<F: RedisClientFactory> {
@@ -37,12 +37,16 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
 }
 
 impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
-    async fn check_impl(
-        &self,
-        address: String,
-    ) -> Result<Vec<MigrationTaskMeta>, CoordinateError> {
-        let mut client = self.client_factory.create_client(address.clone()).await.map_err(CoordinateError::Redis)?;
-        let cmd = vec!["UMCTL".to_string(), "INFOMGR".to_string()].into_iter().map(String::into_bytes).collect();
+    async fn check_impl(&self, address: String) -> Result<Vec<MigrationTaskMeta>, CoordinateError> {
+        let mut client = self
+            .client_factory
+            .create_client(address.clone())
+            .await
+            .map_err(CoordinateError::Redis)?;
+        let cmd = vec!["UMCTL".to_string(), "INFOMGR".to_string()]
+            .into_iter()
+            .map(String::into_bytes)
+            .collect();
         let resp = client.execute(cmd).await.map_err(CoordinateError::Redis)?;
 
         match resp {
@@ -52,10 +56,7 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
                     match Self::parse_migration_task_meta(&element) {
                         Some(meta) => metadata.push(meta),
                         None => {
-                            error!(
-                                "failed to parse migration task meta data {:?}",
-                                element
-                            );
+                            error!("failed to parse migration task meta data {:?}", element);
                             return Err(CoordinateError::InvalidReply);
                         }
                     };
@@ -84,7 +85,7 @@ impl<F: RedisClientFactory> MigrationStateChecker for MigrationStateRespChecker<
                     };
                     stream::iter(elements)
                 })
-                .flatten_stream()
+                .flatten_stream(),
         )
     }
 }

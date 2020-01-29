@@ -4,6 +4,7 @@ use super::slowlog::TaskEvent;
 use crate::common::future_group::new_future_group;
 use crate::common::utils::{gen_moved, get_slot, revolve_first_address, ThreadSafe};
 use crate::protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
+use futures::StreamExt;
 use futures01::sync::mpsc;
 use futures01::Sink;
 use futures01::{future, stream, Future, Stream};
@@ -18,9 +19,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio;
-use tokio_util::codec::Decoder;
 use tokio::net::TcpStream;
-use futures::StreamExt;
+use tokio_util::codec::Decoder;
 
 pub type BackendResult<T> = Result<Box<T>, BackendError>;
 
@@ -315,13 +315,13 @@ where
 
     let _batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
     let _batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
-//    let task_receiver = Chunks::new(
-//        task_receiver,
-//        backend_batch_buf,
-//        batch_min_time,
-//        batch_max_time,
-//    )
-//    .map_err(|_| ());
+    //    let task_receiver = Chunks::new(
+    //        task_receiver,
+    //        backend_batch_buf,
+    //        batch_min_time,
+    //        batch_max_time,
+    //    )
+    //    .map_err(|_| ());
     let task_receiver = task_receiver.map_err(|_| ());
 
     let writer_handler = handle_write(task_receiver, writer, tx);

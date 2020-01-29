@@ -4,12 +4,12 @@ use super::slowlog::SlowRequestLogger;
 use crate::common::config::ConfigError;
 use crate::common::future_group::new_future_group;
 use crate::common::utils::{revolve_first_address, ThreadSafe};
-use futures01::{future, Future};
+use futures::compat::Future01CompatExt;
 use futures::TryFutureExt;
+use futures01::{future, Future};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use futures::compat::Future01CompatExt;
 
 #[derive(Debug)]
 pub struct ServerProxyConfig {

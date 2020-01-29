@@ -1,8 +1,8 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{CoordinateError, ProxyFailure, ProxyFailureHandler, ProxyFailureRetriever};
 use futures::{Future, Stream, TryFutureExt, TryStreamExt};
-use std::sync::Arc;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub struct BrokerProxyFailureRetriever<B: MetaDataBroker> {
     broker: Arc<B>,

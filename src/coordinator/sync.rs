@@ -7,8 +7,8 @@ use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
 use futures::{Future, TryFutureExt};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub struct HostMetaRespSender<F: RedisClientFactory> {
     client_factory: Arc<F>,
@@ -22,24 +22,33 @@ impl<F: RedisClientFactory> HostMetaRespSender<F> {
 
 impl<F: RedisClientFactory> HostMetaRespSender<F> {
     async fn send_meta_impl(&self, host: Host) -> Result<(), CoordinateError> {
-        let mut client = self.client_factory.create_client(host.get_address().clone())
+        let mut client = self
+            .client_factory
+            .create_client(host.get_address().clone())
             .await
             .map_err(CoordinateError::Redis)?;
         let host_with_only_masters = filter_host_masters(host.clone());
-        send_meta(&mut client,
-                  "SETREPL".to_string(),
-                  generate_repl_meta_cmd_args(host, DBMapFlags { force: false })).await?;
+        send_meta(
+            &mut client,
+            "SETREPL".to_string(),
+            generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
+        )
+        .await?;
         send_meta(
             &mut client,
             "SETDB".to_string(),
             generate_host_meta_cmd_args(DBMapFlags { force: false }, host_with_only_masters),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 }
 
 impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
-    fn send_meta<'s>(&'s self, host: Host) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
+    fn send_meta<'s>(
+        &'s self,
+        host: Host,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
         Box::pin(self.send_meta_impl(host))
     }
 }

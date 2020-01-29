@@ -9,11 +9,11 @@ use std::pin::Pin;
 pub trait MetaDataBroker: ThreadSafe {
     fn get_cluster_names<'s>(
         &'s self,
-    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send +'s>>;
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
     fn get_cluster<'s>(
         &'s self,
         name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send +'s>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>;
     fn get_host_addresses<'s>(
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
@@ -26,7 +26,9 @@ pub trait MetaDataBroker: ThreadSafe {
         address: String,
         reporter_id: String,
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send + 's>>;
-    fn get_failures<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+    fn get_failures<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
 }
 
 // Maybe we would want to support other database supporting redis protocol.

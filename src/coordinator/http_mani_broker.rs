@@ -1,9 +1,9 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
 use crate::common::cluster::{Host, MigrationTaskMeta};
 use crate::common::utils::ThreadSafe;
-use std::pin::Pin;
-use futures::{Future};
+use futures::Future;
 use reqwest;
+use std::pin::Pin;
 
 #[derive(Clone)]
 pub struct HttpMetaManipulationBroker {
@@ -35,7 +35,6 @@ impl HttpMetaManipulationBroker {
             error!("Failed to replace proxy {:?}", e);
             MetaManipulationBrokerError::InvalidReply
         })?;
-
 
         let status = response.status();
 
@@ -69,10 +68,16 @@ impl HttpMetaManipulationBroker {
     ) -> Result<(), MetaManipulationBrokerError> {
         let url = format!("http://{}/api/clusters/migrations", self.broker_address);
 
-        let response = self.client.put(&url).json(&meta).send().await.map_err(|e| {
-            error!("Failed to commit migration {:?}", e);
-            MetaManipulationBrokerError::InvalidReply
-        })?;
+        let response = self
+            .client
+            .put(&url)
+            .json(&meta)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("Failed to commit migration {:?}", e);
+                MetaManipulationBrokerError::InvalidReply
+            })?;
 
         let status = response.status();
 
@@ -83,11 +88,17 @@ impl HttpMetaManipulationBroker {
             let result = response.text().await;
             match result {
                 Ok(body) => {
-                    error!("HttpMetaManipulationBroker::commit_migration Error body: {:?}", body);
+                    error!(
+                        "HttpMetaManipulationBroker::commit_migration Error body: {:?}",
+                        body
+                    );
                     Err(MetaManipulationBrokerError::InvalidReply)
                 }
                 Err(e) => {
-                    error!("HttpMetaManipulationBroker::commit_migration Failed to get body: {:?}", e);
+                    error!(
+                        "HttpMetaManipulationBroker::commit_migration Failed to get body: {:?}",
+                        e
+                    );
                     Err(MetaManipulationBrokerError::InvalidReply)
                 }
             }

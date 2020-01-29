@@ -1,7 +1,7 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
 use crate::common::cluster::{Cluster, Host};
 use crate::common::utils::ThreadSafe;
-use futures::{stream, Future, Stream, FutureExt};
+use futures::{stream, Future, FutureExt, Stream};
 use reqwest;
 use serde_derive::Deserialize;
 use std::pin::Pin;
@@ -24,61 +24,46 @@ impl HttpMetaBroker {
 impl ThreadSafe for HttpMetaBroker {}
 
 impl HttpMetaBroker {
-    async fn get_cluster_names_impl(
-        &self,
-    ) -> Result<Vec<String>, MetaDataBrokerError> {
+    async fn get_cluster_names_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = format!("http://{}/api/clusters/names", self.broker_address);
-        let response = self.client.get(&url).send().await.map_err(|e|{
+        let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
-        let ClusterNamesPayload { names } = response
-            .json().await.map_err(|e| {
+        let ClusterNamesPayload { names } = response.json().await.map_err(|e| {
             error!("failed to get cluster names from json {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
         Ok(names)
     }
 
-    async fn get_cluster_impl(
-        &self,
-        name: String,
-    ) -> Result<Option<Cluster>, MetaDataBrokerError> {
+    async fn get_cluster_impl(&self, name: String) -> Result<Option<Cluster>, MetaDataBrokerError> {
         let url = format!("http://{}/api/clusters/meta/{}", self.broker_address, name);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
-        let ClusterPayload { cluster } = response
-            .json().await
-            .map_err(|e| {
-                error!("failed to get cluster from json {:?}", e);
-                MetaDataBrokerError::InvalidReply
-            })?;
+        let ClusterPayload { cluster } = response.json().await.map_err(|e| {
+            error!("failed to get cluster from json {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        })?;
         Ok(cluster)
     }
 
-    async fn get_host_addresses_impl(
-        &self,
-    ) -> Result<Vec<String>, MetaDataBrokerError> {
+    async fn get_host_addresses_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = format!("http://{}/api/proxies/addresses", self.broker_address);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get host addresses {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
-        let HostAddressesPayload { addresses } = response
-            .json().await
-            .map_err(|e| {
-                error!("failed to get host adddresses from json {:?}", e);
-                MetaDataBrokerError::InvalidReply
-            })?;
+        let HostAddressesPayload { addresses } = response.json().await.map_err(|e| {
+            error!("failed to get host adddresses from json {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        })?;
         Ok(addresses)
     }
 
-    async fn get_host_impl(
-        &self,
-        address: String,
-    ) -> Result<Option<Host>, MetaDataBrokerError> {
+    async fn get_host_impl(&self, address: String) -> Result<Option<Host>, MetaDataBrokerError> {
         let url = format!(
             "http://{}/api/proxies/meta/{}",
             self.broker_address, address
@@ -87,12 +72,10 @@ impl HttpMetaBroker {
             error!("failed to get host {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
-        let HostPayload { host } = response
-            .json().await
-            .map_err(move |e| {
-                error!("failed to get host {} from json {:?}", address, e);
-                MetaDataBrokerError::InvalidReply
-            })?;
+        let HostPayload { host } = response.json().await.map_err(move |e| {
+            error!("failed to get host {} from json {:?}", address, e);
+            MetaDataBrokerError::InvalidReply
+        })?;
         Ok(host)
     }
 
@@ -129,18 +112,14 @@ impl HttpMetaBroker {
 
     async fn get_failures_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = format!("http://{}/api/failures", self.broker_address);
-        let response = self.client.get(&url).send().await
-            .map_err(|e| {
-                error!("Failed to get failures {:?}", e);
-                MetaDataBrokerError::InvalidReply
-            })?;
-        let FailuresPayload { addresses } = response
-            .json()
-            .await
-            .map_err(|e| {
-                error!("Failed to get cluster names from json {:?}", e);
-                MetaDataBrokerError::InvalidReply
-            })?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            error!("Failed to get failures {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        })?;
+        let FailuresPayload { addresses } = response.json().await.map_err(|e| {
+            error!("Failed to get cluster names from json {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        })?;
         Ok(addresses)
     }
 }
@@ -158,14 +137,15 @@ impl MetaDataBroker for HttpMetaBroker {
                     };
                     stream::iter(elements)
                 })
-                .flatten_stream()
+                .flatten_stream(),
         )
     }
 
     fn get_cluster<'s>(
         &'s self,
         name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>
+    {
         Box::pin(self.get_cluster_impl(name))
     }
 
@@ -181,7 +161,7 @@ impl MetaDataBroker for HttpMetaBroker {
                     };
                     stream::iter(elements)
                 })
-                .flatten_stream()
+                .flatten_stream(),
         )
     }
 
@@ -200,7 +180,9 @@ impl MetaDataBroker for HttpMetaBroker {
         Box::pin(self.add_failure_impl(address, reporter_id))
     }
 
-    fn get_failures<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send +'s>> {
+    fn get_failures<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(
             self.get_failures_impl()
                 .map(|failures_res| {
@@ -210,7 +192,7 @@ impl MetaDataBroker for HttpMetaBroker {
                     };
                     stream::iter(elements)
                 })
-                .flatten_stream()
+                .flatten_stream(),
         )
     }
 }

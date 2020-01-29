@@ -1,17 +1,19 @@
 use super::broker::{MetaDataBrokerError, MetaManipulationBrokerError};
 use crate::common::cluster::{Host, MigrationTaskMeta};
 use crate::protocol::RedisClientError;
-use futures::{future, Future, FutureExt, TryFutureExt, stream, Stream, StreamExt};
+use futures::{future, stream, Future, FutureExt, Stream, StreamExt, TryFutureExt};
+use futures_batch::ChunksTimeoutStreamExt;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::Arc;
 use std::pin::Pin;
-use futures_batch::ChunksTimeoutStreamExt;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub trait ProxiesRetriever: Sync + Send + 'static {
-    fn retrieve_proxies<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send +'s>>;
+    fn retrieve_proxies<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send + 's>>;
 }
 
 pub type ProxyFailure = String; // proxy address
@@ -24,8 +26,10 @@ pub trait FailureChecker: Sync + Send + 'static {
 }
 
 pub trait FailureReporter: Sync + Send + 'static {
-    fn report<'s>(&'s self, address: String)
-        -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
+    fn report<'s>(
+        &'s self,
+        address: String,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
 }
 
 pub trait FailureDetector {
@@ -47,16 +51,19 @@ pub struct SeqFailureDetector<
     reporter: Arc<Reporter>,
 }
 
-impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetector<T, C, P>
-{
-    async fn check_and_report(checker: &C, reporter: &P, address: String) -> Result<(), CoordinateError> {
+impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetector<T, C, P> {
+    async fn check_and_report(
+        checker: &C,
+        reporter: &P,
+        address: String,
+    ) -> Result<(), CoordinateError> {
         let address = match checker.check(address).await? {
             Some(addr) => addr,
             None => return Ok(()),
         };
         if let Err(err) = reporter.report(address).await {
             error!("failed to report failure: {:?}", err);
-            return Err(err)
+            return Err(err);
         }
         Ok(())
     }
@@ -69,7 +76,13 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetec
 
         let mut res = Ok(());
 
-        for results in self.retriever.retrieve_proxies().chunks_timeout(BATCH_SIZE, batch_time).next().await {
+        for results in self
+            .retriever
+            .retrieve_proxies()
+            .chunks_timeout(BATCH_SIZE, batch_time)
+            .next()
+            .await
+        {
             let mut proxies = vec![];
             for r in results {
                 match r {
@@ -77,10 +90,13 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetec
                     Err(err) => {
                         error!("failed to get proxy: {:?}", err);
                         res = Err(err);
-                    },
+                    }
                 }
             }
-            let futs: Vec<_> = proxies.into_iter().map(|address| Self::check_and_report(&checker, &reporter, address)).collect();
+            let futs: Vec<_> = proxies
+                .into_iter()
+                .map(|address| Self::check_and_report(&checker, &reporter, address))
+                .collect();
             let results = future::join_all(futs).await;
             for r in results.into_iter() {
                 if let Err(err) = r {
@@ -147,7 +163,13 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> SeqFailureHandler<P, H> {
 
         let mut res = Ok(());
 
-        for results in self.proxy_failure_retriever.retrieve_proxy_failures().chunks_timeout(BATCH_SIZE, batch_time).next().await {
+        for results in self
+            .proxy_failure_retriever
+            .retrieve_proxy_failures()
+            .chunks_timeout(BATCH_SIZE, batch_time)
+            .next()
+            .await
+        {
             let mut proxies = vec![];
             for r in results {
                 match r {
@@ -155,17 +177,20 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> SeqFailureHandler<P, H> {
                     Err(err) => {
                         error!("failed to get proxy: {:?}", err);
                         res = Err(err);
-                    },
+                    }
                 }
             }
-            let futs: Vec<_> = proxies.into_iter().map(|proxy_address| {
-                handler
-                    .handle_proxy_failure(proxy_address.clone())
-                    .or_else(move |err| {
-                        error!("Failed to handler proxy failre {} {:?}", proxy_address, err);
-                        future::ok(())
-                    })
-            }).collect();
+            let futs: Vec<_> = proxies
+                .into_iter()
+                .map(|proxy_address| {
+                    handler
+                        .handle_proxy_failure(proxy_address.clone())
+                        .or_else(move |err| {
+                            error!("Failed to handler proxy failre {} {:?}", proxy_address, err);
+                            future::ok(())
+                        })
+                })
+                .collect();
             let results = future::join_all(futs).await;
             for r in results.into_iter() {
                 if let Err(err) = r {
@@ -190,12 +215,19 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFai
     }
 
     fn run<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send + 's>> {
-        Box::pin(self.run_impl().map(|res| stream::iter(vec![res])).flatten_stream())
+        Box::pin(
+            self.run_impl()
+                .map(|res| stream::iter(vec![res]))
+                .flatten_stream(),
+        )
     }
 }
 
 pub trait HostMetaSender: Sync + Send + 'static {
-    fn send_meta<'s>(&'s self, host: Host) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
+    fn send_meta<'s>(
+        &'s self,
+        host: Host,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
 }
 
 pub trait HostMetaRetriever: Sync + Send + 'static {
@@ -228,9 +260,14 @@ pub struct HostMetaRespSynchronizer<
     sender: Arc<Sender>,
 }
 
-impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaRespSynchronizer<P, M, S>
+impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender>
+    HostMetaRespSynchronizer<P, M, S>
 {
-    async fn retrieve_and_send_meta(meta_retriever: &M, sender: &S, address: String) -> Result<(), CoordinateError> {
+    async fn retrieve_and_send_meta(
+        meta_retriever: &M,
+        sender: &S,
+        address: String,
+    ) -> Result<(), CoordinateError> {
         let host_opt = meta_retriever.get_host_meta(address).await?;
         let host = match host_opt {
             Some(host) => host,
@@ -249,7 +286,10 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaRespS
         let batch_time = Duration::from_millis(1);
 
         let mut res = Ok(());
-        let mut s = self.proxy_retriever.retrieve_proxies().chunks_timeout(10, batch_time);
+        let mut s = self
+            .proxy_retriever
+            .retrieve_proxies()
+            .chunks_timeout(10, batch_time);
         for results in s.next().await {
             let mut proxies = vec![];
             for r in results {
@@ -258,10 +298,13 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaRespS
                     Err(err) => {
                         error!("failed to get proxy: {:?}", err);
                         res = Err(err);
-                    },
+                    }
                 }
             }
-            let futs: Vec<_> = proxies.into_iter().map(|address| Self::retrieve_and_send_meta(&meta_retriever, &sender, address)).collect();
+            let futs: Vec<_> = proxies
+                .into_iter()
+                .map(|address| Self::retrieve_and_send_meta(&meta_retriever, &sender, address))
+                .collect();
             let results = future::join_all(futs).await;
             for r in results.into_iter() {
                 if let Err(err) = r {
@@ -294,7 +337,11 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynch
     }
 
     fn run<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send + 's>> {
-        Box::pin(self.run_impl().map(|res| stream::iter(vec![res])).flatten_stream())
+        Box::pin(
+            self.run_impl()
+                .map(|res| stream::iter(vec![res]))
+                .flatten_stream(),
+        )
     }
 }
 
@@ -361,47 +408,49 @@ impl<
             Some(host) => host,
             None => {
                 error!("host can't be found after committing migration {}", address);
-                return Ok(())
+                return Ok(());
             }
         };
         info!("sending meta after committing migration {}", address);
         sender.send_meta(host).await
     }
 
-    async fn sync_migration_state(commiter: &MC, meta_retriever: &MR, sender: &S, meta: MigrationTaskMeta) -> Result<(), CoordinateError> {
-        let (src_address, dst_address) =
-            match meta.slot_range.tag.get_migration_meta() {
-                Some(migration_meta) => (
-                    migration_meta.src_proxy_address.clone(),
-                    migration_meta.dst_proxy_address.clone(),
-                ),
-                None => {
-                    error!("invalid migration task meta {:?}, skip it.", meta);
-                    return Ok(());
-                }
-            };
+    async fn sync_migration_state(
+        commiter: &MC,
+        meta_retriever: &MR,
+        sender: &S,
+        meta: MigrationTaskMeta,
+    ) -> Result<(), CoordinateError> {
+        let (src_address, dst_address) = match meta.slot_range.tag.get_migration_meta() {
+            Some(migration_meta) => (
+                migration_meta.src_proxy_address.clone(),
+                migration_meta.dst_proxy_address.clone(),
+            ),
+            None => {
+                error!("invalid migration task meta {:?}, skip it.", meta);
+                return Ok(());
+            }
+        };
 
         if let Err(err) = commiter.commit(meta).await {
             error!("failed to commit migration state: {:?}", err);
-            return Err(err)
+            return Err(err);
         }
 
         // Send to dst first to make sure the slots will always have owner.
-        Self::set_db_meta(
-            dst_address,
-            meta_retriever,
-            sender,
-        ).await?;
-        Self::set_db_meta(
-            src_address,
-            meta_retriever,
-            sender,
-        ).await?;
+        Self::set_db_meta(dst_address, meta_retriever, sender).await?;
+        Self::set_db_meta(src_address, meta_retriever, sender).await?;
 
         Ok(())
     }
 
-    async fn check_and_sync(checker: &SC, commiter: &MC, meta_retriever: &MR, sender: &S, address: String) -> Result<(), CoordinateError> {
+    async fn check_and_sync(
+        checker: &SC,
+        commiter: &MC,
+        meta_retriever: &MR,
+        sender: &S,
+        address: String,
+    ) -> Result<(), CoordinateError> {
         for res in checker.check(address).next().await {
             let meta = match res {
                 Ok(meta) => meta,
@@ -422,7 +471,10 @@ impl<
         let batch_time = Duration::from_millis(1);
 
         let mut res = Ok(());
-        let mut s = self.proxy_retriever.retrieve_proxies().chunks_timeout(CHUNK_SIZE, batch_time);
+        let mut s = self
+            .proxy_retriever
+            .retrieve_proxies()
+            .chunks_timeout(CHUNK_SIZE, batch_time);
         for results in s.next().await {
             let mut proxies = vec![];
             for r in results {
@@ -431,11 +483,15 @@ impl<
                     Err(err) => {
                         error!("failed to get proxy: {:?}", err);
                         res = Err(err);
-                    },
+                    }
                 }
             }
-            let futs: Vec<_> = proxies.into_iter()
-                .map(|address| Self::check_and_sync(&checker, &committer, &meta_retriever, &sender, address)).collect();
+            let futs: Vec<_> = proxies
+                .into_iter()
+                .map(|address| {
+                    Self::check_and_sync(&checker, &committer, &meta_retriever, &sender, address)
+                })
+                .collect();
             let results = future::join_all(futs).await;
             for r in results.into_iter() {
                 if let Err(err) = r {
@@ -479,7 +535,11 @@ impl<
     }
 
     fn run<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send + 's>> {
-        Box::pin(self.run_impl().map(|res| stream::iter(vec![res])).flatten_stream())
+        Box::pin(
+            self.run_impl()
+                .map(|res| stream::iter(vec![res]))
+                .flatten_stream(),
+        )
     }
 }
 

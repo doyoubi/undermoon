@@ -14,9 +14,9 @@ use futures::future::select_all;
 use futures::{stream, Future, StreamExt};
 use futures_timer::Delay;
 use std::iter;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use std::pin::Pin;
 
 #[derive(Debug, Clone)]
 pub struct CoordinatorConfig {
@@ -128,7 +128,10 @@ impl<
                 reporter_id.clone(),
                 data_broker.clone(),
                 client_factory.clone(),
-            ).run().await {
+            )
+            .run()
+            .await
+            {
                 error!("detector stream err {:?}", e);
             }
             Delay::new(Duration::from_secs(1)).await;
@@ -142,7 +145,8 @@ impl<
         loop {
             debug!("start sync host meta data");
             defer!(debug!("host meta sync finished a round"));
-            let mut s = Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone()).run();
+            let mut s =
+                Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone()).run();
             for r in s.next().await {
                 if let Err(e) = r {
                     error!("sync stream err {:?}", e);
@@ -181,7 +185,8 @@ impl<
                 data_broker.clone(),
                 mani_broker.clone(),
                 client_factory.clone(),
-            ).run();
+            )
+            .run();
             for r in s.next().await {
                 if let Err(e) = r {
                     error!("migration sync stream err {:?}", e)

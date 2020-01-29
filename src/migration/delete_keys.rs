@@ -6,12 +6,12 @@ use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::keep_connecting_and_sending;
 use crate::protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
 use atomic_option::AtomicOption;
-use futures::{Future};
+use futures::Future;
 use itertools::Itertools;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::pin::Pin;
 use std::time::Duration;
 
 pub struct DeleteKeysTaskMap {
@@ -166,7 +166,8 @@ impl DeleteKeysTask {
         let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
 
         let resp = client.execute(byte_cmd).await?;
-        let ScanResponse { next_index, keys } =  ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
+        let ScanResponse { next_index, keys } =
+            ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
 
         let keys: Vec<Vec<u8>> = keys
             .into_iter()
@@ -195,57 +196,6 @@ impl DeleteKeysTask {
         client: &'static mut C,
     ) -> Pin<Box<dyn Future<Output = Result<(SlotRangeArray, u64), RedisClientError>> + Send>> {
         Box::pin(Self::scan_and_delete_keys_impl(data, client))
-//        let (slot_ranges, index) = data;
-//        let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
-//        let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
-//        let exec_fut = client
-//            .execute(byte_cmd)
-//            .and_then(move |(client, resp)| {
-//                future::result(
-//                    ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply),
-//                )
-//                .and_then(move |scan| {
-//                    let ScanResponse { next_index, keys } = scan;
-//                    let keys: Vec<Vec<u8>> = keys
-//                        .into_iter()
-//                        .filter(|k| !slot_ranges.is_key_inside(k.as_slice()))
-//                        .collect();
-//
-//                    let fut: Box<
-//                        dyn Future<Item = (SlotRangeArray, u64, C), Error = RedisClientError>
-//                            + Send,
-//                    > = if keys.is_empty() {
-//                        Box::new(future::ok((slot_ranges, next_index, client)))
-//                    } else {
-//                        let mut del_cmd = vec!["DEL".to_string().into_bytes()];
-//                        del_cmd.extend_from_slice(keys.as_slice());
-//                        Box::new(
-//                            client
-//                                .execute(del_cmd)
-//                                .and_then(|(client, resp)| {
-//                                    let r = match resp {
-//                                        Resp::Error(err) => {
-//                                            error!("failed to delete keys: {:?}", err);
-//                                            Err(RedisClientError::InvalidReply)
-//                                        }
-//                                        _ => Ok(client),
-//                                    };
-//                                    future::result(r)
-//                                })
-//                                .map(move |client| (slot_ranges, next_index, client)),
-//                        )
-//                    };
-//                    fut
-//                })
-//            })
-//            .and_then(|(slot_ranges, next_index, client)| {
-//                if next_index == 0 {
-//                    future::err(RedisClientError::Done)
-//                } else {
-//                    future::ok(((slot_ranges, next_index), client))
-//                }
-//            });
-//        Box::new(exec_fut)
     }
 
     pub fn get_address(&self) -> String {

@@ -7,13 +7,13 @@ use crate::common::utils::pretty_print_bytes;
 use crate::protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use atomic_option::AtomicOption;
 use futures::channel::{mpsc, oneshot};
-use futures::{Future, TryFutureExt, stream, StreamExt, SinkExt, select, FutureExt};
+use futures::{select, stream, Future, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use futures_timer::Delay;
+use std::pin::Pin;
 use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use std::pin::Pin;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
@@ -145,7 +145,8 @@ impl ScanMigrationTask {
                     restore_cmd,
                     interval,
                     Self::handle_forward,
-                ).await;
+                )
+                .await;
 
                 client_opt = match res {
                     Ok(client_opt) => client_opt,
@@ -154,7 +155,7 @@ impl ScanMigrationTask {
                         if let Err(_err) = sender.send(entry).await {
                             debug!("failed to send back entry");
                         }
-                        continue
+                        continue;
                     }
                 };
 
@@ -162,7 +163,7 @@ impl ScanMigrationTask {
             }
         };
 
-        let stop  = async move {
+        let stop = async move {
             stop_receiver.await;
             loop {
                 if 0 == counter.load(Ordering::SeqCst) {
@@ -220,7 +221,13 @@ impl ScanMigrationTask {
             Self::scan_and_migrate_keys,
         );
         let mut stop_sender = stop_sender;
-        let send = send.map(move |_| stop_sender.send(()));
+        let send = send.map(move |res| {
+            match res {
+                Ok(_) => info!("migration producer finished scanning"),
+                Err(err) => error!("migration producer finished error: {:?}", err),
+            }
+            stop_sender.send(())
+        });
         let (send, handle) = new_auto_drop_future(send);
         (Box::pin(send), handle)
     }
@@ -228,20 +235,23 @@ impl ScanMigrationTask {
     async fn scan_and_migrate_keys_impl<C: RedisClient>(
         data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
         client: &mut C,
-    ) -> Result<(SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>), RedisClientError> {
+    ) -> Result<(SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>), RedisClientError>
+    {
         let (slot_ranges, index, mut sender, counter) = data;
         let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
         let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
 
         let resp = client.execute(byte_cmd).await?;
-        let ScanResponse { next_index, keys } = ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
+        let ScanResponse { next_index, keys } =
+            ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
 
         let (slot_ranges, entries) = Self::produce_entries(slot_ranges, keys, client).await?;
 
         let entries_num = entries.len() as i64;
         sender
             .send_all(&mut stream::iter(entries.into_iter().map(Ok)))
-            .map_err(|_err| RedisClientError::Canceled).await?;
+            .map_err(|_err| RedisClientError::Canceled)
+            .await?;
 
         counter.fetch_add(entries_num, Ordering::SeqCst);
         Ok((slot_ranges, next_index, sender, counter))
@@ -252,10 +262,16 @@ impl ScanMigrationTask {
     fn scan_and_migrate_keys<C: RedisClient>(
         data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
         client: &'static mut C,
-    ) -> Pin<Box<
-        dyn Future<Output = Result<(SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>), RedisClientError>
-            > + Send,
-    >> {
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
+                        RedisClientError,
+                    >,
+                > + Send,
+        >,
+    > {
         Box::pin(Self::scan_and_migrate_keys_impl(data, client))
     }
 
@@ -267,7 +283,7 @@ impl ScanMigrationTask {
         let mut entries = vec![];
         for key in keys {
             if !slot_ranges.is_key_inside(key.as_slice()) {
-                continue
+                continue;
             }
 
             let pttl_cmd = vec!["PTTL".to_string().into_bytes(), key.clone()];
@@ -292,7 +308,7 @@ impl ScanMigrationTask {
                         pttl,
                         raw_data,
                     });
-                },
+                }
                 (Resp::Bulk(BulkStr::Nil), _) | (_, None) => (),
                 (others, _pttl_opt) => {
                     error!("failed to dump data: {:?}", others);
