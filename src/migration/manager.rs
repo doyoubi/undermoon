@@ -12,7 +12,7 @@ use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTaskSender, ReqTaskSende
 use crate::proxy::database::{DBSendError, DBTag};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
-use futures::{TryFutureExt};
+use futures::TryFutureExt;
 use itertools::Either;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -108,32 +108,32 @@ where
                         "spawn slot migrating task {} {} {} {}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
-                    tokio::spawn(
-                        migrating_task
-                            .start()
-                            .map_err(move |e| {
-                                error!(
-                                    "master slot task {} {} {} {} exit {:?}",
-                                    db_name, epoch, slot_range_start, slot_range_end, e
-                                )
-                            }),
-                    );
+                    let migrating_task = migrating_task.clone();
+                    let fut = async move {
+                        if let Err(err) = migrating_task.start().await {
+                            error!(
+                                "master slot task {} {} {} {} exit {:?}",
+                                db_name, epoch, slot_range_start, slot_range_end, err
+                            );
+                        }
+                    };
+                    tokio::spawn(fut);
                 }
                 Either::Right(importing_task) => {
                     info!(
                         "spawn slot importing replica {} {} {}-{}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
-                    tokio::spawn(
-                        importing_task
-                            .start()
-                            .map_err(move |e| {
-                                error!(
-                                    "replica slot task {} {} {}-{} exit {:?}",
-                                    db_name, epoch, slot_range_start, slot_range_end, e
-                                )
-                            }),
-                    );
+                    let importing_task = importing_task.clone();
+                    let fut = async move {
+                        if let Err(err) = importing_task.start().await {
+                            error!(
+                                "replica slot task {} {} {}-{} exit {:?}",
+                                db_name, epoch, slot_range_start, slot_range_end, err
+                            );
+                        }
+                    };
+                    tokio::spawn(fut);
                 }
             }
         }

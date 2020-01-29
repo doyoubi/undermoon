@@ -90,6 +90,7 @@ fn main() {
     let server = ServerProxyService::new(config.clone(), forward_handler, slow_request_logger);
 
     let mut runtime = match tokio::runtime::Builder::new()
+        .threaded_scheduler()
         .core_threads(config.thread_number)
         .build()
     {
@@ -100,7 +101,7 @@ fn main() {
         }
     };
 
-    if let Err(()) = runtime.block_on(server.run()) {
-        error!("tokio runtime failed");
+    if let Err(err) = runtime.block_on(server.run()) {
+        error!("tokio runtime failed: {}", err);
     }
 }

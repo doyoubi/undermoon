@@ -15,7 +15,7 @@ pub fn has_flags(s: &str, delimiter: char, flag: &'static str) -> bool {
         .any(|s| caseless::canonical_caseless_match_str(s, flag))
 }
 
-pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
+pub fn resolve_first_address(address: &str) -> Option<SocketAddr> {
     match address.to_socket_addrs() {
         Ok(mut address_list) => match address_list.next() {
             Some(address) => Some(address),

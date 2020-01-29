@@ -2,7 +2,7 @@ use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError,
 };
 use crate::common::resp_execution::{retry_handle_func, I64Retriever};
-use crate::common::utils::{revolve_first_address, ThreadSafe};
+use crate::common::utils::{resolve_first_address, ThreadSafe};
 use crate::protocol::{RedisClientError, RedisClientFactory, RespVec};
 use futures::TryFutureExt;
 use futures01::{future, Future};
@@ -111,7 +111,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
             }
         };
 
-        match revolve_first_address(master_node_address) {
+        match resolve_first_address(master_node_address) {
             Some(address) => {
                 let host = address.ip().to_string();
                 let port = address.port().to_string();

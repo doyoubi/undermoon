@@ -19,7 +19,7 @@ pub async fn keep_connecting_and_sending_cmd_with_cached_client<F: RedisClientFa
     cmd: Vec<BinSafeStr>,
     interval: Duration,
     handle_result: Func,
-) -> Result<Option<F::Client>, RedisClientError>
+) -> F::Client
 where
     Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
@@ -28,13 +28,20 @@ where
         let mut c = if let Some(c) = client.take() {
             c
         } else {
-            client_factory.create_client(address.clone()).await?
+            match client_factory.create_client(address.clone()).await {
+                Ok(c) => c,
+                Err(err) => {
+                    error!("failed to create client: {:?}", err);
+                    Delay::new(interval).await;
+                    continue;
+                }
+            }
         };
         match keep_sending_cmd(&mut c, cmd.clone(), interval, handle_result.clone()).await {
             Ok(()) => {
                 client = Some(c);
             }
-            Err(RedisClientError::Done) => return Err(RedisClientError::Done),
+            Err(RedisClientError::Done) => return c,
             Err(err) => {
                 error!(
                     "failed to send commands {:?} {:?}. Try again.",
@@ -45,6 +52,7 @@ where
                 );
             }
         }
+        Delay::new(interval).await;
     }
 }
 
@@ -54,8 +62,7 @@ pub async fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
     cmd: Vec<Vec<u8>>,
     interval: Duration,
     handle_result: Func,
-) -> Result<Option<F::Client>, RedisClientError>
-where
+) where
     Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
     keep_connecting_and_sending_cmd_with_cached_client(
@@ -66,7 +73,7 @@ where
         interval,
         handle_result,
     )
-    .await
+    .await;
 }
 
 pub async fn keep_sending_cmd<C: RedisClient, Func>(
@@ -104,55 +111,43 @@ pub async fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory,
     address: String,
     interval: Duration,
     send_func: Func,
-) -> Result<T, RedisClientError>
+) -> T
+// dyn Trait has default 'static lifetime.
+// '_ would use the lifetime of &mut F::Client instead.
 where
     Func: Clone
         + Send
         + Fn(
             T,
-            &'static mut F::Client,
-        ) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
+            &mut F::Client,
+        ) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send + '_>>,
 {
     let mut data = data;
     loop {
         let mut client = match client_factory.create_client(address.clone()).await {
             Ok(client) => client,
             Err(err) => {
+                error!("failed to create redis client: {:?}", err);
                 Delay::new(interval).await;
                 continue;
             }
         };
-        data = match keep_sending(data.clone(), &mut client, interval, send_func.clone()).await {
-            Ok(data) => data,
-            Err((_, RedisClientError::Done)) => return Err(RedisClientError::Done),
-            Err((data, e)) => {
-                error!("failed to send {:?}. Try again.", e);
-                data
-            }
-        };
+        loop {
+            data = match send_func(data.clone(), &mut client).await {
+                Ok(d) => d,
+                Err(RedisClientError::Done) => return data.clone(),
+                Err(err) => {
+                    error!("failed to send: {:?}. Try again", err);
+                    break;
+                }
+            };
+            Delay::new(interval).await;
+        }
         Delay::new(interval).await;
     }
 }
 
-pub async fn keep_sending<T: Clone + Send, C: RedisClient, Func>(
-    data: T,
-    client: &'static mut C,
-    interval: Duration,
-    send_func: Func,
-) -> Result<T, (T, RedisClientError)>
-where
-    Func: Send
-        + Fn(T, &'static mut C) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
-{
-    let mut data = data;
-    loop {
-        data = match send_func(data, client).await {
-            Ok(data) => data,
-            Err(err) => return Err((data, err)),
-        };
-        Delay::new(interval).await;
-    }
-}
+type RetrieverFut = Pin<Box<dyn Future<Output = Result<(), RedisClientError>> + Send>>;
 
 pub struct I64Retriever<F: RedisClientFactory> {
     data: Arc<atomic::AtomicI64>,
@@ -192,10 +187,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
         self.data.load(atomic::Ordering::SeqCst)
     }
 
-    pub fn start<Func>(
-        &self,
-        handle_func: Func,
-    ) -> Option<Pin<Box<dyn Future<Output = Result<(), RedisClientError>> + Send>>>
+    pub fn start<Func>(&self, handle_func: Func) -> Option<RetrieverFut>
     where
         Func: Fn(RespVec, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
             + Clone
@@ -218,7 +210,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
             );
             let fut = async {
                 select! {
-                    res = sending.fuse() => res.map(|_| ()),
+                    res = sending.fuse() => Ok(()),
                     _ = stop_signal_receiver.fuse() => Err(RedisClientError::Canceled),
                 }
             };
@@ -362,8 +354,7 @@ mod tests {
             interval,
             handler,
         );
-        let res = rt.block_on(fut);
-        assert!(res.is_ok());
+        rt.block_on(fut);
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
         assert_eq!(retry_counter_clone.count.load(Ordering::SeqCst), 2);
     }

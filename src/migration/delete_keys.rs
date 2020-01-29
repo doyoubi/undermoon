@@ -2,8 +2,9 @@ use super::task::{ScanResponse, SlotRangeArray};
 use crate::common::cluster::SlotRange;
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::HostDBMap;
-use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle, GroupResult};
+use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::keep_connecting_and_sending;
+use crate::migration::task::MigrationError;
 use crate::protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
 use atomic_option::AtomicOption;
 use futures::{Future, FutureExt};
@@ -13,7 +14,6 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::migration::task::MigrationError;
 
 pub struct DeleteKeysTaskMap {
     task_map: HashMap<String, HashMap<String, Arc<DeleteKeysTask>>>,
@@ -95,6 +95,9 @@ impl DeleteKeysTaskMap {
     }
 }
 
+type ScanDelResult = Result<(SlotRangeArray, u64), RedisClientError>;
+type ScanDelFuture = Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>;
+
 pub struct DeleteKeysTask {
     address: String,
     slot_ranges: SlotRangeArray,
@@ -130,7 +133,9 @@ impl DeleteKeysTask {
         }
     }
 
-    pub fn start(&self) -> Option<Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>> {
+    pub fn start(
+        &self,
+    ) -> Option<Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>> {
         self.fut.take(Ordering::SeqCst).map(|t| *t)
     }
 
@@ -139,10 +144,7 @@ impl DeleteKeysTask {
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
         delete_rate: u64,
-    ) -> (
-        Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>,
-        FutureAutoStopHandle,
-    ) {
+    ) -> (ScanDelFuture, FutureAutoStopHandle) {
         let data = (slot_ranges, 0);
         const SCAN_DEFAULT_SIZE: u64 = 10;
         let interval = Duration::from_nanos(1_000_000_000 / (delete_rate / SCAN_DEFAULT_SIZE));
@@ -155,10 +157,9 @@ impl DeleteKeysTask {
             Self::scan_and_delete_keys,
         );
         let (send, handle) = new_auto_drop_future(send);
-        let send = send.map(|group| match group {
-            GroupResult::Canceled => Err(MigrationError::Canceled),
-            GroupResult::Inner(Err(err)) => Err(MigrationError::RedisClient(err)),
-            GroupResult::Inner(Ok(_)) => Ok(()),
+        let send = send.map(|opt| match opt {
+            Some(_) => Ok(()),
+            None => Err(MigrationError::Canceled),
         });
         (Box::pin(send), handle)
     }
@@ -199,8 +200,8 @@ impl DeleteKeysTask {
 
     fn scan_and_delete_keys<C: RedisClient>(
         data: (SlotRangeArray, u64),
-        client: &'static mut C,
-    ) -> Pin<Box<dyn Future<Output = Result<(SlotRangeArray, u64), RedisClientError>> + Send>> {
+        client: &mut C,
+    ) -> Pin<Box<dyn Future<Output = ScanDelResult> + Send + '_>> {
         Box::pin(Self::scan_and_delete_keys_impl(data, client))
     }
 

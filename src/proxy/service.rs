@@ -3,11 +3,15 @@ use super::session::{handle_conn, Session};
 use super::slowlog::SlowRequestLogger;
 use crate::common::config::ConfigError;
 use crate::common::future_group::new_future_group;
-use crate::common::utils::{revolve_first_address, ThreadSafe};
-use futures::TryFutureExt;
-use futures01::{future, Future};
+use crate::common::utils::{resolve_first_address, ThreadSafe};
+use crate::proxy::session::SessionError;
+use futures::compat::Future01CompatExt;
+use futures::{FutureExt, StreamExt, TryFutureExt};
+use std::convert::identity;
+use std::error::Error;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use string_error::into_err;
 use tokio::net::TcpListener;
 
 #[derive(Debug)]
@@ -103,20 +107,20 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         }
     }
 
-    pub fn run(&self) -> Box<dyn Future<Item = (), Error = ()> + Send> {
+    pub async fn run(&self) -> Result<(), Box<dyn Error>> {
         info!("config: {:?}", self.config);
 
         let address = self.config.address.clone();
+        let address = resolve_first_address(&address).ok_or_else(|| {
+            let err_str = format!("failed to resolve address: {}", address);
+            error!("{}", err_str);
+            into_err(err_str)
+        })?;
 
-        let address = match revolve_first_address(&address) {
-            Some(a) => a,
-            None => {
-                error!("failed to resolve address: {}", address);
-                return Box::new(future::err(()));
-            }
-        };
-
-        let listener_fut = TcpListener::bind(&address).compat();
+        let mut listener = TcpListener::bind(&address).await.map_err(|err| {
+            error!("unable to bind address: {} {:?}", address, err);
+            err
+        })?;
 
         let forward_handler = self.cmd_ctx_handler.clone();
         let slow_request_logger = self.slow_request_logger.clone();
@@ -124,62 +128,56 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let session_id = AtomicUsize::new(0);
         let config = self.config.clone();
 
-        Box::new(
-            listener_fut
-                .map_err(|e| {
-                    error!("unable to bind address: {} {:?}", address, e);
-                    return Box::new(future::err(()));
-                })
-                .and_then(|listener| {
-                    listener
-                        .incoming()
-                        .map_err(|e| error!("accept failed: {:?}", e))
-                        .for_each(move |sock| {
-                            if let Err(err) = sock.set_nodelay(true) {
-                                error!("failed to set TCP_NODELAY: {:?}", err);
-                                return future::err(());
-                            }
+        for sock in listener.incoming().next().await {
+            let sock = sock?;
 
-                            let peer = match sock.peer_addr() {
-                                Ok(address) => address.to_string(),
-                                Err(e) => format!("Failed to get peer {}", e),
-                            };
+            if let Err(err) = sock.set_nodelay(true) {
+                let err_str = format!("failed to set TCP_NODELAY: {:?}", err);
+                error!("{}", err_str);
+                return Err(into_err(err_str));
+            }
 
-                            info!("accept conn: {}", peer);
-                            let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
+            let peer = match sock.peer_addr() {
+                Ok(address) => address.to_string(),
+                Err(e) => format!("Failed to get peer {}", e),
+            };
+            info!("accept conn: {}", peer);
 
-                            let handle_clone = forward_handler.clone();
-                            let (reader_handler, writer_handler) = handle_conn(
-                                Arc::new(Session::new(
-                                    curr_session_id,
-                                    handle_clone,
-                                    slow_request_logger.clone(),
-                                )),
-                                sock,
-                                config.session_channel_size,
-                                config.session_batch_min_time,
-                                config.session_batch_max_time,
-                                config.session_batch_buf,
-                            );
-                            let (reader_handler, writer_handler) =
-                                new_future_group(reader_handler, writer_handler);
+            let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
 
-                            let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer);
-                            tokio::spawn(
-                                reader_handler
-                                    .map(move |()| info!("Read IO closed {}", p1))
-                                    .map_err(move |err| error!("Read IO error {:?} {}", err, p2))
-                                    .compat(),
-                            );
-                            tokio::spawn(
-                                writer_handler
-                                    .map(move |()| info!("Write IO closed {}", p3))
-                                    .map_err(move |err| error!("Write IO error {:?} {}", err, p4))
-                                    .compat(),
-                            );
-                            future::ok(())
-                        })
-                }),
-        )
+            let handle_clone = forward_handler.clone();
+            let (reader_handler, writer_handler) = handle_conn(
+                Arc::new(Session::new(
+                    curr_session_id,
+                    handle_clone,
+                    slow_request_logger.clone(),
+                )),
+                sock,
+                config.session_channel_size,
+                config.session_batch_min_time,
+                config.session_batch_max_time,
+                config.session_batch_buf,
+            );
+            let (reader_handler, writer_handler) =
+                new_future_group(reader_handler.compat(), writer_handler.compat());
+
+            let reader_handler =
+                reader_handler.map(|opt| opt.map_or(Err(SessionError::Canceled), identity));
+            let writer_handler =
+                writer_handler.map(|opt| opt.map_or(Err(SessionError::Canceled), identity));
+
+            let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer);
+            tokio::spawn(
+                reader_handler
+                    .map_ok(move |()| info!("Read IO closed {}", p1))
+                    .map_err(move |err| error!("Read IO error {:?} {}", err, p2)),
+            );
+            tokio::spawn(
+                writer_handler
+                    .map_ok(move |()| info!("Write IO closed {}", p3))
+                    .map_err(move |err| error!("Write IO error {:?} {}", err, p4)),
+            );
+        }
+        Ok(())
     }
 }

@@ -1,5 +1,5 @@
 use super::resp::{BinSafeStr, RespVec};
-use crate::common::utils::{revolve_first_address, ThreadSafe};
+use crate::common::utils::{resolve_first_address, ThreadSafe};
 use crate::protocol::RespCodec;
 use atomic_option::AtomicOption;
 use chashmap::CHashMap;
@@ -83,13 +83,11 @@ struct PoolItemHandle<T> {
 type ClientCodec = RespCodec<Vec<BinSafeStr>, RespVec>;
 type RawConnHandle = PoolItemHandle<RedisClientConnection>;
 
-#[derive(Debug)]
 struct RedisClientConnectionHandle {
     frame: Framed<TcpStream, ClientCodec>,
     reclaim_sender: Arc<crossbeam_channel::Sender<RedisClientConnection>>,
 }
 
-#[derive(Debug)]
 pub struct PooledRedisClient {
     conn_handle: Option<RedisClientConnectionHandle>,
     timeout: Duration,
@@ -129,8 +127,9 @@ impl PooledRedisClient {
         &mut self,
         command: Vec<BinSafeStr>,
     ) -> Result<RespVec, RedisClientError> {
+        let timeout = self.timeout;
         let exec_cut = self.execute_cmd(command);
-        let r = match time::timeout(self.timeout, exec_cut).await {
+        let r = match time::timeout(timeout, exec_cut).await {
             Err(err) => {
                 warn!("redis client timeout: {:?}", err);
                 Err(RedisClientError::Timeout)
@@ -157,7 +156,9 @@ impl Drop for PooledRedisClient {
                 frame,
                 reclaim_sender,
             } = conn_handle;
-            let conn = RedisClientConnection{sock: frame.into_inner()};
+            let conn = RedisClientConnection {
+                sock: frame.into_inner(),
+            };
             match reclaim_sender.try_send(conn) {
                 Ok(()) => (),
                 Err(crossbeam_channel::TrySendError::Full(_)) => debug!("pool is full"),
@@ -198,7 +199,7 @@ impl PooledRedisClientFactory {
         &self,
         address: String,
     ) -> Result<RedisClientConnection, RedisClientError> {
-        let sock_address = match revolve_first_address(&address) {
+        let sock_address = match resolve_first_address(&address) {
             Some(address) => address,
             None => return Err(RedisClientError::InvalidAddress),
         };

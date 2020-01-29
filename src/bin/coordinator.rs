@@ -1,5 +1,4 @@
 extern crate futures;
-extern crate reqwest;
 extern crate tokio;
 extern crate undermoon;
 #[macro_use]
@@ -7,12 +6,12 @@ extern crate log;
 extern crate config;
 extern crate env_logger;
 
-use futures01::future::select_all;
-use futures01::Future;
-use reqwest::r#async as request_async; // async is a keyword later
+use futures::future::select_all;
+use reqwest;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use undermoon::coordinator::http_mani_broker::HttpMetaManipulationBroker;
 use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
 use undermoon::coordinator::service::{CoordinatorConfig, CoordinatorService};
@@ -61,9 +60,7 @@ fn gen_conf() -> Vec<CoordinatorConfig> {
 fn gen_service(
     config: CoordinatorConfig,
 ) -> CoordinatorService<HttpMetaBroker, HttpMetaManipulationBroker, PooledRedisClientFactory> {
-    let http_client = request_async::ClientBuilder::new()
-        .build()
-        .expect("request_async_client");
+    let http_client = reqwest::Client::new();
     let data_broker = Arc::new(HttpMetaBroker::new(
         config.broker_address.clone(),
         http_client.clone(),
@@ -86,9 +83,20 @@ fn main() {
     let configs = gen_conf();
     let services = configs.into_iter().map(gen_service);
     let futs = select_all(services.map(|service| {
-        service.run().map_err(|e| {
-            error!("coordinator error {:?}", e);
+        Box::pin(async move {
+            if let Err(err) = service.run().await {
+                error!("coordinator error {:?}", err);
+            }
         })
     }));
-    tokio::run(futs.map(|_| ()).map_err(|_| ()));
+
+    let mut runtime = match Runtime::new() {
+        Ok(rt) => rt,
+        Err(err) => {
+            error!("failed to create runtime: {:?}", err);
+            return;
+        }
+    };
+
+    runtime.block_on(futs);
 }

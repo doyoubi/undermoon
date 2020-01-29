@@ -11,9 +11,8 @@ use super::sync::{BrokerMetaRetriever, HostMetaRespSender};
 use crate::common::utils::ThreadSafe;
 use crate::protocol::RedisClientFactory;
 use futures::future::select_all;
-use futures::{stream, Future, StreamExt};
+use futures::{Future, StreamExt};
 use futures_timer::Delay;
-use std::iter;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -117,7 +116,6 @@ impl<
     }
 
     async fn loop_detect(&self) -> Result<(), CoordinateError> {
-        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
         let reporter_id = self.config.reporter_id.clone();
@@ -139,15 +137,14 @@ impl<
     }
 
     async fn loop_host_sync(&self) -> Result<(), CoordinateError> {
-        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
         loop {
             debug!("start sync host meta data");
             defer!(debug!("host meta sync finished a round"));
-            let mut s =
-                Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone()).run();
-            for r in s.next().await {
+            let sync =
+                Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone());
+            for r in sync.run().next().await {
                 if let Err(e) = r {
                     error!("sync stream err {:?}", e);
                 }
@@ -157,14 +154,13 @@ impl<
     }
 
     async fn loop_failure_handler(&self) -> Result<(), CoordinateError> {
-        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let mani_broker = self.mani_broker.clone();
         loop {
             debug!("start handling failures");
             defer!(debug!("handling failures finished a round"));
-            let mut s = Self::gen_failure_handler(data_broker.clone(), mani_broker.clone()).run();
-            for r in s.next().await {
+            let handler = Self::gen_failure_handler(data_broker.clone(), mani_broker.clone());
+            for r in handler.run().next().await {
                 if let Err(e) = r {
                     error!("failure handler stream err {:?}", e)
                 }
@@ -174,20 +170,18 @@ impl<
     }
 
     async fn loop_migration_sync(&self) -> Result<(), CoordinateError> {
-        let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let mani_broker = self.mani_broker.clone();
         let client_factory = self.client_factory.clone();
         loop {
             debug!("start handling migration sync");
             defer!(debug!("handling migration finished a round"));
-            let mut s = Self::gen_migration_state_synchronizer(
+            let sync = Self::gen_migration_state_synchronizer(
                 data_broker.clone(),
                 mani_broker.clone(),
                 client_factory.clone(),
-            )
-            .run();
-            for r in s.next().await {
+            );
+            for r in sync.run().next().await {
                 if let Err(e) = r {
                     error!("migration sync stream err {:?}", e)
                 }

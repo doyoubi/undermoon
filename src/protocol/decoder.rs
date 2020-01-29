@@ -33,5 +33,4 @@ impl From<io::Error> for DecodeError {
     }
 }
 
-pub const CR: u8 = b'\r';
 pub const LF: u8 = b'\n';

@@ -33,9 +33,9 @@ pub struct FutureGroupHandle<F: Future> {
 }
 
 impl<F: Future> Future for FutureGroupHandle<F> {
-    type Output = GroupResult<F::Output>;
+    type Output = Option<F::Output>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         match this.inner.poll(cx) {
@@ -46,20 +46,21 @@ impl<F: Future> Future for FutureGroupHandle<F> {
                         debug!("failed to signal");
                     }
                 }
-                return Poll::Ready(GroupResult::Inner(output));
+                return Poll::Ready(Some(output));
             }
         }
 
-        this.signal_receiver.poll(cx).map(|_| GroupResult::Canceled)
+        this.signal_receiver.poll(cx).map(|_| None)
     }
 }
 
 #[pinned_drop]
 impl<F: Future> PinnedDrop for FutureGroupHandle<F> {
-    fn drop(self: Pin<&mut Self>) {
-        self.signal_sender
+    fn drop(mut self: Pin<&mut Self>) {
+        self.project()
+            .signal_sender
             .take()
-            .and_then(|mut sender| sender.send(()).ok())
+            .and_then(|sender| sender.send(()).ok())
             .unwrap_or_else(|| debug!("FutureGroupHandle already closed"))
     }
 }
@@ -92,27 +93,22 @@ impl Drop for FutureAutoStopHandle {
     fn drop(&mut self) {
         self.signal_sender
             .take()
-            .and_then(|mut sender| sender.send(()).ok())
+            .and_then(|sender| sender.send(()).ok())
             .unwrap_or_else(|| debug!("FutureAutoStopHandle already closed"))
     }
 }
 
 impl<F: Future> Future for FutureAutoStop<F> {
-    type Output = GroupResult<F::Output>;
+    type Output = Option<F::Output>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         match this.inner.poll(cx) {
             Poll::Pending => (),
-            Poll::Ready(output) => return Poll::Ready(GroupResult::Inner(output)),
+            Poll::Ready(output) => return Poll::Ready(Some(output)),
         }
 
-        this.signal_receiver.poll(cx).map(|_| GroupResult::Canceled)
+        this.signal_receiver.poll(cx).map(|_| None)
     }
-}
-
-pub enum GroupResult<T> {
-    Inner(T),
-    Canceled,
 }

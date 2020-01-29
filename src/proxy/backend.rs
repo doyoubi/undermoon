@@ -2,14 +2,16 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::future_group::new_future_group;
-use crate::common::utils::{gen_moved, get_slot, revolve_first_address, ThreadSafe};
+use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
 use crate::protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
-use futures::StreamExt;
+use futures::compat::Future01CompatExt;
+use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use futures01::sync::mpsc;
 use futures01::Sink;
 use futures01::{future, stream, Future, Stream};
 use std::boxed::Box;
 use std::collections::HashMap;
+use std::convert::identity;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -158,7 +160,7 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
             // Maybe it's just fine. If not, lock the creating connection phrase.
             if need_init {
                 let node_arc = self.node.clone();
-                let address = match revolve_first_address(&self.addr) {
+                let address = match resolve_first_address(&self.addr) {
                     Some(address) => address,
                     None => return Err(BackendError::InvalidAddress),
                 };
@@ -166,15 +168,19 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
                 let config = self.config.clone();
                 let handler = Box::new(self.handler_factory.create());
 
-                let sock = TcpStream::connect(&address);
-                let fut = sock.then(move |res| {
+                let sock = TcpStream::connect(address);
+                let fut = Box::pin(sock).compat().then(move |res| {
                     debug!("sock result: {:?}", res);
                     match res {
                         Ok(sock) => {
                             let (node, reader_handler, writer_handler) =
                                 BackendNode::<F::Handler>::new(sock, handler, config.clone());
                             let (reader_handler, writer_handler) =
-                                new_future_group(reader_handler, writer_handler);
+                                new_future_group(reader_handler.compat(), writer_handler.compat());
+                            let reader_handler = reader_handler
+                                .map(|opt| opt.map_or(Err(BackendError::Canceled), identity));
+                            let writer_handler = writer_handler
+                                .map(|opt| opt.map_or(Err(BackendError::Canceled), identity));
 
                             let (spawn_new, res) = {
                                 let mut guard = node_arc.write().unwrap();
@@ -195,12 +201,12 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
                             if spawn_new {
                                 tokio::spawn(
                                     reader_handler
-                                        .map(|()| error!("backend read IO closed"))
+                                        .map_ok(|()| error!("backend read IO closed"))
                                         .map_err(|e| error!("backend read IO error {:?}", e)),
                                 );
                                 tokio::spawn(
                                     writer_handler
-                                        .map(|()| error!("backend write IO closed"))
+                                        .map_ok(|()| error!("backend write IO closed"))
                                         .map_err(|e| error!("backend write IO error {:?}", e)),
                                 );
                             }
@@ -214,7 +220,7 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
                     }
                 });
                 // If this future fails, cmd_task will be lost. Let itself send back an error response.
-                tokio::spawn(fut);
+                tokio::spawn(fut.compat());
                 return Ok(());
             }
 
@@ -322,10 +328,10 @@ where
     //        batch_max_time,
     //    )
     //    .map_err(|_| ());
-    let task_receiver = task_receiver.map_err(|_| ());
+    let task_receiver = task_receiver.map_err(|_| ()).map(|task| vec![task]);
 
-    let writer_handler = handle_write(task_receiver, writer, tx);
-    let reader_handler = handle_read(handler, reader, rx);
+    let writer_handler = handle_write(task_receiver, writer.compat(), tx);
+    let reader_handler = handle_read(handler, reader.compat(), rx);
 
     // May need to use future_group. The tx <=> rx between them may not be able to shutdown futures.
     (reader_handler, writer_handler)

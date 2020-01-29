@@ -1,9 +1,10 @@
 use super::task::{ScanResponse, SlotRangeArray};
-use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle, GroupResult};
+use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::{
     keep_connecting_and_sending, keep_connecting_and_sending_cmd_with_cached_client,
 };
 use crate::common::utils::pretty_print_bytes;
+use crate::migration::task::MigrationError;
 use crate::protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use atomic_option::AtomicOption;
 use futures::channel::{mpsc, oneshot};
@@ -14,7 +15,6 @@ use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use crate::migration::task::MigrationError;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
@@ -100,11 +100,12 @@ impl ScanMigrationTask {
             client_factory,
         );
         let (send, handle) = new_auto_drop_future(send);
-        let send = send.map(|group| match group {
-            GroupResult::Canceled => Err(MigrationError::Canceled),
-            GroupResult::Inner(Err(err)) => Err(MigrationError::RedisClient(err)),
-            GroupResult::Inner(Ok(_)) => Ok(()),
+        let send = send.map(|opt| {
+            opt.map_or(Err(MigrationError::Canceled), |r| {
+                r.map_err(MigrationError::RedisClient)
+            })
         });
+
         (Box::pin(send), handle)
     }
 
@@ -119,7 +120,7 @@ impl ScanMigrationTask {
         let counter_clone = counter.clone();
 
         let forward = async move {
-            let mut sender = sender;
+            let _sender = sender;
             let mut client_opt = None;
             let mut receiver = receiver;
 
@@ -144,7 +145,7 @@ impl ScanMigrationTask {
                 ];
                 let interval = Duration::from_nanos(0);
 
-                let res = keep_connecting_and_sending_cmd_with_cached_client(
+                let client = keep_connecting_and_sending_cmd_with_cached_client(
                     client_opt.take(),
                     client_factory.clone(),
                     address.clone(),
@@ -154,23 +155,15 @@ impl ScanMigrationTask {
                 )
                 .await;
 
-                client_opt = match res {
-                    Ok(client_opt) => client_opt,
-                    Err(err) => {
-                        error!("failed to send entry: {:?}", err);
-                        if let Err(_err) = sender.send(entry).await {
-                            debug!("failed to send back entry");
-                        }
-                        continue;
-                    }
-                };
-
+                client_opt = Some(client);
                 counter_clone.fetch_sub(1, Ordering::SeqCst);
             }
         };
 
         let stop = async move {
-            stop_receiver.await;
+            if let Err(err) = stop_receiver.await {
+                debug!("failed to receive stop signal: {:?}", err);
+            }
             loop {
                 if 0 == counter.load(Ordering::SeqCst) {
                     break;
@@ -226,14 +219,14 @@ impl ScanMigrationTask {
             interval,
             Self::scan_and_migrate_keys,
         );
-        let mut stop_sender = stop_sender;
         let (send, handle) = new_auto_drop_future(send);
-        let send = send.map(move |group| {
-            stop_sender.send(());
-            match group {
-                GroupResult::Canceled => Err(MigrationError::Canceled),
-                GroupResult::Inner(Err(err)) => Err(MigrationError::RedisClient(err)),
-                GroupResult::Inner(Ok(_)) => Ok(()),
+        let send = send.map(move |opt| {
+            if let Err(err) = stop_sender.send(()) {
+                debug!("failed to send stop signal: {:?}", err);
+            }
+            match opt {
+                Some(_) => Ok(()),
+                None => Err(MigrationError::Canceled),
             }
         });
         (Box::pin(send), handle)
@@ -268,7 +261,7 @@ impl ScanMigrationTask {
     #[allow(clippy::type_complexity)]
     fn scan_and_migrate_keys<C: RedisClient>(
         data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
-        client: &'static mut C,
+        client: &mut C,
     ) -> Pin<
         Box<
             dyn Future<
@@ -276,7 +269,8 @@ impl ScanMigrationTask {
                         (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
                         RedisClientError,
                     >,
-                > + Send,
+                > + Send
+                + '_,
         >,
     > {
         Box::pin(Self::scan_and_migrate_keys_impl(data, client))

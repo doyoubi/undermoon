@@ -8,7 +8,7 @@ use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::utils::ThreadSafe;
 use crate::protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt, TryStreamExt};
 use futures01::sync::mpsc;
 use futures01::{future, stream, Future, Sink, Stream};
 use std::boxed::Box;
@@ -206,10 +206,10 @@ where
 
     let (tx, rx) = mpsc::channel(channel_size);
 
-    let reader_handler = handle_read(handler.clone(), reader, tx);
+    let reader_handler = handle_read(handler.clone(), reader.compat(), tx);
     let writer_handler = handle_write(
         handler,
-        writer,
+        writer.compat(),
         rx,
         session_batch_min_time,
         session_batch_max_time,
@@ -299,6 +299,7 @@ where
     //        batch_max_time,
     //    )
     packets_stream
+        .map(|p| vec![p])
 //    .map_err(|err: batching::Error<SessionError>| {
 //        error!("batching error {:?}", err);
 //        SessionError::Canceled

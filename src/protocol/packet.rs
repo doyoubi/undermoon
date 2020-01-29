@@ -151,7 +151,7 @@ impl PacketDecoder for RespVec {
         let item = IndexedResp::decode(buf)?;
         match item {
             Some(resp) => Ok(Some(resp.to_resp_vec())),
-            None => return Ok(None),
+            None => Ok(None),
         }
     }
 }

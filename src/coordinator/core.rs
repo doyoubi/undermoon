@@ -75,14 +75,12 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetec
         let batch_time = Duration::from_millis(1);
 
         let mut res = Ok(());
-
-        for results in self
+        let mut s = self
             .retriever
             .retrieve_proxies()
-            .chunks_timeout(BATCH_SIZE, batch_time)
-            .next()
-            .await
-        {
+            .chunks_timeout(BATCH_SIZE, batch_time);
+
+        for results in s.next().await {
             let mut proxies = vec![];
             for r in results {
                 match r {

@@ -115,7 +115,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
         cmd
     }
 
-    async fn pre_check(&self) -> Result<(), MigrationError> {
+    async fn pre_check(&self) {
         let state = self.state.clone();
         let meta = self.meta.clone();
 
@@ -149,7 +149,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             .collect();
         let interval = Duration::from_millis(10);
 
-        let res = keep_connecting_and_sending_cmd(
+        keep_connecting_and_sending_cmd(
             client_factory,
             dst_proxy_address,
             cmd,
@@ -157,24 +157,18 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             handle_pre_check,
         )
         .await;
-
-        match res {
-            Ok(_) | Err(RedisClientError::Done) => Ok(()),
-            Err(err) => {
-                error!("pre_check error: {:?}", err);
-                Err(MigrationError::RedisClient(err))
-            }
-        }
+        info!("pre_check done");
     }
 
     async fn pre_block(&self) -> Result<(), MigrationError> {
         let state = self.state.clone();
         // TODO: implement this.
         state.set_state(MigrationState::PreSwitch);
+        info!("pre_block done");
         Ok(())
     }
 
-    async fn pre_switch(&self) -> Result<(), MigrationError> {
+    async fn pre_switch(&self) {
         let state = self.state.clone();
         let meta = self.meta.clone();
 
@@ -207,7 +201,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             .collect();
         let interval = Duration::from_millis(1);
 
-        let res = keep_connecting_and_sending_cmd(
+        keep_connecting_and_sending_cmd(
             client_factory,
             dst_proxy_address,
             cmd,
@@ -215,14 +209,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             handle_pre_switch,
         )
         .await;
-
-        match res {
-            Ok(_) | Err(RedisClientError::Done) => Ok(()),
-            Err(err) => {
-                error!("pre_switch error: {:?}", err);
-                Err(MigrationError::RedisClient(err))
-            }
-        }
+        info!("pre_switch done");
     }
 
     async fn scan_migrate(&self) -> Result<(), MigrationError> {
@@ -237,7 +224,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
                 .map_ok(|()| info!("migration producer finished scanning"))
                 .map_err(|err| {
                     error!("migration producer finished error: {:?}", err);
-                })
+                }),
         );
         match consumer.await {
             Ok(()) => {
@@ -252,7 +239,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
         }
     }
 
-    async fn final_switch(&self) -> Result<(), MigrationError> {
+    async fn final_switch(&self) {
         let state = self.state.clone();
         let meta = self.meta.clone();
 
@@ -283,7 +270,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             .collect();
         let interval = Duration::from_millis(1);
 
-        let res = keep_connecting_and_sending_cmd(
+        keep_connecting_and_sending_cmd(
             client_factory,
             dst_proxy_address,
             cmd,
@@ -291,13 +278,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             handle_final_switch,
         )
         .await;
-        match res {
-            Ok(_) | Err(RedisClientError::Done) => Ok(()),
-            Err(err) => {
-                error!("final_switch error: {:?}", err);
-                Err(MigrationError::RedisClient(err))
-            }
-        }
+        info!("final_switch done");
     }
 
     async fn run(&self) -> Result<(), MigrationError> {
@@ -307,11 +288,11 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
         let scan_migrate = self.scan_migrate();
         let final_switch = self.final_switch();
 
-        pre_check.await?;
+        pre_check.await;
         pre_block.await?;
-        pre_switch.await?;
+        pre_switch.await;
         scan_migrate.await?;
-        final_switch.await?;
+        final_switch.await;
 
         Ok(())
     }
@@ -333,7 +314,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> MigratingT
         let meta = self.meta.clone();
         let fut = self.run();
 
-        let fut = async {
+        let fut = async move {
             let r = select! {
                 res = fut.fuse() => res,
                 _ = receiver.fuse() => Err(MigrationError::Canceled),
@@ -507,7 +488,7 @@ where
             .compat()
             .map_err(|()| MigrationError::Canceled);
 
-        let fut = async {
+        let fut = async move {
             let r = select! {
                 res = fut.fuse() => res,
                 _ = receiver.fuse() => Err(MigrationError::Canceled),
