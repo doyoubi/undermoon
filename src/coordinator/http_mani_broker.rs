@@ -2,7 +2,7 @@ use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
 use crate::common::cluster::{Host, MigrationTaskMeta};
 use crate::common::utils::ThreadSafe;
 use std::pin::Pin;
-use futures::{Future, TryFutureExt};
+use futures::{Future};
 use reqwest;
 
 #[derive(Clone)]
@@ -96,17 +96,17 @@ impl HttpMetaManipulationBroker {
 }
 
 impl MetaManipulationBroker for HttpMetaManipulationBroker {
-    fn replace_proxy(
-        &self,
+    fn replace_proxy<'s>(
+        &'s self,
         failed_proxy_address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send + 's>> {
         Box::pin(self.replace_proxy_impl(failed_proxy_address))
     }
 
-    fn commit_migration(
-        &self,
+    fn commit_migration<'s>(
+        &'s self,
         meta: MigrationTaskMeta,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>> {
         Box::pin(self.commit_migration_impl(meta))
     }
 }

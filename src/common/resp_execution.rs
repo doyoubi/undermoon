@@ -4,7 +4,6 @@ use atomic_option::AtomicOption;
 use futures::channel::oneshot;
 use futures::{Future, FutureExt, select};
 use futures_timer::Delay;
-use futures::TryFutureExt;
 use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
@@ -250,6 +249,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use futures::future;
+    use tokio::runtime::Runtime;
     use crate::common::utils::ThreadSafe;
     use crate::protocol::BinSafeStr;
     use crate::protocol::Resp;
@@ -327,13 +327,14 @@ mod tests {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
         let mut client = DummyRedisClient::new(counter.clone());
-        let res = keep_sending_cmd(
+        let mut rt = Runtime::new().expect("test_keep_sending_cmd");
+        let fut = keep_sending_cmd(
             &mut client,
             vec![],
             interval,
             retry_handle_func,
-        )
-        .wait();
+        );
+        let res = rt.block_on(fut);
         assert!(res.is_err());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
     }
@@ -353,14 +354,15 @@ mod tests {
             }
         };
         let factory = Arc::new(DummyClientFactory::new(counter.clone()));
-        let res = keep_connecting_and_sending_cmd(
+        let mut rt = Runtime::new().expect("test_keep_sending_cmd");
+        let fut = keep_connecting_and_sending_cmd(
             factory,
             "host:port".to_string(),
             vec![],
             interval,
             handler,
-        )
-        .wait();
+        );
+        let res = rt.block_on(fut);
         assert!(res.is_ok());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
         assert_eq!(retry_counter_clone.count.load(Ordering::SeqCst), 2);

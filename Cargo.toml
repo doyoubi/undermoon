@@ -17,7 +17,7 @@ name="mem_broker"
 path="src/bin/mem_broker.rs"
 
 [dependencies]
-bytes = "0.4.12"
+bytes = "0.5.4"
 tokio = { version = "0.2", features = ["full"] }
 tokio-util = { version = "0.2", features = ["full"] }
 futures01 = "0.1.29"

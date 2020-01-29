@@ -71,11 +71,21 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
 }
 
 impl<F: RedisClientFactory> MigrationStateChecker for MigrationStateRespChecker<F> {
-    fn check(
-        &self,
+    fn check<'s>(
+        &'s self,
         address: String,
-    ) -> Pin<Box<dyn Stream<Item = Result<MigrationTaskMeta, CoordinateError>> + Send>> {
-        Box::pin(self.check_impl(address).map(|addrs| stream::iter(addrs.map(Ok))).flatten_stream())
+    ) -> Pin<Box<dyn Stream<Item = Result<MigrationTaskMeta, CoordinateError>> + Send + 's>> {
+        Box::pin(
+            self.check_impl(address)
+                .map(|addrs_res| {
+                    let elements = match addrs_res {
+                        Ok(addrs) => addrs.into_iter().map(Ok).collect(),
+                        Err(err) => vec![Err(err)],
+                    };
+                    stream::iter(elements)
+                })
+                .flatten_stream()
+        )
     }
 }
 
@@ -90,19 +100,19 @@ impl<MB: MetaManipulationBroker> BrokerMigrationCommitter<MB> {
 }
 
 impl<MB: MetaManipulationBroker> MigrationCommitter for BrokerMigrationCommitter<MB> {
-    fn commit(
-        &self,
+    fn commit<'s>(
+        &'s self,
         meta: MigrationTaskMeta,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
         let meta_clone = meta.clone();
-        Box::new(
+        Box::pin(
             self.mani_broker
                 .commit_migration(meta.clone())
                 .map_err(move |e| {
                     error!("failed to commit migration {:?} {:?}", meta, e);
                     CoordinateError::MetaMani(e)
                 })
-                .map(move |()| {
+                .map_ok(move |()| {
                     info!("successfully commit the migration {:?}", meta_clone);
                 }),
         )

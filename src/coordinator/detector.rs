@@ -1,7 +1,7 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, FailureChecker, FailureReporter, ProxiesRetriever};
 use crate::protocol::{RedisClient, RedisClientFactory};
-use futures::{Future, Stream, TryStreamExt};
+use futures::{Future, Stream, TryStreamExt, TryFutureExt};
 use std::sync::Arc;
 use std::pin::Pin;
 
@@ -16,7 +16,7 @@ impl<B: MetaDataBroker> BrokerProxiesRetriever<B> {
 }
 
 impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
-    fn retrieve_proxies(&self) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send>> {
+    fn retrieve_proxies<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send + 's>> {
         Box::pin(
             self.meta_data_broker
                 .get_host_addresses()
@@ -70,10 +70,10 @@ impl<F: RedisClientFactory> PingFailureDetector<F> {
 }
 
 impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
-    fn check(
-        &self,
+    fn check<'s>(
+        &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, CoordinateError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, CoordinateError>> + Send + 's>> {
         Box::pin(self.check_impl(address))
     }
 }
@@ -93,10 +93,10 @@ impl<B: MetaDataBroker> BrokerFailureReporter<B> {
 }
 
 impl<B: MetaDataBroker> FailureReporter for BrokerFailureReporter<B> {
-    fn report(
-        &self,
+    fn report<'s>(
+        &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
         Box::pin(
             self.meta_data_broker
                 .add_failure(address, self.reporter_id.clone())
@@ -114,6 +114,7 @@ mod tests {
     use crate::common::utils::ThreadSafe;
     use crate::protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp, RespVec};
     use futures::{future, stream};
+    use tokio::runtime::Runtime;
     use std::sync::{Arc, Mutex};
     use std::pin::Pin;
 
@@ -133,9 +134,9 @@ mod tests {
             _command: Vec<BinSafeStr>,
         ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>> {
             if self.address == NODE1 {
-                Box::new(future::ok((self, Resp::Arr(Array::Nil))))
+                Box::pin(future::ok(Resp::Arr(Array::Nil)))
             } else {
-                Box::new(future::err(RedisClientError::InvalidReply))
+                Box::pin(future::err(RedisClientError::InvalidReply))
             }
         }
     }
@@ -151,7 +152,7 @@ mod tests {
             &self,
             address: String,
         ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>> {
-            Box::new(future::ok(DummyClient { address }))
+            Box::pin(future::ok(DummyClient { address }))
         }
     }
 
@@ -171,42 +172,42 @@ mod tests {
     impl ThreadSafe for DummyMetaBroker {}
 
     impl MetaDataBroker for DummyMetaBroker {
-        fn get_cluster_names(
-            &self,
-        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>> {
-            Box::pin(future::ok(vec![]))
+        fn get_cluster_names<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send +'s>> {
+            Box::pin(stream::iter(vec![]))
         }
-        fn get_cluster(
-            &self,
+        fn get_cluster<'s>(
+            &'s self,
             _name: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>> {
             Box::pin(future::ok(None))
         }
-        fn get_host_addresses(
-            &self,
-        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>> {
-            Box::pin(stream::iter(vec![NODE1.to_string(), NODE2.to_string()]))
+        fn get_host_addresses<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+            Box::pin(stream::iter(vec![Ok(NODE1.to_string()), Ok(NODE2.to_string())]))
         }
-        fn get_host(
-            &self,
+        fn get_host<'s>(
+            &'s self,
             _address: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>> {
             Box::pin(future::ok(None))
         }
-        fn add_failure(
-            &self,
+        fn add_failure<'s>(
+            &'s self,
             address: String,
             _reporter_id: String,
-        ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send>> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send + 's>> {
             self.reported_failures
                 .lock()
                 .expect("dummy_add_failure")
                 .push(address);
             Box::pin(future::ok(()))
         }
-        fn get_failures(
-            &self,
-        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>> {
+        fn get_failures<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
             Box::pin(stream::iter(vec![]))
         }
     }
@@ -218,7 +219,9 @@ mod tests {
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
         let detector = SeqFailureDetector::new(retriever, checker, reporter);
-        let res = detector.run().into_future().wait();
+
+        let mut rt = Runtime::new().expect("test_detector");
+        let res = rt.block_on(detector.run().into_future());
         assert!(res.is_ok());
         let failed_nodes = broker
             .reported_failures

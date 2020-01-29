@@ -11,7 +11,7 @@ use super::sync::{BrokerMetaRetriever, HostMetaRespSender};
 use crate::common::utils::ThreadSafe;
 use crate::protocol::RedisClientFactory;
 use futures::future::select_all;
-use futures::{future, stream, Future, FutureExt, TryFutureExt, StreamExt};
+use futures::{stream, Future, StreamExt};
 use futures_timer::Delay;
 use std::iter;
 use std::sync::Arc;
@@ -55,20 +55,19 @@ impl<
         }
     }
 
-    pub fn run(&self) -> impl Future<Output = Result<(), CoordinateError>> {
+    pub async fn run(&self) -> Result<(), CoordinateError> {
         info!("coordinator config: {:?}", self.config);
 
-        select_all(vec![
-            self.loop_detect(),
-            self.loop_host_sync(),
-            self.loop_failure_handler(),
-            self.loop_migration_sync(),
-        ])
-        .map(|_| error!("service stopped"))
-        .map_err(|(e, _idx, _others)| {
-            error!("service stopped: {:?}", e);
-            e
-        })
+        let futs: Vec<Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>>> = vec![
+            Box::pin(self.loop_detect()),
+            Box::pin(self.loop_host_sync()),
+            Box::pin(self.loop_failure_handler()),
+            Box::pin(self.loop_migration_sync()),
+        ];
+
+        let (res, _, _) = select_all(futs).await;
+        error!("service stopped: {:?}", res);
+        res.map(|_| ())
     }
 
     fn gen_detector(
@@ -117,125 +116,78 @@ impl<
         )
     }
 
-    fn loop_detect(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+    async fn loop_detect(&self) -> Result<(), CoordinateError> {
         let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
         let reporter_id = self.config.reporter_id.clone();
-        Box::new(
-            s.fold(
-                (reporter_id, data_broker, client_factory),
-                |(reporter_id, data_broker, client_factory), ()| {
-                    debug!("start detecting failures");
-                    defer!(debug!("detecting finished a round"));
-                    let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
-                    Self::gen_detector(
-                        reporter_id.clone(),
-                        data_broker.clone(),
-                        client_factory.clone(),
-                    )
-                    .run()
-                    .collect()
-                    .then(move |res| {
-                        if let Err(e) = res {
-                            error!("detector stream err {:?}", e)
-                        }
-                        future::ok(())
-                    })
-                    .join(delay)
-                    .then(move |_| future::ok((reporter_id, data_broker, client_factory)))
-                },
-            )
-            .map(|_| debug!("loop_detect stopped")),
-        )
+        loop {
+            debug!("start detecting failures");
+            defer!(debug!("detecting finished a round"));
+            if let Err(e) = Self::gen_detector(
+                reporter_id.clone(),
+                data_broker.clone(),
+                client_factory.clone(),
+            ).run().await {
+                error!("detector stream err {:?}", e);
+            }
+            Delay::new(Duration::from_secs(1)).await;
+        }
     }
 
-    fn loop_host_sync(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+    async fn loop_host_sync(&self) -> Result<(), CoordinateError> {
         let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
-        Box::new(
-            s.fold(
-                (data_broker, client_factory),
-                |(data_broker, client_factory), ()| {
-                    debug!("start sync host meta data");
-                    defer!(debug!("host meta sync finished a round"));
-                    let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
-                    Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone())
-                        .run()
-                        .collect()
-                        .then(move |res| {
-                            if let Err(e) = res {
-                                error!("sync stream err {:?}", e)
-                            }
-                            future::ok(())
-                        })
-                        .join(delay)
-                        .then(move |_| future::ok((data_broker, client_factory)))
-                },
-            )
-            .map(|_| debug!("loop_sync stopped")),
-        )
+        loop {
+            debug!("start sync host meta data");
+            defer!(debug!("host meta sync finished a round"));
+            let mut s = Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone()).run();
+            for r in s.next().await {
+                if let Err(e) = r {
+                    error!("sync stream err {:?}", e);
+                }
+            }
+            Delay::new(Duration::from_secs(1)).await;
+        }
     }
 
-    fn loop_failure_handler(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+    async fn loop_failure_handler(&self) -> Result<(), CoordinateError> {
         let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let mani_broker = self.mani_broker.clone();
-        Box::new(
-            s.fold(
-                (data_broker, mani_broker),
-                |(data_broker, mani_broker), ()| {
-                    debug!("start handling failures");
-                    defer!(debug!("handling failures finished a round"));
-                    let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
-                    Self::gen_failure_handler(data_broker.clone(), mani_broker.clone())
-                        .run()
-                        .collect()
-                        .then(|res| {
-                            if let Err(e) = res {
-                                error!("failure handler stream err {:?}", e)
-                            }
-                            future::ok(())
-                        })
-                        .join(delay)
-                        .then(move |_| future::ok((data_broker, mani_broker)))
-                },
-            )
-            .map(|_| debug!("loop_failure_handler stopped")),
-        )
+        loop {
+            debug!("start handling failures");
+            defer!(debug!("handling failures finished a round"));
+            let mut s = Self::gen_failure_handler(data_broker.clone(), mani_broker.clone()).run();
+            for r in s.next().await {
+                if let Err(e) = r {
+                    error!("failure handler stream err {:?}", e)
+                }
+            }
+            Delay::new(Duration::from_secs(1)).await;
+        }
     }
 
-    fn loop_migration_sync(&self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+    async fn loop_migration_sync(&self) -> Result<(), CoordinateError> {
         let s = stream::iter(iter::repeat(()));
         let data_broker = self.data_broker.clone();
         let mani_broker = self.mani_broker.clone();
         let client_factory = self.client_factory.clone();
-        Box::new(
-            s.fold(
-                (data_broker, mani_broker, client_factory),
-                |(data_broker, mani_broker, client_factory), ()| {
-                    debug!("start handling migration sync");
-                    defer!(debug!("handling migration finished a round"));
-                    let delay = Delay::new(Duration::from_secs(1)).map_err(CoordinateError::Io);
-                    Self::gen_migration_state_synchronizer(
-                        data_broker.clone(),
-                        mani_broker.clone(),
-                        client_factory.clone(),
-                    )
-                    .run()
-                    .collect()
-                    .then(|res| {
-                        if let Err(e) = res {
-                            error!("migration sync stream err {:?}", e)
-                        }
-                        future::ok(())
-                    })
-                    .join(delay)
-                    .then(move |_| future::ok((data_broker, mani_broker, client_factory)))
-                },
-            )
-            .map(|_| debug!("loop_migration_sync stopped")),
-        )
+        loop {
+            debug!("start handling migration sync");
+            defer!(debug!("handling migration finished a round"));
+            let mut s = Self::gen_migration_state_synchronizer(
+                data_broker.clone(),
+                mani_broker.clone(),
+                client_factory.clone(),
+            ).run();
+            for r in s.next().await {
+                if let Err(e) = r {
+                    error!("migration sync stream err {:?}", e)
+                }
+            }
+            Delay::new(Duration::from_secs(1)).await;
+        }
     }
 }

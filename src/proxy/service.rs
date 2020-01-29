@@ -115,13 +115,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
             }
         };
 
-        let listener = match TcpListener::bind(&address) {
-            Ok(l) => l,
-            Err(e) => {
-                error!("unable to bind address: {} {:?}", address, e);
-                return Box::new(future::err(()));
-            }
-        };
+        let listener_fut = TcpListener::bind(&address).compat();
 
         let forward_handler = self.cmd_ctx_handler.clone();
         let slow_request_logger = self.slow_request_logger.clone();
@@ -130,51 +124,58 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let config = self.config.clone();
 
         Box::new(
-            listener
-                .incoming()
-                .map_err(|e| error!("accept failed: {:?}", e))
-                .for_each(move |sock| {
-                    if let Err(err) = sock.set_nodelay(true) {
-                        error!("failed to set TCP_NODELAY: {:?}", err);
-                        return future::err(());
-                    }
+            listener_fut
+                .map_err(|e| {
+                    error!("unable to bind address: {} {:?}", address, e);
+                    return Box::new(future::err(()));
+                })
+                .and_then(|listener| {
+                    listener
+                        .incoming()
+                        .map_err(|e| error!("accept failed: {:?}", e))
+                        .for_each(move |sock| {
+                            if let Err(err) = sock.set_nodelay(true) {
+                                error!("failed to set TCP_NODELAY: {:?}", err);
+                                return future::err(());
+                            }
 
-                    let peer = match sock.peer_addr() {
-                        Ok(address) => address.to_string(),
-                        Err(e) => format!("Failed to get peer {}", e),
-                    };
+                            let peer = match sock.peer_addr() {
+                                Ok(address) => address.to_string(),
+                                Err(e) => format!("Failed to get peer {}", e),
+                            };
 
-                    info!("accept conn: {}", peer);
-                    let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
+                            info!("accept conn: {}", peer);
+                            let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
 
-                    let handle_clone = forward_handler.clone();
-                    let (reader_handler, writer_handler) = handle_conn(
-                        Arc::new(Session::new(
-                            curr_session_id,
-                            handle_clone,
-                            slow_request_logger.clone(),
-                        )),
-                        sock,
-                        config.session_channel_size,
-                        config.session_batch_min_time,
-                        config.session_batch_max_time,
-                        config.session_batch_buf,
-                    );
-                    let (reader_handler, writer_handler) =
-                        new_future_group(reader_handler, writer_handler);
+                            let handle_clone = forward_handler.clone();
+                            let (reader_handler, writer_handler) = handle_conn(
+                                Arc::new(Session::new(
+                                    curr_session_id,
+                                    handle_clone,
+                                    slow_request_logger.clone(),
+                                )),
+                                sock,
+                                config.session_channel_size,
+                                config.session_batch_min_time,
+                                config.session_batch_max_time,
+                                config.session_batch_buf,
+                            );
+                            let (reader_handler, writer_handler) =
+                                new_future_group(reader_handler, writer_handler);
 
-                    let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer);
-                    tokio::spawn(
-                        reader_handler
-                            .map(move |()| info!("Read IO closed {}", p1))
-                            .map_err(move |err| error!("Read IO error {:?} {}", err, p2)),
-                    );
-                    tokio::spawn(
-                        writer_handler
-                            .map(move |()| info!("Write IO closed {}", p3))
-                            .map_err(move |err| error!("Write IO error {:?} {}", err, p4)),
-                    );
-                    future::ok(())
+                            let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer);
+                            tokio::spawn(
+                                reader_handler
+                                    .map(move |()| info!("Read IO closed {}", p1))
+                                    .map_err(move |err| error!("Read IO error {:?} {}", err, p2)),
+                            );
+                            tokio::spawn(
+                                writer_handler
+                                    .map(move |()| info!("Write IO closed {}", p3))
+                                    .map_err(move |err| error!("Write IO error {:?} {}", err, p4)),
+                            );
+                            future::ok(())
+                        })
                 }),
         )
     }

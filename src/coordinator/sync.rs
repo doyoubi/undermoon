@@ -5,7 +5,7 @@ use crate::common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
 use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
-use futures::{Future, FutureExt, TryFutureExt};
+use futures::{Future, TryFutureExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::pin::Pin;
@@ -39,7 +39,7 @@ impl<F: RedisClientFactory> HostMetaRespSender<F> {
 }
 
 impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
-    fn send_meta(&self, host: Host) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
+    fn send_meta<'s>(&'s self, host: Host) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
         Box::pin(self.send_meta_impl(host))
     }
 }
@@ -70,11 +70,11 @@ impl<B: MetaDataBroker> BrokerMetaRetriever<B> {
 }
 
 impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
-    fn get_host_meta(
-        &self,
+    fn get_host_meta<'s>(
+        &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, CoordinateError>> + Send>> {
-        Box::new(
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, CoordinateError>> + Send + 's>> {
+        Box::pin(
             self.broker
                 .get_host(address)
                 .map_err(CoordinateError::MetaData),

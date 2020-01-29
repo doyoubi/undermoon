@@ -1,6 +1,6 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{CoordinateError, ProxyFailure, ProxyFailureHandler, ProxyFailureRetriever};
-use futures::{Future, Stream, TryFutureExt, FutureExt};
+use futures::{Future, Stream, TryFutureExt, TryStreamExt};
 use std::sync::Arc;
 use std::pin::Pin;
 
@@ -15,10 +15,10 @@ impl<B: MetaDataBroker> BrokerProxyFailureRetriever<B> {
 }
 
 impl<B: MetaDataBroker> ProxyFailureRetriever for BrokerProxyFailureRetriever<B> {
-    fn retrieve_proxy_failures(
-        &self,
-    ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send>> {
-        Box::new(
+    fn retrieve_proxy_failures<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send + 's>> {
+        Box::pin(
             self.broker
                 .get_failures()
                 .map_err(CoordinateError::MetaData),
@@ -43,18 +43,18 @@ impl<DB: MetaDataBroker, MB: MetaManipulationBroker + Clone> ReplaceNodeHandler<
 impl<DB: MetaDataBroker, MB: MetaManipulationBroker + Clone> ProxyFailureHandler
     for ReplaceNodeHandler<DB, MB>
 {
-    fn handle_proxy_failure(
-        &self,
+    fn handle_proxy_failure<'s>(
+        &'s self,
         proxy_failure: ProxyFailure,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>> {
-        Box::new(
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
+        Box::pin(
             self.mani_broker
                 .replace_proxy(proxy_failure)
                 .map_err(|e| {
                     error!("failed to replace proxy {:?}", e);
                     CoordinateError::MetaMani(e)
                 })
-                .map(|new_host| {
+                .map_ok(|new_host| {
                     info!("successfully replace it with new host {:?}", new_host);
                 }),
         )

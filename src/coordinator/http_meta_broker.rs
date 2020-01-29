@@ -1,7 +1,7 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
 use crate::common::cluster::{Cluster, Host};
 use crate::common::utils::ThreadSafe;
-use futures::{stream, Future, Stream, FutureExt, TryFutureExt};
+use futures::{stream, Future, Stream, FutureExt};
 use reqwest;
 use serde_derive::Deserialize;
 use std::pin::Pin;
@@ -146,42 +146,72 @@ impl HttpMetaBroker {
 }
 
 impl MetaDataBroker for HttpMetaBroker {
-    fn get_cluster_names(
-        &self,
-    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>> {
-        Box::pin(self.get_cluster_names_impl().map(|names| stream::iter(names.map(Ok))).flatten_stream())
+    fn get_cluster_names<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+        Box::pin(
+            self.get_cluster_names_impl()
+                .map(|names_res| {
+                    let elements = match names_res {
+                        Ok(names) => names.into_iter().map(Ok).collect(),
+                        Err(err) => vec![Err(err)],
+                    };
+                    stream::iter(elements)
+                })
+                .flatten_stream()
+        )
     }
 
-    fn get_cluster(
-        &self,
+    fn get_cluster<'s>(
+        &'s self,
         name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(self.get_cluster_impl(name))
     }
 
-    fn get_host_addresses(
-        &self,
-    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>> {
-        Box::pin(self.get_host_addresses_impl().map(|addrs| stream::iter(addrs.map(Ok))).flatten_stream())
+    fn get_host_addresses<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+        Box::pin(
+            self.get_host_addresses_impl()
+                .map(|addrs_res| {
+                    let elements = match addrs_res {
+                        Ok(addrs) => addrs.into_iter().map(Ok).collect(),
+                        Err(err) => vec![Err(err)],
+                    };
+                    stream::iter(elements)
+                })
+                .flatten_stream()
+        )
     }
 
-    fn get_host(
-        &self,
+    fn get_host<'s>(
+        &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(self.get_host_impl(address))
     }
 
-    fn add_failure(
-        &self,
+    fn add_failure<'s>(
+        &'s self,
         address: String,
         reporter_id: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send + 's>> {
         Box::pin(self.add_failure_impl(address, reporter_id))
     }
 
-    fn get_failures(&self) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send>> {
-        Box::pin(self.get_failures_impl().map(|fs| stream::iter(fs.map(Ok))).flatten_stream())
+    fn get_failures<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send +'s>> {
+        Box::pin(
+            self.get_failures_impl()
+                .map(|failures_res| {
+                    let elements = match failures_res {
+                        Ok(fs) => fs.into_iter().map(Ok).collect(),
+                        Err(err) => vec![Err(err)],
+                    };
+                    stream::iter(elements)
+                })
+                .flatten_stream()
+        )
     }
 }
 

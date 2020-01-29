@@ -16,6 +16,7 @@ use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use futures::TryFutureExt;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
@@ -145,7 +146,7 @@ impl ScanMigrationTask {
                     restore_cmd,
                     interval,
                     Self::handle_forward,
-                )
+                ).compat()
                 .map(move |client_opt| {
                     counter.fetch_sub(1, Ordering::SeqCst);
                     (sender, client_opt)
