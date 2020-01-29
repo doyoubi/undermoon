@@ -18,6 +18,7 @@ use std::sync;
 use std::time::Duration;
 use tokio_util::codec::Decoder;
 use tokio::net::TcpStream;
+use futures::StreamExt;
 
 pub trait CmdHandler {
     fn handle_cmd(&self, sender: CmdReplySender);

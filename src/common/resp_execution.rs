@@ -105,7 +105,7 @@ pub async fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory,
     where
         Func: Clone
         + Send
-        + Fn(T, &mut F::Client) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
+        + Fn(T, &'static mut F::Client) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
 {
     let mut data = data;
     loop {
@@ -130,12 +130,12 @@ pub async fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory,
 
 pub async fn keep_sending<T: Clone + Send, C: RedisClient, Func>(
     data: T,
-    client: &mut C,
+    client: &'static mut C,
     interval: Duration,
     send_func: Func,
 ) -> Result<T, (T, RedisClientError)>
     where
-        Func: Send + Fn(T, &mut C) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
+        Func: Send + Fn(T, &'static mut C) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send>>,
 {
     let mut data = data;
     loop {

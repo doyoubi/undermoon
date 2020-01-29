@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use futures::TryFutureExt;
 
 pub struct RedisMasterReplicator<F: RedisClientFactory> {
     meta: MasterMeta,
@@ -55,7 +56,7 @@ impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
         let meta = self.meta.clone();
         self.role_sync.start(Self::handle_result).map(|f| {
             let fut: Box<dyn Future<Item = (), Error = ReplicatorError> + Send> =
-                Box::new(f.map_err(ReplicatorError::RedisError).then(move |r| {
+                Box::new(f.compat().map_err(ReplicatorError::RedisError).then(move |r| {
                     warn!("RedisMasterReplicator {:?} stopped {:?}", meta, r);
                     future::ok(())
                 }));
@@ -135,7 +136,7 @@ impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
         let meta = self.meta.clone();
         self.role_sync.start(Self::handle_result).map(|f| {
             let fut: Box<dyn Future<Item = (), Error = ReplicatorError> + Send> =
-                Box::new(f.map_err(ReplicatorError::RedisError).then(move |r| {
+                Box::new(f.compat().map_err(ReplicatorError::RedisError).then(move |r| {
                     warn!("RedisReplicaReplicator {:?} stopped {:?}", meta, r);
                     future::ok(())
                 }));

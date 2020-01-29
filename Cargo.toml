@@ -48,6 +48,7 @@ arr_macro = "0.1.2"
 atoi = "0.3.1"
 zstd = "0.4"
 memchr = "2.3.0"
+pin-project = "0.4"
 
 [profile.release]
 debug = true

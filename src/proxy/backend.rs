@@ -20,6 +20,7 @@ use std::time::Duration;
 use tokio;
 use tokio_util::codec::Decoder;
 use tokio::net::TcpStream;
+use futures::StreamExt;
 
 pub type BackendResult<T> = Result<Box<T>, BackendError>;
 

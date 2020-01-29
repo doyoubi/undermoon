@@ -1,4 +1,4 @@
-use super::task::{MigrationError, ScanResponse, SlotRangeArray};
+use super::task::{ScanResponse, SlotRangeArray};
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::{
     keep_connecting_and_sending, keep_connecting_and_sending_cmd_with_cached_client,
@@ -6,17 +6,14 @@ use crate::common::resp_execution::{
 use crate::common::utils::pretty_print_bytes;
 use crate::protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use atomic_option::AtomicOption;
-use futures01::sync::{mpsc, oneshot};
-use futures01::Sink;
-use futures01::{future, Future};
-use futures01::{stream, Stream};
+use futures::channel::{mpsc, oneshot};
+use futures::{Future, TryFutureExt, stream, StreamExt, SinkExt, select, FutureExt};
 use futures_timer::Delay;
-use std::iter;
 use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use futures::TryFutureExt;
+use std::pin::Pin;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
@@ -30,7 +27,7 @@ struct DataEntry {
     raw_data: Vec<u8>,
 }
 
-type MgrFut = Box<dyn Future<Item = (), Error = MigrationError> + Send>;
+type MgrFut = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub struct ScanMigrationTask {
     handle: AtomicOption<(FutureAutoStopHandle, FutureAutoStopHandle)>, // once this task get dropped, the future will stop.
@@ -90,7 +87,7 @@ impl ScanMigrationTask {
         address: String,
         client_factory: Arc<F>,
     ) -> (
-        Box<dyn Future<Item = (), Error = MigrationError> + Send>,
+        Pin<Box<dyn Future<Output = ()> + Send>>,
         FutureAutoStopHandle,
     ) {
         let send = Self::forward_entries(
@@ -102,34 +99,37 @@ impl ScanMigrationTask {
             client_factory,
         );
         let (send, handle) = new_auto_drop_future(send);
-        (Box::new(send.map_err(|_| MigrationError::Canceled)), handle)
+        (Box::pin(send), handle)
     }
 
-    fn forward_entries<F: RedisClientFactory>(
+    async fn forward_entries<F: RedisClientFactory>(
         sender: mpsc::Sender<DataEntry>,
         receiver: mpsc::Receiver<DataEntry>,
         stop_receiver: oneshot::Receiver<()>,
         counter: Arc<AtomicI64>,
         address: String,
         client_factory: Arc<F>,
-    ) -> impl Future<Item = (), Error = RedisClientError> {
+    ) -> Result<(), RedisClientError> {
         let counter_clone = counter.clone();
-        let forward = receiver
-            .map_err(|()| RedisClientError::Canceled)
-            .fold((sender, None), move |(sender, client_opt), entry| {
-                let counter = counter_clone.clone();
+
+        let forward = async move {
+            let mut sender = sender;
+            let mut client_opt = None;
+            let mut receiver = receiver;
+
+            for entry in receiver.next().await {
                 let DataEntry {
                     key,
                     pttl,
                     raw_data,
                 } = entry.clone();
+
                 let expire_time = if pttl == PEXPIRE_NO_EXPIRE.as_bytes() {
                     RESTORE_NO_EXPIRE.as_bytes().into()
                 } else {
                     pttl
                 };
-                let client_factory2 = client_factory.clone();
-                let sender2 = sender.clone();
+
                 let restore_cmd = vec![
                     "RESTORE".to_string().into_bytes(),
                     key,
@@ -138,48 +138,45 @@ impl ScanMigrationTask {
                 ];
                 let interval = Duration::from_nanos(0);
 
-                // TODO: batch multiple entries to speed up migration.
-                keep_connecting_and_sending_cmd_with_cached_client(
-                    client_opt,
-                    client_factory2,
+                let res = keep_connecting_and_sending_cmd_with_cached_client(
+                    client_opt.take(),
+                    client_factory.clone(),
                     address.clone(),
                     restore_cmd,
                     interval,
                     Self::handle_forward,
-                ).compat()
-                .map(move |client_opt| {
-                    counter.fetch_sub(1, Ordering::SeqCst);
-                    (sender, client_opt)
-                })
-                .or_else(move |_err| {
-                    // If it fails, retry this entry.
-                    sender2
-                        .send(entry)
-                        .map(|sender| (sender, None))
-                        .map_err(|_err| RedisClientError::Canceled)
-                })
-            })
-            .map(|_| ());
+                ).await;
 
-        let stop = stop_receiver.then(move |_| {
-            let s = stream::iter_ok(iter::repeat(()));
-            s.for_each(move |()| {
+                client_opt = match res {
+                    Ok(client_opt) => client_opt,
+                    Err(err) => {
+                        error!("failed to send entry: {:?}", err);
+                        if let Err(_err) = sender.send(entry).await {
+                            debug!("failed to send back entry");
+                        }
+                        continue
+                    }
+                };
+
+                counter_clone.fetch_sub(1, Ordering::SeqCst);
+            }
+        };
+
+        let stop  = async move {
+            stop_receiver.await;
+            loop {
+                if 0 == counter.load(Ordering::SeqCst) {
+                    break;
+                }
                 let interval = Duration::from_millis(100);
-                let fut: Box<dyn Future<Item = (), Error = ()> + Send> =
-                    if counter.load(Ordering::SeqCst) == 0 {
-                        Box::new(future::err(()))
-                    } else {
-                        Box::new(Delay::new(interval).map_err(|_| ()))
-                    };
-                fut
-            })
-            .then(|_| future::ok::<(), ()>(()))
-        });
+                Delay::new(interval).await;
+            }
+        };
 
-        forward
-            .select(stop.map_err(|_| RedisClientError::Canceled))
-            .map(|_| ())
-            .map_err(|(err, _)| err)
+        select! {
+            _ = forward.fuse() => Err(RedisClientError::Canceled),
+            _ = stop.fuse() => Ok(()),
+        }
     }
 
     fn handle_forward(resp: RespVec) -> Result<(), RedisClientError> {
@@ -205,7 +202,7 @@ impl ScanMigrationTask {
         client_factory: Arc<F>,
         scan_rate: u64,
     ) -> (
-        Box<dyn Future<Item = (), Error = MigrationError> + Send>,
+        Pin<Box<dyn Future<Output = ()> + Send>>,
         FutureAutoStopHandle,
     ) {
         let data = (slot_ranges, 0, sender, counter);
@@ -222,120 +219,88 @@ impl ScanMigrationTask {
             interval,
             Self::scan_and_migrate_keys,
         );
+        let mut stop_sender = stop_sender;
+        let send = send.map(move |_| stop_sender.send(()));
         let (send, handle) = new_auto_drop_future(send);
-        let send = send
-            .then(move |_| stop_sender.send(()))
-            .map_err(|_| MigrationError::Canceled);
-        (Box::new(send), handle)
+        (Box::pin(send), handle)
+    }
+
+    async fn scan_and_migrate_keys_impl<C: RedisClient>(
+        data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
+        client: &mut C,
+    ) -> Result<(SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>), RedisClientError> {
+        let (slot_ranges, index, mut sender, counter) = data;
+        let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
+        let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
+
+        let resp = client.execute(byte_cmd).await?;
+        let ScanResponse { next_index, keys } = ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
+
+        let (slot_ranges, entries) = Self::produce_entries(slot_ranges, keys, client).await?;
+
+        let entries_num = entries.len() as i64;
+        sender
+            .send_all(&mut stream::iter(entries.into_iter().map(Ok)))
+            .map_err(|_err| RedisClientError::Canceled).await?;
+
+        counter.fetch_add(entries_num, Ordering::SeqCst);
+        Ok((slot_ranges, next_index, sender, counter))
     }
 
     // TODO: fix this
     #[allow(clippy::type_complexity)]
     fn scan_and_migrate_keys<C: RedisClient>(
         data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
-        client: C,
-    ) -> Box<
-        dyn Future<
-                Item = (
-                    (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
-                    C,
-                ),
-                Error = RedisClientError,
+        client: &'static mut C,
+    ) -> Pin<Box<
+        dyn Future<Output = Result<(SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>), RedisClientError>
             > + Send,
-    > {
-        let (slot_ranges, index, sender, counter) = data;
-        let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
-        let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
-        let exec_fut = client
-            .execute(byte_cmd)
-            .and_then(move |(client, resp)| {
-                future::result(
-                    ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply),
-                )
-                .and_then(move |scan| {
-                    let ScanResponse { next_index, keys } = scan;
-
-                    Self::produce_entries(slot_ranges, keys, client).and_then(
-                        move |(slot_ranges, client, entries)| {
-                            let entries_num = entries.len() as i64;
-                            sender
-                                .send_all(stream::iter_ok(entries))
-                                .map(move |(sender, _entries)| {
-                                    counter.fetch_add(entries_num, Ordering::SeqCst);
-                                    (slot_ranges, next_index, client, sender, counter)
-                                })
-                                .map_err(|_err| RedisClientError::Canceled)
-                        },
-                    )
-                })
-            })
-            .and_then(|(slot_ranges, next_index, client, sender, counter)| {
-                if next_index == 0 {
-                    future::err(RedisClientError::Done)
-                } else {
-                    future::ok(((slot_ranges, next_index, sender, counter), client))
-                }
-            });
-        Box::new(exec_fut)
+    >> {
+        Box::pin(Self::scan_and_migrate_keys_impl(data, client))
     }
 
-    fn produce_entries<C: RedisClient>(
+    async fn produce_entries<C: RedisClient>(
         slot_ranges: SlotRangeArray,
         keys: Vec<Vec<u8>>,
-        client: C,
-    ) -> impl Future<Item = (SlotRangeArray, C, Vec<DataEntry>), Error = RedisClientError> {
-        let keys_iter: Vec<Vec<u8>> = keys
-            .into_iter()
-            .filter(|k| !slot_ranges.is_key_inside(k.as_slice()))
-            .collect();
+        client: &mut C,
+    ) -> Result<(SlotRangeArray, Vec<DataEntry>), RedisClientError> {
+        let mut entries = vec![];
+        for key in keys {
+            if !slot_ranges.is_key_inside(key.as_slice()) {
+                continue
+            }
 
-        let entries = vec![];
-        let s = stream::iter_ok(keys_iter);
-        s.fold((client, entries), move |(client, mut entries), key| {
             let pttl_cmd = vec!["PTTL".to_string().into_bytes(), key.clone()];
-            client
-                .execute(pttl_cmd)
-                .and_then(|(client, resp)| {
-                    let r = match resp {
-                        // -2 for key not eixsts
-                        Resp::Integer(pttl) if pttl == b"-2" => Ok((client, None)),
-                        Resp::Integer(pttl) => Ok((client, Some(pttl))),
-                        others => {
-                            error!("failed to get PTTL: {:?}", others);
-                            Err(RedisClientError::InvalidReply)
-                        }
-                    };
-                    future::result(r)
-                })
-                .and_then(move |(client, pttl_opt)| {
-                    let dump_cmd = vec!["DUMP".to_string().into_bytes(), key.clone()];
-                    client.execute(dump_cmd).and_then(move |(client, resp)| {
-                        let r = match (resp, pttl_opt) {
-                            // This is the most possible case.
-                            (Resp::Bulk(BulkStr::Str(raw_data)), Some(pttl)) => Ok((
-                                client,
-                                Some(DataEntry {
-                                    key,
-                                    pttl,
-                                    raw_data,
-                                }),
-                            )),
-                            (Resp::Bulk(BulkStr::Nil), _) | (_, None) => Ok((client, None)),
-                            (others, _pttl_opt) => {
-                                error!("failed to dump data: {:?}", others);
-                                Err(RedisClientError::InvalidReply)
-                            }
-                        };
-                        future::result(r)
-                    })
-                })
-                .map(move |(client, entry_opt)| {
-                    if let Some(entry) = entry_opt {
-                        entries.push(entry);
-                    }
-                    (client, entries)
-                })
-        })
-        .map(|(client, entries)| (slot_ranges, client, entries))
+            let resp = client.execute(pttl_cmd).await?;
+            let pttl_opt = match resp {
+                // -2 for key not eixsts
+                Resp::Integer(pttl) if pttl == b"-2" => None,
+                Resp::Integer(pttl) => Some(pttl),
+                others => {
+                    error!("failed to get PTTL: {:?}", others);
+                    return Err(RedisClientError::InvalidReply);
+                }
+            };
+
+            let dump_cmd = vec!["DUMP".to_string().into_bytes(), key.clone()];
+            let resp = client.execute(dump_cmd).await?;
+            match (resp, pttl_opt) {
+                // This is the most possible case.
+                (Resp::Bulk(BulkStr::Str(raw_data)), Some(pttl)) => {
+                    entries.push(DataEntry {
+                        key,
+                        pttl,
+                        raw_data,
+                    });
+                },
+                (Resp::Bulk(BulkStr::Nil), _) | (_, None) => (),
+                (others, _pttl_opt) => {
+                    error!("failed to dump data: {:?}", others);
+                    return Err(RedisClientError::InvalidReply);
+                }
+            };
+        }
+
+        Ok((slot_ranges, entries))
     }
 }

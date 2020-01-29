@@ -17,19 +17,19 @@ use tokio_util::codec::{Framed, Decoder};
 use crate::protocol::{RespCodec};
 
 pub trait RedisClient: Send {
-    fn execute(
-        &mut self,
+    fn execute<'s>(
+        &'s mut self,
         command: Vec<BinSafeStr>,
-    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>>;
 }
 
 pub trait RedisClientFactory: ThreadSafe {
     type Client: RedisClient;
 
-    fn create_client(
-        &self,
+    fn create_client<'s>(
+        &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>>;
 }
 
 #[derive(Debug)]
@@ -157,11 +157,11 @@ impl Drop for PooledRedisClient {
             return;
         }
         if let Some(conn_handle) = self.conn_handle.take() {
-            let PoolItemHandle {
-                item: conn,
+            let RedisClientConnectionHandle {
+                frame,
                 reclaim_sender,
             } = conn_handle;
-            match reclaim_sender.try_send(conn.into()) {
+            match reclaim_sender.try_send(frame.into_innter()) {
                 Ok(()) => (),
                 Err(crossbeam_channel::TrySendError::Full(_)) => debug!("pool is full"),
                 Err(crossbeam_channel::TrySendError::Disconnected(_)) => debug!("pool is down"),
@@ -171,10 +171,10 @@ impl Drop for PooledRedisClient {
 }
 
 impl RedisClient for PooledRedisClient {
-    fn execute(
-        &mut self,
+    fn execute<'s>(
+        &'s mut self,
         command: Vec<BinSafeStr>,
-    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
         Box::pin(self.execute_cmd_with_timeout(command))
     }
 }
@@ -285,10 +285,10 @@ impl PooledRedisClientFactory {
 impl RedisClientFactory for PooledRedisClientFactory {
     type Client = PooledRedisClient;
 
-    fn create_client(
-        &self,
+    fn create_client<'s>(
+        &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>> {
         Box::pin(self.create_client_impl(address))
     }
 }

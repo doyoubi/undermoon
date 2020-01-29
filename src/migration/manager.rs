@@ -16,6 +16,7 @@ use futures01::Future;
 use itertools::Either;
 use std::collections::HashMap;
 use std::sync::Arc;
+use futures::compat::Future01CompatExt;
 
 type TaskRecord<T> = Either<Arc<dyn MigratingTask<Task = T>>, Arc<dyn ImportingTask<Task = T>>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
@@ -113,7 +114,7 @@ where
                             "master slot task {} {} {} {} exit {:?}",
                             db_name, epoch, slot_range_start, slot_range_end, e
                         )
-                    }));
+                    }).compat());
                 }
                 Either::Right(importing_task) => {
                     info!(
@@ -125,7 +126,7 @@ where
                             "replica slot task {} {} {}-{} exit {:?}",
                             db_name, epoch, slot_range_start, slot_range_end, e
                         )
-                    }));
+                    }).compat());
                 }
             }
         }
@@ -161,7 +162,7 @@ where
                                 info!("task for deleting keys get canceled")
                             }
                             _ => error!("task for deleting keys exit with error {:?}", e),
-                        }),
+                        }).compat(),
                 );
             }
         }

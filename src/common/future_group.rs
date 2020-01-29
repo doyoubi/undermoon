@@ -1,5 +1,8 @@
-use futures01::sync::oneshot;
-use futures01::{Async, Future, Poll};
+use futures::channel::oneshot;
+use futures::{Future};
+use futures::task::{Context, Poll};
+use std::pin::Pin;
+use pin_project::{pin_project, pinned_drop};
 
 pub fn new_future_group<FA: Future, FB: Future>(
     future1: FA,
@@ -20,53 +23,43 @@ pub fn new_future_group<FA: Future, FB: Future>(
     (handle1, handle2)
 }
 
+#[pin_project(PinnedDrop)]
 pub struct FutureGroupHandle<F: Future> {
+    #[pin]
     inner: F,
-    signal_sender: Option<oneshot::Sender<()>>,
+    #[pin]
     signal_receiver: oneshot::Receiver<()>,
+    signal_sender: Option<oneshot::Sender<()>>,
 }
 
 impl<F: Future> Future for FutureGroupHandle<F> {
-    type Item = ();
-    type Error = F::Error;
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let inner = &mut self.inner;
-        let signal_sender = &mut self.signal_sender;
-        let signal_receiver = &mut self.signal_receiver;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
 
-        match inner.poll() {
-            Ok(Async::NotReady) => (),
-            Ok(Async::Ready(_)) => {
-                if let Some(sender) = signal_sender.take() {
+        match this.inner.poll(cx) {
+            Poll::Pending => (),
+            Poll::Ready(_) => {
+                if let Some(sender) = this.signal_sender.take() {
                     if let Err(()) = sender.send(()) {
                         debug!("failed to signal");
                     }
                 }
-                return Ok(Async::Ready(()));
-            }
-            Err(e) => {
-                if let Some(sender) = signal_sender.take() {
-                    if let Err(()) = sender.send(()) {
-                        debug!("failed to signal");
-                    }
-                }
-                return Err(e);
-            }
-        };
-        match signal_receiver.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(())) => Ok(Async::Ready(())),
-            Err(_e) => Ok(Async::Ready(())),
+                return Poll::Ready(())
+            },
         }
+
+        this.signal_receiver.poll(cx).map(|_| ())
     }
 }
 
-impl<F: Future> Drop for FutureGroupHandle<F> {
-    fn drop(&mut self) {
+#[pinned_drop]
+impl<F: Future> PinnedDrop for FutureGroupHandle<F> {
+    fn drop(self: Pin<&mut Self>) {
         self.signal_sender
             .take()
-            .and_then(|sender| sender.send(()).ok())
+            .and_then(|mut sender| sender.send(()).ok())
             .unwrap_or_else(|| debug!("FutureGroupHandle already closed"))
     }
 }
@@ -83,8 +76,11 @@ pub fn new_auto_drop_future<F: Future>(future: F) -> (FutureAutoStop<F>, FutureA
     (fut, handle)
 }
 
+#[pin_project]
 pub struct FutureAutoStop<F: Future> {
+    #[pin]
     inner: F,
+    #[pin]
     signal_receiver: oneshot::Receiver<()>,
 }
 
@@ -96,27 +92,22 @@ impl Drop for FutureAutoStopHandle {
     fn drop(&mut self) {
         self.signal_sender
             .take()
-            .and_then(|sender| sender.send(()).ok())
+            .and_then(|mut sender| sender.send(()).ok())
             .unwrap_or_else(|| debug!("FutureAutoStopHandle already closed"))
     }
 }
 
 impl<F: Future> Future for FutureAutoStop<F> {
-    type Item = ();
-    type Error = F::Error;
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let inner = &mut self.inner;
-        let signal_receiver = &mut self.signal_receiver;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
 
-        match inner.poll() {
-            Ok(Async::NotReady) => (),
-            Ok(Async::Ready(_)) => return Ok(Async::Ready(())),
-            Err(e) => return Err(e),
+        match this.inner.poll(cx) {
+            Poll::Pending => (),
+            Poll::Ready(_) => return Poll::Ready(()),
         }
-        match signal_receiver.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            _ => Ok(Async::Ready(())),
-        }
+
+        this.signal_receiver.poll(cx).map(|_| ())
     }
 }
