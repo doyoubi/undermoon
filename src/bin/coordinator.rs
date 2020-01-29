@@ -9,6 +9,7 @@ extern crate env_logger;
 use futures::future::select_all;
 use reqwest;
 use std::env;
+use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -77,7 +78,7 @@ fn gen_service(
     CoordinatorService::new(config, data_broker, mani_broker, client_factory)
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     let configs = gen_conf();
@@ -90,13 +91,7 @@ fn main() {
         })
     }));
 
-    let mut runtime = match Runtime::new() {
-        Ok(rt) => rt,
-        Err(err) => {
-            error!("failed to create runtime: {:?}", err);
-            return;
-        }
-    };
-
+    let mut runtime = Runtime::new()?;
     runtime.block_on(futs);
+    Ok(())
 }

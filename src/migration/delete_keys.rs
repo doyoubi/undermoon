@@ -97,12 +97,13 @@ impl DeleteKeysTaskMap {
 
 type ScanDelResult = Result<(SlotRangeArray, u64), RedisClientError>;
 type ScanDelFuture = Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>;
+type MigrationResult = Result<(), MigrationError>;
 
 pub struct DeleteKeysTask {
     address: String,
     slot_ranges: SlotRangeArray,
     _handle: FutureAutoStopHandle, // once this task get dropped, the future will stop.
-    fut: AtomicOption<Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>>,
+    fut: AtomicOption<Pin<Box<dyn Future<Output = MigrationResult> + Send>>>,
 }
 
 impl DeleteKeysTask {
@@ -133,9 +134,7 @@ impl DeleteKeysTask {
         }
     }
 
-    pub fn start(
-        &self,
-    ) -> Option<Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>> {
+    pub fn start(&self) -> Option<Pin<Box<dyn Future<Output = MigrationResult> + Send>>> {
         self.fut.take(Ordering::SeqCst).map(|t| *t)
     }
 

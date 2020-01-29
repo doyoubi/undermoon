@@ -128,7 +128,8 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let session_id = AtomicUsize::new(0);
         let config = self.config.clone();
 
-        for sock in listener.incoming().next().await {
+        let mut s = listener.incoming();
+        while let Some(sock) = s.next().await {
             let sock = sock?;
 
             if let Err(err) = sock.set_nodelay(true) {

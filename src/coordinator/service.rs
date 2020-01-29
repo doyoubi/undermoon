@@ -34,6 +34,8 @@ pub struct CoordinatorService<
     client_factory: Arc<F>,
 }
 
+type CoordResult = Result<(), CoordinateError>;
+
 impl<
         DB: MetaDataBroker + ThreadSafe + Clone,
         MB: MetaManipulationBroker + Clone,
@@ -57,7 +59,7 @@ impl<
     pub async fn run(&self) -> Result<(), CoordinateError> {
         info!("coordinator config: {:?}", self.config);
 
-        let futs: Vec<Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send>>> = vec![
+        let futs: Vec<Pin<Box<dyn Future<Output = CoordResult> + Send>>> = vec![
             Box::pin(self.loop_detect()),
             Box::pin(self.loop_host_sync()),
             Box::pin(self.loop_failure_handler()),
@@ -144,7 +146,8 @@ impl<
             defer!(debug!("host meta sync finished a round"));
             let sync =
                 Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone());
-            for r in sync.run().next().await {
+            let mut s = sync.run();
+            while let Some(r) = s.next().await {
                 if let Err(e) = r {
                     error!("sync stream err {:?}", e);
                 }
@@ -160,7 +163,8 @@ impl<
             debug!("start handling failures");
             defer!(debug!("handling failures finished a round"));
             let handler = Self::gen_failure_handler(data_broker.clone(), mani_broker.clone());
-            for r in handler.run().next().await {
+            let mut s = handler.run();
+            while let Some(r) = s.next().await {
                 if let Err(e) = r {
                     error!("failure handler stream err {:?}", e)
                 }
@@ -181,7 +185,8 @@ impl<
                 mani_broker.clone(),
                 client_factory.clone(),
             );
-            for r in sync.run().next().await {
+            let mut s = sync.run();
+            while let Some(r) = s.next().await {
                 if let Err(e) = r {
                     error!("migration sync stream err {:?}", e)
                 }

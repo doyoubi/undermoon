@@ -80,7 +80,7 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetec
             .retrieve_proxies()
             .chunks_timeout(BATCH_SIZE, batch_time);
 
-        for results in s.next().await {
+        while let Some(results) = s.next().await {
             let mut proxies = vec![];
             for r in results {
                 match r {
@@ -161,13 +161,11 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> SeqFailureHandler<P, H> {
 
         let mut res = Ok(());
 
-        for results in self
+        let mut s = self
             .proxy_failure_retriever
             .retrieve_proxy_failures()
-            .chunks_timeout(BATCH_SIZE, batch_time)
-            .next()
-            .await
-        {
+            .chunks_timeout(BATCH_SIZE, batch_time);
+        while let Some(results) = s.next().await {
             let mut proxies = vec![];
             for r in results {
                 match r {
@@ -288,7 +286,7 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender>
             .proxy_retriever
             .retrieve_proxies()
             .chunks_timeout(10, batch_time);
-        for results in s.next().await {
+        while let Some(results) = s.next().await {
             let mut proxies = vec![];
             for r in results {
                 match r {
@@ -449,7 +447,8 @@ impl<
         sender: &S,
         address: String,
     ) -> Result<(), CoordinateError> {
-        for res in checker.check(address).next().await {
+        let mut s = checker.check(address);
+        while let Some(res) = s.next().await {
             let meta = match res {
                 Ok(meta) => meta,
                 Err(err) => return Err(err),
@@ -473,7 +472,7 @@ impl<
             .proxy_retriever
             .retrieve_proxies()
             .chunks_timeout(CHUNK_SIZE, batch_time);
-        for results in s.next().await {
+        while let Some(results) = s.next().await {
             let mut proxies = vec![];
             for r in results {
                 match r {

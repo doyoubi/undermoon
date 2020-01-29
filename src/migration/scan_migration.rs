@@ -87,10 +87,7 @@ impl ScanMigrationTask {
         receiver: mpsc::Receiver<DataEntry>,
         address: String,
         client_factory: Arc<F>,
-    ) -> (
-        Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>,
-        FutureAutoStopHandle,
-    ) {
+    ) -> (MgrFut, FutureAutoStopHandle) {
         let send = Self::forward_entries(
             sender,
             receiver,
@@ -124,7 +121,7 @@ impl ScanMigrationTask {
             let mut client_opt = None;
             let mut receiver = receiver;
 
-            for entry in receiver.next().await {
+            while let Some(entry) = receiver.next().await {
                 let DataEntry {
                     key,
                     pttl,
@@ -201,10 +198,7 @@ impl ScanMigrationTask {
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
         scan_rate: u64,
-    ) -> (
-        Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>,
-        FutureAutoStopHandle,
-    ) {
+    ) -> (MgrFut, FutureAutoStopHandle) {
         let data = (slot_ranges, 0, sender, counter);
         const SCAN_DEFAULT_SIZE: u64 = 10;
         let interval = Duration::from_nanos(1_000_000_000 / (scan_rate / SCAN_DEFAULT_SIZE));
