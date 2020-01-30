@@ -1,7 +1,7 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
 use crate::common::cluster::{Cluster, Host};
-use crate::common::utils::ThreadSafe;
-use futures::{stream, Future, FutureExt, Stream};
+use crate::common::utils::{vec_result_to_stream, ThreadSafe};
+use futures::{Future, FutureExt, Stream};
 use reqwest;
 use serde_derive::Deserialize;
 use std::pin::Pin;
@@ -130,13 +130,7 @@ impl MetaDataBroker for HttpMetaBroker {
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(
             self.get_cluster_names_impl()
-                .map(|names_res| {
-                    let elements = match names_res {
-                        Ok(names) => names.into_iter().map(Ok).collect(),
-                        Err(err) => vec![Err(err)],
-                    };
-                    stream::iter(elements)
-                })
+                .map(vec_result_to_stream)
                 .flatten_stream(),
         )
     }
@@ -154,13 +148,7 @@ impl MetaDataBroker for HttpMetaBroker {
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(
             self.get_host_addresses_impl()
-                .map(|addrs_res| {
-                    let elements = match addrs_res {
-                        Ok(addrs) => addrs.into_iter().map(Ok).collect(),
-                        Err(err) => vec![Err(err)],
-                    };
-                    stream::iter(elements)
-                })
+                .map(vec_result_to_stream)
                 .flatten_stream(),
         )
     }
@@ -185,13 +173,7 @@ impl MetaDataBroker for HttpMetaBroker {
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(
             self.get_failures_impl()
-                .map(|failures_res| {
-                    let elements = match failures_res {
-                        Ok(fs) => fs.into_iter().map(Ok).collect(),
-                        Err(err) => vec![Err(err)],
-                    };
-                    stream::iter(elements)
-                })
+                .map(vec_result_to_stream)
                 .flatten_stream(),
         )
     }

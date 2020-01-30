@@ -12,7 +12,6 @@ use std::env;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::runtime::Runtime;
 use undermoon::coordinator::http_mani_broker::HttpMetaManipulationBroker;
 use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
 use undermoon::coordinator::service::{CoordinatorConfig, CoordinatorService};
@@ -82,6 +81,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     let configs = gen_conf();
+    let service_num = configs.len();
     let services = configs.into_iter().map(gen_service);
     let futs = select_all(services.map(|service| {
         Box::pin(async move {
@@ -91,7 +91,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
     }));
 
-    let mut runtime = Runtime::new()?;
+    let mut runtime = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(service_num)
+        .enable_all()
+        .build()?;
     runtime.block_on(futs);
     Ok(())
 }

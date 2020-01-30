@@ -6,26 +6,32 @@ use std::fmt;
 use std::io;
 use std::pin::Pin;
 
+// To support large result set, return Stream here in some APIs.
 pub trait MetaDataBroker: ThreadSafe {
     fn get_cluster_names<'s>(
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+
     fn get_cluster<'s>(
         &'s self,
         name: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>;
+
     fn get_host_addresses<'s>(
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+
     fn get_host<'s>(
         &'s self,
         address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>>;
+
     fn add_failure<'s>(
         &'s self,
         address: String,
         reporter_id: String,
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send + 's>>;
+
     fn get_failures<'s>(
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
@@ -38,6 +44,7 @@ pub trait MetaManipulationBroker: ThreadSafe {
         &'s self,
         failed_proxy_address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send + 's>>;
+
     fn commit_migration<'s>(
         &'s self,
         meta: MigrationTaskMeta,

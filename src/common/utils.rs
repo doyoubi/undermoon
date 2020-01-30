@@ -2,6 +2,7 @@ use crate::protocol::RespVec;
 use crate::protocol::{Array, BulkStr, Resp};
 use caseless;
 use crc16::{State, XMODEM};
+use futures::{stream, Stream};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
 
@@ -131,6 +132,14 @@ pub const SLOT_NUM: usize = 16384;
 
 pub const MIGRATING_TAG: &str = "MIGRATING";
 pub const IMPORTING_TAG: &str = "IMPORTING";
+
+pub fn vec_result_to_stream<T, E>(res: Result<Vec<T>, E>) -> impl Stream<Item = Result<T, E>> {
+    let elements = match res {
+        Ok(v) => v.into_iter().map(Ok).collect(),
+        Err(err) => vec![Err(err)],
+    };
+    stream::iter(elements)
+}
 
 #[cfg(test)]
 mod tests {

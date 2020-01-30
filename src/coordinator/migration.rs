@@ -1,9 +1,10 @@
 use super::broker::MetaManipulationBroker;
 use super::core::{CoordinateError, MigrationCommitter, MigrationStateChecker};
 use crate::common::cluster::MigrationTaskMeta;
+use crate::common::utils::vec_result_to_stream;
 use crate::protocol::{Array, BulkStr, Resp};
 use crate::protocol::{RedisClient, RedisClientFactory, RespVec};
-use futures::{stream, Future, FutureExt, Stream, TryFutureExt};
+use futures::{Future, FutureExt, Stream, TryFutureExt};
 use std::pin::Pin;
 use std::str;
 use std::sync::Arc;
@@ -78,13 +79,7 @@ impl<F: RedisClientFactory> MigrationStateChecker for MigrationStateRespChecker<
     ) -> Pin<Box<dyn Stream<Item = Result<MigrationTaskMeta, CoordinateError>> + Send + 's>> {
         Box::pin(
             self.check_impl(address)
-                .map(|addrs_res| {
-                    let elements = match addrs_res {
-                        Ok(addrs) => addrs.into_iter().map(Ok).collect(),
-                        Err(err) => vec![Err(err)],
-                    };
-                    stream::iter(elements)
-                })
+                .map(vec_result_to_stream)
                 .flatten_stream(),
         )
     }

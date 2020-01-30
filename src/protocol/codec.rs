@@ -5,11 +5,11 @@ use std::io;
 use std::marker::PhantomData;
 use tokio_util::codec::{Decoder, Encoder};
 
-pub struct RespCodec<E, D>(PhantomData<E>, PhantomData<D>);
+pub struct RespCodec<E, D>(PhantomData<(E, D)>);
 
 impl<E, D> Default for RespCodec<E, D> {
     fn default() -> Self {
-        Self(PhantomData, PhantomData)
+        Self(PhantomData)
     }
 }
 

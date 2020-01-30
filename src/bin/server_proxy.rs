@@ -12,7 +12,6 @@ use std::error::Error;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::runtime::Runtime;
 use undermoon::protocol::PooledRedisClientFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::manager::MetaMap;
@@ -89,14 +88,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         slow_request_logger.clone(),
         meta_map,
     );
-    let server = ServerProxyService::new(config, forward_handler, slow_request_logger);
+    let server = ServerProxyService::new(config.clone(), forward_handler, slow_request_logger);
 
-    // TODO: when the panic bug is fixed, support configure thread number
-    //    let mut runtime = match tokio::runtime::Builder::new()
-    //        .threaded_scheduler()
-    //        .core_threads(config.thread_number)
-    //        .build()?;
-    let mut runtime = Runtime::new()?;
+    let mut runtime = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(config.thread_number)
+        .enable_all()
+        .build()?;
 
     if let Err(err) = runtime.block_on(server.run()) {
         error!("tokio runtime failed: {}", err);

@@ -72,13 +72,13 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetec
         let checker = self.checker.clone();
         let reporter = self.reporter.clone();
         const BATCH_SIZE: usize = 30;
-        let batch_time = Duration::from_millis(1);
+        const BATCH_TIME: Duration = Duration::from_millis(1);
 
         let mut res = Ok(());
         let mut s = self
             .retriever
             .retrieve_proxies()
-            .chunks_timeout(BATCH_SIZE, batch_time);
+            .chunks_timeout(BATCH_SIZE, BATCH_TIME);
 
         while let Some(results) = s.next().await {
             let mut proxies = vec![];
@@ -157,14 +157,14 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> SeqFailureHandler<P, H> {
     async fn run_impl(&self) -> Result<(), CoordinateError> {
         let handler = self.handler.clone();
         const BATCH_SIZE: usize = 10;
-        let batch_time = Duration::from_millis(1);
+        const BATCH_TIME: Duration = Duration::from_millis(1);
 
         let mut res = Ok(());
 
         let mut s = self
             .proxy_failure_retriever
             .retrieve_proxy_failures()
-            .chunks_timeout(BATCH_SIZE, batch_time);
+            .chunks_timeout(BATCH_SIZE, BATCH_TIME);
         while let Some(results) = s.next().await {
             let mut proxies = vec![];
             for r in results {
@@ -279,13 +279,14 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender>
     async fn run_impl(&self) -> Result<(), CoordinateError> {
         let meta_retriever = self.meta_retriever.clone();
         let sender = self.sender.clone();
-        let batch_time = Duration::from_millis(1);
+        const BATCH_SIZE: usize = 10;
+        const BATCH_TIME: Duration = Duration::from_millis(1);
 
         let mut res = Ok(());
         let mut s = self
             .proxy_retriever
             .retrieve_proxies()
-            .chunks_timeout(10, batch_time);
+            .chunks_timeout(BATCH_SIZE, BATCH_TIME);
         while let Some(results) = s.next().await {
             let mut proxies = vec![];
             for r in results {
@@ -465,13 +466,13 @@ impl<
         let sender = self.sender.clone();
 
         const CHUNK_SIZE: usize = 10;
-        let batch_time = Duration::from_millis(1);
+        const BATCH_SIZE: Duration = Duration::from_millis(1);
 
         let mut res = Ok(());
         let mut s = self
             .proxy_retriever
             .retrieve_proxies()
-            .chunks_timeout(CHUNK_SIZE, batch_time);
+            .chunks_timeout(CHUNK_SIZE, BATCH_SIZE);
         while let Some(results) = s.next().await {
             let mut proxies = vec![];
             for r in results {
@@ -571,7 +572,7 @@ impl Error for CoordinateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::runtime::Runtime;
+    use tokio;
 
     struct DummyChecker {}
 
@@ -584,16 +585,14 @@ mod tests {
         }
     }
 
-    fn check<C: FailureChecker>(checker: C) {
-        let mut rt = Runtime::new().expect("test_failure_checker");
-        let fut = checker.check("".to_string());
-        let res = rt.block_on(fut);
+    async fn check<C: FailureChecker>(checker: C) {
+        let res = checker.check("".to_string()).await;
         assert!(res.is_ok());
     }
 
-    #[test]
-    fn test_reporter() {
+    #[tokio::test]
+    async fn test_reporter() {
         let checker = DummyChecker {};
-        check(checker);
+        check(checker).await;
     }
 }

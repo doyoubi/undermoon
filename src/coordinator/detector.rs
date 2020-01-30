@@ -45,12 +45,14 @@ impl<F: RedisClientFactory> PingFailureDetector<F> {
             }
         };
 
+        // The connection pool might get a stale connection.
+        // Return err instead for retry.
         let ping_command = vec!["PING".to_string().into_bytes()];
         match client.execute(ping_command).await {
             Ok(_) => Ok(None),
             Err(err) => {
                 error!("PingFailureDetector::check failed to send PING: {:?}", err);
-                Ok(Some(address))
+                Err(CoordinateError::Redis(err))
             }
         }
     }
@@ -60,7 +62,7 @@ impl<F: RedisClientFactory> PingFailureDetector<F> {
         for i in 1..=RETRY {
             match self.ping(address.clone()).await {
                 Ok(None) => return Ok(None),
-                res if i == RETRY => return res,
+                _ if i == RETRY => return Ok(Some(address)),
                 _ => continue,
             }
         }
@@ -115,7 +117,7 @@ mod tests {
     use futures::{future, stream};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
-    use tokio::runtime::Runtime;
+    use tokio;
 
     const NODE1: &'static str = "127.0.0.1:7000";
     const NODE2: &'static str = "127.0.0.1:7001";
@@ -216,16 +218,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_detector() {
+    #[tokio::test]
+    async fn test_detector() {
         let broker = Arc::new(DummyMetaBroker::new());
         let retriever = BrokerProxiesRetriever::new(broker.clone());
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
         let detector = SeqFailureDetector::new(retriever, checker, reporter);
 
-        let mut rt = Runtime::new().expect("test_detector");
-        let res = rt.block_on(detector.run().into_future());
+        let res = detector.run().into_future().await;
         assert!(res.is_ok());
         let failed_nodes = broker
             .reported_failures

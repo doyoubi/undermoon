@@ -210,7 +210,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
             );
             let fut = async {
                 select! {
-                    res = sending.fuse() => Ok(()),
+                    () = sending.fuse() => Ok(()),
                     _ = stop_signal_receiver.fuse() => Err(RedisClientError::Canceled),
                 }
             };
@@ -251,7 +251,7 @@ mod tests {
     use crate::protocol::Resp;
     use futures::future;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::runtime::Runtime;
+    use tokio;
 
     #[derive(Debug)]
     struct Counter {
@@ -319,20 +319,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_keep_sending_cmd() {
+    #[tokio::test]
+    async fn test_keep_sending_cmd() {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
         let mut client = DummyRedisClient::new(counter.clone());
-        let mut rt = Runtime::new().expect("test_keep_sending_cmd");
-        let fut = keep_sending_cmd(&mut client, vec![], interval, retry_handle_func);
-        let res = rt.block_on(fut);
+        let res = keep_sending_cmd(&mut client, vec![], interval, retry_handle_func).await;
         assert!(res.is_err());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
     }
 
-    #[test]
-    fn test_keep_connecting_and_sending() {
+    #[tokio::test]
+    async fn test_keep_connecting_and_sending() {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
         let retry_counter = Arc::new(Counter::new(2));
@@ -346,15 +344,14 @@ mod tests {
             }
         };
         let factory = Arc::new(DummyClientFactory::new(counter.clone()));
-        let mut rt = Runtime::new().expect("test_keep_sending_cmd");
-        let fut = keep_connecting_and_sending_cmd(
+        keep_connecting_and_sending_cmd(
             factory,
             "host:port".to_string(),
             vec![],
             interval,
             handler,
-        );
-        rt.block_on(fut);
+        )
+        .await;
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
         assert_eq!(retry_counter_clone.count.load(Ordering::SeqCst), 2);
     }
