@@ -61,7 +61,7 @@ impl CmdTaskResultHandler for DecompressCommitHandler {
             }
         }
 
-        cmd_ctx.set_result(Ok(packet))
+        cmd_ctx.set_result(Ok(Box::new(packet)))
     }
 }
 
@@ -101,6 +101,6 @@ impl CmdTaskResultHandler for ReplyCommitHandler {
                 )));
             }
         };
-        cmd_ctx.set_result(Ok(packet))
+        cmd_ctx.set_result(Ok(Box::new(packet)))
     }
 }

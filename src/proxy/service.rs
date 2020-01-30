@@ -1,13 +1,9 @@
 use super::session::CmdCtxHandler;
-use super::session::{handle_conn, Session};
+use super::session::{handle_session, Session};
 use super::slowlog::SlowRequestLogger;
 use crate::common::config::ConfigError;
-use crate::common::future_group::new_future_group;
 use crate::common::utils::{resolve_first_address, ThreadSafe};
-use crate::proxy::session::SessionError;
-use futures::compat::Future01CompatExt;
-use futures::{FutureExt, StreamExt, TryFutureExt};
-use std::convert::identity;
+use futures::{FutureExt, StreamExt};
 use std::error::Error;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -147,7 +143,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
             let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
 
             let handle_clone = forward_handler.clone();
-            let (reader_handler, writer_handler) = handle_conn(
+            let session_handler = handle_session(
                 Arc::new(Session::new(
                     curr_session_id,
                     handle_clone,
@@ -159,25 +155,11 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                 config.session_batch_max_time,
                 config.session_batch_buf,
             );
-            let (reader_handler, writer_handler) =
-                new_future_group(reader_handler.compat(), writer_handler.compat());
 
-            let reader_handler =
-                reader_handler.map(|opt| opt.map_or(Err(SessionError::Canceled), identity));
-            let writer_handler =
-                writer_handler.map(|opt| opt.map_or(Err(SessionError::Canceled), identity));
-
-            let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer);
-            tokio::spawn(
-                reader_handler
-                    .map_ok(move |()| info!("Read IO closed {}", p1))
-                    .map_err(move |err| error!("Read IO error {:?} {}", err, p2)),
-            );
-            tokio::spawn(
-                writer_handler
-                    .map_ok(move |()| info!("Write IO closed {}", p3))
-                    .map_err(move |err| error!("Write IO error {:?} {}", err, p4)),
-            );
+            tokio::spawn(session_handler.map(move |res| match res {
+                Ok(()) => info!("session IO closed {}", peer),
+                Err(err) => error!("session IO error {:?} {}", err, peer),
+            }));
         }
         Ok(())
     }

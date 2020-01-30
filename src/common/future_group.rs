@@ -4,6 +4,7 @@ use futures::Future;
 use pin_project::{pin_project, pinned_drop};
 use std::pin::Pin;
 
+#[allow(dead_code)]
 pub fn new_future_group<FA: Future, FB: Future>(
     future1: FA,
     future2: FB,

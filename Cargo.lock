@@ -793,14 +793,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "futures01"
-version = "0.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "glob"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2343,7 +2335,6 @@ dependencies = [
  "futures 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-batch 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-timer 3.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures01 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "memchr 2.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2805,7 +2796,6 @@ dependencies = [
 "checksum futures-timer 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a1de7508b218029b0f01662ed8f61b1c964b3ae99d6f25462d0f55a595109df6"
 "checksum futures-timer 3.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "3de1a2b2a2a33d9e60e17980b60ee061eeaae96a5abe9121db0fdb9af167a1c5"
 "checksum futures-util 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)" = "22766cf25d64306bedf0384da004d05c9974ab104fcc4528f1236181c18004c5"
-"checksum futures01 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)" = "7ef8cbbf52909170053540c6c05a62433ddb60662dabee714e2a882caa864f22"
 "checksum glob 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 "checksum h2 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)" = "ddb2b25a33e231484694267af28fec74ac63b5ccf51ee2065a5e313b834d836e"
 "checksum h2 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b9433d71e471c1736fd5a61b671fc0b148d7a2992f666c958d03cd8feb3b88d1"

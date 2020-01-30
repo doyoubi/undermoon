@@ -19,7 +19,6 @@ use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use crate::proxy::service::ServerProxyConfig;
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
-use futures::compat::Future01CompatExt;
 use futures::{future, select, Future, FutureExt, TryFutureExt};
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
@@ -482,15 +481,11 @@ where
         };
 
         let meta = self.meta.clone();
-        let fut = self
-            .cmd_handler
-            .run_task_handler()
-            .compat()
-            .map_err(|()| MigrationError::Canceled);
+        let fut = self.cmd_handler.run_task_handler();
 
         let fut = async move {
             let r = select! {
-                res = fut.fuse() => res,
+                () = fut.fuse() => Ok(()),
                 _ = receiver.fuse() => Err(MigrationError::Canceled),
             };
             match r {
