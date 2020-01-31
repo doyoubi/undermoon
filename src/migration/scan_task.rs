@@ -184,7 +184,6 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
                     Ok(())
                 }
                 _reply => {
-                    info!("pre_switch done");
                     state.set_state(MigrationState::Scanning);
                     Err(RedisClientError::Done)
                 }

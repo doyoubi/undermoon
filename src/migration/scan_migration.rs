@@ -239,6 +239,10 @@ impl ScanMigrationTask {
         let ScanResponse { next_index, keys } =
             ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
 
+        if next_index == 0 {
+            return Err(RedisClientError::Done);
+        }
+
         let (slot_ranges, entries) = Self::produce_entries(slot_ranges, keys, client).await?;
 
         let entries_num = entries.len() as i64;
