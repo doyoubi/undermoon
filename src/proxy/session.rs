@@ -1,4 +1,4 @@
-use super::backend::{CmdTask, CmdTaskFactory};
+use super::backend::{CmdTask, CmdTaskFactory, TaskResult};
 use super::command::TaskReply;
 use super::command::{
     new_command_pair, CmdReplySender, CmdType, Command, CommandError, CommandResult, DataCmdType,
@@ -139,7 +139,7 @@ impl CmdTaskFactory for CmdCtxFactory {
         resp: RespVec,
     ) -> (
         Self::Task,
-        Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + Send + 'static>>,
+        Pin<Box<dyn Future<Output = TaskResult> + Send + 'static>>,
     ) {
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));

@@ -24,6 +24,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 
 pub type BackendResult<T> = Result<T, BackendError>;
+pub type TaskResult = Result<RespVec, CommandError>;
 
 pub trait CmdTaskResultHandler: Send + Sync + 'static {
     type Task: CmdTask;
@@ -68,7 +69,8 @@ pub trait CmdTaskFactory {
         resp: RespVec,
     ) -> (
         Self::Task,
-        Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + Send + 'static>>,
+        // TODO: return indexed resp
+        Pin<Box<dyn Future<Output = TaskResult> + Send + 'static>>,
     );
 }
 
@@ -194,9 +196,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
             handler,
             rx,
             address,
-            config.backend_channel_size,
             config.backend_batch_min_time,
-            config.backend_batch_max_time,
             config.backend_batch_buf,
             create_conn,
         );
@@ -249,9 +249,7 @@ pub async fn handle_backend<H, F: Send + 'static>(
     handler: Arc<H>,
     task_receiver: mpsc::UnboundedReceiver<H::Task>,
     address: String,
-    _channel_size: usize,
     backend_batch_min_time: usize,
-    _backend_batch_max_time: usize,
     backend_batch_buf: usize,
     create_conn: F,
 ) -> Result<(), BackendError>

@@ -1,9 +1,8 @@
 use super::backend::{BackendSenderFactory, CmdTask, CmdTaskFactory, ReqTask, ReqTaskSender};
 use super::command::CommandError;
 use super::reply::ReplyCommitHandlerFactory;
-use crate::common::utils::ThreadSafe;
-use crate::protocol::RespVec;
-use crate::protocol::{Array, BinSafeStr, BulkStr, Resp};
+use crate::common::utils::{pretty_print_bytes, ThreadSafe};
+use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use atomic_option::AtomicOption;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{select, Future, FutureExt, StreamExt};
@@ -12,6 +11,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 const KEY_NOT_EXISTS: &str = "0";
+const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access source node";
 
 type ReplyFuture = Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + Send>>;
 type DataEntryFuture =
@@ -205,13 +205,20 @@ type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
 type DumpPttlTaskSender<F> = UnboundedSender<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
 type DumpPttlTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
+type RestoreTaskSender = UnboundedSender<ReplyFuture>;
+type RestoreTaskReceiver = UnboundedReceiver<ReplyFuture>;
 
 pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> {
     src_sender: Arc<S>,
     dst_sender: Arc<S>,
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
-    task_receivers: AtomicOption<(ExistsTaskReceiver<F>, DumpPttlTaskReceiver<F>)>,
+    restore_task_sender: RestoreTaskSender,
+    task_receivers: AtomicOption<(
+        ExistsTaskReceiver<F>,
+        DumpPttlTaskReceiver<F>,
+        RestoreTaskReceiver,
+    )>,
     cmd_task_factory: Arc<F>,
 }
 
@@ -226,13 +233,18 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
         let dst_sender = Arc::new(dst_sender);
         let (exists_task_sender, exists_task_receiver) = unbounded();
         let (dump_pttl_task_sender, dump_pttl_task_receiver) = unbounded();
-        let task_receivers =
-            AtomicOption::new(Box::new((exists_task_receiver, dump_pttl_task_receiver)));
+        let (restore_task_sender, restore_task_receiver) = unbounded();
+        let task_receivers = AtomicOption::new(Box::new((
+            exists_task_receiver,
+            dump_pttl_task_receiver,
+            restore_task_receiver,
+        )));
         Self {
             src_sender,
             dst_sender,
             exists_task_sender,
             dump_pttl_task_sender,
+            restore_task_sender,
             task_receivers,
             cmd_task_factory,
         }
@@ -242,16 +254,18 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
         let src_sender = self.src_sender.clone();
         let dst_sender = self.dst_sender.clone();
+        let restore_task_sender = self.restore_task_sender.clone();
         let cmd_task_factory = self.cmd_task_factory.clone();
 
         let receiver_opt = self.task_receivers.take(Ordering::SeqCst).map(|p| *p);
-        let (exists_task_receiver, dump_pttl_task_receiver) = match receiver_opt {
-            Some(r) => r,
-            None => {
-                error!("RestoreDataCmdTaskHandler has already been started");
-                return;
-            }
-        };
+        let (exists_task_receiver, dump_pttl_task_receiver, restore_task_receiver) =
+            match receiver_opt {
+                Some(r) => r,
+                None => {
+                    error!("RestoreDataCmdTaskHandler has already been started");
+                    return;
+                }
+            };
 
         let exists_task_handler = Self::handle_exists_task(
             exists_task_receiver,
@@ -261,12 +275,19 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
             cmd_task_factory.clone(),
         );
 
-        let dump_pttl_task_handler =
-            Self::handle_dump_pttl_task(dump_pttl_task_receiver, dst_sender, cmd_task_factory);
+        let dump_pttl_task_handler = Self::handle_dump_pttl_task(
+            dump_pttl_task_receiver,
+            restore_task_sender,
+            dst_sender,
+            cmd_task_factory,
+        );
+
+        let restore_task_handler = Self::handle_restore(restore_task_receiver);
 
         select! {
             () = exists_task_handler.fuse() => (),
             () = dump_pttl_task_handler.fuse() => (),
+            () = restore_task_handler.fuse() => (),
         }
     }
 
@@ -315,6 +336,7 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
 
     async fn handle_dump_pttl_task(
         mut dump_pttl_task_receiver: DumpPttlTaskReceiver<F>,
+        restore_task_sender: RestoreTaskSender,
         dst_sender: Arc<S>,
         cmd_task_factory: Arc<F>,
     ) {
@@ -331,8 +353,11 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
                     continue;
                 }
                 Err(err) => {
+                    let task = state.into_inner();
+                    task.set_resp_result(Ok(Resp::Error(
+                        format!("{}: {:?}", FAILED_TO_ACCESS_SOURCE, err).into_bytes(),
+                    )));
                     error!("failed to get exists cmd response: {:?}. Skip it", err);
-                    // TODO: set error result here;
                     continue;
                 }
             };
@@ -342,8 +367,32 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to send restore and forward: {:?}", err);
             }
-            // TODO: do it in another future instead of blocking here.
-            reply_receiver.await;
+
+            if let Err(err) = restore_task_sender.unbounded_send(reply_receiver) {
+                debug!("failed to send restore task to queue: {:?}", err);
+            }
+        }
+    }
+
+    async fn handle_restore(mut restore_task_receiver: RestoreTaskReceiver) {
+        while let Some(reply_fut) = restore_task_receiver.next().await {
+            let resp = match reply_fut.await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    error!("failed to restore: {:?}", err);
+                    continue;
+                }
+            };
+            const BUSYKEY: &[u8] = b"BUSYKEY";
+            match resp {
+                Resp::Simple(_) => (),
+                Resp::Error(err)
+                    if err.get(..BUSYKEY.len()).map(|p| p == BUSYKEY) == Some(true) => {}
+                others => {
+                    let pretty_resp = others.as_ref().map(|s| pretty_print_bytes(&s));
+                    error!("unexpected RESTORE result: {:?}", pretty_resp);
+                }
+            }
         }
     }
 
@@ -715,7 +764,7 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
 
-            assert!(s.starts_with("future_returns_error".as_bytes()));
+            assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
     }
 
@@ -744,7 +793,7 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
 
-            assert!(s.starts_with("future_returns_error".as_bytes()));
+            assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
     }
 
@@ -778,7 +827,7 @@ mod tests {
                 // this has to be correct. In reality, this might be error.
                 assert_eq!(s, "key_not_exists".as_bytes());
             } else {
-                assert!(s.starts_with("future_returns_error".as_bytes()));
+                assert!(s.starts_with(b"future_returns_error"));
             }
         }
     }
