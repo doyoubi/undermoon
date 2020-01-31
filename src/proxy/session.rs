@@ -208,7 +208,7 @@ where
         })
         .chunks_timeout(
             session_batch_buf,
-            Duration::from_micros(session_batch_min_time as u64),
+            Duration::from_nanos(session_batch_min_time as u64),
         );
 
     let mut reply_receiver_list = Vec::with_capacity(session_batch_buf);

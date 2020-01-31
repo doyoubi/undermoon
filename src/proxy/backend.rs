@@ -4,7 +4,7 @@ use super::slowlog::TaskEvent;
 use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
 use crate::protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
 use futures::channel::mpsc;
-use futures::{stream, Future, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use futures_batch::ChunksTimeoutStreamExt;
 use futures_timer::Delay;
 use std::boxed::Box;
@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::result::Result;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio;
@@ -112,6 +112,7 @@ pub trait ReqTaskSenderFactory {
 
 // TODO: change to use AtomicOption
 pub struct RecoverableBackendNode<F: CmdTaskResultHandlerFactory> {
+    address: String,
     node: BackendNode<<F as CmdTaskResultHandlerFactory>::Handler>,
 }
 
@@ -138,13 +139,13 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSenderFactory for RecoverableBackend
 
     fn create(&self, address: String) -> Self::Sender {
         let (node, fut) = BackendNode::new(
-            address,
+            address.clone(),
             Arc::new(self.handler_factory.create()),
             self.config.clone(),
             |address| Box::pin(create_conn(address)),
         );
         tokio::spawn(fut);
-        Self::Sender { node }
+        Self::Sender { address, node }
     }
 }
 
@@ -152,7 +153,11 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
     type Task = <<F as CmdTaskResultHandlerFactory>::Handler as CmdTaskResultHandler>::Task;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        self.node.send(cmd_task).map_err(|_e| {
+        self.node.send(cmd_task).map_err(|e| {
+            let cmd_task = e.into_inner();
+            cmd_task.set_resp_result(Ok(Resp::Error(
+                format!("backend connection failed: {}", self.address).into_bytes(),
+            )));
             error!("backend node is closed");
             BackendError::Canceled
         })
@@ -170,6 +175,7 @@ impl<T> BackendSendError<T> {
 
 pub struct BackendNode<H: CmdTaskResultHandler> {
     tx: mpsc::UnboundedSender<H::Task>,
+    conn_failed: Arc<AtomicBool>,
 }
 
 impl<H: CmdTaskResultHandler> BackendNode<H> {
@@ -192,19 +198,24 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
             + 'static,
     {
         let (tx, rx) = mpsc::unbounded();
+        let conn_failed = Arc::new(AtomicBool::new(true));
         let handle_backend_fut = handle_backend(
             handler,
             rx,
+            conn_failed.clone(),
             address,
             config.backend_batch_min_time,
             config.backend_batch_buf,
             create_conn,
         );
-        (Self { tx }, handle_backend_fut)
+        (Self { tx, conn_failed }, handle_backend_fut)
     }
 
     pub fn send(&self, cmd_task: H::Task) -> Result<(), BackendSendError<H::Task>> {
         cmd_task.log_event(TaskEvent::SentToWritingQueue);
+        if self.conn_failed.load(Ordering::SeqCst) {
+            return Err(BackendSendError(cmd_task));
+        }
         self.tx
             .unbounded_send(cmd_task)
             .map(|_| ())
@@ -245,9 +256,17 @@ async fn create_conn<T: Packet + Send + 'static>(address: SocketAddr) -> CreateC
     Ok((Box::pin(writer), Box::pin(reader)))
 }
 
+const MAX_BACKEND_RETRY: usize = 3;
+
+struct RetryState<T: CmdTask> {
+    retry_times: usize,
+    tasks: Vec<T>,
+}
+
 pub async fn handle_backend<H, F: Send + 'static>(
     handler: Arc<H>,
     task_receiver: mpsc::UnboundedReceiver<H::Task>,
+    conn_failed: Arc<AtomicBool>,
     address: String,
     backend_batch_min_time: usize,
     backend_batch_buf: usize,
@@ -264,7 +283,7 @@ where
         + 'static,
 {
     // TODO: move this to upper layer.
-    let address = match resolve_first_address(&address) {
+    let sock_address = match resolve_first_address(&address) {
         Some(addr) => addr,
         None => {
             error!("invalid address: {:?}", address);
@@ -272,18 +291,42 @@ where
         }
     };
 
+    let mut retry_state: Option<RetryState<H::Task>> = None;
+
     let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
-    let mut task_receiver = task_receiver.chunks_timeout(backend_batch_buf, batch_min_time);
+    let mut task_receiver = task_receiver
+        .chunks_timeout(backend_batch_buf, batch_min_time)
+        .fuse();
 
     loop {
-        let (writer, reader) = match create_conn(address).await {
+        conn_failed.store(true, Ordering::SeqCst);
+        let (writer, reader) = match create_conn(sock_address).await {
             Ok(conn) => conn,
             Err(err) => {
                 error!("failed to connect: {:?}", err);
-                Delay::new(Duration::from_secs(3)).await;
+                retry_state.take();
+
+                let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
+                loop {
+                    let mut tasks_fut = task_receiver.next().fuse();
+                    let tasks_opt = select! {
+                        () = timeout_fut => break,
+                        tasks_opt = tasks_fut => tasks_opt,
+                    };
+                    let tasks = match tasks_opt {
+                        Some(tasks) => tasks,
+                        None => break,
+                    };
+                    for task in tasks.into_iter() {
+                        task.set_resp_result(Ok(Resp::Error(
+                            format!("failed to connect to {}", address).into_bytes(),
+                        )))
+                    }
+                }
                 continue;
             }
         };
+        conn_failed.store(false, Ordering::SeqCst);
 
         let res = handle_conn(
             writer,
@@ -291,6 +334,7 @@ where
             &mut task_receiver,
             handler.clone(),
             backend_batch_buf,
+            retry_state.take(),
         )
         .await;
         match res {
@@ -298,8 +342,9 @@ where
                 error!("task receiver is closed");
                 return Err(BackendError::Canceled);
             }
-            Err(err) => {
+            Err((err, state)) => {
                 error!("connection is closed: {:?}", err);
+                retry_state = state;
                 continue;
             }
         }
@@ -312,14 +357,26 @@ async fn handle_conn<H, S>(
     task_receiver: &mut S,
     handler: Arc<H>,
     backend_batch_buf: usize,
-) -> Result<(), BackendError>
+    mut retry_state_opt: Option<RetryState<H::Task>>,
+) -> Result<(), (BackendError, Option<RetryState<H::Task>>)>
 where
     H: CmdTaskResultHandler,
     S: Stream<Item = Vec<H::Task>> + Unpin,
 {
     let mut packets = Vec::with_capacity(backend_batch_buf);
 
-    while let Some(tasks) = task_receiver.next().await {
+    loop {
+        let (retry_times_opt, tasks) = match retry_state_opt.take() {
+            Some(RetryState { retry_times, tasks }) => (Some(retry_times), tasks),
+            None => {
+                let tasks = match task_receiver.next().await {
+                    Some(tasks) => tasks,
+                    None => return Ok(()),
+                };
+                (None, tasks)
+            }
+        };
+
         for task in &tasks {
             task.log_event(TaskEvent::WritingQueueReceived);
             packets.push(task.get_packet());
@@ -334,20 +391,27 @@ where
 
         if let Err(err) = res {
             error!("backend write error: {}", err);
-            for task in tasks.into_iter() {
-                task.set_result(Err(CommandError::Io(io::Error::from(err.kind()))));
-            }
-            return Err(BackendError::Io(err));
+            let retry_state = handle_conn_err(retry_times_opt, tasks, &err);
+            return Err((BackendError::Io(err), retry_state));
         }
 
-        for task in tasks.into_iter() {
+        let mut tasks_iter = tasks.into_iter();
+        // `while let` will consume ownership.
+        #[allow(clippy::while_let_loop)]
+        loop {
+            let task = match tasks_iter.next() {
+                Some(task) => task,
+                None => break,
+            };
             let packet_res = match reader.next().await {
                 Some(pkt) => pkt,
                 None => {
-                    // The remaining tasks might leak here
-                    // It's up to the tasks inside Receiver to gracefully drop themselves in destructor.
                     error!("Failed to read packet. Connection is closed.");
-                    return Err(BackendError::Canceled);
+                    let mut failed_tasks = vec![task];
+                    failed_tasks.extend(tasks_iter);
+                    let err = io::Error::from(io::ErrorKind::BrokenPipe);
+                    let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
+                    return Err((BackendError::Io(err), retry_state));
                 }
             };
 
@@ -355,7 +419,26 @@ where
             handler.handle_task(task, packet_res);
         }
     }
-    Ok(())
+}
+
+fn handle_conn_err<T: CmdTask>(
+    retry_times_opt: Option<usize>,
+    tasks: Vec<T>,
+    err: &io::Error,
+) -> Option<RetryState<T>> {
+    let retry_times = retry_times_opt.unwrap_or(0);
+    if retry_times >= MAX_BACKEND_RETRY {
+        for task in tasks.into_iter() {
+            task.set_result(Err(CommandError::Io(io::Error::from(err.kind()))));
+        }
+        None
+    } else {
+        let retry_state = RetryState {
+            retry_times: retry_times + 1,
+            tasks,
+        };
+        Some(retry_state)
+    }
 }
 
 #[derive(Debug)]
