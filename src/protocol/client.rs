@@ -20,15 +20,52 @@ use tokio::time;
 use tokio_util::codec::{Decoder, Framed};
 
 pub trait RedisClient: Send {
-    fn execute<'s>(
+    fn execute_single<'s>(
         &'s mut self,
         command: Vec<BinSafeStr>,
-    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
+        let fut = async move {
+            match self.execute(command.into()).await {
+                Ok(opt_mul_resp) => {
+                    match opt_mul_resp {
+                        OptionalMulti::Single(t) => Ok(t),
+                        OptionalMulti::Multi(v) => {
+                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", v);
+                            Err(RedisClientError::InvalidState)
+                        }
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        };
+        Box::pin(fut)
+    }
 
     fn execute_multi<'s>(
         &'s mut self,
         commands: Vec<Vec<BinSafeStr>>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>> {
+        let fut = async move {
+            match self.execute(OptionalMulti::Multi(commands)).await {
+                Ok(opt_mul_resp) => {
+                    match opt_mul_resp {
+                        OptionalMulti::Single(t) => {
+                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", t);
+                            Err(RedisClientError::InvalidState)
+                        }
+                        OptionalMulti::Multi(v) => Ok(v),
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        };
+        Box::pin(fut)
+    }
+
+    fn execute<'s>(
+        &'s mut self,
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>;
 }
 
 pub trait RedisClientFactory: ThreadSafe {
@@ -186,47 +223,10 @@ impl Drop for PooledRedisClient {
 impl RedisClient for PooledRedisClient {
     fn execute<'s>(
         &'s mut self,
-        command: Vec<BinSafeStr>,
-    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
-        let fut = async move {
-            match self.execute_cmd_with_timeout(command.into()).await {
-                Ok(opt_mul_resp) => {
-                    match opt_mul_resp {
-                        OptionalMulti::Single(t) => Ok(t),
-                        OptionalMulti::Multi(v) => {
-                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", v);
-                            Err(RedisClientError::InvalidState)
-                        }
-                    }
-                }
-                Err(err) => Err(err),
-            }
-        };
-        Box::pin(fut)
-    }
-
-    fn execute_multi<'s>(
-        &'s mut self,
-        commands: Vec<Vec<BinSafeStr>>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>> {
-        let fut = async move {
-            match self
-                .execute_cmd_with_timeout(OptionalMulti::Multi(commands))
-                .await
-            {
-                Ok(opt_mul_resp) => {
-                    match opt_mul_resp {
-                        OptionalMulti::Single(t) => {
-                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", t);
-                            Err(RedisClientError::InvalidState)
-                        }
-                        OptionalMulti::Multi(v) => Ok(v),
-                    }
-                }
-                Err(err) => Err(err),
-            }
-        };
-        Box::pin(fut)
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>
+    {
+        Box::pin(self.execute_cmd_with_timeout(command))
     }
 }
 

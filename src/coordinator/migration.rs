@@ -48,7 +48,10 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
             .into_iter()
             .map(String::into_bytes)
             .collect();
-        let resp = client.execute(cmd).await.map_err(CoordinateError::Redis)?;
+        let resp = client
+            .execute_single(cmd)
+            .await
+            .map_err(CoordinateError::Redis)?;
 
         match resp {
             Resp::Arr(Array::Arr(arr)) => {

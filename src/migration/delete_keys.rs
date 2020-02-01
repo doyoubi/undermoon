@@ -171,7 +171,7 @@ impl DeleteKeysTask {
         let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
         let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
 
-        let resp = client.execute(byte_cmd).await?;
+        let resp = client.execute_single(byte_cmd).await?;
         let ScanResponse { next_index, keys } =
             ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
 
@@ -186,7 +186,7 @@ impl DeleteKeysTask {
 
         let mut del_cmd = vec!["DEL".to_string().into_bytes()];
         del_cmd.extend_from_slice(keys.as_slice());
-        let resp = client.execute(del_cmd).await?;
+        let resp = client.execute_single(del_cmd).await?;
 
         match resp {
             Resp::Error(err) => {

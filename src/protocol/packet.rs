@@ -291,6 +291,7 @@ impl<T: DecodedPacket> PacketDecoder for SimplePacketDecoder<T> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum OptionalMulti<T> {
     Single(T),
     Multi(Vec<T>),
@@ -313,6 +314,16 @@ impl<T> OptionalMulti<T> {
         match self {
             Self::Single(_) => OptionalMultiHint::Single,
             Self::Multi(v) => OptionalMultiHint::Multi(v.len()),
+        }
+    }
+
+    pub fn map<F, A>(self, f: F) -> OptionalMulti<A>
+    where
+        F: Fn(T) -> A,
+    {
+        match self {
+            Self::Single(t) => OptionalMulti::Single(f(t)),
+            Self::Multi(v) => OptionalMulti::Multi(v.into_iter().map(f).collect()),
         }
     }
 }
