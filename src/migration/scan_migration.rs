@@ -25,7 +25,6 @@ const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
 const BUSYKEY_ERROR: &str = "BUSYKEY";
 const DATA_QUEUE_SIZE: usize = 4096;
-const SCAN_DEFAULT_SIZE: u64 = 64;
 
 #[derive(Clone)]
 struct DataEntry {
@@ -62,8 +61,9 @@ impl ScanMigrationTask {
             src_address,
             slot_ranges,
             client_factory.clone(),
-            config,
+            config.clone(),
         );
+
         let (consumer_fut, consumer_handle) = Self::gen_consumer(
             data_sender,
             stop_receiver,
@@ -71,6 +71,7 @@ impl ScanMigrationTask {
             data_receiver,
             dst_address,
             client_factory,
+            config,
         );
         Self {
             handle: AtomicOption::new(Box::new((producer_handle, consumer_handle))),
@@ -93,7 +94,9 @@ impl ScanMigrationTask {
         receiver: mpsc::Receiver<DataEntry>,
         address: String,
         client_factory: Arc<F>,
+        config: Arc<AtomicMigrationConfig>,
     ) -> (MgrFut, FutureAutoStopHandle) {
+        let scan_count = config.get_scan_count();
         let send = Self::forward_entries(
             sender,
             receiver,
@@ -101,6 +104,7 @@ impl ScanMigrationTask {
             counter,
             address,
             client_factory,
+            scan_count,
         );
         let (send, handle) = new_auto_drop_future(send);
         let send = send.map(|opt| {
@@ -119,6 +123,7 @@ impl ScanMigrationTask {
         counter: Arc<AtomicI64>,
         address: String,
         client_factory: Arc<F>,
+        scan_count: u64,
     ) -> Result<(), RedisClientError> {
         let counter_clone = counter.clone();
 
@@ -127,11 +132,11 @@ impl ScanMigrationTask {
         let forward = async move {
             let _sender = sender;
             let mut client_opt = None;
-            let mut receiver = receiver.chunks_timeout(SCAN_DEFAULT_SIZE as usize, wait_timeout);
+            let mut receiver = receiver.chunks_timeout(scan_count as usize, wait_timeout);
 
             while let Some(entries) = receiver.next().await {
                 let key_num = entries.len();
-                let mut commands = Vec::with_capacity(SCAN_DEFAULT_SIZE as usize);
+                let mut commands = Vec::with_capacity(scan_count as usize);
                 for entry in entries.into_iter() {
                     let DataEntry {
                         key,
@@ -224,7 +229,10 @@ impl ScanMigrationTask {
             Duration::from_millis(10),
         );
         let scan_count = config.get_scan_count();
-        info!("scan and migrate keys with interval {:?}", interval);
+        info!(
+            "scan and migrate keys with interval: {:?} count: {}",
+            interval, scan_count
+        );
 
         // When scan_and_migrate_keys fails, it will retry from the last scanning index.
         // So we won't lose data here.
