@@ -1,4 +1,5 @@
 use super::task::{ScanResponse, SlotRangeArray};
+use crate::common::config::AtomicMigrationConfig;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::{
     keep_connecting_and_sending, keep_connecting_and_sending_cmd_with_cached_client,
@@ -13,18 +14,18 @@ use futures::channel::{mpsc, oneshot};
 use futures::{select, stream, Future, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use futures_batch::ChunksTimeoutStreamExt;
 use futures_timer::Delay;
+use std::cmp::min;
 use std::pin::Pin;
 use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use std::cmp::max;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
 const BUSYKEY_ERROR: &str = "BUSYKEY";
 const DATA_QUEUE_SIZE: usize = 4096;
-const SCAN_DEFAULT_SIZE: u64 = 10;
+const SCAN_DEFAULT_SIZE: u64 = 64;
 
 #[derive(Clone)]
 struct DataEntry {
@@ -46,7 +47,7 @@ impl ScanMigrationTask {
         dst_address: String,
         slot_range: (usize, usize),
         client_factory: Arc<F>,
-        scan_rate: u64,
+        config: Arc<AtomicMigrationConfig>,
     ) -> Self {
         let slot_ranges = SlotRangeArray {
             ranges: vec![slot_range],
@@ -61,7 +62,7 @@ impl ScanMigrationTask {
             src_address,
             slot_ranges,
             client_factory.clone(),
-            scan_rate,
+            config,
         );
         let (consumer_fut, consumer_handle) = Self::gen_consumer(
             data_sender,
@@ -215,11 +216,14 @@ impl ScanMigrationTask {
         address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
-        scan_rate: u64,
+        config: Arc<AtomicMigrationConfig>,
     ) -> (MgrFut, FutureAutoStopHandle) {
         let data = (slot_ranges, 0, sender, counter);
-        let interval = Duration::from_nanos(1_000_000_000 / (scan_rate / SCAN_DEFAULT_SIZE));
-        let interval = max(interval, Duration::from_millis(1));
+        let interval = min(
+            Duration::from_micros(config.get_scan_interval()),
+            Duration::from_millis(10),
+        );
+        let scan_count = config.get_scan_count();
         info!("scan and migrate keys with interval {:?}", interval);
 
         // When scan_and_migrate_keys fails, it will retry from the last scanning index.
@@ -229,7 +233,7 @@ impl ScanMigrationTask {
             client_factory,
             address,
             interval,
-            Self::scan_and_migrate_keys,
+            move |data, client| Self::scan_and_migrate_keys(data, client, scan_count),
         );
         let (send, handle) = new_auto_drop_future(send);
         let send = send.map(move |opt| {
@@ -247,10 +251,16 @@ impl ScanMigrationTask {
     async fn scan_and_migrate_keys_impl<C: RedisClient>(
         data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
         client: &mut C,
+        scan_count: u64,
     ) -> Result<(SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>), RedisClientError>
     {
         let (slot_ranges, index, mut sender, counter) = data;
-        let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
+        let scan_cmd = vec![
+            "SCAN".to_string(),
+            index.to_string(),
+            "COUNT".to_string(),
+            scan_count.to_string(),
+        ];
         let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
 
         let resp = client.execute_single(byte_cmd).await?;
@@ -278,6 +288,7 @@ impl ScanMigrationTask {
     fn scan_and_migrate_keys<C: RedisClient>(
         data: (SlotRangeArray, u64, mpsc::Sender<DataEntry>, Arc<AtomicI64>),
         client: &mut C,
+        scan_count: u64,
     ) -> Pin<
         Box<
             dyn Future<
@@ -289,7 +300,7 @@ impl ScanMigrationTask {
                 + '_,
         >,
     > {
-        Box::pin(Self::scan_and_migrate_keys_impl(data, client))
+        Box::pin(Self::scan_and_migrate_keys_impl(data, client, scan_count))
     }
 
     async fn produce_entries<C: RedisClient>(

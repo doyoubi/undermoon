@@ -487,15 +487,18 @@ impl<D: DecodedPacket> PacketDecoder for OptionalMultiPacketDecoder<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matches::assert_matches;
     use crate::protocol::Array;
+    use matches::assert_matches;
 
     #[test]
     fn test_single_packet() {
-        let (mut encoder, mut decoder) = new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
+        let (mut encoder, mut decoder) =
+            new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
         let mut buf = BytesMut::new();
         let cmd = OptionalMulti::Single(vec![b"PING1".to_vec()]);
-        encoder.encode(cmd, |data| buf.extend_from_slice(data)).expect("test_single_packet encode");
+        encoder
+            .encode(cmd, |data| buf.extend_from_slice(data))
+            .expect("test_single_packet encode");
         assert_eq!(buf.as_ref(), b"*1\r\n$5\r\nPING1\r\n");
         let res = decoder.decode(&mut buf);
         assert!(decoder.curr_hint.is_none());
@@ -513,10 +516,13 @@ mod tests {
 
     #[test]
     fn test_multi_packet() {
-        let (mut encoder, mut decoder) = new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
+        let (mut encoder, mut decoder) =
+            new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
         let mut buf = BytesMut::new();
         let cmd = OptionalMulti::Multi(vec![vec![b"PING1".to_vec()], vec![b"PING2".to_vec()]]);
-        encoder.encode(cmd, |data| buf.extend_from_slice(data)).expect("test_multi_packet encode");
+        encoder
+            .encode(cmd, |data| buf.extend_from_slice(data))
+            .expect("test_multi_packet encode");
         assert_eq!(buf.as_ref(), b"*1\r\n$5\r\nPING1\r\n*1\r\n$5\r\nPING2\r\n");
         let res = decoder.decode(&mut buf);
         assert!(decoder.curr_hint.is_none());
@@ -534,10 +540,13 @@ mod tests {
 
     #[test]
     fn test_empty_multi_packet() {
-        let (mut encoder, mut decoder) = new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
+        let (mut encoder, mut decoder) =
+            new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
         let mut buf = BytesMut::new();
         let cmd = OptionalMulti::Multi(vec![]);
-        encoder.encode(cmd, |data| buf.extend_from_slice(data)).expect("test_empty_multi_packet encode");
+        encoder
+            .encode(cmd, |data| buf.extend_from_slice(data))
+            .expect("test_empty_multi_packet encode");
         assert_eq!(buf.as_ref(), b"");
         let res = decoder.decode(&mut buf);
         assert!(decoder.curr_hint.is_none());

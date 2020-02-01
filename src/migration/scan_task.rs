@@ -25,10 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-const SCAN_RATE: u64 = 10000;
-
 pub struct RedisScanMigratingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> {
-    _mgr_config: Arc<AtomicMigrationConfig>,
     db_name: String,
     slot_range: (usize, usize),
     meta: MigrationMeta,
@@ -66,12 +63,11 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             meta.dst_node_address.clone(),
             slot_range,
             client_factory.clone(),
-            SCAN_RATE,
+            mgr_config,
         );
         let redirection_sender_factory =
             ReqAdaptorSenderFactory::new(RedirectionSenderFactory::default());
         Self {
-            _mgr_config: mgr_config,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
