@@ -140,6 +140,14 @@ mod tests {
                 Box::pin(future::err(RedisClientError::InvalidReply))
             }
         }
+
+        fn execute_multi<'s>(
+            &'s mut self,
+            _commands: Vec<Vec<BinSafeStr>>,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>>
+        {
+            unreachable!();
+        }
     }
 
     struct DummyClientFactory;

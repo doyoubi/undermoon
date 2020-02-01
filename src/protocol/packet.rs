@@ -139,17 +139,18 @@ impl EncodedPacket for Vec<BinSafeStr> {
 
 // Multiple commands
 impl EncodedPacket for Vec<Vec<BinSafeStr>> {
-    fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
+    fn encode<F>(self, f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
     {
-        let mut buf = Vec::new();
-        let mut s = 0;
+        let mut sum = 0;
+        let mut f = f;
         for cmd in self.into_iter() {
-            s += command_to_buf(&mut buf, cmd)?;
+            let (s, nf) = cmd.encode(f)?;
+            sum += s;
+            f = nf;
         }
-        f(&buf);
-        Ok((s, f))
+        Ok((sum, f))
     }
 }
 
@@ -301,9 +302,9 @@ enum OptionalMultiHint<T> {
     Multi(T),
 }
 
-impl<T: From<RespVec>> From<RespVec> for OptionalMulti<T> {
-    fn from(resp: RespVec) -> Self {
-        Self::Single(T::from(resp))
+impl<T> From<T> for OptionalMulti<T> {
+    fn from(t: T) -> Self {
+        Self::Single(t)
     }
 }
 
