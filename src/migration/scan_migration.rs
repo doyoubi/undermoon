@@ -18,6 +18,7 @@ use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use std::cmp::max;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
@@ -218,6 +219,7 @@ impl ScanMigrationTask {
     ) -> (MgrFut, FutureAutoStopHandle) {
         let data = (slot_ranges, 0, sender, counter);
         let interval = Duration::from_nanos(1_000_000_000 / (scan_rate / SCAN_DEFAULT_SIZE));
+        let interval = max(interval, Duration::from_millis(1));
         info!("scan and migrate keys with interval {:?}", interval);
 
         // When scan_and_migrate_keys fails, it will retry from the last scanning index.

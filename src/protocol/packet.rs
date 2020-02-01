@@ -364,14 +364,14 @@ impl OptionalMultiHintState {
         match self.state.swap(0, Ordering::SeqCst) {
             0 => None,
             1 => Some(OptionalMultiHint::Single),
-            n => Some(OptionalMultiHint::Multi(n - 1)),
+            n => Some(OptionalMultiHint::Multi(n - 2)),
         }
     }
 
     fn produce(&self, hint: OptionalMultiHint<usize>) -> bool {
         let n = match hint {
             OptionalMultiHint::Single => 1,
-            OptionalMultiHint::Multi(n) => n + 1,
+            OptionalMultiHint::Multi(n) => n + 2,
         };
         self.state.compare_and_swap(0, n, Ordering::SeqCst) == 0
     }
@@ -458,28 +458,98 @@ impl<D: DecodedPacket> PacketDecoder for OptionalMultiPacketDecoder<D> {
             return Ok(Some(OptionalMulti::Multi(vec![])));
         }
 
-        let packet = match D::decode(buf)? {
-            Some(p) => p,
-            None => return Ok(None),
-        };
+        loop {
+            let packet = match D::decode(buf)? {
+                Some(p) => p,
+                None => return Ok(None),
+            };
 
-        match hint {
-            OptionalMultiHint::Single => {
-                self.curr_hint = None;
-                Ok(Some(OptionalMulti::Single(packet)))
-            }
-            OptionalMultiHint::Multi(size) => {
-                self.buf.push(packet);
-
-                if size == self.buf.len() {
+            match hint {
+                OptionalMultiHint::Single => {
                     self.curr_hint = None;
-                    let v = self.buf.drain(..).collect();
+                    return Ok(Some(OptionalMulti::Single(packet)));
+                }
+                OptionalMultiHint::Multi(size) => {
+                    self.buf.push(packet);
 
-                    Ok(Some(OptionalMulti::Multi(v)))
-                } else {
-                    Ok(None)
+                    if size == self.buf.len() {
+                        self.curr_hint = None;
+                        let v = self.buf.drain(..).collect();
+
+                        return Ok(Some(OptionalMulti::Multi(v)));
+                    }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matches::assert_matches;
+    use crate::protocol::Array;
+
+    #[test]
+    fn test_single_packet() {
+        let (mut encoder, mut decoder) = new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
+        let mut buf = BytesMut::new();
+        let cmd = OptionalMulti::Single(vec![b"PING1".to_vec()]);
+        encoder.encode(cmd, |data| buf.extend_from_slice(data)).expect("test_single_packet encode");
+        assert_eq!(buf.as_ref(), b"*1\r\n$5\r\nPING1\r\n");
+        let res = decoder.decode(&mut buf);
+        assert!(decoder.curr_hint.is_none());
+        assert!(decoder.buf.is_empty());
+        assert!(decoder.state.consume().is_none());
+        let pkt = res
+            .expect("test_single_packet result")
+            .expect("test_single_packet option");
+        let response = match pkt {
+            OptionalMulti::Multi(_) => panic!("test_single_packet"),
+            OptionalMulti::Single(response) => response,
+        };
+        assert_matches!(response, Resp::Arr(Array::Arr(_)));
+    }
+
+    #[test]
+    fn test_multi_packet() {
+        let (mut encoder, mut decoder) = new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
+        let mut buf = BytesMut::new();
+        let cmd = OptionalMulti::Multi(vec![vec![b"PING1".to_vec()], vec![b"PING2".to_vec()]]);
+        encoder.encode(cmd, |data| buf.extend_from_slice(data)).expect("test_multi_packet encode");
+        assert_eq!(buf.as_ref(), b"*1\r\n$5\r\nPING1\r\n*1\r\n$5\r\nPING2\r\n");
+        let res = decoder.decode(&mut buf);
+        assert!(decoder.curr_hint.is_none());
+        assert!(decoder.buf.is_empty());
+        assert!(decoder.state.consume().is_none());
+        let pkt = res
+            .expect("test_multi_packet result")
+            .expect("test_multi_packet option");
+        let response = match pkt {
+            OptionalMulti::Single(_) => panic!("test_multi_packet"),
+            OptionalMulti::Multi(response) => response,
+        };
+        assert_eq!(response.len(), 2);
+    }
+
+    #[test]
+    fn test_empty_multi_packet() {
+        let (mut encoder, mut decoder) = new_optional_multi_packet_codec::<Vec<BinSafeStr>, RespVec>();
+        let mut buf = BytesMut::new();
+        let cmd = OptionalMulti::Multi(vec![]);
+        encoder.encode(cmd, |data| buf.extend_from_slice(data)).expect("test_empty_multi_packet encode");
+        assert_eq!(buf.as_ref(), b"");
+        let res = decoder.decode(&mut buf);
+        assert!(decoder.curr_hint.is_none());
+        assert!(decoder.buf.is_empty());
+        assert!(decoder.state.consume().is_none());
+        let pkt = res
+            .expect("test_empty_multi_packet result")
+            .expect("test_empty_multi_packet option");
+        let response = match pkt {
+            OptionalMulti::Single(_) => panic!("test_empty_multi_packet"),
+            OptionalMulti::Multi(response) => response,
+        };
+        assert_eq!(response.len(), 0);
     }
 }

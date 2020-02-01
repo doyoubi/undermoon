@@ -25,7 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-const SCAN_RATE: u64 = 1000;
+const SCAN_RATE: u64 = 10000;
 
 pub struct RedisScanMigratingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> {
     _mgr_config: Arc<AtomicMigrationConfig>,
@@ -319,7 +319,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> MigratingT
             };
             match r {
                 Ok(()) => {
-                    warn!("Migrating tasks stopped {:?}", meta);
+                    info!("Migrating tasks stopped {:?}", meta);
                     Ok(())
                 }
                 Err(err) => {
