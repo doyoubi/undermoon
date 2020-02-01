@@ -1,4 +1,6 @@
 use super::resp::{Array, BinSafeStr, BulkStr, Resp, RespVec};
+use std::error::Error;
+use std::fmt;
 use std::io;
 
 pub fn command_to_buf(buf: &mut Vec<u8>, command: Vec<BinSafeStr>) -> io::Result<usize> {
@@ -67,4 +69,39 @@ where
     W: io::Write,
 {
     Ok(writer.write(prefix)? + writer.write(b.as_ref())? + writer.write(b"\r\n")?)
+}
+
+#[derive(Debug)]
+pub enum EncodeError<T> {
+    NotReady(T),
+    Io(io::Error),
+}
+
+impl<T> fmt::Display for EncodeError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            Self::NotReady(_) => "EncodeError::NotReady".to_string(),
+            Self::Io(err) => format!("EncodeError::Io({})", err),
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl<T: fmt::Debug> Error for EncodeError<T> {
+    fn description(&self) -> &str {
+        "decode error"
+    }
+
+    fn cause(&self) -> Option<&dyn Error> {
+        match self {
+            EncodeError::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl<T> From<io::Error> for EncodeError<T> {
+    fn from(e: io::Error) -> Self {
+        EncodeError::Io(e)
+    }
 }

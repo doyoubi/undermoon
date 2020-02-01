@@ -1,6 +1,8 @@
 use super::resp::{BinSafeStr, RespVec};
 use crate::common::utils::{resolve_first_address, ThreadSafe};
-use crate::protocol::RespCodec;
+use crate::protocol::{
+    new_simple_packet_codec, EncodeError, RespCodec, SimplePacketDecoder, SimplePacketEncoder,
+};
 use atomic_option::AtomicOption;
 use chashmap::CHashMap;
 use crossbeam_channel;
@@ -80,7 +82,7 @@ struct PoolItemHandle<T> {
     reclaim_sender: Arc<crossbeam_channel::Sender<T>>,
 }
 
-type ClientCodec = RespCodec<Vec<BinSafeStr>, RespVec>;
+type ClientCodec = RespCodec<SimplePacketEncoder<Vec<BinSafeStr>>, SimplePacketDecoder<RespVec>>;
 type RawConnHandle = PoolItemHandle<RedisClientConnection>;
 
 struct RedisClientConnectionHandle {
@@ -112,7 +114,10 @@ impl PooledRedisClient {
             }
         };
 
-        frame.send(command).await.map_err(RedisClientError::Io)?;
+        frame.send(command).await.map_err(|err| match err {
+            EncodeError::Io(err) => RedisClientError::Io(err),
+            EncodeError::NotReady(_) => RedisClientError::InvalidState,
+        })?;
         match frame.next().await {
             Some(Ok(resp)) => Ok(resp),
             Some(Err(err)) => {
@@ -244,8 +249,9 @@ impl PooledRedisClientFactory {
                 item,
                 reclaim_sender,
             } = conn_handle;
+            let (encoder, decoder) = new_simple_packet_codec();
             let conn_handle = RedisClientConnectionHandle {
-                frame: ClientCodec::default().framed(item.into()),
+                frame: ClientCodec::new(encoder, decoder).framed(item.into()),
                 reclaim_sender,
             };
             return Ok(PooledRedisClient::new(conn_handle, self.timeout));
@@ -266,8 +272,9 @@ impl PooledRedisClientFactory {
                         Err(err)
                     }
                     Ok(Ok(conn)) => {
+                        let (encoder, decoder) = new_simple_packet_codec();
                         let conn_handle = RedisClientConnectionHandle {
-                            frame: ClientCodec::default().framed(conn.into()),
+                            frame: ClientCodec::new(encoder, decoder).framed(conn.into()),
                             reclaim_sender: *reclaim_sender,
                         };
                         Ok(PooledRedisClient::new(conn_handle, timeout))
@@ -304,6 +311,7 @@ pub enum RedisClientError {
     Done,
     Canceled,
     EncodeError,
+    InvalidState,
 }
 
 impl fmt::Display for RedisClientError {

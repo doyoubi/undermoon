@@ -2,7 +2,9 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
-use crate::protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
+use crate::protocol::{
+    new_simple_packet_codec, DecodeError, EncodeError, Packet, Resp, RespCodec, RespVec,
+};
 use futures::channel::mpsc;
 use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use futures_batch::ChunksTimeoutStreamExt;
@@ -74,7 +76,8 @@ pub trait CmdTaskFactory {
     );
 }
 
-// Type alias can't work with trait bound so we need to define again.
+// Type alias can't work with trait bound so we need to define again,
+// or we can use OptionalMulti.
 pub enum ReqTask<T: CmdTask> {
     Simple(T),
     Multi(Vec<T>),
@@ -227,7 +230,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
     }
 }
 
-type ConnSink<T> = Pin<Box<dyn Sink<T, Error = io::Error> + Send>>;
+type ConnSink<T> = Pin<Box<dyn Sink<T, Error = BackendError> + Send>>;
 type ConnStream<T> = Pin<Box<dyn Stream<Item = Result<T, BackendError>> + Send>>;
 type CreateConnResult<T> = Result<(ConnSink<T>, ConnStream<T>), BackendError>;
 
@@ -240,8 +243,14 @@ async fn create_conn<T: Packet + Send + 'static>(address: SocketAddr) -> CreateC
         }
     };
 
-    let frame = RespCodec::default().framed(socket);
+    let (encoder, decoder) = new_simple_packet_codec::<T, T>();
+
+    let frame = RespCodec::new(encoder, decoder).framed(socket);
     let (writer, reader) = frame.split();
+    let writer = writer.sink_map_err(|e| match e {
+        EncodeError::Io(err) => BackendError::Io(err),
+        EncodeError::NotReady(_) => BackendError::InvalidState,
+    });
     let reader = reader.map_err(|e| match e {
         DecodeError::InvalidProtocol => {
             error!("backend: invalid protocol");
@@ -392,7 +401,7 @@ where
         if let Err(err) = res {
             error!("backend write error: {}", err);
             let retry_state = handle_conn_err(retry_times_opt, tasks, &err);
-            return Err((BackendError::Io(err), retry_state));
+            return Err((err, retry_state));
         }
 
         let mut tasks_iter = tasks.into_iter();
@@ -409,9 +418,9 @@ where
                     error!("Failed to read packet. Connection is closed.");
                     let mut failed_tasks = vec![task];
                     failed_tasks.extend(tasks_iter);
-                    let err = io::Error::from(io::ErrorKind::BrokenPipe);
+                    let err = BackendError::Io(io::Error::from(io::ErrorKind::BrokenPipe));
                     let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
-                    return Err((BackendError::Io(err), retry_state));
+                    return Err((err, retry_state));
                 }
             };
 
@@ -424,12 +433,19 @@ where
 fn handle_conn_err<T: CmdTask>(
     retry_times_opt: Option<usize>,
     tasks: Vec<T>,
-    err: &io::Error,
+    err: &BackendError,
 ) -> Option<RetryState<T>> {
     let retry_times = retry_times_opt.unwrap_or(0);
     if retry_times >= MAX_BACKEND_RETRY {
         for task in tasks.into_iter() {
-            task.set_result(Err(CommandError::Io(io::Error::from(err.kind()))));
+            let cmd_err = match err {
+                BackendError::Io(e) => CommandError::Io(io::Error::from(e.kind())),
+                others => {
+                    error!("unexpected backend error: {:?}", others);
+                    CommandError::InnerError
+                }
+            };
+            task.set_result(Err(cmd_err));
         }
         None
     } else {
@@ -448,6 +464,7 @@ pub enum BackendError {
     InvalidProtocol,
     InvalidAddress,
     Canceled,
+    InvalidState,
 }
 
 impl fmt::Display for BackendError {

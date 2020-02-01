@@ -6,7 +6,9 @@ use super::command::{
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::utils::ThreadSafe;
-use crate::protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
+use crate::protocol::{
+    new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
+};
 use futures::{stream, Future, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use futures_batch::ChunksTimeoutStreamExt;
@@ -200,7 +202,8 @@ pub async fn handle_session<H>(
 where
     H: CmdHandler + Send + Sync + 'static,
 {
-    let (mut writer, reader) = RespCodec::default().framed(sock).split();
+    let (encoder, decoder) = new_simple_packet_codec::<Box<RespPacket>, Box<RespPacket>>();
+    let (mut writer, reader) = RespCodec::new(encoder, decoder).framed(sock).split();
     let mut reader = reader
         .map_err(|e| match e {
             DecodeError::Io(e) => SessionError::Io(e),
@@ -255,7 +258,11 @@ where
         let mut batch = stream::iter(replies.drain(..)).map(Ok);
         if let Err(err) = writer.send_all(&mut batch).await {
             error!("writer error: {}", err);
-            return Err(SessionError::Io(err));
+            let err = match err {
+                EncodeError::Io(err) => SessionError::Io(err),
+                EncodeError::NotReady(_) => SessionError::InvalidState,
+            };
+            return Err(err);
         }
     }
 
@@ -268,7 +275,7 @@ pub enum SessionError {
     CmdErr(CommandError),
     InvalidProtocol,
     Canceled,
-    Other, // TODO: remove this
+    InvalidState,
 }
 
 impl fmt::Display for SessionError {

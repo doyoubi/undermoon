@@ -1,33 +1,36 @@
 use super::decoder::DecodeError;
-use super::packet::{PacketDecoder, PacketEncoder};
+use super::encoder::EncodeError;
+use crate::protocol::packet::{PacketDecoder, PacketEncoder};
 use bytes::BytesMut;
-use std::io;
-use std::marker::PhantomData;
 use tokio_util::codec::{Decoder, Encoder};
 
-pub struct RespCodec<E, D>(PhantomData<(E, D)>);
+pub struct RespCodec<E: PacketEncoder, D: PacketDecoder> {
+    encoder: E,
+    decoder: D,
+}
 
-impl<E, D> Default for RespCodec<E, D> {
-    fn default() -> Self {
-        Self(PhantomData)
+impl<E: PacketEncoder, D: PacketDecoder> RespCodec<E, D> {
+    pub fn new(encoder: E, decoder: D) -> Self {
+        Self { encoder, decoder }
     }
 }
 
-impl<E, D: PacketDecoder> Decoder for RespCodec<E, D> {
-    type Item = D;
+impl<E: PacketEncoder, D: PacketDecoder> Decoder for RespCodec<E, D> {
+    type Item = D::Pkt;
     type Error = DecodeError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        D::decode(buf)
+        self.decoder.decode(buf)
     }
 }
 
-impl<E: PacketEncoder, D> Encoder for RespCodec<E, D> {
-    type Item = E;
-    type Error = io::Error;
+impl<E: PacketEncoder, D: PacketDecoder> Encoder for RespCodec<E, D> {
+    type Item = E::Pkt;
+    type Error = EncodeError<E::Pkt>;
 
     fn encode(&mut self, item: Self::Item, buf: &mut BytesMut) -> Result<(), Self::Error> {
-        item.encode(|data| buf.extend_from_slice(data))?;
+        self.encoder
+            .encode(item, |data| buf.extend_from_slice(data))?;
         Ok(())
     }
 }

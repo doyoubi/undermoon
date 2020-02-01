@@ -4,29 +4,51 @@ use super::fp::{RFunctor, VFunctor};
 use super::resp::{BinSafeStr, IndexedResp, Resp, RespSlice, RespVec};
 use super::stateless::{parse_indexed_resp, ParseError};
 use crate::common::utils::{change_bulk_array_element, change_bulk_str, get_command_element};
+use crate::protocol::EncodeError;
 use bytes::BytesMut;
 use std::io;
+use std::marker::PhantomData;
 use std::str;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-// PacketEncoder and PacketDecoder abstracts the entries sent between clients and redis instances,
+// EncodedPacket and DecodedPacket abstracts the entries sent between clients and redis instances,
 // including the single Resp and multiple Resp.
-// TODO: use TaskEncoder + TaskDecoder in CmdTask.
+// TODO: use EncodedPacket + DecodedPacket in CmdTask.
 
-pub trait PacketEncoder {
-    fn encode<F>(self, f: F) -> io::Result<usize>
+pub trait EncodedPacket {
+    fn encode<F>(self, f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]);
 }
 
-pub trait PacketDecoder {
+pub trait DecodedPacket {
     fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized;
 }
 
-pub trait Packet: PacketEncoder + PacketDecoder + From<RespVec> {}
+pub trait Packet: EncodedPacket + DecodedPacket + From<RespVec> {}
 
-impl<T: PacketEncoder + PacketDecoder + From<RespVec>> Packet for T {}
+impl<T: EncodedPacket + DecodedPacket + From<RespVec>> Packet for T {}
+
+pub trait PacketEncoder {
+    type Pkt: EncodedPacket;
+
+    // Return EncodeError::NotReady if not ready.
+    fn encode<F>(&mut self, packet: Self::Pkt, f: F) -> Result<usize, EncodeError<Self::Pkt>>
+    where
+        F: FnMut(&[u8]);
+}
+
+pub trait PacketDecoder {
+    // Pkt can't decode itself for some types.
+    type Pkt;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Pkt>, DecodeError>
+    where
+        Self: Sized;
+}
 
 #[derive(Debug, Clone)]
 pub enum RespPacket {
@@ -103,21 +125,21 @@ impl From<RespVec> for RespPacket {
     }
 }
 
-impl PacketEncoder for Vec<BinSafeStr> {
-    fn encode<F>(self, mut f: F) -> io::Result<usize>
+impl EncodedPacket for Vec<BinSafeStr> {
+    fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
     {
         let mut buf = Vec::new();
         let s = command_to_buf(&mut buf, self)?;
         f(&buf);
-        Ok(s)
+        Ok((s, f))
     }
 }
 
 // Multiple commands
-impl PacketEncoder for Vec<Vec<BinSafeStr>> {
-    fn encode<F>(self, mut f: F) -> io::Result<usize>
+impl EncodedPacket for Vec<Vec<BinSafeStr>> {
+    fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
     {
@@ -127,23 +149,23 @@ impl PacketEncoder for Vec<Vec<BinSafeStr>> {
             s += command_to_buf(&mut buf, cmd)?;
         }
         f(&buf);
-        Ok(s)
+        Ok((s, f))
     }
 }
 
-impl<T: AsRef<[u8]>> PacketEncoder for Resp<T> {
-    fn encode<F>(self, mut f: F) -> io::Result<usize>
+impl<T: AsRef<[u8]>> EncodedPacket for Resp<T> {
+    fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
     {
         let mut b = Vec::new();
         let s = encode_resp(&mut b, &self)?;
         f(&b);
-        Ok(s)
+        Ok((s, f))
     }
 }
 
-impl PacketDecoder for RespVec {
+impl DecodedPacket for RespVec {
     fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
@@ -156,7 +178,7 @@ impl PacketDecoder for RespVec {
     }
 }
 
-impl PacketDecoder for IndexedResp {
+impl DecodedPacket for IndexedResp {
     fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
@@ -175,8 +197,8 @@ impl PacketDecoder for IndexedResp {
     }
 }
 
-impl PacketEncoder for RespPacket {
-    fn encode<F>(self, mut f: F) -> io::Result<usize>
+impl EncodedPacket for RespPacket {
+    fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
     {
@@ -184,19 +206,19 @@ impl PacketEncoder for RespPacket {
             RespPacket::Indexed(indexed_resp) => {
                 let data = indexed_resp.get_data();
                 f(data);
-                Ok(data.len())
+                Ok((data.len(), f))
             }
             RespPacket::Data(resp) => {
                 let mut b = Vec::with_capacity(1024);
                 let size = encode_resp(&mut b, &resp)?;
                 f(&b);
-                Ok(size)
+                Ok((size, f))
             }
         }
     }
 }
 
-impl PacketDecoder for RespPacket {
+impl DecodedPacket for RespPacket {
     fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
@@ -205,8 +227,8 @@ impl PacketDecoder for RespPacket {
     }
 }
 
-impl<T: PacketEncoder> PacketEncoder for Box<T> {
-    fn encode<F>(self, f: F) -> io::Result<usize>
+impl<T: EncodedPacket> EncodedPacket for Box<T> {
+    fn encode<F>(self, f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
     {
@@ -214,7 +236,7 @@ impl<T: PacketEncoder> PacketEncoder for Box<T> {
     }
 }
 
-impl<T: PacketDecoder> PacketDecoder for Box<T> {
+impl<T: DecodedPacket> DecodedPacket for Box<T> {
     fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
@@ -223,13 +245,229 @@ impl<T: PacketDecoder> PacketDecoder for Box<T> {
     }
 }
 
+pub fn new_simple_packet_codec<E: EncodedPacket, D: DecodedPacket>(
+) -> (SimplePacketEncoder<E>, SimplePacketDecoder<D>) {
+    (
+        SimplePacketEncoder::default(),
+        SimplePacketDecoder::default(),
+    )
+}
+
+pub struct SimplePacketEncoder<T: EncodedPacket>(PhantomData<T>);
+pub struct SimplePacketDecoder<T: DecodedPacket>(PhantomData<T>);
+
+impl<T: EncodedPacket> Default for SimplePacketEncoder<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: EncodedPacket> PacketEncoder for SimplePacketEncoder<T> {
+    type Pkt = T;
+
+    fn encode<F>(&mut self, packet: Self::Pkt, f: F) -> Result<usize, EncodeError<Self::Pkt>>
+    where
+        F: FnMut(&[u8]),
+    {
+        packet.encode(f).map(|(s, _)| s).map_err(EncodeError::Io)
+    }
+}
+
+impl<T: DecodedPacket> Default for SimplePacketDecoder<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: DecodedPacket> PacketDecoder for SimplePacketDecoder<T> {
+    type Pkt = T;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Pkt>, DecodeError>
+    where
+        Self: Sized,
+    {
+        Self::Pkt::decode(buf)
+    }
+}
+
 pub enum OptionalMulti<T> {
-    Simple(T),
+    Single(T),
     Multi(Vec<T>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OptionalMultiHint<T> {
+    Single,
+    Multi(T),
 }
 
 impl<T: From<RespVec>> From<RespVec> for OptionalMulti<T> {
     fn from(resp: RespVec) -> Self {
-        Self::Simple(T::from(resp))
+        Self::Single(T::from(resp))
+    }
+}
+
+impl<T> OptionalMulti<T> {
+    fn to_hint(&self) -> OptionalMultiHint<usize> {
+        match self {
+            Self::Single(_) => OptionalMultiHint::Single,
+            Self::Multi(v) => OptionalMultiHint::Multi(v.len()),
+        }
+    }
+}
+
+impl<T: EncodedPacket> EncodedPacket for OptionalMulti<T> {
+    fn encode<F>(self, f: F) -> io::Result<(usize, F)>
+    where
+        F: FnMut(&[u8]),
+    {
+        match self {
+            OptionalMulti::Single(t) => t.encode(f),
+            OptionalMulti::Multi(v) => {
+                let mut sum = 0;
+                let mut f = f;
+                for t in v.into_iter() {
+                    let (s, nf) = t.encode(f)?;
+                    sum += s;
+                    f = nf;
+                }
+                Ok((sum, f))
+            }
+        }
+    }
+}
+
+struct OptionalMultiHintState {
+    state: Arc<AtomicUsize>,
+}
+
+impl OptionalMultiHintState {
+    fn new_pair() -> (Self, Self) {
+        let s1 = Arc::new(AtomicUsize::new(0));
+        let s2 = s1.clone();
+        (Self { state: s1 }, Self { state: s2 })
+    }
+
+    fn consume(&self) -> Option<OptionalMultiHint<usize>> {
+        match self.state.swap(0, Ordering::SeqCst) {
+            0 => None,
+            1 => Some(OptionalMultiHint::Single),
+            n => Some(OptionalMultiHint::Multi(n - 1)),
+        }
+    }
+
+    fn produce(&self, hint: OptionalMultiHint<usize>) -> bool {
+        let n = match hint {
+            OptionalMultiHint::Single => 1,
+            OptionalMultiHint::Multi(n) => n + 1,
+        };
+        self.state.compare_and_swap(0, n, Ordering::SeqCst) == 0
+    }
+}
+
+pub fn new_optional_multi_packet_codec<E: EncodedPacket, D: DecodedPacket>(
+) -> (OptionalMultiPacketEncoder<E>, OptionalMultiPacketDecoder<D>) {
+    let (s1, s2) = OptionalMultiHintState::new_pair();
+    let encoder = OptionalMultiPacketEncoder::new(s1);
+    let decoder = OptionalMultiPacketDecoder::new(s2);
+    (encoder, decoder)
+}
+
+// Does not support pipeline for packet.
+// But the packet it self can support pipeline.
+pub struct OptionalMultiPacketEncoder<E: EncodedPacket> {
+    state: OptionalMultiHintState,
+    phantom: PhantomData<E>,
+}
+
+impl<E: EncodedPacket> OptionalMultiPacketEncoder<E> {
+    fn new(state: OptionalMultiHintState) -> Self {
+        Self {
+            state,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<E: EncodedPacket> PacketEncoder for OptionalMultiPacketEncoder<E> {
+    type Pkt = OptionalMulti<E>;
+
+    fn encode<F>(&mut self, packet: Self::Pkt, f: F) -> Result<usize, EncodeError<Self::Pkt>>
+    where
+        F: FnMut(&[u8]),
+    {
+        let hint = packet.to_hint();
+        if !self.state.produce(hint) {
+            return Err(EncodeError::NotReady(packet));
+        }
+
+        packet.encode(f).map(|(s, _)| s).map_err(EncodeError::Io)
+    }
+}
+
+pub struct OptionalMultiPacketDecoder<D: DecodedPacket> {
+    state: OptionalMultiHintState,
+    buf: Vec<D>,
+    curr_hint: Option<OptionalMultiHint<usize>>,
+}
+
+impl<D: DecodedPacket> OptionalMultiPacketDecoder<D> {
+    fn new(state: OptionalMultiHintState) -> Self {
+        Self {
+            state,
+            buf: vec![],
+            curr_hint: None,
+        }
+    }
+}
+
+impl<D: DecodedPacket> PacketDecoder for OptionalMultiPacketDecoder<D> {
+    type Pkt = OptionalMulti<D>;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Pkt>, DecodeError>
+    where
+        Self: Sized,
+    {
+        let hint = match &self.curr_hint {
+            Some(h) => *h,
+            None => {
+                let h = match self.state.consume() {
+                    Some(h) => h,
+                    None => return Ok(None),
+                };
+                self.curr_hint = Some(h);
+                h
+            }
+        };
+
+        // Empty requested
+        if let OptionalMultiHint::Multi(0) = hint {
+            self.curr_hint = None;
+            return Ok(Some(OptionalMulti::Multi(vec![])));
+        }
+
+        let packet = match D::decode(buf)? {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        match hint {
+            OptionalMultiHint::Single => {
+                self.curr_hint = None;
+                Ok(Some(OptionalMulti::Single(packet)))
+            }
+            OptionalMultiHint::Multi(size) => {
+                self.buf.push(packet);
+
+                if size == self.buf.len() {
+                    self.curr_hint = None;
+                    let v = self.buf.drain(..).collect();
+
+                    Ok(Some(OptionalMulti::Multi(v)))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
     }
 }
