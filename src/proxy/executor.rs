@@ -7,7 +7,8 @@ use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use ::migration::manager::SwitchError;
-use ::migration::task::parse_tmp_switch_command;
+use ::migration::task::parse_switch_command;
+use ::migration::task::MgrSubCmd;
 use atoi::atoi;
 use caseless;
 use common::db::ProxyDBMeta;
@@ -166,8 +167,12 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_info_repl(cmd_ctx);
         } else if sub_cmd.eq("INFOMGR") {
             self.handle_umctl_info_migration(cmd_ctx);
-        } else if sub_cmd.eq("TMPSWITCH") {
-            self.handle_umctl_tmp_switch(cmd_ctx);
+        } else if sub_cmd.eq(MgrSubCmd::PreCheck.as_str()) {
+            self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::PreCheck);
+        } else if sub_cmd.eq(MgrSubCmd::PreSwitch.as_str()) {
+            self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::PreSwitch);
+        } else if sub_cmd.eq(MgrSubCmd::FinalSwitch.as_str()) {
+            self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::FinalSwitch);
         } else if sub_cmd.eq("SLOWLOG") {
             self.handle_umctl_slowlog(cmd_ctx);
         } else {
@@ -242,19 +247,19 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(report.into_bytes()))));
     }
 
-    fn handle_umctl_tmp_switch(&self, cmd_ctx: CmdCtx) {
-        let switch_arg = match parse_tmp_switch_command(cmd_ctx.get_resp()) {
+    fn handle_umctl_mgr_cmd(&self, cmd_ctx: CmdCtx, sub_cmd: MgrSubCmd) {
+        let switch_arg = match parse_switch_command(cmd_ctx.get_resp()) {
             Some(switch_meta) => switch_meta,
             None => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    "failed to parse TMPSWITCH arguments"
+                    "failed to parse migration switch arguments"
                         .to_string()
                         .into_bytes(),
                 )));
                 return;
             }
         };
-        match self.manager.commit_importing(switch_arg) {
+        match self.manager.handle_switch(switch_arg, sub_cmd) {
             Ok(()) => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
             }
@@ -412,6 +417,9 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             CmdType::UmCtl => self.handle_umctl(cmd_ctx),
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
             CmdType::Config => self.handle_config(cmd_ctx),
+            CmdType::Command => {
+                cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
+            }
         };
     }
 }

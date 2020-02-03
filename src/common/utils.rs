@@ -85,6 +85,14 @@ pub fn get_command_element(resp: &Resp, index: usize) -> Option<&[u8]> {
     }
 }
 
+pub fn extract_command_name(resp: &Resp) -> Option<&str> {
+    let first = get_command_element(resp, 0)?;
+    match str::from_utf8(first) {
+        Ok(cmd_name) => Some(cmd_name),
+        Err(_) => None,
+    }
+}
+
 pub fn change_bulk_array_element(resp: &mut Resp, index: usize, data: Vec<u8>) -> bool {
     match resp {
         Resp::Arr(Array::Arr(ref mut resps)) => {
@@ -124,45 +132,11 @@ pub fn get_slot(key: &[u8]) -> usize {
     State::<XMODEM>::calculate(get_hash_tag(key)) as usize % SLOT_NUM
 }
 
-pub fn extract_info_int_field(resp: &Resp, field: &str) -> Result<i64, String> {
-    let value = extract_info_field(resp, field)?;
-    value
-        .parse::<i64>()
-        .map_err(|e| format!("invalid int value: {} {}", value, e))
-}
-
-pub fn extract_info_field(resp: &Resp, field: &str) -> Result<String, String> {
-    let data = match resp {
-        Resp::Bulk(BulkStr::Str(s)) => s,
-        other => {
-            return Err(format!("unexpected response of INFO command: {:?}", other));
-        }
-    };
-
-    let info = match str::from_utf8(data) {
+pub fn pretty_print_bytes(data: &[u8]) -> String {
+    match str::from_utf8(data) {
         Ok(s) => s.to_string(),
-        Err(e) => {
-            return Err(format!(
-                "failed to parse INFO command to utf8 string {:?}",
-                e
-            ));
-        }
-    };
-
-    let lines = info.split("\r\n");
-    for line in lines {
-        if !line.starts_with(field) {
-            continue;
-        }
-        let mut kv = line.split(':');
-        if kv.next().is_none() {
-            continue;
-        }
-        if let Some(value) = kv.next() {
-            return Ok(value.to_string());
-        }
+        Err(_) => format!("{:?}", data),
     }
-    Err(format!("field {} not found", field))
 }
 
 pub const OK_REPLY: &str = "OK";
@@ -191,44 +165,5 @@ mod tests {
         assert_eq!(get_hash_tag("foo{{bar}}".as_bytes()), "{bar".as_bytes());
         assert_eq!(get_hash_tag("foo{bar}{zap}".as_bytes()), "bar".as_bytes());
         assert_eq!(get_hash_tag("{}xxxxx".as_bytes()), "{}xxxxx".as_bytes());
-    }
-
-    #[test]
-    fn test_extract_info_field() {
-        let persistence = "# Persistence\r
-loading:0\r
-rdb_changes_since_last_save:0\r
-rdb_bgsave_in_progress:0\r
-rdb_last_save_time:1567137465\r
-rdb_last_bgsave_status:ok\r
-rdb_last_bgsave_time_sec:-1\r
-rdb_current_bgsave_time_sec:-1\r
-rdb_last_cow_size:0\r
-aof_enabled:0\r
-aof_rewrite_in_progress:0\r
-aof_rewrite_scheduled:0\r
-aof_last_rewrite_time_sec:-1\r
-aof_current_rewrite_time_sec:-1\r
-aof_last_bgrewrite_status:ok\r
-aof_last_write_status:ok\r
-aof_last_cow_size:0\r\n";
-        let data = persistence.as_bytes().to_vec();
-        let resp = Resp::Bulk(BulkStr::Str(data));
-
-        assert_eq!(extract_info_field(&resp, "loading"), Ok("0".to_string()));
-        assert_eq!(
-            extract_info_field(&resp, "rdb_current_bgsave_time_sec"),
-            Ok("-1".to_string())
-        );
-        assert_eq!(
-            extract_info_field(&resp, "aof_last_cow_size"),
-            Ok("0".to_string())
-        );
-
-        assert_eq!(extract_info_int_field(&resp, "loading"), Ok(0));
-        assert_eq!(
-            extract_info_int_field(&resp, "rdb_last_save_time"),
-            Ok(1567137465)
-        );
     }
 }

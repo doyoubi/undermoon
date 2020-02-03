@@ -3,7 +3,7 @@ language: rust
 sudo: required
 
 rust:
-  - 1.37.0
+  - 1.40.0
   - nightly
 
 matrix:

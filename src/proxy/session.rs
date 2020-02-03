@@ -1,4 +1,4 @@
-use super::backend::CmdTask;
+use super::backend::{CmdTask, CmdTaskFactory};
 use super::command::TaskReply;
 use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
@@ -40,7 +40,7 @@ pub struct CmdCtx {
 impl ThreadSafe for CmdCtx {}
 
 impl CmdCtx {
-    fn new(
+    pub fn new(
         db: sync::Arc<sync::RwLock<String>>,
         reply_sender: CmdReplySender,
         session_id: usize,
@@ -55,6 +55,14 @@ impl CmdCtx {
 
     pub fn get_cmd(&self) -> &Command {
         self.reply_sender.get_cmd()
+    }
+
+    pub fn get_db(&self) -> sync::Arc<sync::RwLock<String>> {
+        self.db.clone()
+    }
+
+    pub fn get_session_id(&self) -> usize {
+        self.slowlog.get_session_id()
     }
 
     pub fn change_cmd_element(&mut self, index: usize, data: Vec<u8>) -> bool {
@@ -91,7 +99,7 @@ impl CmdTask for CmdCtx {
         let task_result = result.map(|packet| Box::new(TaskReply::new(packet, slowlog)));
         let res = self.reply_sender.send(task_result);
         if let Err(e) = res {
-            error!("Failed to send result {:?}", e);
+            error!("Failed to send result: {:?}", e);
         }
     }
 
@@ -111,6 +119,41 @@ impl DBTag for CmdCtx {
 
     fn set_db_name(&self, db: String) {
         *self.db.write().unwrap() = db
+    }
+}
+
+pub struct CmdCtxFactory;
+
+impl ThreadSafe for CmdCtxFactory {}
+
+impl Default for CmdCtxFactory {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl CmdTaskFactory for CmdCtxFactory {
+    type Task = CmdCtx;
+
+    fn create_with(
+        &self,
+        another_task: &Self::Task,
+        resp: Resp,
+    ) -> (
+        Self::Task,
+        Box<dyn Future<Item = Resp, Error = CommandError> + Send>,
+    ) {
+        let packet = Box::new(RespPacket::new(resp));
+        let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));
+        let cmd_ctx = CmdCtx::new(
+            another_task.get_db(),
+            reply_sender,
+            another_task.get_session_id(),
+        );
+        let fut = reply_receiver
+            .wait_response()
+            .map(|reply| reply.into_resp());
+        (cmd_ctx, Box::new(fut))
     }
 }
 

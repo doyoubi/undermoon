@@ -76,7 +76,7 @@ fn main() {
     let config = Arc::new(gen_conf());
 
     let timeout = Duration::new(1, 0);
-    let pool_size = 1;
+    let pool_size = 4;
     let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
 
     let slow_request_logger = Arc::new(SlowRequestLogger::new(config.clone()));

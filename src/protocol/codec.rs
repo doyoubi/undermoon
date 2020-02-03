@@ -33,6 +33,11 @@ impl RespPacket {
         &self.resp
     }
 
+    pub fn into_resp(self) -> Resp {
+        let Self { resp, .. } = self;
+        resp
+    }
+
     pub fn get_mut_resp(&mut self) -> &mut Resp {
         &mut self.resp
     }

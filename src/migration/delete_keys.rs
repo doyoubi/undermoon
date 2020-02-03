@@ -1,18 +1,14 @@
-use super::task::MigrationError;
+use super::task::{MigrationError, ScanResponse, SlotRangeArray};
 use atomic_option::AtomicOption;
 use common::cluster::SlotRange;
 use common::config::AtomicMigrationConfig;
 use common::db::HostDBMap;
 use common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use common::resp_execution::keep_connecting_and_sending;
-use common::utils::{get_resp_bytes, get_slot};
 use futures::{future, Future};
 use itertools::Itertools;
-use protocol::{
-    Array, BinSafeStr, BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp,
-};
+use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
 use std::collections::HashMap;
-use std::str;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -97,30 +93,6 @@ impl DeleteKeysTaskMap {
     }
 }
 
-#[derive(Clone)]
-struct SlotRangeArray {
-    ranges: Vec<(usize, usize)>,
-}
-
-impl SlotRangeArray {
-    fn is_key_inside(&self, key: &[u8]) -> bool {
-        let slot = get_slot(key);
-        for (start, end) in self.ranges.iter() {
-            if slot >= *start && slot <= *end {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn info(&self) -> String {
-        self.ranges
-            .iter()
-            .map(|(start, end)| format!("{}-{}", start, end))
-            .join(",")
-    }
-}
-
 pub struct DeleteKeysTask {
     address: String,
     slot_ranges: SlotRangeArray,
@@ -194,40 +166,42 @@ impl DeleteKeysTask {
         let exec_fut = client
             .execute(byte_cmd)
             .and_then(move |(client, resp)| {
-                future::result(parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply))
-                    .and_then(move |scan| {
-                        let ScanResponse { next_index, keys } = scan;
-                        let keys: Vec<Vec<u8>> = keys
-                            .into_iter()
-                            .filter(|k| !slot_ranges.is_key_inside(k.as_slice()))
-                            .collect();
+                future::result(
+                    ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply),
+                )
+                .and_then(move |scan| {
+                    let ScanResponse { next_index, keys } = scan;
+                    let keys: Vec<Vec<u8>> = keys
+                        .into_iter()
+                        .filter(|k| !slot_ranges.is_key_inside(k.as_slice()))
+                        .collect();
 
-                        let fut: Box<
-                            dyn Future<Item = (SlotRangeArray, u64, C), Error = RedisClientError>
-                                + Send,
-                        > = if keys.is_empty() {
-                            Box::new(future::ok((slot_ranges, next_index, client)))
-                        } else {
-                            let mut del_cmd = vec!["DEL".to_string().into_bytes()];
-                            del_cmd.extend_from_slice(keys.as_slice());
-                            Box::new(
-                                client
-                                    .execute(del_cmd)
-                                    .and_then(|(client, resp)| {
-                                        let r = match resp {
-                                            Resp::Error(err) => {
-                                                error!("failed to delete keys: {:?}", err);
-                                                Err(RedisClientError::InvalidReply)
-                                            }
-                                            _ => Ok(client),
-                                        };
-                                        future::result(r)
-                                    })
-                                    .map(move |client| (slot_ranges, next_index, client)),
-                            )
-                        };
-                        fut
-                    })
+                    let fut: Box<
+                        dyn Future<Item = (SlotRangeArray, u64, C), Error = RedisClientError>
+                            + Send,
+                    > = if keys.is_empty() {
+                        Box::new(future::ok((slot_ranges, next_index, client)))
+                    } else {
+                        let mut del_cmd = vec!["DEL".to_string().into_bytes()];
+                        del_cmd.extend_from_slice(keys.as_slice());
+                        Box::new(
+                            client
+                                .execute(del_cmd)
+                                .and_then(|(client, resp)| {
+                                    let r = match resp {
+                                        Resp::Error(err) => {
+                                            error!("failed to delete keys: {:?}", err);
+                                            Err(RedisClientError::InvalidReply)
+                                        }
+                                        _ => Ok(client),
+                                    };
+                                    future::result(r)
+                                })
+                                .map(move |client| (slot_ranges, next_index, client)),
+                        )
+                    };
+                    fut
+                })
             })
             .and_then(|(slot_ranges, next_index, client)| {
                 if next_index == 0 {
@@ -241,26 +215,5 @@ impl DeleteKeysTask {
 
     pub fn get_address(&self) -> String {
         self.address.clone()
-    }
-}
-
-struct ScanResponse {
-    next_index: u64,
-    keys: Vec<BinSafeStr>,
-}
-
-fn parse_scan(resp: Resp) -> Option<ScanResponse> {
-    match resp {
-        Resp::Arr(Array::Arr(ref resps)) => {
-            let index_data = resps.get(0).and_then(|resp| match resp {
-                Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
-                Resp::Simple(ref s) => Some(s.clone()),
-                _ => None,
-            })?;
-            let next_index = str::from_utf8(index_data.as_slice()).ok()?.parse().ok()?;
-            let keys = get_resp_bytes(resps.get(1)?)?;
-            Some(ScanResponse { next_index, keys })
-        }
-        _ => None,
     }
 }
