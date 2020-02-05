@@ -4,7 +4,7 @@ use super::replicator::{
 use common::resp_execution::{retry_handle_func, I64Retriever};
 use common::utils::{revolve_first_address, ThreadSafe};
 use futures::{future, Future};
-use protocol::{RedisClientError, RedisClientFactory, Resp};
+use protocol::{RedisClientError, RedisClientFactory, RespVec};
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ impl<F: RedisClientFactory> RedisMasterReplicator<F> {
         self.role_sync.get_data() != 0
     }
 
-    fn handle_result(resp: Resp, data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
+    fn handle_result(resp: RespVec, data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
         let r = retry_handle_func(resp);
         if r.is_ok() {
             data.store(1, Ordering::SeqCst);
@@ -125,7 +125,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
         }
     }
 
-    fn handle_result(resp: Resp, _data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
+    fn handle_result(resp: RespVec, _data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
         retry_handle_func(resp)
     }
 }

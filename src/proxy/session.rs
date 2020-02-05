@@ -7,11 +7,10 @@ use super::command::{
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use ::common::utils::ThreadSafe;
-use bytes::BytesMut;
 use common::batching;
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Sink, Stream};
-use protocol::{DecodeError, Resp, RespCodec, RespPacket};
+use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespSlice, RespVec};
 use std::boxed::Box;
 use std::error::Error;
 use std::fmt;
@@ -82,8 +81,8 @@ impl CmdTask for CmdCtx {
         self.get_cmd().get_key()
     }
 
-    fn get_resp(&self) -> &Resp {
-        self.reply_sender.get_cmd().get_resp()
+    fn get_resp_slice(&self) -> RespSlice {
+        self.reply_sender.get_cmd().get_resp_slice()
     }
 
     fn get_cmd_type(&self) -> CmdType {
@@ -103,8 +102,8 @@ impl CmdTask for CmdCtx {
         }
     }
 
-    fn drain_packet_data(&self) -> Option<BytesMut> {
-        self.reply_sender.get_cmd().drain_packet_data()
+    fn get_packet(&self) -> RespPacket {
+        self.reply_sender.get_cmd().get_packet()
     }
 
     fn get_slowlog(&self) -> &Slowlog {
@@ -138,12 +137,12 @@ impl CmdTaskFactory for CmdCtxFactory {
     fn create_with(
         &self,
         another_task: &Self::Task,
-        resp: Resp,
+        resp: RespVec,
     ) -> (
         Self::Task,
-        Box<dyn Future<Item = Resp, Error = CommandError> + Send>,
+        Box<dyn Future<Item = RespVec, Error = CommandError> + Send>,
     ) {
-        let packet = Box::new(RespPacket::new(resp));
+        let packet = Box::new(RespPacket::from_resp_vec(resp));
         let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));
         let cmd_ctx = CmdCtx::new(
             another_task.get_db(),
@@ -152,7 +151,7 @@ impl CmdTaskFactory for CmdCtxFactory {
         );
         let fut = reply_receiver
             .wait_response()
-            .map(|reply| reply.into_resp());
+            .map(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::new(fut))
     }
 }
@@ -289,7 +288,7 @@ where
                 let err_msg = format!("Err cmd error {:?}", e);
                 error!("{}", err_msg);
                 let resp = Resp::Error(err_msg.into_bytes());
-                future::ok(Box::new(RespPacket::new(resp)))
+                future::ok(Box::new(RespPacket::from_resp_vec(resp)))
             }
         });
 

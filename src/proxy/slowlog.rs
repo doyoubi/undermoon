@@ -3,7 +3,7 @@ use super::service::ServerProxyConfig;
 use arc_swap::ArcSwapOption;
 use arr_macro::arr;
 use chrono::{naive, DateTime, Utc};
-use protocol::{Array, BulkStr, Resp};
+use protocol::{Array, BulkStr, Resp, RespVec};
 use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
@@ -80,7 +80,8 @@ impl Slowlog {
     }
 
     fn get_brief_command(command: &Command) -> Vec<String> {
-        let resps = match command.get_resp() {
+        let resp_slice = command.get_resp_slice();
+        let resps = match resp_slice {
             Resp::Arr(Array::Arr(ref resps)) => resps,
             others => return vec![format!("{:?}", others)],
         };
@@ -170,7 +171,7 @@ impl SlowRequestLogger {
     }
 }
 
-pub fn slowlogs_to_resp(logs: Vec<Arc<Slowlog>>) -> Resp {
+pub fn slowlogs_to_resp(logs: Vec<Arc<Slowlog>>) -> RespVec {
     let elements = logs
         .into_iter()
         .map(|log| slowlog_to_report(&(*log)))
@@ -178,7 +179,7 @@ pub fn slowlogs_to_resp(logs: Vec<Arc<Slowlog>>) -> Resp {
     Resp::Arr(Array::Arr(elements))
 }
 
-fn slowlog_to_report(log: &Slowlog) -> Resp {
+fn slowlog_to_report(log: &Slowlog) -> RespVec {
     let start = log.event_map.get_event_time(TaskEvent::Created);
     let start_date = match naive::NaiveDateTime::from_timestamp_opt(
         start / 1_000_000_000,

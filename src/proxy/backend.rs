@@ -2,13 +2,12 @@ use super::command::{CmdType, CommandError, CommandResult, DataCmdType};
 use super::service::ServerProxyConfig;
 use super::slowlog::{Slowlog, TaskEvent};
 use crate::common::batching::Chunks;
-use bytes::BytesMut;
 use common::future_group::new_future_group;
 use common::utils::{gen_moved, get_slot, revolve_first_address, ThreadSafe};
 use futures::sync::mpsc;
 use futures::Sink;
 use futures::{future, stream, Future, Stream};
-use protocol::{Array, DecodeError, Resp, RespCodec, RespPacket};
+use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespSlice, RespVec};
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::error::Error;
@@ -39,17 +38,17 @@ pub trait CmdTaskResultHandlerFactory: ThreadSafe {
 
 pub trait CmdTask: ThreadSafe + fmt::Debug {
     fn get_key(&self) -> Option<&[u8]>;
-    fn get_resp(&self) -> &Resp;
+    fn get_resp_slice(&self) -> RespSlice;
     fn get_cmd_type(&self) -> CmdType;
     fn get_data_cmd_type(&self) -> DataCmdType;
     fn set_result(self, result: CommandResult);
-    fn drain_packet_data(&self) -> Option<BytesMut>;
+    fn get_packet(&self) -> RespPacket;
 
-    fn set_resp_result(self, result: Result<Resp, CommandError>)
+    fn set_resp_result(self, result: Result<RespVec, CommandError>)
     where
         Self: Sized,
     {
-        self.set_result(result.map(|resp| Box::new(RespPacket::new(resp))))
+        self.set_result(result.map(|resp| Box::new(RespPacket::from_resp_vec(resp))))
     }
 
     fn get_slowlog(&self) -> &Slowlog;
@@ -61,10 +60,10 @@ pub trait CmdTaskFactory {
     fn create_with(
         &self,
         another_task: &Self::Task,
-        resp: Resp,
+        resp: RespVec,
     ) -> (
         Self::Task,
-        Box<dyn Future<Item = Resp, Error = CommandError> + Send>,
+        Box<dyn Future<Item = RespVec, Error = CommandError> + Send>,
     );
 }
 
@@ -349,19 +348,7 @@ where
 
             let items: Vec<Box<RespPacket>> = tasks
                 .iter()
-                .map(|task| match task.drain_packet_data() {
-                    Some(data) => {
-                        // Tricky code here. The nil array will be ignored when encoded.
-                        // TODO: Refactor it by using enum to differentiate this two packet type.
-                        RespPacket::new_with_buf(Resp::Arr(Array::Nil), data)
-                    }
-                    None => {
-                        // TODO: remove the clone
-                        let resp = task.get_resp().clone();
-                        RespPacket::new(resp)
-                    }
-                })
-                .map(Box::new)
+                .map(|task| Box::new(task.get_packet()))
                 .collect();
 
             writer

@@ -2,8 +2,7 @@ use common::cluster::ReplPeer;
 use common::db::DBMapFlags;
 use common::utils::{CmdParseError, ThreadSafe};
 use futures::Future;
-use protocol::RedisClientError;
-use protocol::{Array, BulkStr, Resp};
+use protocol::{Array, BulkStr, RedisClientError, Resp};
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -32,7 +31,7 @@ pub struct ReplicatorMeta {
 }
 
 impl ReplicatorMeta {
-    pub fn from_resp(resp: &Resp) -> Result<Self, CmdParseError> {
+    pub fn from_resp<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<Self, CmdParseError> {
         parse_repl_meta(resp)
     }
 }
@@ -51,7 +50,7 @@ pub struct ReplicaMeta {
     pub masters: Vec<ReplPeer>,
 }
 
-fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
+fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, CmdParseError> {
     let arr = match resp {
         Resp::Arr(Array::Arr(ref arr)) => arr,
         _ => return Err(CmdParseError {}),
@@ -59,7 +58,7 @@ fn parse_repl_meta(resp: &Resp) -> Result<ReplicatorMeta, CmdParseError> {
 
     // Skip the "UMCTL SETREPL"
     let it = arr.iter().skip(2).flat_map(|resp| match resp {
-        Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str) {
+        Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str.as_ref()) {
             Ok(s) => Some(s.to_string()),
             _ => None,
         },

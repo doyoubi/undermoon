@@ -3,7 +3,7 @@ use atomic_option::AtomicOption;
 use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_timer::Delay;
-use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
+use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use std::iter;
 use std::str;
 use std::sync::atomic;
@@ -19,7 +19,7 @@ pub fn keep_connecting_and_sending_cmd_with_cached_client<F: RedisClientFactory,
     handle_result: Func,
 ) -> impl Future<Item = Option<F::Client>, Error = RedisClientError>
 where
-    Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
+    Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
     let infinite_stream = stream::iter_ok(iter::repeat(()));
     infinite_stream
@@ -70,7 +70,7 @@ pub fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
     handle_result: Func,
 ) -> impl Future<Item = (), Error = RedisClientError>
 where
-    Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
+    Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
     keep_connecting_and_sending_cmd_with_cached_client(
         None,
@@ -90,7 +90,7 @@ pub fn keep_sending_cmd<C: RedisClient, Func>(
     handle_result: Func,
 ) -> impl Future<Item = C, Error = (Option<C>, RedisClientError)>
 where
-    Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
+    Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
     let infinite_stream = stream::iter_ok(iter::repeat(()));
     infinite_stream.fold(client, move |client, ()| {
@@ -114,7 +114,7 @@ where
     })
 }
 
-pub fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
+pub fn retry_handle_func(response: RespVec) -> Result<(), RedisClientError> {
     if let Resp::Error(err) = response {
         let err_str = str::from_utf8(&err)
             .map(ToString::to_string)
@@ -225,7 +225,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
         handle_func: Func,
     ) -> Option<Box<dyn Future<Item = (), Error = RedisClientError> + Send>>
     where
-        Func: Fn(Resp, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
+        Func: Fn(RespVec, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
             + Clone
             + Send
             + 'static,
@@ -233,7 +233,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
         if let Some(stop_signal_receiver) = self.stop_signal_receiver.take(atomic::Ordering::SeqCst)
         {
             let data_clone = self.data.clone();
-            let handle_result = move |resp: Resp| -> Result<(), RedisClientError> {
+            let handle_result = move |resp: RespVec| -> Result<(), RedisClientError> {
                 handle_func(resp, &data_clone)
             };
             let sending = keep_connecting_and_sending_cmd(
@@ -285,6 +285,7 @@ mod tests {
     use ::common::utils::ThreadSafe;
     use ::protocol::BinSafeStr;
     use futures::future;
+    use protocol::Resp;
 
     #[derive(Debug)]
     struct Counter {
@@ -318,7 +319,7 @@ mod tests {
         fn execute(
             self,
             _command: Vec<BinSafeStr>,
-        ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send + 'static>
+        ) -> Box<dyn Future<Item = (Self, RespVec), Error = RedisClientError> + Send + 'static>
         {
             let client = self;
             if client.counter.count.load(Ordering::SeqCst) < client.counter.max_count {

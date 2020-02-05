@@ -4,7 +4,7 @@ use ::proxy::backend::CmdTask;
 use ::proxy::database::DBSendError;
 use futures::Future;
 use itertools::Itertools;
-use protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp};
+use protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
 use replication::replicator::ReplicatorError;
 use std::error::Error;
 use std::fmt;
@@ -113,7 +113,7 @@ impl SwitchArg {
     }
 }
 
-pub fn parse_switch_command(resp: &Resp) -> Option<SwitchArg> {
+pub fn parse_switch_command(resp: &RespSlice) -> Option<SwitchArg> {
     let command = get_resp_strings(resp)?;
     let mut it = command.into_iter();
     // Skip UMCTL TMPSWITCH
@@ -185,7 +185,7 @@ pub struct ScanResponse {
 }
 
 impl ScanResponse {
-    pub fn parse_scan(resp: Resp) -> Option<ScanResponse> {
+    pub fn parse_scan(resp: RespVec) -> Option<ScanResponse> {
         match resp {
             Resp::Arr(Array::Arr(ref resps)) => {
                 let index_data = resps.get(0).and_then(|resp| match resp {

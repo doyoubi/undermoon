@@ -92,8 +92,8 @@ impl ProxyDBMeta {
         &self.clusters_config
     }
 
-    pub fn from_resp(
-        resp: &Resp,
+    pub fn from_resp<T: AsRef<[u8]>>(
+        resp: &Resp<T>,
     ) -> Result<(Self, Result<(), ParseExtendedMetaError>), CmdParseError> {
         let arr = match resp {
             Resp::Arr(Array::Arr(ref arr)) => arr,
@@ -102,7 +102,7 @@ impl ProxyDBMeta {
 
         // Skip the "UMCTL SETDB"
         let it = arr.iter().skip(2).flat_map(|resp| match resp {
-            Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str) {
+            Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str.as_ref()) {
                 Ok(s) => Some(s.to_string()),
                 _ => None,
             },

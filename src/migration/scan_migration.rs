@@ -10,7 +10,7 @@ use futures::Sink;
 use futures::{future, Future};
 use futures::{stream, Stream};
 use futures_timer::Delay;
-use protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp};
+use protocol::{BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec};
 use std::iter;
 use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -182,7 +182,7 @@ impl ScanMigrationTask {
             .map_err(|(err, _)| err)
     }
 
-    fn handle_forward(resp: Resp) -> Result<(), RedisClientError> {
+    fn handle_forward(resp: RespVec) -> Result<(), RedisClientError> {
         match resp {
             Resp::Error(err_msg) => {
                 if &err_msg[..BUSYKEY_ERROR.as_bytes().len()] == BUSYKEY_ERROR.as_bytes() {

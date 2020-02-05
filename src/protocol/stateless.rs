@@ -1,18 +1,16 @@
-use super::decoder::{DecodeError, LF};
-use super::resp::{Array, BinSafeStr, BulkStr, Resp};
+use super::decoder::LF;
+use super::resp::{AdvanceIndex, ArrayIndex, BulkStrIndex, DataIndex, IndexedResp, RespIndex};
 use btoi::btoi;
-use futures::{Async, Future, Poll};
+use bytes::BytesMut;
+use memchr::memchr;
 use std::error::Error;
 use std::fmt;
-use std::io::{self, BufRead};
-use std::mem;
-use tokio::prelude::AsyncRead;
 
 #[derive(Debug)]
 pub enum ParseError {
     InvalidProtocol,
     NotEnoughData,
-    Io(io::Error),
+    UnexpectedErr,
 }
 
 impl fmt::Display for ParseError {
@@ -27,139 +25,83 @@ impl Error for ParseError {
     }
 
     fn cause(&self) -> Option<&dyn Error> {
-        match self {
-            ParseError::Io(err) => Some(err),
-            _ => None,
-        }
+        None
     }
 }
 
-pub fn stateless_decode_resp<R>(
-    reader: R,
-) -> impl Future<Item = (R, Resp), Error = DecodeError> + Send
-where
-    R: AsyncRead + io::BufRead + Send + 'static,
-{
-    RespParser::new(reader)
+pub fn parse_indexed_resp(buf: &mut BytesMut) -> Result<IndexedResp, ParseError> {
+    let (resp, consumed) = parse_resp(&buf)?;
+    let data = buf.split_to(consumed).freeze();
+    Ok(IndexedResp::new(resp, data))
 }
 
-#[derive(Debug)]
-enum State<R> {
-    Reading(R),
-    Empty,
-}
-
-pub struct RespParser<R: AsyncRead + io::BufRead + Send + 'static> {
-    state: State<R>,
-}
-
-impl<R: AsyncRead + io::BufRead + Send + 'static> RespParser<R> {
-    fn new(reader: R) -> Self {
-        Self {
-            state: State::Reading(reader),
-        }
-    }
-}
-
-impl<R: AsyncRead + io::BufRead + Send + 'static> Future for RespParser<R> {
-    type Item = (R, Resp);
-    type Error = DecodeError;
-
-    fn poll(&mut self) -> Poll<Self::Item, DecodeError> {
-        let (resp, consumed) = match self.state {
-            State::Reading(ref mut reader) => {
-                let buf = match reader.fill_buf() {
-                    Ok(buf) => buf,
-                    Err(e) => {
-                        if e.kind() == io::ErrorKind::WouldBlock {
-                            return Ok(Async::NotReady);
-                        }
-                        error!("io error when parsing {:?}", e);
-                        return Err(DecodeError::Io(e));
-                    }
-                };
-                match parse_resp(buf) {
-                    Ok(r) => r,
-                    Err(ParseError::NotEnoughData) => return Ok(Async::NotReady),
-                    Err(ParseError::InvalidProtocol) => return Err(DecodeError::InvalidProtocol),
-                    Err(ParseError::Io(e)) => {
-                        if e.kind() == io::ErrorKind::WouldBlock {
-                            return Ok(Async::NotReady);
-                        }
-                        error!("io error when parsing {:?}", e);
-                        return Err(DecodeError::Io(e));
-                    }
-                }
-            }
-            State::Empty => panic!("poll ReadUntil after it's done"),
-        };
-
-        match mem::replace(&mut self.state, State::Empty) {
-            State::Reading(mut reader) => {
-                reader.consume(consumed);
-                Ok(Async::Ready((reader, resp)))
-            }
-            State::Empty => unreachable!(),
-        }
-    }
-}
-
-pub fn parse_resp(buf: &[u8]) -> Result<(Resp, usize), ParseError> {
+pub fn parse_resp(buf: &[u8]) -> Result<(RespIndex, usize), ParseError> {
     if buf.is_empty() {
         return Err(ParseError::NotEnoughData);
     }
 
-    let prefix = buf[0] as char;
+    let prefix = *buf.get(0).ok_or_else(|| ParseError::UnexpectedErr)?;
+    let next_buf = buf.get(1..).ok_or_else(|| ParseError::InvalidProtocol)?;
+
     match prefix {
-        '$' => {
-            let (v, consumed) = parse_bulk_str(&buf[1..])?;
-            Ok((Resp::Bulk(v), 1 + consumed))
+        b'$' => {
+            let (mut v, consumed) = parse_bulk_str(next_buf)?;
+            v.advance(1);
+            Ok((RespIndex::Bulk(v), 1 + consumed))
         }
-        '+' => {
-            let (v, consumed) = parse_line(&buf[1..])?;
-            Ok((Resp::Simple(v), 1 + consumed))
+        b'+' => {
+            let (mut v, consumed) = parse_line(next_buf)?;
+            v.advance(1);
+            Ok((RespIndex::Simple(v), 1 + consumed))
         }
-        ':' => {
-            let (v, consumed) = parse_line(&buf[1..])?;
-            Ok((Resp::Integer(v), 1 + consumed))
+        b':' => {
+            let (mut v, consumed) = parse_line(next_buf)?;
+            v.advance(1);
+            Ok((RespIndex::Integer(v), 1 + consumed))
         }
-        '-' => {
-            let (v, consumed) = parse_line(&buf[1..])?;
-            Ok((Resp::Error(v), 1 + consumed))
+        b'-' => {
+            let (mut v, consumed) = parse_line(next_buf)?;
+            v.advance(1);
+            Ok((RespIndex::Error(v), 1 + consumed))
         }
-        '*' => {
-            let (v, consumed) = parse_array(&buf[1..])?;
-            Ok((Resp::Arr(v), 1 + consumed))
+        b'*' => {
+            let (mut v, consumed) = parse_array(next_buf)?;
+            v.advance(1);
+            Ok((RespIndex::Arr(v), 1 + consumed))
         }
         prefix => {
-            error!("Unexpected prefix {:?}", prefix);
+            debug!("invalid prefix {:?}", prefix);
             Err(ParseError::InvalidProtocol)
         }
     }
 }
 
-fn parse_array(buf: &[u8]) -> Result<(Array, usize), ParseError> {
+fn parse_array(buf: &[u8]) -> Result<(ArrayIndex, usize), ParseError> {
     let (len, mut consumed) = parse_len(buf)?;
     if len < 0 {
-        return Ok((Array::Nil, consumed));
+        return Ok((ArrayIndex::Nil, consumed));
     }
 
     let array_size = len as usize;
     let mut array = Vec::with_capacity(array_size);
 
     for _ in 0..array_size {
-        let (v, element_consumed) = parse_resp(&buf[consumed..])?;
+        let next_buf = buf
+            .get(consumed..)
+            .ok_or_else(|| ParseError::InvalidProtocol)?;
+        let (mut v, element_consumed) = parse_resp(next_buf)?;
+        v.advance(consumed);
         consumed += element_consumed;
         array.push(v);
     }
 
-    Ok((Array::Arr(array), consumed))
+    Ok((ArrayIndex::Arr(array), consumed))
 }
 
-fn parse_bulk_str(buf: &[u8]) -> Result<(BulkStr, usize), ParseError> {
+fn parse_bulk_str(buf: &[u8]) -> Result<(BulkStrIndex, usize), ParseError> {
     let (len, consumed) = parse_len(buf)?;
     if len < 0 {
-        return Ok((BulkStr::Nil, consumed));
+        return Ok((BulkStrIndex::Nil, consumed));
     }
 
     let content_size = len as usize;
@@ -167,103 +109,109 @@ fn parse_bulk_str(buf: &[u8]) -> Result<(BulkStr, usize), ParseError> {
         return Err(ParseError::NotEnoughData);
     }
 
-    Ok((
-        BulkStr::Str(buf[consumed..consumed + content_size].to_vec()),
-        consumed + content_size + 2,
-    ))
+    let s = DataIndex(consumed, consumed + content_size);
+    Ok((BulkStrIndex::Str(s), consumed + content_size + 2))
 }
 
 fn parse_len(buf: &[u8]) -> Result<(i64, usize), ParseError> {
-    let (line, consumed) = parse_line(buf)?;
-    // TODO: optimize it by not allocating the Vec
-    let len = btoi(&line).map_err(|_| ParseError::InvalidProtocol)?;
+    let (data_index, consumed) = parse_line(buf)?;
+    let next_buf = buf
+        .get(data_index.to_range())
+        .ok_or_else(|| ParseError::UnexpectedErr)?;
+
+    let len = btoi(&next_buf).map_err(|_| ParseError::InvalidProtocol)?;
     Ok((len, consumed))
 }
 
-fn parse_line(mut buf: &[u8]) -> Result<(BinSafeStr, usize), ParseError> {
-    let mut line = Vec::new();
-    let consumed = buf.read_until(LF, &mut line).map_err(ParseError::Io)?;
-    if consumed == 0 || line[consumed - 1] != LF {
-        return Err(ParseError::NotEnoughData);
-    }
-
-    if consumed == 1 {
+fn parse_line(buf: &[u8]) -> Result<(DataIndex, usize), ParseError> {
+    let lf_index = memchr(LF, &buf).ok_or_else(|| ParseError::NotEnoughData)?;
+    if lf_index == 0 {
         return Err(ParseError::InvalidProtocol);
     }
+
     // s >= 2
     // Just ignore the CR
-    line.truncate(consumed - 2);
-    Ok((line, consumed))
+    let line = DataIndex(0, lf_index + 1 - 2);
+    Ok((line, lf_index + 1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str;
+    use crate::protocol::resp::{ArraySlice, BulkStrSlice, RespSlice};
 
     #[test]
-    fn test_parse_len() {
-        let r = parse_len("233\r\n".as_bytes());
+    fn test_parse_len_bytes() {
+        let r = parse_len(b"233\r\n");
         assert!(r.is_ok());
         let (len, s) = r.expect("test_parse_len");
         assert_eq!(s, 5);
         assert_eq!(len, 233);
 
-        let r = parse_len("-233\r\n".as_bytes());
+        let r = parse_len(b"-233\r\n");
         assert!(r.is_ok());
         let (len, s) = r.expect("test_parse_len");
         assert_eq!(s, 6);
         assert_eq!(len, -233);
 
-        let r = parse_len("2a3\r\n".as_bytes());
+        let r = parse_len(b"2a3\r\n");
         assert!(r.is_err());
     }
 
     #[test]
-    fn test_parse_line() {
-        let r = parse_line("233\r\n".as_bytes());
+    fn test_parse_line_bytes() {
+        let data = b"233\r\n";
+        let r = parse_line(data);
         assert!(r.is_ok());
         let (b, l) = r.expect("test_parse_line");
         assert_eq!(l, 5);
-        assert_eq!(str::from_utf8(&b), Ok("233"));
+        assert_eq!(&data[b.to_range()], b"233");
 
-        let r = parse_line("\r\n".as_bytes());
+        let data = b"\r\n";
+        let r = parse_line(data);
         assert!(r.is_ok());
         let (b, l) = r.expect("test_parse_line");
         assert_eq!(l, 2);
-        assert_eq!(str::from_utf8(&b), Ok(""));
+        assert_eq!(&data[b.to_range()], b"".as_ref());
     }
 
     #[test]
-    fn test_parse_bulk_str() {
-        let r = parse_bulk_str("2\r\nab\r\n".as_bytes());
+    fn test_parse_bulk_str_bytes() {
+        let data = b"2\r\nab\r\n";
+        let r = parse_bulk_str(data);
         assert!(r.is_ok());
         let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 7);
-        assert_eq!(BulkStr::Str(String::from("ab").into_bytes()), content);
+        assert_eq!(
+            Some(b"ab".as_ref()),
+            content.try_to_range().map(|r| &data[r])
+        );
 
-        let r = parse_bulk_str("-1\r\n".as_bytes());
+        let r = parse_bulk_str(b"-1\r\n");
         assert!(r.is_ok());
         let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 4);
-        assert_eq!(BulkStr::Nil, content);
+        assert_eq!(BulkStrIndex::Nil, content);
 
-        let r = parse_bulk_str("2a3\r\nab\r\n".as_bytes());
+        let r = parse_bulk_str(b"2a3\r\nab\r\n");
         assert!(r.is_err());
 
-        let r = parse_bulk_str("0\r\n\r\n".as_bytes());
+        let r = parse_bulk_str(b"0\r\n\r\n");
         assert!(r.is_ok());
         let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 5);
-        assert_eq!(BulkStr::Str(String::from("").into_bytes()), content);
+        assert_eq!(Some(b"".as_ref()), content.try_to_range().map(|r| &data[r]));
 
-        let r = parse_bulk_str("1\r\na\r\n".as_bytes());
+        let r = parse_bulk_str(b"1\r\na\r\n");
         assert!(r.is_ok());
         let (content, s) = r.expect("test_parse_bulk_str");
         assert_eq!(s, 6);
-        assert_eq!(BulkStr::Str(String::from("a").into_bytes()), content);
+        assert_eq!(
+            Some(b"a".as_ref()),
+            content.try_to_range().map(|r| &data[r])
+        );
 
-        let r = parse_bulk_str("2\r\na\r\n".as_bytes());
+        let r = parse_bulk_str(b"2\r\na\r\n");
         assert!(r.is_err());
 
         // TODO: Support this check
@@ -272,32 +220,34 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_array() {
-        let r = parse_array("2\r\n$1\r\na\r\n$2\r\nbc\r\n".as_bytes());
+    fn test_parse_array_bytes() {
+        let data = b"2\r\n$1\r\na\r\n$2\r\nbc\r\n";
+        let r = parse_array(data);
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_array");
         assert_eq!(s, 18);
+        let arr = a.map_to_slice(data);
         assert_eq!(
-            Array::Arr(vec![
-                Resp::Bulk(BulkStr::Str(String::from("a").into_bytes())),
-                Resp::Bulk(BulkStr::Str(String::from("bc").into_bytes())),
+            ArraySlice::Arr(vec![
+                RespSlice::Bulk(BulkStrSlice::Str(b"a")),
+                RespSlice::Bulk(BulkStrSlice::Str(b"bc")),
             ]),
-            a
+            arr
         );
 
-        let r = parse_array("-1\r\n".as_bytes());
+        let r = parse_array(b"-1\r\n");
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_array");
         assert_eq!(s, 4);
-        assert_eq!(Array::Nil, a);
+        assert_eq!(ArrayIndex::Nil, a);
 
-        let r = parse_array("0\r\n".as_bytes());
+        let r = parse_array(b"0\r\n");
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_array");
         assert_eq!(s, 3);
-        assert_eq!(Array::Arr(vec![]), a);
+        assert_eq!(ArrayIndex::Arr(vec![]), a);
 
-        let r = parse_array("1\r\n$2\r\na\r\n".as_bytes());
+        let r = parse_array(b"1\r\n$2\r\na\r\n");
         assert!(r.is_err());
 
         // TODO: Support this check
@@ -306,44 +256,48 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_resp() {
-        let r = parse_resp("*-1\r\n".as_bytes());
+    fn test_parse_resp_bytes() {
+        let r = parse_resp(b"*-1\r\n");
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 5);
-        assert_eq!(Resp::Arr(Array::Nil), a);
+        assert_eq!(RespIndex::Arr(ArrayIndex::Nil), a);
 
-        let r = parse_resp("*0\r\n".as_bytes());
+        let r = parse_resp(b"*0\r\n");
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 4);
-        assert_eq!(Resp::Arr(Array::Arr(vec![])), a);
+        assert_eq!(RespIndex::Arr(ArrayIndex::Arr(vec![])), a);
 
-        let r = parse_resp("-abc\r\n".as_bytes());
+        let data = b"-abc\r\n";
+        let r = parse_resp(data);
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 6);
-        assert_eq!(Resp::Error(String::from("abc").into_bytes()), a);
+        assert_eq!(RespSlice::Error(b"abc"), a.map_to_slice(data));
 
-        let r = parse_resp(":233\r\n".as_bytes());
+        let data = b":233\r\n";
+        let r = parse_resp(data);
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 6);
-        assert_eq!(Resp::Integer(String::from("233").into_bytes()), a);
+        assert_eq!(RespSlice::Integer(b"233"), a.map_to_slice(data));
 
-        let r = parse_resp("+233\r\n".as_bytes());
+        let data = b"+233\r\n";
+        let r = parse_resp(data);
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 6);
-        assert_eq!(Resp::Simple(String::from("233").into_bytes()), a);
+        assert_eq!(RespSlice::Simple(b"233"), a.map_to_slice(data));
 
-        let r = parse_resp("$3\r\nfoo\r\n".as_bytes());
+        let data = b"$3\r\nfoo\r\n";
+        let r = parse_resp(data);
         assert!(r.is_ok());
         let (a, s) = r.expect("test_parse_resp");
         assert_eq!(s, 9);
         assert_eq!(
-            Resp::Bulk(BulkStr::Str(String::from("foo").into_bytes())),
-            a
+            RespSlice::Bulk(BulkStrSlice::Str(b"foo")),
+            a.map_to_slice(data),
         );
     }
 }
