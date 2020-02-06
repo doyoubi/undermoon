@@ -85,7 +85,7 @@ fn main() {
         config.clone(),
         Arc::new(client_factory),
         slow_request_logger.clone(),
-        meta_map.clone(),
+        meta_map,
     );
     let server = ServerProxyService::new(config.clone(), forward_handler, slow_request_logger);
 

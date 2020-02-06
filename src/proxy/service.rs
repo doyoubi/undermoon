@@ -163,7 +163,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                     let (reader_handler, writer_handler) =
                         new_future_group(reader_handler, writer_handler);
 
-                    let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer.clone());
+                    let (p1, p2, p3, p4) = (peer.clone(), peer.clone(), peer.clone(), peer);
                     tokio::spawn(
                         reader_handler
                             .map(move |()| info!("Read IO closed {}", p1))

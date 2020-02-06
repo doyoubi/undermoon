@@ -221,9 +221,7 @@ where
         cmd_task: <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
     ) -> Result<(), DBSendError<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>>
     {
-        cmd_task
-            .get_slowlog()
-            .log_event(TaskEvent::SentToMigrationDB);
+        cmd_task.log_event(TaskEvent::SentToMigrationDB);
         self.send_to_db(cmd_task)
     }
 

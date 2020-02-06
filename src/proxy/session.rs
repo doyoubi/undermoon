@@ -10,7 +10,7 @@ use ::common::utils::ThreadSafe;
 use common::batching;
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Sink, Stream};
-use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespSlice, RespVec};
+use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespVec};
 use std::boxed::Box;
 use std::error::Error;
 use std::fmt;
@@ -67,6 +67,14 @@ impl CmdCtx {
     pub fn change_cmd_element(&mut self, index: usize, data: Vec<u8>) -> bool {
         self.reply_sender.get_mut_cmd().change_element(index, data)
     }
+
+    pub fn get_cmd_type(&self) -> CmdType {
+        self.reply_sender.get_cmd().get_type()
+    }
+
+    pub fn get_data_cmd_type(&self) -> DataCmdType {
+        self.reply_sender.get_cmd().get_data_cmd_type()
+    }
 }
 
 // Make sure that ctx will always be sent back.
@@ -77,23 +85,13 @@ impl Drop for CmdCtx {
 }
 
 impl CmdTask for CmdCtx {
+    type Pkt = RespPacket;
+
     fn get_key(&self) -> Option<&[u8]> {
         self.get_cmd().get_key()
     }
 
-    fn get_resp_slice(&self) -> RespSlice {
-        self.reply_sender.get_cmd().get_resp_slice()
-    }
-
-    fn get_cmd_type(&self) -> CmdType {
-        self.reply_sender.get_cmd().get_type()
-    }
-
-    fn get_data_cmd_type(&self) -> DataCmdType {
-        self.reply_sender.get_cmd().get_data_cmd_type()
-    }
-
-    fn set_result(self, result: CommandResult) {
+    fn set_result(self, result: CommandResult<Self::Pkt>) {
         let slowlog = self.slowlog.clone();
         let task_result = result.map(|packet| Box::new(TaskReply::new(packet, slowlog)));
         let res = self.reply_sender.send(task_result);
@@ -102,12 +100,12 @@ impl CmdTask for CmdCtx {
         }
     }
 
-    fn get_packet(&self) -> RespPacket {
+    fn get_packet(&self) -> Self::Pkt {
         self.reply_sender.get_cmd().get_packet()
     }
 
-    fn get_slowlog(&self) -> &Slowlog {
-        &self.slowlog
+    fn log_event(&self, event: TaskEvent) {
+        self.slowlog.log_event(event);
     }
 }
 
@@ -181,7 +179,7 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, reply_sender: CmdReplySender) {
         let cmd_ctx = CmdCtx::new(self.db.clone(), reply_sender, self.session_id);
-        cmd_ctx.get_slowlog().log_event(TaskEvent::Created);
+        cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx);
     }
 
@@ -204,7 +202,7 @@ pub fn handle_conn<H>(
 where
     H: CmdHandler + Send + Sync + 'static,
 {
-    let (writer, reader) = RespCodec {}.framed(sock).split();
+    let (writer, reader) = RespCodec::default().framed(sock).split();
 
     let (tx, rx) = mpsc::channel(channel_size);
 

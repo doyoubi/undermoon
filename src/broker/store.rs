@@ -283,8 +283,8 @@ impl MetaStore {
 
         let repl = ReplMeta::new(Role::Master, vec![]);
         let new_node = Node::new(
-            node_address.clone(),
-            proxy_address.clone(),
+            node_address,
+            proxy_address,
             cluster.get_name().clone(),
             vec![],
             repl,
@@ -676,7 +676,7 @@ impl MetaStore {
                 .ok_or(MetaStoreError::NodeNotFound));
             master.get_mut_repl().add_peer(ReplPeer {
                 node_address: replica_node_address.clone(),
-                proxy_address: replica_proxy_address.clone(),
+                proxy_address: replica_proxy_address,
             });
         }
 
@@ -685,8 +685,8 @@ impl MetaStore {
                 .get_mut_node(&replica_node_address)
                 .ok_or_else(|| MetaStoreError::NodeNotFound));
             replica.get_mut_repl().add_peer(ReplPeer {
-                node_address: master_node_address.clone(),
-                proxy_address: master_proxy_address.clone(),
+                node_address: master_node_address,
+                proxy_address: master_proxy_address,
             });
             replica.get_mut_repl().set_role(Role::Replica);
         }
@@ -1093,7 +1093,7 @@ impl MetaStore {
 
         *try_state!(cluster
             .get_mut_node(&node_address)
-            .ok_or_else(|| MetaStoreError::NodeNotFound)) = master_node.clone();
+            .ok_or_else(|| MetaStoreError::NodeNotFound)) = master_node;
         *try_state!(cluster
             .get_mut_node(&peer_node_address)
             .ok_or_else(|| MetaStoreError::NodeNotFound)) = replica_node.clone();
@@ -1261,7 +1261,7 @@ impl MetaStore {
 
             let new_node = Node::new(
                 node_address,
-                proxy_address.clone(),
+                proxy_address,
                 node.get_cluster_name().clone(),
                 new_slot_ranges,
                 node.get_repl_meta().clone(),

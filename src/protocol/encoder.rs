@@ -1,17 +1,17 @@
 use super::resp::{Array, BinSafeStr, BulkStr, Resp, RespVec};
 use std::io;
 
-pub fn command_to_buf(buf: &mut Vec<u8>, command: Vec<BinSafeStr>) {
+pub fn command_to_buf(buf: &mut Vec<u8>, command: Vec<BinSafeStr>) -> io::Result<usize> {
     let arr: Vec<RespVec> = command
         .into_iter()
         .map(|s| Resp::Bulk(BulkStr::Str(s)))
         .collect();
     let resp = Resp::Arr(Array::Arr(arr));
-    resp_to_buf(buf, &resp);
+    resp_to_buf(buf, &resp)
 }
 
-pub fn resp_to_buf(buf: &mut Vec<u8>, resp: &RespVec) {
-    encode_resp(buf, resp).expect("resp_to_buf"); // TODO: remove expect
+pub fn resp_to_buf(buf: &mut Vec<u8>, resp: &RespVec) -> io::Result<usize> {
+    encode_resp(buf, resp)
 }
 
 pub fn encode_resp<W, T: AsRef<[u8]>>(writer: &mut W, resp: &Resp<T>) -> io::Result<usize>

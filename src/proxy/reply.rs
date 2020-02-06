@@ -34,7 +34,11 @@ pub struct DecompressCommitHandler {
 impl CmdTaskResultHandler for DecompressCommitHandler {
     type Task = CmdCtx;
 
-    fn handle_task(&self, cmd_ctx: Self::Task, result: BackendResult) {
+    fn handle_task(
+        &self,
+        cmd_ctx: Self::Task,
+        result: BackendResult<<Self::Task as CmdTask>::Pkt>,
+    ) {
         let mut packet = match result {
             Ok(pkt) => pkt,
             Err(err) => {
@@ -84,7 +88,11 @@ pub struct ReplyCommitHandler;
 impl CmdTaskResultHandler for ReplyCommitHandler {
     type Task = CmdCtx;
 
-    fn handle_task(&self, cmd_ctx: Self::Task, result: BackendResult) {
+    fn handle_task(
+        &self,
+        cmd_ctx: Self::Task,
+        result: BackendResult<<Self::Task as CmdTask>::Pkt>,
+    ) {
         let packet = match result {
             Ok(pkt) => pkt,
             Err(err) => {

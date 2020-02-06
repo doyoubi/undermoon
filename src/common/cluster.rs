@@ -24,10 +24,10 @@ impl MigrationMeta {
         } = self;
         vec![
             epoch.to_string(),
-            src_proxy_address.clone(),
-            src_node_address.clone(),
-            dst_proxy_address.clone(),
-            dst_node_address.clone(),
+            src_proxy_address,
+            src_node_address,
+            dst_proxy_address,
+            dst_node_address,
         ]
     }
 

@@ -1,13 +1,13 @@
-use super::command::{CmdType, CommandError, CommandResult, DataCmdType};
+use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
-use super::slowlog::{Slowlog, TaskEvent};
+use super::slowlog::TaskEvent;
 use crate::common::batching::Chunks;
 use common::future_group::new_future_group;
 use common::utils::{gen_moved, get_slot, revolve_first_address, ThreadSafe};
 use futures::sync::mpsc;
 use futures::Sink;
 use futures::{future, stream, Future, Stream};
-use protocol::{DecodeError, Resp, RespCodec, RespPacket, RespSlice, RespVec};
+use protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::error::Error;
@@ -22,12 +22,16 @@ use tokio;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
 
-pub type BackendResult = Result<Box<RespPacket>, BackendError>;
+pub type BackendResult<T> = Result<Box<T>, BackendError>;
 
 pub trait CmdTaskResultHandler: Send + 'static {
     type Task: CmdTask;
 
-    fn handle_task(&self, cmd_task: Self::Task, result: BackendResult);
+    fn handle_task(
+        &self,
+        cmd_task: Self::Task,
+        result: BackendResult<<Self::Task as CmdTask>::Pkt>,
+    );
 }
 
 pub trait CmdTaskResultHandlerFactory: ThreadSafe {
@@ -37,21 +41,20 @@ pub trait CmdTaskResultHandlerFactory: ThreadSafe {
 }
 
 pub trait CmdTask: ThreadSafe + fmt::Debug {
+    type Pkt: Packet + Send;
+
     fn get_key(&self) -> Option<&[u8]>;
-    fn get_resp_slice(&self) -> RespSlice;
-    fn get_cmd_type(&self) -> CmdType;
-    fn get_data_cmd_type(&self) -> DataCmdType;
-    fn set_result(self, result: CommandResult);
-    fn get_packet(&self) -> RespPacket;
+    fn set_result(self, result: CommandResult<Self::Pkt>);
+    fn get_packet(&self) -> Self::Pkt;
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)
     where
         Self: Sized,
     {
-        self.set_result(result.map(|resp| Box::new(RespPacket::from_resp_vec(resp))))
+        self.set_result(result.map(|resp| Box::new(Self::Pkt::from(resp))))
     }
 
-    fn get_slowlog(&self) -> &Slowlog;
+    fn log_event(&self, event: TaskEvent);
 }
 
 pub trait CmdTaskFactory {
@@ -67,6 +70,7 @@ pub trait CmdTaskFactory {
     );
 }
 
+// Type alias can't work with trait bound so we need to define again.
 pub enum ReqTask<T: CmdTask> {
     Simple(T),
     Multi(Vec<T>),
@@ -278,9 +282,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
     }
 
     pub fn send(&self, cmd_task: H::Task) -> Result<(), BackendSendError<H::Task>> {
-        cmd_task
-            .get_slowlog()
-            .log_event(TaskEvent::SentToWritingQueue);
+        cmd_task.log_event(TaskEvent::SentToWritingQueue);
         self.tx
             .unbounded_send(cmd_task)
             .map(|_| ())
@@ -307,7 +309,7 @@ pub fn handle_backend<H>(
 where
     H: CmdTaskResultHandler,
 {
-    let (writer, reader) = RespCodec {}.framed(sock).split();
+    let (writer, reader) = RespCodec::default().framed(sock).split();
 
     let (tx, rx) = mpsc::channel(channel_size);
 
@@ -335,18 +337,17 @@ fn handle_write<S, W, T>(
 ) -> impl Future<Item = (), Error = BackendError> + Send
 where
     S: Stream<Item = Vec<T>, Error = ()> + Send + 'static,
-    W: Sink<SinkItem = Box<RespPacket>, SinkError = io::Error> + Send + 'static,
+    W: Sink<SinkItem = Box<<T as CmdTask>::Pkt>, SinkError = io::Error> + Send + 'static,
     T: CmdTask,
 {
     task_receiver
         .map_err(|()| BackendError::Canceled)
         .fold((writer, tx), |(writer, tx), tasks| {
             for task in tasks.iter() {
-                task.get_slowlog()
-                    .log_event(TaskEvent::WritingQueueReceived);
+                task.log_event(TaskEvent::WritingQueueReceived);
             }
 
-            let items: Vec<Box<RespPacket>> = tasks
+            let items: Vec<Box<<T as CmdTask>::Pkt>> = tasks
                 .iter()
                 .map(|task| Box::new(task.get_packet()))
                 .collect();
@@ -355,7 +356,7 @@ where
                 .send_all(stream::iter_ok::<_, io::Error>(items))
                 .then(move |res| {
                     for task in tasks.iter() {
-                        task.get_slowlog().log_event(TaskEvent::SentToBackend);
+                        task.log_event(TaskEvent::SentToBackend);
                     }
 
                     let fut: Box<dyn Future<Item = _, Error = BackendError> + Send> = match res {
@@ -401,7 +402,7 @@ fn handle_read<H, R>(
     rx: mpsc::Receiver<H::Task>,
 ) -> impl Future<Item = (), Error = BackendError> + Send
 where
-    R: Stream<Item = Box<RespPacket>, Error = DecodeError> + Send + 'static,
+    R: Stream<Item = Box<<H::Task as CmdTask>::Pkt>, Error = DecodeError> + Send + 'static,
     H: CmdTaskResultHandler,
 {
     let rx = rx.into_future();
@@ -425,7 +426,7 @@ where
             })
             .and_then(|(task_opt, rx)| match task_opt {
                 Some(task) => {
-                    task.get_slowlog().log_event(TaskEvent::ReceivedFromBackend);
+                    task.log_event(TaskEvent::ReceivedFromBackend);
                     handler.handle_task(task, Ok(packet));
                     future::ok((handler, rx.into_future()))
                 }

@@ -421,7 +421,7 @@ where
             ReqAdaptorSenderFactory::new(RedirectionSenderFactory::default());
         Self {
             _mgr_config: mgr_config,
-            meta: meta.clone(),
+            meta,
             state: Arc::new(AtomicMigrationState::new()),
             _client_factory: client_factory,
             _sender_factory: sender_factory,

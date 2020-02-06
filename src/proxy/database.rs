@@ -185,10 +185,10 @@ where
     pub fn auto_select_db(&self) -> Option<String> {
         {
             let local = &self.local_dbs;
-            if local.len() == 1 {
-                return local.keys().next().cloned();
-            } else if local.len() > 1 {
-                return None;
+            match local.len() {
+                0 => (),
+                1 => return local.keys().next().cloned(),
+                _ => return None,
             }
         }
         {
