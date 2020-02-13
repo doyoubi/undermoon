@@ -1,7 +1,8 @@
-use ::protocol::RespVec;
+use crate::protocol::RespVec;
+use crate::protocol::{Array, BulkStr, Resp};
 use caseless;
 use crc16::{State, XMODEM};
-use protocol::{Array, BulkStr, Resp};
+use futures::{stream, Stream};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
 
@@ -15,7 +16,7 @@ pub fn has_flags(s: &str, delimiter: char, flag: &'static str) -> bool {
         .any(|s| caseless::canonical_caseless_match_str(s, flag))
 }
 
-pub fn revolve_first_address(address: &str) -> Option<SocketAddr> {
+pub fn resolve_first_address(address: &str) -> Option<SocketAddr> {
     match address.to_socket_addrs() {
         Ok(mut address_list) => match address_list.next() {
             Some(address) => Some(address),
@@ -131,6 +132,14 @@ pub const SLOT_NUM: usize = 16384;
 
 pub const MIGRATING_TAG: &str = "MIGRATING";
 pub const IMPORTING_TAG: &str = "IMPORTING";
+
+pub fn vec_result_to_stream<T, E>(res: Result<Vec<T>, E>) -> impl Stream<Item = Result<T, E>> {
+    let elements = match res {
+        Ok(v) => v.into_iter().map(Ok).collect(),
+        Err(err) => vec![Err(err)],
+    };
+    stream::iter(elements)
+}
 
 #[cfg(test)]
 mod tests {

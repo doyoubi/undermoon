@@ -1,19 +1,19 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
-use ::common::cluster::{MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
-use ::common::config::AtomicMigrationConfig;
-use ::common::db::HostDBMap;
-use ::common::utils::{get_slot, ThreadSafe};
-use ::protocol::RedisClientFactory;
-use ::protocol::Resp;
-use ::proxy::backend::{CmdTask, CmdTaskFactory, ReqTaskSender, ReqTaskSenderFactory};
-use ::proxy::database::{DBSendError, DBTag};
-use ::proxy::slowlog::TaskEvent;
-use futures::Future;
+use crate::common::cluster::{MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
+use crate::common::config::AtomicMigrationConfig;
+use crate::common::db::HostDBMap;
+use crate::common::utils::{get_slot, ThreadSafe};
+use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
+use crate::migration::task::MgrSubCmd;
+use crate::protocol::RedisClientFactory;
+use crate::protocol::Resp;
+use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTaskSender, ReqTaskSenderFactory};
+use crate::proxy::database::{DBSendError, DBTag};
+use crate::proxy::service::ServerProxyConfig;
+use crate::proxy::slowlog::TaskEvent;
+use futures::TryFutureExt;
 use itertools::Either;
-use migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
-use migration::task::MgrSubCmd;
-use proxy::service::ServerProxyConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -108,24 +108,32 @@ where
                         "spawn slot migrating task {} {} {} {}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
-                    tokio::spawn(migrating_task.start().map_err(move |e| {
-                        error!(
-                            "master slot task {} {} {} {} exit {:?}",
-                            db_name, epoch, slot_range_start, slot_range_end, e
-                        )
-                    }));
+                    let migrating_task = migrating_task.clone();
+                    let fut = async move {
+                        if let Err(err) = migrating_task.start().await {
+                            error!(
+                                "master slot task {} {} {} {} exit {:?}",
+                                db_name, epoch, slot_range_start, slot_range_end, err
+                            );
+                        }
+                    };
+                    tokio::spawn(fut);
                 }
                 Either::Right(importing_task) => {
                     info!(
                         "spawn slot importing replica {} {} {}-{}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
-                    tokio::spawn(importing_task.start().map_err(move |e| {
-                        error!(
-                            "replica slot task {} {} {}-{} exit {:?}",
-                            db_name, epoch, slot_range_start, slot_range_end, e
-                        )
-                    }));
+                    let importing_task = importing_task.clone();
+                    let fut = async move {
+                        if let Err(err) = importing_task.start().await {
+                            error!(
+                                "replica slot task {} {} {}-{} exit {:?}",
+                                db_name, epoch, slot_range_start, slot_range_end, err
+                            );
+                        }
+                    };
+                    tokio::spawn(fut);
                 }
             }
         }
@@ -155,7 +163,7 @@ where
             if let Some(fut) = task.start() {
                 let address = task.get_address();
                 tokio::spawn(
-                    fut.map(move |()| info!("deleting keys for {} stopped", address))
+                    fut.map_ok(move |()| info!("deleting keys for {} stopped", address))
                         .map_err(move |e| match e {
                             MigrationError::Canceled => {
                                 info!("task for deleting keys get canceled")

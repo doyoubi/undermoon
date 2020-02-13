@@ -1,10 +1,10 @@
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use ::protocol::RespPacket;
-use common::config::{ClusterConfig, CompressionStrategy};
-use protocol::{BulkStr, Resp};
-use proxy::database::DBTag;
+use crate::common::config::{ClusterConfig, CompressionStrategy};
+use crate::protocol::RespPacket;
+use crate::protocol::{BulkStr, Resp};
+use crate::proxy::database::DBTag;
 use std::error::Error;
 use std::fmt;
 use std::io;

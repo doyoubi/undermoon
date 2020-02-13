@@ -1,14 +1,15 @@
-use ::common::cluster::MigrationTaskMeta;
-use ::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
-use ::proxy::backend::CmdTask;
-use ::proxy::database::DBSendError;
+use crate::common::cluster::MigrationTaskMeta;
+use crate::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
+use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
+use crate::proxy::backend::CmdTask;
+use crate::proxy::database::DBSendError;
+use crate::replication::replicator::ReplicatorError;
 use futures::Future;
 use itertools::Itertools;
-use protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
-use replication::replicator::ReplicatorError;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::pin::Pin;
 use std::str;
 use std::sync::atomic::{AtomicU16, Ordering};
 
@@ -70,8 +71,9 @@ impl AtomicMigrationState {
 pub trait MigratingTask: ThreadSafe {
     type Task: CmdTask;
 
-    fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
+    fn start<'s>(&'s self)
+        -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
+    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
     fn get_state(&self) -> MigrationState;
 }
@@ -79,8 +81,9 @@ pub trait MigratingTask: ThreadSafe {
 pub trait ImportingTask: ThreadSafe {
     type Task: CmdTask;
 
-    fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
+    fn start<'s>(&'s self)
+        -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
+    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
     fn get_state(&self) -> MigrationState;
     fn handle_switch(

@@ -1,17 +1,18 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
-use common::cluster::{Host, MigrationTaskMeta};
-use common::utils::ThreadSafe;
-use futures::{future, Future, Stream};
-use reqwest::r#async as request_async; // async is a keyword later
+use crate::common::cluster::{Host, MigrationTaskMeta};
+use crate::common::utils::ThreadSafe;
+use futures::Future;
+use reqwest;
+use std::pin::Pin;
 
 #[derive(Clone)]
 pub struct HttpMetaManipulationBroker {
     broker_address: String,
-    client: request_async::Client,
+    client: reqwest::Client,
 }
 
 impl HttpMetaManipulationBroker {
-    pub fn new(broker_address: String, client: request_async::Client) -> Self {
+    pub fn new(broker_address: String, client: reqwest::Client) -> Self {
         HttpMetaManipulationBroker {
             broker_address,
             client,
@@ -21,86 +22,102 @@ impl HttpMetaManipulationBroker {
 
 impl ThreadSafe for HttpMetaManipulationBroker {}
 
-impl MetaManipulationBroker for HttpMetaManipulationBroker {
-    fn replace_proxy(
+impl HttpMetaManipulationBroker {
+    async fn replace_proxy_impl(
         &self,
         failed_proxy_address: String,
-    ) -> Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send> {
+    ) -> Result<Host, MetaManipulationBrokerError> {
         let url = format!(
             "http://{}/api/proxies/failover/{}",
             self.broker_address, failed_proxy_address
         );
-        let request = self.client.post(&url).send();
-        let fut = request
-            .map_err(|e| {
-                error!("Failed to replace proxy {:?}", e);
+        let response = self.client.post(&url).send().await.map_err(|e| {
+            error!("Failed to replace proxy {:?}", e);
+            MetaManipulationBrokerError::InvalidReply
+        })?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            response.json().await.map_err(|e| {
+                error!("Failed to get json payload {:?}", e);
                 MetaManipulationBrokerError::InvalidReply
             })
-            .and_then(|mut response| {
-                let status = response.status();
-                let fut: Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send> =
-                    if status.is_success() {
-                        let host_fut = response.json().map_err(|e| {
-                            error!("Failed to get json payload {:?}", e);
-                            MetaManipulationBrokerError::InvalidReply
-                        });
-                        Box::new(host_fut)
-                    } else {
-                        error!(
-                            "replace_proxy: Failed to replace node: status code {:?}",
-                            status
-                        );
-                        let body_fut = response.into_body().collect().then(|result| match result {
-                            Ok(body) => {
-                                error!("replace_proxy: Error body: {:?}", body);
-                                future::err(MetaManipulationBrokerError::InvalidReply)
-                            }
-                            Err(e) => {
-                                error!("replace_proxy: Failed to get body: {:?}", e);
-                                future::err(MetaManipulationBrokerError::InvalidReply)
-                            }
-                        });
-                        Box::new(body_fut)
-                    };
-                fut
-            });
-        Box::new(fut)
+        } else {
+            error!(
+                "replace_proxy: Failed to replace node: status code {:?}",
+                status
+            );
+            let result = response.text().await;
+            match result {
+                Ok(body) => {
+                    error!("replace_proxy: Error body: {:?}", body);
+                    Err(MetaManipulationBrokerError::InvalidReply)
+                }
+                Err(e) => {
+                    error!("replace_proxy: Failed to get body: {:?}", e);
+                    Err(MetaManipulationBrokerError::InvalidReply)
+                }
+            }
+        }
     }
 
-    fn commit_migration(
+    async fn commit_migration_impl(
         &self,
         meta: MigrationTaskMeta,
-    ) -> Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send> {
+    ) -> Result<(), MetaManipulationBrokerError> {
         let url = format!("http://{}/api/clusters/migrations", self.broker_address);
-        let request_payload = meta;
 
-        let request = self.client.put(&url).json(&request_payload).send();
-        let fut = request
+        let response = self
+            .client
+            .put(&url)
+            .json(&meta)
+            .send()
+            .await
             .map_err(|e| {
                 error!("Failed to commit migration {:?}", e);
                 MetaManipulationBrokerError::InvalidReply
-            })
-            .and_then(|response| {
-                let status = response.status();
-                let fut: Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send> =
-                    if status.is_success() || status.as_u16() == 404 {
-                        Box::new(future::ok(()))
-                    } else {
-                        error!("Failed to commit migration status code {:?}", status);
-                        let body_fut = response.into_body().collect().then(|result| match result {
-                            Ok(body) => {
-                                error!("HttpMetaManipulationBroker::commit_migration Error body: {:?}", body);
-                                future::err(MetaManipulationBrokerError::InvalidReply)
-                            }
-                            Err(e) => {
-                                error!("HttpMetaManipulationBroker::commit_migration Failed to get body: {:?}", e);
-                                future::err(MetaManipulationBrokerError::InvalidReply)
-                            }
-                        });
-                        Box::new(body_fut)
-                    };
-                fut
-            });
-        Box::new(fut)
+            })?;
+
+        let status = response.status();
+
+        if status.is_success() || status.as_u16() == 404 {
+            Ok(())
+        } else {
+            error!("Failed to commit migration status code {:?}", status);
+            let result = response.text().await;
+            match result {
+                Ok(body) => {
+                    error!(
+                        "HttpMetaManipulationBroker::commit_migration Error body: {:?}",
+                        body
+                    );
+                    Err(MetaManipulationBrokerError::InvalidReply)
+                }
+                Err(e) => {
+                    error!(
+                        "HttpMetaManipulationBroker::commit_migration Failed to get body: {:?}",
+                        e
+                    );
+                    Err(MetaManipulationBrokerError::InvalidReply)
+                }
+            }
+        }
+    }
+}
+
+impl MetaManipulationBroker for HttpMetaManipulationBroker {
+    fn replace_proxy<'s>(
+        &'s self,
+        failed_proxy_address: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send + 's>> {
+        Box::pin(self.replace_proxy_impl(failed_proxy_address))
+    }
+
+    fn commit_migration<'s>(
+        &'s self,
+        meta: MigrationTaskMeta,
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>> {
+        Box::pin(self.commit_migration_impl(meta))
     }
 }

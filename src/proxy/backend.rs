@@ -1,30 +1,32 @@
 use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::batching::Chunks;
-use common::future_group::new_future_group;
-use common::utils::{gen_moved, get_slot, revolve_first_address, ThreadSafe};
-use futures::sync::mpsc;
-use futures::Sink;
-use futures::{future, stream, Future, Stream};
-use protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
+use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
+use crate::protocol::{DecodeError, Packet, Resp, RespCodec, RespVec};
+use futures::channel::mpsc;
+use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures_batch::ChunksTimeoutStreamExt;
+use futures_timer::Delay;
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::marker::PhantomData;
+use std::net::SocketAddr;
+use std::pin::Pin;
 use std::result::Result;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio;
-use tokio::codec::Decoder;
 use tokio::net::TcpStream;
+use tokio_util::codec::Decoder;
 
-pub type BackendResult<T> = Result<Box<T>, BackendError>;
+pub type BackendResult<T> = Result<T, BackendError>;
+pub type TaskResult = Result<RespVec, CommandError>;
 
-pub trait CmdTaskResultHandler: Send + 'static {
+pub trait CmdTaskResultHandler: Send + Sync + 'static {
     type Task: CmdTask;
 
     fn handle_task(
@@ -62,11 +64,13 @@ pub trait CmdTaskFactory {
 
     fn create_with(
         &self,
+        // TODO: make it an general context
         another_task: &Self::Task,
         resp: RespVec,
     ) -> (
         Self::Task,
-        Box<dyn Future<Item = RespVec, Error = CommandError> + Send>,
+        // TODO: return indexed resp
+        Pin<Box<dyn Future<Output = TaskResult> + Send + 'static>>,
     );
 }
 
@@ -108,10 +112,8 @@ pub trait ReqTaskSenderFactory {
 
 // TODO: change to use AtomicOption
 pub struct RecoverableBackendNode<F: CmdTaskResultHandlerFactory> {
-    addr: Arc<String>,
-    node: Arc<RwLock<Option<BackendNode<<F as CmdTaskResultHandlerFactory>::Handler>>>>,
-    config: Arc<ServerProxyConfig>,
-    handler_factory: Arc<F>,
+    address: String,
+    node: BackendNode<<F as CmdTaskResultHandlerFactory>::Handler>,
 }
 
 impl<F: CmdTaskResultHandlerFactory + ThreadSafe> ThreadSafe for RecoverableBackendNode<F> {}
@@ -136,12 +138,14 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSenderFactory for RecoverableBackend
     type Sender = RecoverableBackendNode<F>;
 
     fn create(&self, address: String) -> Self::Sender {
-        Self::Sender {
-            addr: Arc::new(address),
-            node: Arc::new(RwLock::new(None)),
-            config: self.config.clone(),
-            handler_factory: self.handler_factory.clone(),
-        }
+        let (node, fut) = BackendNode::new(
+            address.clone(),
+            Arc::new(self.handler_factory.create()),
+            self.config.clone(),
+            |address| Box::pin(create_conn(address)),
+        );
+        tokio::spawn(fut);
+        Self::Sender { address, node }
     }
 }
 
@@ -149,99 +153,14 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
     type Task = <<F as CmdTaskResultHandlerFactory>::Handler as CmdTaskResultHandler>::Task;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        let retry_times = 3;
-        let mut cmd_task = cmd_task;
-
-        for _ in 0..retry_times {
-            let need_init = self.node.read().unwrap().is_none();
-            // Race condition here. Multiple threads might be creating new connection at the same time.
-            // Maybe it's just fine. If not, lock the creating connection phrase.
-            if need_init {
-                let node_arc = self.node.clone();
-                let address = match revolve_first_address(&self.addr) {
-                    Some(address) => address,
-                    None => return Err(BackendError::InvalidAddress),
-                };
-
-                let config = self.config.clone();
-                let handler = Box::new(self.handler_factory.create());
-
-                let sock = TcpStream::connect(&address);
-                let fut = sock.then(move |res| {
-                    debug!("sock result: {:?}", res);
-                    match res {
-                        Ok(sock) => {
-                            let (node, reader_handler, writer_handler) =
-                                BackendNode::<F::Handler>::new(sock, handler, config.clone());
-                            let (reader_handler, writer_handler) =
-                                new_future_group(reader_handler, writer_handler);
-
-                            let (spawn_new, res) = {
-                                let mut guard = node_arc.write().unwrap();
-                                let empty = guard.is_none();
-                                let inner_node = guard.get_or_insert(node);
-                                (
-                                    empty,
-                                    inner_node
-                                        .send(cmd_task)
-                                        .map_err(|_e| BackendError::Canceled),
-                                )
-                            };
-
-                            if let Err(e) = res {
-                                error!("failed to forward cmd {:?}", e);
-                            }
-
-                            if spawn_new {
-                                tokio::spawn(
-                                    reader_handler
-                                        .map(|()| error!("backend read IO closed"))
-                                        .map_err(|e| error!("backend read IO error {:?}", e)),
-                                );
-                                tokio::spawn(
-                                    writer_handler
-                                        .map(|()| error!("backend write IO closed"))
-                                        .map_err(|e| error!("backend write IO error {:?}", e)),
-                                );
-                            }
-                            future::ok(())
-                        }
-                        Err(e) => {
-                            error!("sock err: {:?}", e);
-                            cmd_task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
-                            future::err(())
-                        }
-                    }
-                });
-                // If this future fails, cmd_task will be lost. Let itself send back an error response.
-                tokio::spawn(fut);
-                return Ok(());
-            }
-
-            let res = match self.node.read().unwrap().as_ref() {
-                Some(n) => n.send(cmd_task),
-                None => {
-                    cmd_task.set_result(Err(CommandError::InnerError));
-                    return Err(BackendError::NodeNotFound);
-                }
-            };
-            cmd_task = match res {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    // if it fails, remove this connection.
-                    {
-                        let mut node = self.node.write().unwrap();
-                        if let Some(true) = node.as_ref().map(BackendNode::is_closed) {
-                            node.take();
-                        }
-                    }
-                    error!("reset backend connection {}", *self.addr);
-                    e.into_inner()
-                }
-            };
-        }
-
-        Err(BackendError::Canceled)
+        self.node.send(cmd_task).map_err(|e| {
+            let cmd_task = e.into_inner();
+            cmd_task.set_resp_result(Ok(Resp::Error(
+                format!("backend connection failed: {}", self.address).into_bytes(),
+            )));
+            error!("backend node is closed");
+            BackendError::Canceled
+        })
     }
 }
 
@@ -256,33 +175,47 @@ impl<T> BackendSendError<T> {
 
 pub struct BackendNode<H: CmdTaskResultHandler> {
     tx: mpsc::UnboundedSender<H::Task>,
+    conn_failed: Arc<AtomicBool>,
 }
 
 impl<H: CmdTaskResultHandler> BackendNode<H> {
-    pub fn new(
-        sock: TcpStream,
-        handler: Box<H>,
+    pub fn new<F>(
+        address: String,
+        handler: Arc<H>,
         config: Arc<ServerProxyConfig>,
+        create_conn: F,
     ) -> (
         BackendNode<H>,
-        impl Future<Item = (), Error = BackendError> + Send,
-        impl Future<Item = (), Error = BackendError> + Send,
-    ) {
+        impl Future<Output = Result<(), BackendError>> + Send,
+    )
+    where
+        F: Fn(
+                SocketAddr,
+            )
+                -> Pin<Box<dyn Future<Output = CreateConnResult<<H::Task as CmdTask>::Pkt>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    {
         let (tx, rx) = mpsc::unbounded();
-        let (reader_handler, writer_handler) = handle_backend(
+        let conn_failed = Arc::new(AtomicBool::new(true));
+        let handle_backend_fut = handle_backend(
             handler,
             rx,
-            sock,
-            config.backend_channel_size,
+            conn_failed.clone(),
+            address,
             config.backend_batch_min_time,
-            config.backend_batch_max_time,
             config.backend_batch_buf,
+            create_conn,
         );
-        (Self { tx }, reader_handler, writer_handler)
+        (Self { tx, conn_failed }, handle_backend_fut)
     }
 
     pub fn send(&self, cmd_task: H::Task) -> Result<(), BackendSendError<H::Task>> {
         cmd_task.log_event(TaskEvent::SentToWritingQueue);
+        if self.conn_failed.load(Ordering::SeqCst) {
+            return Err(BackendSendError(cmd_task));
+        }
         self.tx
             .unbounded_send(cmd_task)
             .map(|_| ())
@@ -294,146 +227,218 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
     }
 }
 
-pub fn handle_backend<H>(
-    handler: Box<H>,
+type ConnSink<T> = Pin<Box<dyn Sink<T, Error = io::Error> + Send>>;
+type ConnStream<T> = Pin<Box<dyn Stream<Item = Result<T, BackendError>> + Send>>;
+type CreateConnResult<T> = Result<(ConnSink<T>, ConnStream<T>), BackendError>;
+
+async fn create_conn<T: Packet + Send + 'static>(address: SocketAddr) -> CreateConnResult<T> {
+    let socket = match TcpStream::connect(address).await {
+        Ok(socket) => socket,
+        Err(err) => {
+            error!("failed to connect: {:?}", err);
+            return Err(BackendError::Io(err));
+        }
+    };
+
+    let frame = RespCodec::default().framed(socket);
+    let (writer, reader) = frame.split();
+    let reader = reader.map_err(|e| match e {
+        DecodeError::InvalidProtocol => {
+            error!("backend: invalid protocol");
+            BackendError::InvalidProtocol
+        }
+        DecodeError::Io(e) => {
+            error!("backend: io error: {:?}", e);
+            BackendError::Io(e)
+        }
+    });
+
+    Ok((Box::pin(writer), Box::pin(reader)))
+}
+
+const MAX_BACKEND_RETRY: usize = 3;
+
+struct RetryState<T: CmdTask> {
+    retry_times: usize,
+    tasks: Vec<T>,
+}
+
+pub async fn handle_backend<H, F: Send + 'static>(
+    handler: Arc<H>,
     task_receiver: mpsc::UnboundedReceiver<H::Task>,
-    sock: TcpStream,
-    channel_size: usize,
+    conn_failed: Arc<AtomicBool>,
+    address: String,
     backend_batch_min_time: usize,
-    backend_batch_max_time: usize,
     backend_batch_buf: usize,
-) -> (
-    impl Future<Item = (), Error = BackendError> + Send,
-    impl Future<Item = (), Error = BackendError> + Send,
-)
+    create_conn: F,
+) -> Result<(), BackendError>
 where
     H: CmdTaskResultHandler,
+    F: Fn(
+            SocketAddr,
+        )
+            -> Pin<Box<dyn Future<Output = CreateConnResult<<H::Task as CmdTask>::Pkt>> + Send>>
+        + Send
+        + Sync
+        + 'static,
 {
-    let (writer, reader) = RespCodec::default().framed(sock).split();
+    // TODO: move this to upper layer.
+    let sock_address = match resolve_first_address(&address) {
+        Some(addr) => addr,
+        None => {
+            error!("invalid address: {:?}", address);
+            return Err(BackendError::InvalidAddress);
+        }
+    };
 
-    let (tx, rx) = mpsc::channel(channel_size);
+    let mut retry_state: Option<RetryState<H::Task>> = None;
 
     let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
-    let batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
-    let task_receiver = Chunks::new(
-        task_receiver,
-        backend_batch_buf,
-        batch_min_time,
-        batch_max_time,
-    )
-    .map_err(|_| ());
+    let mut task_receiver = task_receiver
+        .chunks_timeout(backend_batch_buf, batch_min_time)
+        .fuse();
 
-    let writer_handler = handle_write(task_receiver, writer, tx);
-    let reader_handler = handle_read(handler, reader, rx);
+    loop {
+        conn_failed.store(true, Ordering::SeqCst);
+        let (writer, reader) = match create_conn(sock_address).await {
+            Ok(conn) => conn,
+            Err(err) => {
+                error!("failed to connect: {:?}", err);
+                retry_state.take();
 
-    // May need to use future_group. The tx <=> rx between them may not be able to shutdown futures.
-    (reader_handler, writer_handler)
-}
-
-fn handle_write<S, W, T>(
-    task_receiver: S,
-    writer: W,
-    tx: mpsc::Sender<T>,
-) -> impl Future<Item = (), Error = BackendError> + Send
-where
-    S: Stream<Item = Vec<T>, Error = ()> + Send + 'static,
-    W: Sink<SinkItem = Box<<T as CmdTask>::Pkt>, SinkError = io::Error> + Send + 'static,
-    T: CmdTask,
-{
-    task_receiver
-        .map_err(|()| BackendError::Canceled)
-        .fold((writer, tx), |(writer, tx), tasks| {
-            for task in tasks.iter() {
-                task.log_event(TaskEvent::WritingQueueReceived);
-            }
-
-            let items: Vec<Box<<T as CmdTask>::Pkt>> = tasks
-                .iter()
-                .map(|task| Box::new(task.get_packet()))
-                .collect();
-
-            writer
-                .send_all(stream::iter_ok::<_, io::Error>(items))
-                .then(move |res| {
-                    for task in tasks.iter() {
-                        task.log_event(TaskEvent::SentToBackend);
-                    }
-
-                    let fut: Box<dyn Future<Item = _, Error = BackendError> + Send> = match res {
-                        Ok((writer, empty_stream)) => {
-                            debug_assert!(empty_stream
-                                .collect()
-                                .wait()
-                                .expect("invalid empty_stream")
-                                .is_empty());
-                            let fut = tx
-                                .send_all(stream::iter_ok(tasks))
-                                .map(move |(tx, empty_stream)| {
-                                    debug_assert!(empty_stream
-                                        .collect()
-                                        .wait()
-                                        .expect("invalid empty_stream")
-                                        .is_empty());
-                                    (writer, tx)
-                                })
-                                .map_err(|e| {
-                                    error!("backend handle_write rx closed {:?}", e);
-                                    BackendError::Canceled
-                                });
-                            Box::new(fut)
-                        }
-                        Err(e) => {
-                            error!("Failed to write");
-                            for task in tasks {
-                                task.set_result(Err(CommandError::Io(io::Error::from(e.kind()))));
-                            }
-                            Box::new(future::err(BackendError::Io(e)))
-                        }
+                let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
+                loop {
+                    let mut tasks_fut = task_receiver.next().fuse();
+                    let tasks_opt = select! {
+                        () = timeout_fut => break,
+                        tasks_opt = tasks_fut => tasks_opt,
                     };
-                    fut
-                })
-        })
-        .map(|_| ())
+                    let tasks = match tasks_opt {
+                        Some(tasks) => tasks,
+                        None => break,
+                    };
+                    for task in tasks.into_iter() {
+                        task.set_resp_result(Ok(Resp::Error(
+                            format!("failed to connect to {}", address).into_bytes(),
+                        )))
+                    }
+                }
+                continue;
+            }
+        };
+        conn_failed.store(false, Ordering::SeqCst);
+
+        let res = handle_conn(
+            writer,
+            reader,
+            &mut task_receiver,
+            handler.clone(),
+            backend_batch_buf,
+            retry_state.take(),
+        )
+        .await;
+        match res {
+            Ok(()) => {
+                error!("task receiver is closed");
+                return Err(BackendError::Canceled);
+            }
+            Err((err, state)) => {
+                error!("connection is closed: {:?}", err);
+                retry_state = state;
+                continue;
+            }
+        }
+    }
 }
 
-fn handle_read<H, R>(
-    handler: Box<H>,
-    reader: R,
-    rx: mpsc::Receiver<H::Task>,
-) -> impl Future<Item = (), Error = BackendError> + Send
+async fn handle_conn<H, S>(
+    mut writer: ConnSink<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
+    mut reader: ConnStream<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
+    task_receiver: &mut S,
+    handler: Arc<H>,
+    backend_batch_buf: usize,
+    mut retry_state_opt: Option<RetryState<H::Task>>,
+) -> Result<(), (BackendError, Option<RetryState<H::Task>>)>
 where
-    R: Stream<Item = Box<<H::Task as CmdTask>::Pkt>, Error = DecodeError> + Send + 'static,
     H: CmdTaskResultHandler,
+    S: Stream<Item = Vec<H::Task>> + Unpin,
 {
-    let rx = rx.into_future();
-    reader
-        .map_err(|e| match e {
-            DecodeError::InvalidProtocol => {
-                error!("backend: invalid protocol");
-                BackendError::InvalidProtocol
+    let mut packets = Vec::with_capacity(backend_batch_buf);
+
+    loop {
+        let (retry_times_opt, tasks) = match retry_state_opt.take() {
+            Some(RetryState { retry_times, tasks }) => (Some(retry_times), tasks),
+            None => {
+                let tasks = match task_receiver.next().await {
+                    Some(tasks) => tasks,
+                    None => return Ok(()),
+                };
+                (None, tasks)
             }
-            DecodeError::Io(e) => {
-                error!("backend: io error: {:?}", e);
-                BackendError::Io(e)
-            }
-        })
-        .fold((handler, rx), move |(handler, rx), packet| {
-            rx.map_err(|((), _receiver)| {
-                // The remaining tasks in _receiver might leak here
-                // It's up to the tasks inside Receiver to gracefully drop themselves in destructor.
-                error!("backend: unexpected read");
-                BackendError::Canceled
-            })
-            .and_then(|(task_opt, rx)| match task_opt {
-                Some(task) => {
-                    task.log_event(TaskEvent::ReceivedFromBackend);
-                    handler.handle_task(task, Ok(packet));
-                    future::ok((handler, rx.into_future()))
+        };
+
+        for task in &tasks {
+            task.log_event(TaskEvent::WritingQueueReceived);
+            packets.push(task.get_packet());
+        }
+
+        let mut batch = stream::iter(packets.drain(..)).map(Ok);
+        let res = writer.send_all(&mut batch).await;
+
+        for task in tasks.iter() {
+            task.log_event(TaskEvent::SentToBackend);
+        }
+
+        if let Err(err) = res {
+            error!("backend write error: {}", err);
+            let retry_state = handle_conn_err(retry_times_opt, tasks, &err);
+            return Err((BackendError::Io(err), retry_state));
+        }
+
+        let mut tasks_iter = tasks.into_iter();
+        // `while let` will consume ownership.
+        #[allow(clippy::while_let_loop)]
+        loop {
+            let task = match tasks_iter.next() {
+                Some(task) => task,
+                None => break,
+            };
+            let packet_res = match reader.next().await {
+                Some(pkt) => pkt,
+                None => {
+                    error!("Failed to read packet. Connection is closed.");
+                    let mut failed_tasks = vec![task];
+                    failed_tasks.extend(tasks_iter);
+                    let err = io::Error::from(io::ErrorKind::BrokenPipe);
+                    let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
+                    return Err((BackendError::Io(err), retry_state));
                 }
-                None => future::err(BackendError::Canceled),
-            })
-        })
-        .map(|_| ())
+            };
+
+            task.log_event(TaskEvent::ReceivedFromBackend);
+            handler.handle_task(task, packet_res);
+        }
+    }
+}
+
+fn handle_conn_err<T: CmdTask>(
+    retry_times_opt: Option<usize>,
+    tasks: Vec<T>,
+    err: &io::Error,
+) -> Option<RetryState<T>> {
+    let retry_times = retry_times_opt.unwrap_or(0);
+    if retry_times >= MAX_BACKEND_RETRY {
+        for task in tasks.into_iter() {
+            task.set_result(Err(CommandError::Io(io::Error::from(err.kind()))));
+        }
+        None
+    } else {
+        let retry_state = RetryState {
+            retry_times: retry_times + 1,
+            tasks,
+        };
+        Some(retry_state)
+    }
 }
 
 #[derive(Debug)]

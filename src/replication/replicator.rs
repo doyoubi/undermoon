@@ -1,23 +1,26 @@
-use common::cluster::ReplPeer;
-use common::db::DBMapFlags;
-use common::utils::{CmdParseError, ThreadSafe};
+use crate::common::cluster::ReplPeer;
+use crate::common::db::DBMapFlags;
+use crate::common::utils::{CmdParseError, ThreadSafe};
+use crate::protocol::{Array, BulkStr, RedisClientError, Resp};
 use futures::Future;
-use protocol::{Array, BulkStr, RedisClientError, Resp};
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::pin::Pin;
 use std::str;
+
+pub type ReplicatorResult = Result<(), ReplicatorError>;
 
 // MasterReplicator and ReplicaReplicator work together remotely to manage the replication.
 
 pub trait MasterReplicator: ThreadSafe {
-    fn start(&self) -> Option<Box<dyn Future<Item = (), Error = ReplicatorError> + Send>>;
+    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>>;
     fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &MasterMeta;
 }
 
 pub trait ReplicaReplicator: ThreadSafe {
-    fn start(&self) -> Option<Box<dyn Future<Item = (), Error = ReplicatorError> + Send>>;
+    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>>;
     fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &ReplicaMeta;
 }

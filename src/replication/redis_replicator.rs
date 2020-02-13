@@ -1,10 +1,12 @@
 use super::replicator::{
-    MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError,
+    MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError, ReplicatorResult,
 };
-use common::resp_execution::{retry_handle_func, I64Retriever};
-use common::utils::{revolve_first_address, ThreadSafe};
+use crate::common::resp_execution::{retry_handle_func, I64Retriever};
+use crate::common::utils::{resolve_first_address, ThreadSafe};
+use crate::protocol::{RedisClientError, RedisClientFactory, RespVec};
 use futures::{future, Future};
-use protocol::{RedisClientError, RedisClientFactory, RespVec};
+use futures::{FutureExt, TryFutureExt};
+use std::pin::Pin;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -51,11 +53,11 @@ impl<F: RedisClientFactory> RedisMasterReplicator<F> {
 }
 
 impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
-    fn start(&self) -> Option<Box<dyn Future<Item = (), Error = ReplicatorError> + Send>> {
+    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>> {
         let meta = self.meta.clone();
         self.role_sync.start(Self::handle_result).map(|f| {
-            let fut: Box<dyn Future<Item = (), Error = ReplicatorError> + Send> =
-                Box::new(f.map_err(ReplicatorError::RedisError).then(move |r| {
+            let fut: Pin<Box<dyn Future<Output = Result<(), ReplicatorError>> + Send + 's>> =
+                Box::pin(f.map_err(ReplicatorError::RedisError).then(move |r| {
                     warn!("RedisMasterReplicator {:?} stopped {:?}", meta, r);
                     future::ok(())
                 }));
@@ -107,7 +109,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
             }
         };
 
-        match revolve_first_address(master_node_address) {
+        match resolve_first_address(master_node_address) {
             Some(address) => {
                 let host = address.ip().to_string();
                 let port = address.port().to_string();
@@ -131,11 +133,11 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
 }
 
 impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
-    fn start(&self) -> Option<Box<dyn Future<Item = (), Error = ReplicatorError> + Send>> {
+    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>> {
         let meta = self.meta.clone();
         self.role_sync.start(Self::handle_result).map(|f| {
-            let fut: Box<dyn Future<Item = (), Error = ReplicatorError> + Send> =
-                Box::new(f.map_err(ReplicatorError::RedisError).then(move |r| {
+            let fut: Pin<Box<dyn Future<Output = Result<(), ReplicatorError>> + Send + 's>> =
+                Box::pin(f.map_err(ReplicatorError::RedisError).then(move |r| {
                     warn!("RedisReplicaReplicator {:?} stopped {:?}", meta, r);
                     future::ok(())
                 }));

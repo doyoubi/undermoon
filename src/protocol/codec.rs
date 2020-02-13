@@ -3,27 +3,27 @@ use super::packet::{PacketDecoder, PacketEncoder};
 use bytes::BytesMut;
 use std::io;
 use std::marker::PhantomData;
-use tokio::codec::{Decoder, Encoder};
+use tokio_util::codec::{Decoder, Encoder};
 
-pub struct RespCodec<T>(PhantomData<T>);
+pub struct RespCodec<E, D>(PhantomData<(E, D)>);
 
-impl<T> Default for RespCodec<T> {
+impl<E, D> Default for RespCodec<E, D> {
     fn default() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T: PacketDecoder> Decoder for RespCodec<T> {
-    type Item = T;
+impl<E, D: PacketDecoder> Decoder for RespCodec<E, D> {
+    type Item = D;
     type Error = DecodeError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        T::decode(buf)
+        D::decode(buf)
     }
 }
 
-impl<T: PacketEncoder> Encoder for RespCodec<T> {
-    type Item = T;
+impl<E: PacketEncoder, D> Encoder for RespCodec<E, D> {
+    type Item = E;
     type Error = io::Error;
 
     fn encode(&mut self, item: Self::Item, buf: &mut BytesMut) -> Result<(), Self::Error> {

@@ -1,10 +1,10 @@
-use ::common::cluster::{
+use crate::common::cluster::{
     Cluster, Host, MigrationTaskMeta, Node, PeerProxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
 };
-use ::common::config::ClusterConfig;
-use ::common::utils::SLOT_NUM;
+use crate::common::cluster::{MigrationMeta, Role};
+use crate::common::config::ClusterConfig;
+use crate::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use common::cluster::{MigrationMeta, Role};
 use itertools::Itertools;
 use std::cmp;
 use std::collections::{HashMap, HashSet};

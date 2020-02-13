@@ -1,13 +1,13 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, ReqTaskSender, ReqTaskSenderFactory};
 use super::slot::SlotMap;
-use common::cluster::{Range, SlotRange, SlotRangeTag};
-use common::config::ClusterConfig;
-use common::db::ProxyDBMeta;
-use common::utils::{gen_moved, get_slot};
+use crate::common::cluster::{Range, SlotRange, SlotRangeTag};
+use crate::common::config::ClusterConfig;
+use crate::common::db::ProxyDBMeta;
+use crate::common::utils::{gen_moved, get_slot};
+use crate::migration::task::MigrationState;
+use crate::protocol::{Array, BulkStr, Resp, RespVec};
 use crc64::crc64;
-use migration::task::MigrationState;
-use protocol::{Array, BulkStr, Resp, RespVec};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -551,8 +551,8 @@ fn gen_cluster_slots_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::common::cluster::MigrationMeta;
-    use protocol::{Array, BulkStr};
+    use crate::common::cluster::MigrationMeta;
+    use crate::protocol::{Array, BulkStr};
     use std::iter::repeat;
 
     fn gen_testing_slot_ranges(address: &str) -> HashMap<String, Vec<SlotRange>> {

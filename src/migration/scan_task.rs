@@ -3,23 +3,24 @@ use super::task::{
     AtomicMigrationState, ImportingTask, MgrSubCmd, MigratingTask, MigrationError, MigrationState,
     SwitchArg,
 };
-use ::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
-use ::common::config::AtomicMigrationConfig;
-use ::common::resp_execution::keep_connecting_and_sending_cmd;
-use ::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
-use ::common::version::UNDERMOON_MIGRATION_VERSION;
-use ::protocol::{RedisClientError, RedisClientFactory, Resp};
-use ::proxy::backend::ReqAdaptorSenderFactory;
-use ::proxy::database::DBSendError;
-use ::proxy::migration_backend::RestoreDataCmdTaskHandler;
-use atomic_option::AtomicOption;
-use futures::sync::oneshot;
-use futures::{future, Future};
-use protocol::RespVec;
-use proxy::backend::{
+use crate::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
+use crate::common::config::AtomicMigrationConfig;
+use crate::common::resp_execution::keep_connecting_and_sending_cmd;
+use crate::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
+use crate::common::version::UNDERMOON_MIGRATION_VERSION;
+use crate::protocol::RespVec;
+use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
+use crate::proxy::backend::ReqAdaptorSenderFactory;
+use crate::proxy::backend::{
     CmdTaskFactory, RedirectionSenderFactory, ReqTaskSender, ReqTaskSenderFactory,
 };
-use proxy::service::ServerProxyConfig;
+use crate::proxy::database::DBSendError;
+use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
+use crate::proxy::service::ServerProxyConfig;
+use atomic_option::AtomicOption;
+use futures::channel::oneshot;
+use futures::{future, select, Future, FutureExt, TryFutureExt};
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,9 +114,10 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
         cmd
     }
 
-    fn pre_check(&self) -> impl Future<Item = (), Error = MigrationError> {
+    async fn pre_check(&self) {
         let state = self.state.clone();
         let meta = self.meta.clone();
+
         let handle_pre_check = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
@@ -153,26 +155,22 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             interval,
             handle_pre_check,
         )
-        .then(|res| match res {
-            Ok(()) | Err(RedisClientError::Done) => future::ok(()),
-            Err(err) => {
-                error!("pre_check error: {:?}", err);
-                future::err(MigrationError::RedisClient(err))
-            }
-        })
+        .await;
+        info!("pre_check done");
     }
 
-    fn pre_block(&self) -> impl Future<Item = (), Error = MigrationError> {
+    async fn pre_block(&self) -> Result<(), MigrationError> {
         let state = self.state.clone();
         // TODO: implement this.
-        future::ok(()).map(move |()| {
-            state.set_state(MigrationState::PreSwitch);
-        })
+        state.set_state(MigrationState::PreSwitch);
+        info!("pre_block done");
+        Ok(())
     }
 
-    fn pre_switch(&self) -> impl Future<Item = (), Error = MigrationError> {
+    async fn pre_switch(&self) {
         let state = self.state.clone();
         let meta = self.meta.clone();
+
         let handle_pre_switch = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
@@ -186,7 +184,6 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
                     Ok(())
                 }
                 _reply => {
-                    info!("pre_switch done");
                     state.set_state(MigrationState::Scanning);
                     Err(RedisClientError::Done)
                 }
@@ -209,44 +206,41 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             interval,
             handle_pre_switch,
         )
-        .then(|res| match res {
-            Ok(()) | Err(RedisClientError::Done) => future::ok(()),
-            Err(err) => {
-                error!("pre_switch error: {:?}", err);
-                future::err(MigrationError::RedisClient(err))
-            }
-        })
+        .await;
+        info!("pre_switch done");
     }
 
-    fn scan_migrate(&self) -> impl Future<Item = (), Error = MigrationError> {
+    async fn scan_migrate(&self) -> Result<(), MigrationError> {
         let state = self.state.clone();
-        let tasks = self
+        let (producer, consumer) = self
             .task
             .start()
-            .ok_or_else(|| MigrationError::AlreadyStarted);
-        future::result(tasks).and_then(move |(producer, consumer)| {
-            tokio::spawn(
-                producer
-                    .map(|()| info!("migration producer finished scanning"))
-                    .map_err(|err| {
-                        error!("migration producer finished error: {:?}", err);
-                    }),
-            );
-            consumer
-                .map(move |()| {
-                    state.set_state(MigrationState::FinalSwitch);
-                    info!("migration consumer finished forwarding data")
-                })
+            .ok_or_else(|| MigrationError::AlreadyStarted)?;
+
+        tokio::spawn(
+            producer
+                .map_ok(|()| info!("migration producer finished scanning"))
                 .map_err(|err| {
-                    error!("migration consumer finished error: {:?}", err);
-                    err
-                })
-        })
+                    error!("migration producer finished error: {:?}", err);
+                }),
+        );
+        match consumer.await {
+            Ok(()) => {
+                state.set_state(MigrationState::FinalSwitch);
+                info!("migration consumer finished forwarding data");
+                Ok(())
+            }
+            Err(err) => {
+                error!("migration consumer finished error: {:?}", err);
+                Err(err)
+            }
+        }
     }
 
-    fn final_switch(&self) -> impl Future<Item = (), Error = MigrationError> {
+    async fn final_switch(&self) {
         let state = self.state.clone();
         let meta = self.meta.clone();
+
         let handle_final_switch = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
@@ -281,27 +275,24 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             interval,
             handle_final_switch,
         )
-        .then(|res| match res {
-            Ok(()) | Err(RedisClientError::Done) => future::ok(()),
-            Err(err) => {
-                error!("final_switch error: {:?}", err);
-                future::err(MigrationError::RedisClient(err))
-            }
-        })
+        .await;
+        info!("final_switch done");
     }
 
-    fn run(&self) -> impl Future<Item = (), Error = MigrationError> {
+    async fn run(&self) -> Result<(), MigrationError> {
         let pre_check = self.pre_check();
         let pre_block = self.pre_block();
         let pre_switch = self.pre_switch();
         let scan_migrate = self.scan_migrate();
         let final_switch = self.final_switch();
 
-        pre_check
-            .and_then(move |()| pre_block)
-            .and_then(move |()| pre_switch)
-            .and_then(move |()| scan_migrate)
-            .and_then(move |()| final_switch)
+        pre_check.await;
+        pre_block.await?;
+        pre_switch.await;
+        scan_migrate.await?;
+        final_switch.await;
+
+        Ok(())
     }
 }
 
@@ -310,29 +301,41 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> MigratingT
 {
     type Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task;
 
-    fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
+    fn start<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
         let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
             Some(r) => r,
-            None => return Box::new(future::err(MigrationError::AlreadyStarted)),
+            None => return Box::pin(future::err(MigrationError::AlreadyStarted)),
         };
 
         let meta = self.meta.clone();
         let fut = self.run();
 
-        Box::new(
-            receiver
-                .map_err(|_| MigrationError::Canceled)
-                .select(fut)
-                .then(move |_| {
+        let fut = async move {
+            let r = select! {
+                res = fut.fuse() => res,
+                _ = receiver.fuse() => Err(MigrationError::Canceled),
+            };
+            match r {
+                Ok(()) => {
                     warn!("Migrating tasks stopped {:?}", meta);
-                    future::ok(())
-                }),
-        )
+                    Ok(())
+                }
+                Err(err) => {
+                    error!("migration exit with error: {:?}", err);
+                    Err(err)
+                }
+            }
+        };
+
+        Box::pin(fut)
     }
 
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
+    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
         self.task.stop();
-        Box::new(future::result(self.send_stop_signal()))
+        let r = self.send_stop_signal();
+        Box::pin(async { r })
     }
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
@@ -468,31 +471,40 @@ where
 {
     type Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task;
 
-    fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
+    fn start<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
         let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
             Some(r) => r,
-            None => return Box::new(future::err(MigrationError::AlreadyStarted)),
+            None => return Box::pin(future::err(MigrationError::AlreadyStarted)),
         };
 
         let meta = self.meta.clone();
-        let fut = self
-            .cmd_handler
-            .run_task_handler()
-            .map_err(|()| MigrationError::Canceled);
+        let fut = self.cmd_handler.run_task_handler();
 
-        Box::new(
-            receiver
-                .map_err(|_| MigrationError::Canceled)
-                .select(fut)
-                .then(move |_| {
+        let fut = async move {
+            let r = select! {
+                () = fut.fuse() => Ok(()),
+                _ = receiver.fuse() => Err(MigrationError::Canceled),
+            };
+            match r {
+                Ok(()) => {
                     warn!("Importing tasks stopped {:?}", meta);
-                    future::ok(())
-                }),
-        )
+                    Ok(())
+                }
+                Err(err) => {
+                    error!("importing exit with error: {:?}", err);
+                    Err(err)
+                }
+            }
+        };
+
+        Box::pin(fut)
     }
 
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send> {
-        Box::new(future::result(self.send_stop_signal()))
+    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
+        let r = self.send_stop_signal();
+        Box::pin(async { r })
     }
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {

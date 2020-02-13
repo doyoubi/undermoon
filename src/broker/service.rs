@@ -1,13 +1,13 @@
 use super::store::{MetaStore, MetaStoreError, MigrationType};
-use ::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
-use ::common::version::UNDERMOON_VERSION;
-use ::coordinator::http_meta_broker::{
+use crate::broker::store::InconsistentError;
+use crate::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
+use crate::common::version::UNDERMOON_VERSION;
+use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, HostAddressesPayload, HostPayload,
 };
 use actix_web::{
     error, http, middleware, App, HttpRequest, HttpResponse, Json, Path, Responder, State,
 };
-use broker::store::InconsistentError;
 use chrono;
 use std::error::Error;
 use std::sync::{Arc, RwLock};

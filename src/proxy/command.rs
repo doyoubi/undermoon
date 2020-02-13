@@ -1,8 +1,8 @@
 use super::slowlog::Slowlog;
+use crate::protocol::{RespPacket, RespSlice, RespVec};
 use atomic_option::AtomicOption;
-use futures::sync::oneshot;
-use futures::{future, Future};
-use protocol::{RespPacket, RespSlice, RespVec};
+use futures::channel::oneshot;
+use std::convert::identity;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -272,10 +272,11 @@ impl CmdReplySender {
 }
 
 impl CmdReplyReceiver {
-    pub fn wait_response(self) -> impl Future<Item = Box<TaskReply>, Error = CommandError> + Send {
+    pub async fn wait_response(self) -> Result<Box<TaskReply>, CommandError> {
         self.reply_receiver
+            .await
             .map_err(|_| CommandError::Canceled)
-            .and_then(future::result)
+            .and_then(identity)
     }
 }
 

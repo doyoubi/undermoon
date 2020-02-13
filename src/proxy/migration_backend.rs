@@ -1,19 +1,21 @@
 use super::backend::{BackendSenderFactory, CmdTask, CmdTaskFactory, ReqTask, ReqTaskSender};
 use super::command::CommandError;
 use super::reply::ReplyCommitHandlerFactory;
-use ::protocol::RespVec;
+use crate::common::utils::{pretty_print_bytes, ThreadSafe};
+use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use atomic_option::AtomicOption;
-use common::utils::ThreadSafe;
-use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::{future, Future, Stream};
-use protocol::{Array, BinSafeStr, BulkStr, Resp};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::{select, Future, FutureExt, StreamExt};
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 const KEY_NOT_EXISTS: &str = "0";
+const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access source node";
 
-type ReplyFuture = Box<dyn Future<Item = RespVec, Error = CommandError> + Send>;
-type DataEntryFuture = Box<dyn Future<Item = Option<DataEntry>, Error = CommandError> + Send>;
+type ReplyFuture = Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + Send>>;
+type DataEntryFuture =
+    Pin<Box<dyn Future<Output = Result<Option<DataEntry>, CommandError>> + Send>>;
 
 #[derive(Debug)]
 struct MgrCmdStateExists<F: CmdTaskFactory> {
@@ -87,7 +89,8 @@ impl<F: CmdTaskFactory> MgrCmdStateDumpPttl<F> {
 
         let task = ReqTask::Multi(vec![dump_cmd_task, pttl_cmd_task]);
         let state = Self { inner_task, key };
-        let entry_fut = data_entry_future(dump_reply_fut, pttl_reply_fut);
+        //        let entry_fut = data_entry_future(dump_reply_fut, pttl_reply_fut);
+        let entry_fut = Box::pin(get_data_entry(dump_reply_fut, pttl_reply_fut));
 
         (state, task, entry_fut)
     }
@@ -119,28 +122,53 @@ struct DataEntry {
     pttl: BinSafeStr,
 }
 
-fn data_entry_future(dump: ReplyFuture, pttl: ReplyFuture) -> DataEntryFuture {
-    let fut = dump.join(pttl).and_then(|(dump, pttl)| {
-        let dump_result = match dump {
-            Resp::Bulk(BulkStr::Str(raw_data)) => Ok(Some(raw_data)),
-            Resp::Bulk(BulkStr::Nil) => Ok(None),
-            _others => Err(CommandError::UnexpectedResponse),
-        };
-        let pttl_result = match pttl {
-            // -2 for key not exists
-            Resp::Integer(pttl) if pttl.as_slice() != b"-2" => Ok(Some(pttl)),
-            Resp::Integer(_pttl) => Ok(None),
-            _others => Err(CommandError::UnexpectedResponse),
-        };
-        match (dump_result, pttl_result) {
-            (Ok(Some(raw_data)), Ok(Some(pttl))) => future::ok(Some(DataEntry { raw_data, pttl })),
-            (Ok(None), _) | (_, Ok(None)) => future::ok(None),
-            (Err(err), _) => future::err(err),
-            (_, Err(err)) => future::err(err),
-        }
-    });
-    Box::new(fut)
+async fn get_data_entry(
+    dump: ReplyFuture,
+    pttl: ReplyFuture,
+) -> Result<Option<DataEntry>, CommandError> {
+    let dump_result = match dump.await? {
+        Resp::Bulk(BulkStr::Str(raw_data)) => Ok(Some(raw_data)),
+        Resp::Bulk(BulkStr::Nil) => Ok(None),
+        _others => Err(CommandError::UnexpectedResponse),
+    };
+
+    let pttl_result = match pttl.await? {
+        // -2 for key not exists
+        Resp::Integer(pttl) if pttl.as_slice() != b"-2" => Ok(Some(pttl)),
+        Resp::Integer(_pttl) => Ok(None),
+        _others => Err(CommandError::UnexpectedResponse),
+    };
+
+    match (dump_result, pttl_result) {
+        (Ok(Some(raw_data)), Ok(Some(pttl))) => Ok(Some(DataEntry { raw_data, pttl })),
+        (Ok(None), _) | (_, Ok(None)) => Ok(None),
+        (Err(err), _) => Err(err),
+        (_, Err(err)) => Err(err),
+    }
 }
+
+//fn data_entry_future(dump: ReplyFuture, pttl: ReplyFuture) -> DataEntryFuture {
+////    let fut = dump.join(pttl).and_then(|(dump, pttl)| {
+////        let dump_result = match dump {
+////            Resp::Bulk(BulkStr::Str(raw_data)) => Ok(Some(raw_data)),
+////            Resp::Bulk(BulkStr::Nil) => Ok(None),
+////            _others => Err(CommandError::UnexpectedResponse),
+////        };
+////        let pttl_result = match pttl {
+////            // -2 for key not exists
+////            Resp::Integer(pttl) if pttl.as_slice() != b"-2" => Ok(Some(pttl)),
+////            Resp::Integer(_pttl) => Ok(None),
+////            _others => Err(CommandError::UnexpectedResponse),
+////        };
+////        match (dump_result, pttl_result) {
+////            (Ok(Some(raw_data)), Ok(Some(pttl))) => future::ok(Some(DataEntry { raw_data, pttl })),
+////            (Ok(None), _) | (_, Ok(None)) => future::ok(None),
+////            (Err(err), _) => future::err(err),
+////            (_, Err(err)) => future::err(err),
+////        }
+////    });
+//    Box::pin(get_data_entry(dump, pttl))
+//}
 
 #[derive(Debug)]
 struct MgrCmdStateRestoreForward;
@@ -177,13 +205,20 @@ type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
 type DumpPttlTaskSender<F> = UnboundedSender<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
 type DumpPttlTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
+type RestoreTaskSender = UnboundedSender<ReplyFuture>;
+type RestoreTaskReceiver = UnboundedReceiver<ReplyFuture>;
 
 pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> {
     src_sender: Arc<S>,
     dst_sender: Arc<S>,
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
-    task_receivers: AtomicOption<(ExistsTaskReceiver<F>, DumpPttlTaskReceiver<F>)>,
+    restore_task_sender: RestoreTaskSender,
+    task_receivers: AtomicOption<(
+        ExistsTaskReceiver<F>,
+        DumpPttlTaskReceiver<F>,
+        RestoreTaskReceiver,
+    )>,
     cmd_task_factory: Arc<F>,
 }
 
@@ -198,144 +233,167 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
         let dst_sender = Arc::new(dst_sender);
         let (exists_task_sender, exists_task_receiver) = unbounded();
         let (dump_pttl_task_sender, dump_pttl_task_receiver) = unbounded();
-        let task_receivers =
-            AtomicOption::new(Box::new((exists_task_receiver, dump_pttl_task_receiver)));
+        let (restore_task_sender, restore_task_receiver) = unbounded();
+        let task_receivers = AtomicOption::new(Box::new((
+            exists_task_receiver,
+            dump_pttl_task_receiver,
+            restore_task_receiver,
+        )));
         Self {
             src_sender,
             dst_sender,
             exists_task_sender,
             dump_pttl_task_sender,
+            restore_task_sender,
             task_receivers,
             cmd_task_factory,
         }
     }
 
-    pub fn run_task_handler(&self) -> impl Future<Item = (), Error = ()> {
+    pub async fn run_task_handler(&self) {
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
         let src_sender = self.src_sender.clone();
         let dst_sender = self.dst_sender.clone();
+        let restore_task_sender = self.restore_task_sender.clone();
         let cmd_task_factory = self.cmd_task_factory.clone();
-        let r = self
-            .task_receivers
-            .take(Ordering::SeqCst)
-            .map(|p| *p)
-            .ok_or_else(|| ());
 
-        if r.is_err() {
-            error!("Failed to run importing task handler. It's already run.");
+        let receiver_opt = self.task_receivers.take(Ordering::SeqCst).map(|p| *p);
+        let (exists_task_receiver, dump_pttl_task_receiver, restore_task_receiver) =
+            match receiver_opt {
+                Some(r) => r,
+                None => {
+                    error!("RestoreDataCmdTaskHandler has already been started");
+                    return;
+                }
+            };
+
+        let exists_task_handler = Self::handle_exists_task(
+            exists_task_receiver,
+            dump_pttl_task_sender,
+            src_sender,
+            dst_sender.clone(),
+            cmd_task_factory.clone(),
+        );
+
+        let dump_pttl_task_handler = Self::handle_dump_pttl_task(
+            dump_pttl_task_receiver,
+            restore_task_sender,
+            dst_sender,
+            cmd_task_factory,
+        );
+
+        let restore_task_handler = Self::handle_restore(restore_task_receiver);
+
+        select! {
+            () = exists_task_handler.fuse() => (),
+            () = dump_pttl_task_handler.fuse() => (),
+            () = restore_task_handler.fuse() => (),
         }
-
-        future::result(r).and_then(move |(exists_task_receiver, dump_pttl_task_receiver)| {
-            let exists_task_handler = Self::handle_exists_task(
-                exists_task_receiver,
-                dump_pttl_task_sender,
-                src_sender,
-                dst_sender.clone(),
-                cmd_task_factory.clone(),
-            );
-            let dump_pttl_task_handler =
-                Self::handle_dump_pttl_task(dump_pttl_task_receiver, dst_sender, cmd_task_factory);
-            exists_task_handler
-                .select(dump_pttl_task_handler)
-                .map(|_| ())
-                .map_err(|_| ())
-        })
     }
 
-    fn handle_exists_task(
-        exists_task_receiver: ExistsTaskReceiver<F>,
+    async fn handle_exists_task(
+        mut exists_task_receiver: ExistsTaskReceiver<F>,
         dump_pttl_task_sender: DumpPttlTaskSender<F>,
         src_sender: Arc<S>,
         dst_sender: Arc<S>,
         cmd_task_factory: Arc<F>,
-    ) -> impl Future<Item = (), Error = ()> {
-        exists_task_receiver
-            .and_then(|(state, reply_receiver)| {
-                reply_receiver
-                    .and_then(move |resp| {
-                        let r = match resp {
-                            Resp::Integer(num) => {
-                                Ok((num.as_slice() != KEY_NOT_EXISTS.as_bytes(), state))
-                            }
-                            _others => Err(CommandError::UnexpectedResponse),
-                        };
-                        future::result(r)
-                    })
-                    .then(|res| match res {
-                        Ok(item) => future::ok(Some(item)),
-                        Err(err) => {
-                            debug!("failed to get exists cmd response: {:?}", err);
-                            future::ok(None)
-                        }
-                    })
-            })
-            .for_each(move |item| {
-                match item {
-                    Some((true, state)) => {
-                        let (_state, req_task) = MgrCmdStateForward::from_state_exists(state);
-                        if let Err(err) = dst_sender.send(req_task) {
-                            debug!("failed to forward: {:?}", err);
-                        }
-                    }
-                    Some((false, state)) => {
-                        let (state, req_task, reply_fut) =
-                            MgrCmdStateDumpPttl::from_state_exists(state, &(*cmd_task_factory));
-                        if let Err(err) = src_sender.send(req_task) {
-                            debug!("failed to send dump pttl: {:?}", err);
-                        }
-                        if let Err(_err) = dump_pttl_task_sender.unbounded_send((state, reply_fut))
-                        {
-                            debug!("dump_pttl_task_sender is canceled");
-                        }
-                    }
-                    None => (),
+    ) {
+        while let Some((state, reply_receiver)) = exists_task_receiver.next().await {
+            let res = reply_receiver.await;
+            let resp = match res {
+                Ok(resp) => resp,
+                Err(err) => {
+                    error!("failed to get exists cmd response: {:?}", err);
+                    continue;
                 }
-                future::ok(())
-            })
+            };
+            let key_exists = match resp {
+                Resp::Integer(num) => num.as_slice() != KEY_NOT_EXISTS.as_bytes(),
+                others => {
+                    error!("Unexpected reply from EXISTS: {:?}. Skip it.", others);
+                    continue;
+                }
+            };
+
+            if key_exists {
+                let (_state, req_task) = MgrCmdStateForward::from_state_exists(state);
+                if let Err(err) = dst_sender.send(req_task) {
+                    debug!("failed to forward: {:?}", err);
+                }
+                continue;
+            }
+
+            let (state, req_task, reply_fut) =
+                MgrCmdStateDumpPttl::from_state_exists(state, &(*cmd_task_factory));
+            if let Err(err) = src_sender.send(req_task) {
+                debug!("failed to send dump pttl: {:?}", err);
+            }
+            if let Err(_err) = dump_pttl_task_sender.unbounded_send((state, reply_fut)) {
+                debug!("dump_pttl_task_sender is canceled");
+            }
+        }
     }
 
-    fn handle_dump_pttl_task(
-        dump_pttl_task_receiver: DumpPttlTaskReceiver<F>,
+    async fn handle_dump_pttl_task(
+        mut dump_pttl_task_receiver: DumpPttlTaskReceiver<F>,
+        restore_task_sender: RestoreTaskSender,
         dst_sender: Arc<S>,
         cmd_task_factory: Arc<F>,
-    ) -> impl Future<Item = (), Error = ()> {
-        let dst_sender_clone = dst_sender.clone();
-        dump_pttl_task_receiver
-            .and_then(move |(state, reply_fut)| {
-                let dst_sender = dst_sender_clone.clone();
-                reply_fut.then(move |res| match res {
-                    Ok(Some(entry)) => future::ok(Some((entry, state))),
-                    Ok(None) => {
-                        let (_state, req_task) = MgrCmdStateForward::from_state_dump_pttl(state);
-                        if let Err(err) = dst_sender.send(req_task) {
-                            debug!("failed to send forward: {:?}", err);
-                        }
-                        future::ok(None)
+    ) {
+        while let Some((state, reply_fut)) = dump_pttl_task_receiver.next().await {
+            let res = reply_fut.await;
+            let entry = match res {
+                Ok(Some(entry)) => entry,
+                Ok(None) => {
+                    // The key also does not exist in source node.
+                    let (_state, req_task) = MgrCmdStateForward::from_state_dump_pttl(state);
+                    if let Err(err) = dst_sender.send(req_task) {
+                        debug!("failed to send forward: {:?}", err);
                     }
-                    Err(err) => {
-                        debug!("failed to get exists cmd response: {:?}", err);
-                        future::ok(None)
-                    }
-                })
-            })
-            .for_each(move |item| {
-                let fut: Box<dyn Future<Item = (), Error = ()> + Send> =
-                    if let Some((entry, state)) = item {
-                        let (_state, req_task, reply_receiver) =
-                            MgrCmdStateRestoreForward::from_state_exists(
-                                state,
-                                entry,
-                                &(*cmd_task_factory),
-                            );
-                        if let Err(err) = dst_sender.send(req_task) {
-                            debug!("failed to send restore and forward: {:?}", err);
-                        }
-                        Box::new(reply_receiver.map(|_| ()).map_err(|_| ()))
-                    } else {
-                        Box::new(future::ok(()))
-                    };
-                fut
-            })
+                    continue;
+                }
+                Err(err) => {
+                    let task = state.into_inner();
+                    task.set_resp_result(Ok(Resp::Error(
+                        format!("{}: {:?}", FAILED_TO_ACCESS_SOURCE, err).into_bytes(),
+                    )));
+                    error!("failed to get exists cmd response: {:?}. Skip it", err);
+                    continue;
+                }
+            };
+
+            let (_state, req_task, reply_receiver) =
+                MgrCmdStateRestoreForward::from_state_exists(state, entry, &(*cmd_task_factory));
+            if let Err(err) = dst_sender.send(req_task) {
+                debug!("failed to send restore and forward: {:?}", err);
+            }
+
+            if let Err(err) = restore_task_sender.unbounded_send(reply_receiver) {
+                debug!("failed to send restore task to queue: {:?}", err);
+            }
+        }
+    }
+
+    async fn handle_restore(mut restore_task_receiver: RestoreTaskReceiver) {
+        while let Some(reply_fut) = restore_task_receiver.next().await {
+            let resp = match reply_fut.await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    error!("failed to restore: {:?}", err);
+                    continue;
+                }
+            };
+            const BUSYKEY: &[u8] = b"BUSYKEY";
+            match resp {
+                Resp::Simple(_) => (),
+                Resp::Error(err)
+                    if err.get(..BUSYKEY.len()).map(|p| p == BUSYKEY) == Some(true) => {}
+                others => {
+                    let pretty_resp = others.as_ref().map(|s| pretty_print_bytes(&s));
+                    error!("unexpected RESTORE result: {:?}", pretty_resp);
+                }
+            }
+        }
     }
 
     pub fn handle_cmd_task(&self, cmd_task: F::Task) {
@@ -376,12 +434,12 @@ mod tests {
     use super::super::session::{CmdCtx, CmdCtxFactory};
     use super::*;
     use crate::protocol::RespPacket;
+    use crate::protocol::{BulkStr, Resp};
     use chashmap::CHashMap;
-    use futures::{future, Future};
-    use protocol::{BulkStr, Resp};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::RwLock;
+    use tokio;
 
     #[derive(Debug, Clone, Copy)]
     enum ErrType {
@@ -522,25 +580,23 @@ mod tests {
         (cmd_ctx, reply_receiver)
     }
 
-    fn gen_reply_future(
-        reply_receiver: CmdReplyReceiver,
-    ) -> impl Future<Item = BinSafeStr, Error = ()> {
+    async fn gen_reply_future(reply_receiver: CmdReplyReceiver) -> Result<BinSafeStr, ()> {
         reply_receiver
             .wait_response()
+            .await
             .map_err(|err| error!("cmd err: {:?}", err))
-            .and_then(|task_reply| {
+            .map(|task_reply| {
                 let (packet, _) = task_reply.into_inner();
-                let s = match packet.to_resp_slice() {
+                match packet.to_resp_slice() {
                     Resp::Bulk(BulkStr::Str(s)) => s.to_vec(),
                     Resp::Bulk(BulkStr::Nil) => "key_not_exists".to_string().into_bytes(),
                     Resp::Error(err_str) => err_str.to_vec(),
                     others => format!("invalid_reply {:?}", others).into_bytes(),
-                };
-                future::ok(s)
+                }
             })
     }
 
-    fn run_future(
+    async fn run_future(
         handler: &RestoreDataCmdTaskHandler<CmdCtxFactory, DummyReqTaskSender>,
         reply_receiver: CmdReplyReceiver,
     ) -> BinSafeStr {
@@ -548,15 +604,15 @@ mod tests {
         let run = handler
             .run_task_handler()
             .map(|()| "handler_end_first".to_string().into_bytes());
-        reply
-            .select(run)
-            .map(|(s, _next)| s)
-            .wait()
-            .unwrap_or_else(|(err, _next)| format!("future_returns_error: {:?}", err).into_bytes())
+        let res = select! {
+            res = reply.fuse() => res,
+            s = run.fuse() => Ok(s),
+        };
+        res.unwrap_or_else(|err| format!("future_returns_error: {:?}", err).into_bytes())
     }
 
-    #[test]
-    fn test_key_exists() {
+    #[tokio::test]
+    async fn test_key_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyReqTaskSender::new(false, HashMap::new()),
             DummyReqTaskSender::new(true, HashMap::new()),
@@ -566,7 +622,7 @@ mod tests {
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
         handler.handle_cmd_task(cmd_ctx);
-        let s = run_future(&handler, reply_receiver);
+        let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
         assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
@@ -577,8 +633,8 @@ mod tests {
         assert_eq!(s, "get_reply".to_string().into_bytes());
     }
 
-    #[test]
-    fn test_key_dst_not_exists() {
+    #[tokio::test]
+    async fn test_key_dst_not_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyReqTaskSender::new(true, HashMap::new()),
             DummyReqTaskSender::new(false, HashMap::new()),
@@ -588,7 +644,7 @@ mod tests {
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
         handler.handle_cmd_task(cmd_ctx);
-        let s = run_future(&handler, reply_receiver);
+        let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
         assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
@@ -599,8 +655,8 @@ mod tests {
         assert_eq!(s, "get_reply".to_string().into_bytes());
     }
 
-    #[test]
-    fn test_key_both_not_exists() {
+    #[tokio::test]
+    async fn test_key_both_not_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyReqTaskSender::new(false, HashMap::new()),
             DummyReqTaskSender::new(false, HashMap::new()),
@@ -610,7 +666,7 @@ mod tests {
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
         handler.handle_cmd_task(cmd_ctx);
-        let s = run_future(&handler, reply_receiver);
+        let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
         assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
@@ -621,8 +677,8 @@ mod tests {
         assert_eq!(s, "key_not_exists".to_string().into_bytes());
     }
 
-    #[test]
-    fn test_key_exists_with_exists_err() {
+    #[tokio::test]
+    async fn test_key_exists_with_exists_err() {
         let mut err_set1 = HashMap::new();
         err_set1.insert("EXISTS", ErrType::ErrorReply);
         let mut err_set2 = HashMap::new();
@@ -638,7 +694,7 @@ mod tests {
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
             handler.handle_cmd_task(cmd_ctx);
-            let s = run_future(&handler, reply_receiver);
+            let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("GET"), None);
@@ -650,8 +706,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_key_exists_with_get_err() {
+    #[tokio::test]
+    async fn test_key_exists_with_get_err() {
         let mut err_set1 = HashMap::new();
         err_set1.insert("GET", ErrType::ErrorReply);
         let mut err_set2 = HashMap::new();
@@ -667,7 +723,7 @@ mod tests {
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
             handler.handle_cmd_task(cmd_ctx);
-            let s = run_future(&handler, reply_receiver);
+            let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
@@ -683,8 +739,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_key_exists_with_dump_err() {
+    #[tokio::test]
+    async fn test_key_exists_with_dump_err() {
         let mut err_set1 = HashMap::new();
         err_set1.insert("DUMP", ErrType::ErrorReply);
         let mut err_set2 = HashMap::new();
@@ -700,7 +756,7 @@ mod tests {
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
             handler.handle_cmd_task(cmd_ctx);
-            let s = run_future(&handler, reply_receiver);
+            let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("GET"), None);
@@ -708,12 +764,12 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
 
-            assert!(s.starts_with("future_returns_error".as_bytes()));
+            assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
     }
 
-    #[test]
-    fn test_key_exists_with_pttl_err() {
+    #[tokio::test]
+    async fn test_key_exists_with_pttl_err() {
         let mut err_set1 = HashMap::new();
         err_set1.insert("PTTL", ErrType::ErrorReply);
         let mut err_set2 = HashMap::new();
@@ -729,7 +785,7 @@ mod tests {
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
             handler.handle_cmd_task(cmd_ctx);
-            let s = run_future(&handler, reply_receiver);
+            let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("GET"), None);
@@ -737,12 +793,12 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
 
-            assert!(s.starts_with("future_returns_error".as_bytes()));
+            assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
     }
 
-    #[test]
-    fn test_key_exists_with_restore_err() {
+    #[tokio::test]
+    async fn test_key_exists_with_restore_err() {
         let mut err_set1 = HashMap::new();
         err_set1.insert("RESTORE", ErrType::ErrorReply);
         let mut err_set2 = HashMap::new();
@@ -758,7 +814,7 @@ mod tests {
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
 
             handler.handle_cmd_task(cmd_ctx);
-            let s = run_future(&handler, reply_receiver);
+            let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
@@ -771,7 +827,7 @@ mod tests {
                 // this has to be correct. In reality, this might be error.
                 assert_eq!(s, "key_not_exists".as_bytes());
             } else {
-                assert!(s.starts_with("future_returns_error".as_bytes()));
+                assert!(s.starts_with(b"future_returns_error"));
             }
         }
     }
