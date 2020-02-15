@@ -1,6 +1,6 @@
 use crate::common::utils::pretty_print_bytes;
 use crate::protocol::{
-    BinSafeStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
+    BinSafeStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
 };
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
@@ -16,12 +16,12 @@ pub async fn keep_connecting_and_sending_cmd_with_cached_client<F: RedisClientFa
     client: Option<F::Client>,
     client_factory: Arc<F>,
     address: String,
-    cmd: Vec<BinSafeStr>,
+    opt_multi_cmd: OptionalMulti<Vec<BinSafeStr>>,
     interval: Duration,
     handle_result: Func,
 ) -> F::Client
 where
-    Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
+    Func: Clone + Fn(OptionalMulti<RespVec>) -> Result<(), RedisClientError>,
 {
     let mut client = client;
     loop {
@@ -37,18 +37,27 @@ where
                 }
             }
         };
-        match keep_sending_cmd(&mut c, cmd.clone(), interval, handle_result.clone()).await {
+        match keep_sending_cmd(
+            &mut c,
+            opt_multi_cmd.clone(),
+            interval,
+            handle_result.clone(),
+        )
+        .await
+        {
             Ok(()) => {
                 client = Some(c);
             }
             Err(RedisClientError::Done) => return c,
             Err(err) => {
-                error!(
-                    "failed to send commands {:?} {:?}. Try again.",
-                    err,
+                let debug_cmd = opt_multi_cmd.clone().map(|cmd| {
                     cmd.iter()
                         .map(|b| pretty_print_bytes(&b))
                         .collect::<Vec<String>>()
+                });
+                error!(
+                    "failed to send commands {:?} {:?}. Try again.",
+                    err, debug_cmd
                 );
             }
         }
@@ -65,28 +74,35 @@ pub async fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
 ) where
     Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
 {
+    let handler = move |opt_multi_cmd| match opt_multi_cmd {
+        OptionalMulti::Single(r) => handle_result(r),
+        OptionalMulti::Multi(v) => {
+            error!("unexpected multiple replies: {:?}", v);
+            Err(RedisClientError::InvalidReply)
+        }
+    };
     keep_connecting_and_sending_cmd_with_cached_client(
         None,
         client_factory,
         address,
-        cmd,
+        cmd.into(),
         interval,
-        handle_result,
+        handler,
     )
     .await;
 }
 
 pub async fn keep_sending_cmd<C: RedisClient, Func>(
     client: &mut C,
-    cmd: Vec<BinSafeStr>,
+    opt_mul_cmd: OptionalMulti<Vec<BinSafeStr>>,
     interval: Duration,
     handle_result: Func,
 ) -> Result<(), RedisClientError>
 where
-    Func: Fn(RespVec) -> Result<(), RedisClientError>,
+    Func: Fn(OptionalMulti<RespVec>) -> Result<(), RedisClientError>,
 {
     loop {
-        let response = match client.execute(cmd.clone()).await {
+        let response = match client.execute(opt_mul_cmd.clone()).await {
             Ok(response) => response,
             Err(err) => return Err(err),
         };
@@ -95,13 +111,15 @@ where
     }
 }
 
-pub fn retry_handle_func(response: RespVec) -> Result<(), RedisClientError> {
-    if let Resp::Error(err) = response {
-        let err_str = str::from_utf8(&err)
-            .map(ToString::to_string)
-            .unwrap_or_else(|_| format!("{:?}", err));
-        error!("error reply: {}", err_str);
-    }
+pub fn retry_handle_func(response: OptionalMulti<RespVec>) -> Result<(), RedisClientError> {
+    response.map(|resp| {
+        if let Resp::Error(err) = resp {
+            let err_str = str::from_utf8(&err)
+                .map(ToString::to_string)
+                .unwrap_or_else(|_| format!("{:?}", err));
+            error!("error reply: {}", err_str);
+        }
+    });
     Ok(())
 }
 
@@ -248,7 +266,7 @@ mod tests {
     use super::*;
     use crate::common::utils::ThreadSafe;
     use crate::protocol::BinSafeStr;
-    use crate::protocol::Resp;
+    use crate::protocol::{OptionalMulti, Resp};
     use futures::future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio;
@@ -282,14 +300,17 @@ mod tests {
     impl ThreadSafe for DummyRedisClient {}
 
     impl RedisClient for DummyRedisClient {
-        fn execute(
-            &mut self,
-            _command: Vec<BinSafeStr>,
-        ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>> {
+        fn execute<'s>(
+            &'s mut self,
+            _command: OptionalMulti<Vec<BinSafeStr>>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>,
+        > {
             let client = self;
             if client.counter.count.load(Ordering::SeqCst) < client.counter.max_count {
                 client.counter.count.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async { Ok(Resp::Simple("OK".to_string().into_bytes())) })
+                // Only works for single command
+                Box::pin(async { Ok(Resp::Simple("OK".to_string().into_bytes()).into()) })
             } else {
                 Box::pin(async { Err(RedisClientError::Closed) })
             }
@@ -324,7 +345,7 @@ mod tests {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
         let mut client = DummyRedisClient::new(counter.clone());
-        let res = keep_sending_cmd(&mut client, vec![], interval, retry_handle_func).await;
+        let res = keep_sending_cmd(&mut client, vec![].into(), interval, retry_handle_func).await;
         assert!(res.is_err());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
     }

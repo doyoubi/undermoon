@@ -44,7 +44,7 @@ impl<F: RedisClientFactory> RedisMasterReplicator<F> {
     }
 
     fn handle_result(resp: RespVec, data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
-        let r = retry_handle_func(resp);
+        let r = retry_handle_func(resp.into());
         if r.is_ok() {
             data.store(1, Ordering::SeqCst);
         }
@@ -128,7 +128,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
     }
 
     fn handle_result(resp: RespVec, _data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
-        retry_handle_func(resp)
+        retry_handle_func(resp.into())
     }
 }
 

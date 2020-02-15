@@ -129,7 +129,7 @@ async fn send_meta<C: RedisClient>(
     let mut cmd = vec!["UMCTL".to_string(), sub_command.clone()];
     cmd.extend(args);
     let resp = client
-        .execute(cmd.into_iter().map(String::into_bytes).collect())
+        .execute_single(cmd.into_iter().map(String::into_bytes).collect())
         .await
         .map_err(|e| {
             error!("failed to send meta data of host {:?}", e);

@@ -537,7 +537,7 @@ mod tests {
             "compression_strategy",
             "allow_all",
             "otherdb",
-            "migration_offset_threshold",
+            "migration_delete_count",
             "233",
             "mydb",
             "migration_max_migration_time",
@@ -569,19 +569,19 @@ mod tests {
                 .get("otherdb")
                 .expect("test_clusters_config")
                 .migration_config
-                .offset_threshold,
+                .delete_count,
             233
         );
 
         let mut result_args = clusters_config.to_args();
-        result_args.sort();
+
         let mut full_args = vec![
             "mydb",
             "compression_strategy",
             "allow_all",
             "mydb",
-            "migration_offset_threshold",
-            "50000",
+            "migration_delete_count",
+            "16",
             "mydb",
             "migration_max_migration_time",
             "666",
@@ -589,36 +589,37 @@ mod tests {
             "migration_max_blocking_time",
             "10000",
             "mydb",
-            "migration_min_blocking_time",
-            "100",
+            "migration_delete_interval",
+            "500",
             "mydb",
-            "migration_max_redirection_time",
-            "5000",
+            "migration_scan_interval",
+            "500",
             "mydb",
-            "migration_switch_retry_interval",
-            "10",
+            "migration_scan_count",
+            "16",
             "otherdb",
             "compression_strategy",
             "disabled",
             "otherdb",
-            "migration_offset_threshold",
+            "migration_delete_count",
             "233",
             "otherdb",
             "migration_max_migration_time",
-            "600000",
+            "10800",
             "otherdb",
             "migration_max_blocking_time",
             "10000",
             "otherdb",
-            "migration_min_blocking_time",
-            "100",
+            "migration_delete_interval",
+            "500",
             "otherdb",
-            "migration_max_redirection_time",
-            "5000",
+            "migration_scan_interval",
+            "500",
             "otherdb",
-            "migration_switch_retry_interval",
-            "10",
+            "migration_scan_count",
+            "16",
         ];
+        result_args.sort();
         full_args.sort();
         assert_eq!(result_args, full_args);
     }
@@ -766,23 +767,23 @@ mod tests {
         let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         let extended = vec![
             "dbname",
-            "migration_offset_threshold",
-            "50000",
+            "migration_delete_count",
+            "16",
             "dbname",
             "migration_max_migration_time",
-            "600000",
+            "10800",
             "dbname",
             "migration_max_blocking_time",
             "10000",
             "dbname",
-            "migration_min_blocking_time",
-            "100",
+            "migration_delete_interval",
+            "500",
             "dbname",
-            "migration_max_redirection_time",
-            "5000",
+            "migration_scan_interval",
+            "500",
             "dbname",
-            "migration_switch_retry_interval",
-            "10",
+            "migration_scan_count",
+            "16",
         ]
         .into_iter()
         .map(|s| s.to_string());

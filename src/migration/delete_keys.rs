@@ -79,7 +79,7 @@ impl DeleteKeysTaskMap {
                     address.clone(),
                     slots,
                     client_factory.clone(),
-                    config.get_delete_rate(),
+                    config.clone(),
                 ));
                 db.insert(address, task.clone());
                 new_tasks.push(task);
@@ -111,7 +111,7 @@ impl DeleteKeysTask {
         address: String,
         slot_ranges: Vec<SlotRange>,
         client_factory: Arc<F>,
-        delete_rate: u64,
+        config: Arc<AtomicMigrationConfig>,
     ) -> Self {
         let slot_ranges = slot_ranges
             .into_iter()
@@ -120,12 +120,8 @@ impl DeleteKeysTask {
         let slot_ranges = SlotRangeArray {
             ranges: slot_ranges,
         };
-        let (fut, handle) = Self::gen_future(
-            address.clone(),
-            slot_ranges.clone(),
-            client_factory,
-            delete_rate,
-        );
+        let (fut, handle) =
+            Self::gen_future(address.clone(), slot_ranges.clone(), client_factory, config);
         Self {
             address,
             slot_ranges,
@@ -142,18 +138,18 @@ impl DeleteKeysTask {
         address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
-        delete_rate: u64,
+        config: Arc<AtomicMigrationConfig>,
     ) -> (ScanDelFuture, FutureAutoStopHandle) {
         let data = (slot_ranges, 0);
-        const SCAN_DEFAULT_SIZE: u64 = 10;
-        let interval = Duration::from_nanos(1_000_000_000 / (delete_rate / SCAN_DEFAULT_SIZE));
+        let scan_count = config.get_delete_count();
+        let interval = Duration::from_micros(config.get_delete_interval());
         info!("delete keys with interval {:?}", interval);
         let send = keep_connecting_and_sending(
             data,
             client_factory,
             address,
             interval,
-            Self::scan_and_delete_keys,
+            move |data, client| Self::scan_and_delete_keys(data, client, scan_count),
         );
         let (send, handle) = new_auto_drop_future(send);
         let send = send.map(|opt| match opt {
@@ -166,12 +162,18 @@ impl DeleteKeysTask {
     async fn scan_and_delete_keys_impl<C: RedisClient>(
         data: (SlotRangeArray, u64),
         client: &mut C,
+        scan_count: u64,
     ) -> Result<(SlotRangeArray, u64), RedisClientError> {
         let (slot_ranges, index) = data;
-        let scan_cmd = vec!["SCAN".to_string(), index.to_string()];
+        let scan_cmd = vec![
+            "SCAN".to_string(),
+            index.to_string(),
+            "COUNT".to_string(),
+            scan_count.to_string(),
+        ];
         let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
 
-        let resp = client.execute(byte_cmd).await?;
+        let resp = client.execute_single(byte_cmd).await?;
         let ScanResponse { next_index, keys } =
             ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
 
@@ -186,7 +188,7 @@ impl DeleteKeysTask {
 
         let mut del_cmd = vec!["DEL".to_string().into_bytes()];
         del_cmd.extend_from_slice(keys.as_slice());
-        let resp = client.execute(del_cmd).await?;
+        let resp = client.execute_single(del_cmd).await?;
 
         match resp {
             Resp::Error(err) => {
@@ -200,8 +202,9 @@ impl DeleteKeysTask {
     fn scan_and_delete_keys<C: RedisClient>(
         data: (SlotRangeArray, u64),
         client: &mut C,
+        scan_count: u64,
     ) -> Pin<Box<dyn Future<Output = ScanDelResult> + Send + '_>> {
-        Box::pin(Self::scan_and_delete_keys_impl(data, client))
+        Box::pin(Self::scan_and_delete_keys_impl(data, client, scan_count))
     }
 
     pub fn get_address(&self) -> String {

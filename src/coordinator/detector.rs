@@ -48,7 +48,7 @@ impl<F: RedisClientFactory> PingFailureDetector<F> {
         // The connection pool might get a stale connection.
         // Return err instead for retry.
         let ping_command = vec!["PING".to_string().into_bytes()];
-        match client.execute(ping_command).await {
+        match client.execute_single(ping_command).await {
             Ok(_) => Ok(None),
             Err(err) => {
                 error!("PingFailureDetector::check failed to send PING: {:?}", err);
@@ -113,7 +113,9 @@ mod tests {
     use super::*;
     use crate::common::cluster::{Cluster, Host};
     use crate::common::utils::ThreadSafe;
-    use crate::protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp, RespVec};
+    use crate::protocol::{
+        Array, BinSafeStr, OptionalMulti, RedisClient, RedisClientError, Resp, RespVec,
+    };
     use futures::{future, stream};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
@@ -130,12 +132,15 @@ mod tests {
     impl ThreadSafe for DummyClient {}
 
     impl RedisClient for DummyClient {
-        fn execute(
-            &mut self,
-            _command: Vec<BinSafeStr>,
-        ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send>> {
+        fn execute<'s>(
+            &'s mut self,
+            _command: OptionalMulti<Vec<BinSafeStr>>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>,
+        > {
             if self.address == NODE1 {
-                Box::pin(future::ok(Resp::Arr(Array::Nil)))
+                // only works for single command
+                Box::pin(future::ok(Resp::Arr(Array::Nil).into()))
             } else {
                 Box::pin(future::err(RedisClientError::InvalidReply))
             }

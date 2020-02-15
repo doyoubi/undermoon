@@ -20,15 +20,14 @@ use crate::proxy::service::ServerProxyConfig;
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
 use futures::{future, select, Future, FutureExt, TryFutureExt};
+use futures_timer::Delay;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-const SCAN_RATE: u64 = 1000;
-
 pub struct RedisScanMigratingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> {
-    _mgr_config: Arc<AtomicMigrationConfig>,
+    mgr_config: Arc<AtomicMigrationConfig>,
     db_name: String,
     slot_range: (usize, usize),
     meta: MigrationMeta,
@@ -66,12 +65,12 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
             meta.dst_node_address.clone(),
             slot_range,
             client_factory.clone(),
-            SCAN_RATE,
+            mgr_config.clone(),
         );
         let redirection_sender_factory =
             ReqAdaptorSenderFactory::new(RedirectionSenderFactory::default());
         Self {
-            _mgr_config: mgr_config,
+            mgr_config,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
@@ -161,6 +160,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
 
     async fn pre_block(&self) -> Result<(), MigrationError> {
         let state = self.state.clone();
+        let _ = self.mgr_config.get_max_blocking_time();
         // TODO: implement this.
         state.set_state(MigrationState::PreSwitch);
         info!("pre_block done");
@@ -280,19 +280,29 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
     }
 
     async fn run(&self) -> Result<(), MigrationError> {
+        let final_switch = self.final_switch();
+
+        let timeout = Duration::from_secs(self.mgr_config.get_max_migration_time());
+        let mut timeout_fut = Delay::new(timeout).fuse();
+        select! {
+            () = timeout_fut => error!("migration timeout after {:?}, force to commit migration", timeout),
+            res = self.run_migration().fuse() => res?,
+        };
+        final_switch.await;
+
+        Ok(())
+    }
+
+    async fn run_migration(&self) -> Result<(), MigrationError> {
         let pre_check = self.pre_check();
         let pre_block = self.pre_block();
         let pre_switch = self.pre_switch();
         let scan_migrate = self.scan_migrate();
-        let final_switch = self.final_switch();
 
         pre_check.await;
         pre_block.await?;
         pre_switch.await;
-        scan_migrate.await?;
-        final_switch.await;
-
-        Ok(())
+        scan_migrate.await
     }
 }
 
@@ -319,7 +329,7 @@ impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> MigratingT
             };
             match r {
                 Ok(()) => {
-                    warn!("Migrating tasks stopped {:?}", meta);
+                    info!("Migrating tasks stopped {:?}", meta);
                     Ok(())
                 }
                 Err(err) => {

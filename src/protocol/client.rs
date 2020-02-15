@@ -1,6 +1,9 @@
 use super::resp::{BinSafeStr, RespVec};
 use crate::common::utils::{resolve_first_address, ThreadSafe};
-use crate::protocol::RespCodec;
+use crate::protocol::{
+    new_optional_multi_packet_codec, EncodeError, OptionalMulti, OptionalMultiPacketDecoder,
+    OptionalMultiPacketEncoder, RespCodec,
+};
 use atomic_option::AtomicOption;
 use chashmap::CHashMap;
 use crossbeam_channel;
@@ -17,10 +20,52 @@ use tokio::time;
 use tokio_util::codec::{Decoder, Framed};
 
 pub trait RedisClient: Send {
-    fn execute<'s>(
+    fn execute_single<'s>(
         &'s mut self,
         command: Vec<BinSafeStr>,
-    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
+        let fut = async move {
+            match self.execute(command.into()).await {
+                Ok(opt_mul_resp) => {
+                    match opt_mul_resp {
+                        OptionalMulti::Single(t) => Ok(t),
+                        OptionalMulti::Multi(v) => {
+                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", v);
+                            Err(RedisClientError::InvalidState)
+                        }
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        };
+        Box::pin(fut)
+    }
+
+    fn execute_multi<'s>(
+        &'s mut self,
+        commands: Vec<Vec<BinSafeStr>>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>> {
+        let fut = async move {
+            match self.execute(OptionalMulti::Multi(commands)).await {
+                Ok(opt_mul_resp) => {
+                    match opt_mul_resp {
+                        OptionalMulti::Single(t) => {
+                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", t);
+                            Err(RedisClientError::InvalidState)
+                        }
+                        OptionalMulti::Multi(v) => Ok(v),
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        };
+        Box::pin(fut)
+    }
+
+    fn execute<'s>(
+        &'s mut self,
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>;
 }
 
 pub trait RedisClientFactory: ThreadSafe {
@@ -80,7 +125,8 @@ struct PoolItemHandle<T> {
     reclaim_sender: Arc<crossbeam_channel::Sender<T>>,
 }
 
-type ClientCodec = RespCodec<Vec<BinSafeStr>, RespVec>;
+type ClientCodec =
+    RespCodec<OptionalMultiPacketEncoder<Vec<BinSafeStr>>, OptionalMultiPacketDecoder<RespVec>>;
 type RawConnHandle = PoolItemHandle<RedisClientConnection>;
 
 struct RedisClientConnectionHandle {
@@ -103,7 +149,10 @@ impl PooledRedisClient {
         }
     }
 
-    async fn execute_cmd(&mut self, command: Vec<BinSafeStr>) -> Result<RespVec, RedisClientError> {
+    async fn execute_cmd(
+        &mut self,
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
         let frame = match &mut self.conn_handle {
             Some(RedisClientConnectionHandle { frame, .. }) => frame,
             None => {
@@ -112,7 +161,10 @@ impl PooledRedisClient {
             }
         };
 
-        frame.send(command).await.map_err(RedisClientError::Io)?;
+        frame.send(command).await.map_err(|err| match err {
+            EncodeError::Io(err) => RedisClientError::Io(err),
+            EncodeError::NotReady(_) => RedisClientError::InvalidState,
+        })?;
         match frame.next().await {
             Some(Ok(resp)) => Ok(resp),
             Some(Err(err)) => {
@@ -125,8 +177,8 @@ impl PooledRedisClient {
 
     async fn execute_cmd_with_timeout(
         &mut self,
-        command: Vec<BinSafeStr>,
-    ) -> Result<RespVec, RedisClientError> {
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
         let timeout = self.timeout;
         let exec_cut = self.execute_cmd(command);
         let r = match time::timeout(timeout, exec_cut).await {
@@ -171,8 +223,9 @@ impl Drop for PooledRedisClient {
 impl RedisClient for PooledRedisClient {
     fn execute<'s>(
         &'s mut self,
-        command: Vec<BinSafeStr>,
-    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>
+    {
         Box::pin(self.execute_cmd_with_timeout(command))
     }
 }
@@ -244,8 +297,9 @@ impl PooledRedisClientFactory {
                 item,
                 reclaim_sender,
             } = conn_handle;
+            let (encoder, decoder) = new_optional_multi_packet_codec();
             let conn_handle = RedisClientConnectionHandle {
-                frame: ClientCodec::default().framed(item.into()),
+                frame: ClientCodec::new(encoder, decoder).framed(item.into()),
                 reclaim_sender,
             };
             return Ok(PooledRedisClient::new(conn_handle, self.timeout));
@@ -266,8 +320,9 @@ impl PooledRedisClientFactory {
                         Err(err)
                     }
                     Ok(Ok(conn)) => {
+                        let (encoder, decoder) = new_optional_multi_packet_codec();
                         let conn_handle = RedisClientConnectionHandle {
-                            frame: ClientCodec::default().framed(conn.into()),
+                            frame: ClientCodec::new(encoder, decoder).framed(conn.into()),
                             reclaim_sender: *reclaim_sender,
                         };
                         Ok(PooledRedisClient::new(conn_handle, timeout))
@@ -304,6 +359,7 @@ pub enum RedisClientError {
     Done,
     Canceled,
     EncodeError,
+    InvalidState,
 }
 
 impl fmt::Display for RedisClientError {
