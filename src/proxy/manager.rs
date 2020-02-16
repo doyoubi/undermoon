@@ -9,18 +9,19 @@ use super::slowlog::TaskEvent;
 use crate::common::cluster::{MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMeta;
-use crate::common::utils::ThreadSafe;
+use crate::common::utils::{Wrapper, ThreadSafe};
 use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
 use crate::protocol::{RedisClientFactory, RespVec};
-use crate::proxy::backend::CmdTask;
+use crate::proxy::backend::{CmdTask};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use crate::proxy::command::CommandResult;
 
 pub struct MetaMap<F: ReqTaskSenderFactory, MF>
 where
@@ -58,7 +59,7 @@ where
     }
 }
 
-type SenderFactory = BackendSenderFactory<DecompressCommitHandlerFactory>;
+type SenderFactory = BackendSenderFactory<DecompressCommitHandlerFactory<CounterTask<CmdCtx>>>;
 type MigrationSenderFactory = BackendSenderFactory<ReplyCommitHandlerFactory>;
 pub type SharedMetaMap = Arc<ArcSwap<MetaMap<SenderFactory, MigrationSenderFactory>>>;
 
@@ -237,6 +238,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             },
         };
 
+        let cmd_ctx = CounterTask::new(cmd_ctx, Arc::new(AtomicI64::new(0)));
         cmd_ctx.log_event(TaskEvent::SentToDB);
         let res = meta_map.db_map.send(cmd_ctx);
         if let Err(e) = res {
@@ -253,5 +255,78 @@ impl<F: RedisClientFactory> MetaManager<F> {
             cmd_ctx.set_db_name(db_name);
         }
         cmd_ctx
+    }
+}
+
+pub struct CounterTask<T: CmdTask> {
+    inner: T,
+    _counter: AutoCounter,
+}
+
+struct AutoCounter(Arc<AtomicI64>);
+
+impl AutoCounter {
+    fn new(counter: Arc<AtomicI64>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter)
+    }
+}
+
+impl Drop for AutoCounter {
+    fn drop(&mut self) {
+        // TODO: This order could be relaxed.
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl<T: CmdTask> CounterTask<T> {
+    pub fn new(inner: T, counter: Arc<AtomicI64>) -> Self {
+        Self {
+            inner,
+            _counter: AutoCounter::new(counter),
+        }
+    }
+
+    pub fn into_inner(self) -> T {
+        let Self { inner, .. } = self;
+        inner
+    }
+}
+
+impl<T: CmdTask> From<CounterTask<T>> for Wrapper<T> {
+    fn from(counter_task: CounterTask<T>) -> Self {
+        Wrapper(counter_task.into_inner())
+    }
+}
+
+impl<T: CmdTask + ThreadSafe> ThreadSafe for CounterTask<T> {}
+
+impl<T: CmdTask + DBTag> DBTag for CounterTask<T> {
+    fn get_db_name(&self) -> String {
+        self.inner.get_db_name()
+    }
+
+    fn set_db_name(&self, db: String) {
+        self.inner.set_db_name(db)
+    }
+}
+
+impl<T: CmdTask> CmdTask for CounterTask<T> {
+    type Pkt = T::Pkt;
+
+    fn get_key(&self) -> Option<&[u8]> {
+        self.inner.get_key()
+    }
+
+    fn set_result(self, result: CommandResult<Self::Pkt>) {
+        self.into_inner().set_result(result)
+    }
+
+    fn get_packet(&self) -> Self::Pkt {
+        self.inner.get_packet()
+    }
+
+    fn log_event(&self, event: TaskEvent) {
+        self.inner.log_event(event)
     }
 }

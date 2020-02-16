@@ -141,6 +141,15 @@ pub fn vec_result_to_stream<T, E>(res: Result<Vec<T>, E>) -> impl Stream<Item = 
     stream::iter(elements)
 }
 
+pub struct Wrapper<T>(pub T);
+
+impl<T> Wrapper<T> {
+    pub fn into_inner(self) -> T {
+        let Self(t) = self;
+        t
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
