@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::result::Result;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio;
@@ -44,7 +44,7 @@ pub trait CmdTaskResultHandlerFactory: ThreadSafe {
     fn create(&self) -> Self::Handler;
 }
 
-pub trait CmdTask: ThreadSafe + fmt::Debug {
+pub trait CmdTask: ThreadSafe {
     type Pkt: Packet + Send;
 
     fn get_key(&self) -> Option<&[u8]>;
@@ -76,6 +76,59 @@ pub trait CmdTaskFactory {
     );
 }
 
+pub struct CounterTask<T: CmdTask> {
+    inner: T,
+    _counter: AutoCounter,
+}
+
+struct AutoCounter(Arc<AtomicI64>);
+
+impl AutoCounter {
+    fn new(counter: Arc<AtomicI64>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter)
+    }
+}
+
+impl Drop for AutoCounter {
+    fn drop(&mut self) {
+        // TODO: This order could be relaxed.
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl<T: CmdTask> CounterTask<T> {
+    pub fn new(inner: T, counter: Arc<AtomicI64>) -> Self {
+        Self {
+            inner,
+            _counter: AutoCounter::new(counter),
+        }
+    }
+}
+
+impl<T: CmdTask + ThreadSafe> ThreadSafe for CounterTask<T> {}
+
+impl<T: CmdTask> CmdTask for CounterTask<T> {
+    type Pkt = T::Pkt;
+
+    fn get_key(&self) -> Option<&[u8]> {
+        self.inner.get_key()
+    }
+
+    fn set_result(self, result: CommandResult<Self::Pkt>) {
+        let Self { inner, .. } = self;
+        inner.set_result(result)
+    }
+
+    fn get_packet(&self) -> Self::Pkt {
+        self.inner.get_packet()
+    }
+
+    fn log_event(&self, event: TaskEvent) {
+        self.inner.log_event(event)
+    }
+}
+
 // Type alias can't work with trait bound so we need to define again,
 // or we can use OptionalMulti.
 pub enum ReqTask<T: CmdTask> {
@@ -101,6 +154,12 @@ pub trait CmdTaskSenderFactory {
     fn create(&self, address: String) -> Self::Sender;
 }
 
+// ReqTaskSender is used to guarantee a group of commands
+// are sent in the same connection to preserve their order.
+// This could be implemented by making CmdTask a group task
+// consisting of multiple commands at this point.
+// TODO: maybe we will implement a GroupCmdTask and remove
+// this interface in the future.
 pub trait ReqTaskSender {
     type Task: CmdTask;
 

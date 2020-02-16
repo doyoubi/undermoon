@@ -407,7 +407,6 @@ impl RemoteDB {
     }
 }
 
-#[derive(Debug)]
 pub enum DBSendError<T: CmdTask> {
     MissingKey,
     DBNotFound(String),
@@ -420,6 +419,20 @@ pub enum DBSendError<T: CmdTask> {
 impl<T: CmdTask> fmt::Display for DBSendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl<T: CmdTask> fmt::Debug for DBSendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::MissingKey => "DBSendError::MissingKey".to_string(),
+            Self::DBNotFound(db) => format!("DBSendError::DBNotFound({})", db),
+            Self::SlotNotFound(_) => "DBSendError::SlotNotFound".to_string(),
+            Self::SlotNotCovered => "DBSendError::SlotNotCovered".to_string(),
+            Self::Backend(err) => format!("DBSendError::Backend({})", err),
+            Self::MigrationError => "DBSendError::MigrationError".to_string(),
+        };
+        write!(f, "{}", s)
     }
 }
 
