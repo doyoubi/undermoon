@@ -11,15 +11,23 @@ pub struct DecompressCommitHandlerFactory<T: CmdTask<Pkt = RespPacket> + Into<Wr
     phanthom: PhantomData<T>,
 }
 
-impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> ThreadSafe for DecompressCommitHandlerFactory<T> {}
+impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> ThreadSafe
+    for DecompressCommitHandlerFactory<T>
+{
+}
 
 impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> DecompressCommitHandlerFactory<T> {
     pub fn new(meta_map: SharedMetaMap) -> Self {
-        Self { meta_map, phanthom: PhantomData }
+        Self {
+            meta_map,
+            phanthom: PhantomData,
+        }
     }
 }
 
-impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandlerFactory for DecompressCommitHandlerFactory<T> {
+impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandlerFactory
+    for DecompressCommitHandlerFactory<T>
+{
     type Handler = DecompressCommitHandler<T>;
 
     fn create(&self) -> Self::Handler {
@@ -35,7 +43,9 @@ pub struct DecompressCommitHandler<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<C
     phanthom: PhantomData<T>,
 }
 
-impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandler for DecompressCommitHandler<T> {
+impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandler
+    for DecompressCommitHandler<T>
+{
     type Task = T;
 
     fn handle_task(

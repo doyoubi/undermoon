@@ -1,6 +1,7 @@
 use super::backend::{
     gen_sender_factory, BackendSenderFactory, ReqTaskSender, ReqTaskSenderFactory,
 };
+use super::blocking::CounterTask;
 use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
@@ -9,19 +10,18 @@ use super::slowlog::TaskEvent;
 use crate::common::cluster::{MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMeta;
-use crate::common::utils::{Wrapper, ThreadSafe};
+use crate::common::utils::ThreadSafe;
 use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
 use crate::protocol::{RedisClientFactory, RespVec};
-use crate::proxy::backend::{CmdTask};
+use crate::proxy::backend::CmdTask;
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
-use std::sync::atomic::{AtomicU64, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use crate::proxy::command::CommandResult;
 
 pub struct MetaMap<F: ReqTaskSenderFactory, MF>
 where
@@ -74,6 +74,7 @@ pub struct MetaManager<F: RedisClientFactory> {
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, MigrationSenderFactory, CmdCtxFactory>,
     sender_factory: SenderFactory,
+    running_cmd: Arc<AtomicI64>,
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
@@ -105,6 +106,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
                 cmd_ctx_factory,
             ),
             sender_factory,
+            running_cmd: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -226,24 +228,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
-        let meta_map = self.meta_map.lease();
-        let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
-            Ok(()) => return,
-            Err(e) => match e {
-                DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
-                err => {
-                    error!("migration send task failed: {:?}", err);
-                    return;
-                }
-            },
-        };
-
-        let cmd_ctx = CounterTask::new(cmd_ctx, Arc::new(AtomicI64::new(0)));
-        cmd_ctx.log_event(TaskEvent::SentToDB);
-        let res = meta_map.db_map.send(cmd_ctx);
-        if let Err(e) = res {
-            warn!("Failed to forward cmd_ctx: {:?}", e)
-        }
+        send_cmd_ctx(&self.meta_map, cmd_ctx, &self.running_cmd);
     }
 
     pub fn try_select_db(&self, cmd_ctx: CmdCtx) -> CmdCtx {
@@ -258,75 +243,23 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 }
 
-pub struct CounterTask<T: CmdTask> {
-    inner: T,
-    _counter: AutoCounter,
-}
+pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx, running_cmd: &Arc<AtomicI64>) {
+    let meta_map = meta_map.lease();
+    let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
+        Ok(()) => return,
+        Err(e) => match e {
+            DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
+            err => {
+                error!("migration send task failed: {:?}", err);
+                return;
+            }
+        },
+    };
 
-struct AutoCounter(Arc<AtomicI64>);
-
-impl AutoCounter {
-    fn new(counter: Arc<AtomicI64>) -> Self {
-        counter.fetch_add(1, Ordering::SeqCst);
-        Self(counter)
-    }
-}
-
-impl Drop for AutoCounter {
-    fn drop(&mut self) {
-        // TODO: This order could be relaxed.
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-impl<T: CmdTask> CounterTask<T> {
-    pub fn new(inner: T, counter: Arc<AtomicI64>) -> Self {
-        Self {
-            inner,
-            _counter: AutoCounter::new(counter),
-        }
-    }
-
-    pub fn into_inner(self) -> T {
-        let Self { inner, .. } = self;
-        inner
-    }
-}
-
-impl<T: CmdTask> From<CounterTask<T>> for Wrapper<T> {
-    fn from(counter_task: CounterTask<T>) -> Self {
-        Wrapper(counter_task.into_inner())
-    }
-}
-
-impl<T: CmdTask + ThreadSafe> ThreadSafe for CounterTask<T> {}
-
-impl<T: CmdTask + DBTag> DBTag for CounterTask<T> {
-    fn get_db_name(&self) -> String {
-        self.inner.get_db_name()
-    }
-
-    fn set_db_name(&self, db: String) {
-        self.inner.set_db_name(db)
-    }
-}
-
-impl<T: CmdTask> CmdTask for CounterTask<T> {
-    type Pkt = T::Pkt;
-
-    fn get_key(&self) -> Option<&[u8]> {
-        self.inner.get_key()
-    }
-
-    fn set_result(self, result: CommandResult<Self::Pkt>) {
-        self.into_inner().set_result(result)
-    }
-
-    fn get_packet(&self) -> Self::Pkt {
-        self.inner.get_packet()
-    }
-
-    fn log_event(&self, event: TaskEvent) {
-        self.inner.log_event(event)
+    let cmd_ctx = CounterTask::new(cmd_ctx, running_cmd.clone());
+    cmd_ctx.log_event(TaskEvent::SentToDB);
+    let res = meta_map.db_map.send(cmd_ctx);
+    if let Err(e) = res {
+        warn!("Failed to forward cmd_ctx: {:?}", e)
     }
 }

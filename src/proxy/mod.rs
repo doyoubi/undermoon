@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod blocking;
 mod command;
 mod compress;
 pub mod database;
