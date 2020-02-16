@@ -23,24 +23,24 @@ use arc_swap::ArcSwap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub struct MetaMap<F: ReqTaskSenderFactory, MF>
+pub struct MetaMap<S: ReqTaskSender, MF>
 where
     MF: ReqTaskSenderFactory + ThreadSafe,
     <MF as ReqTaskSenderFactory>::Sender: ThreadSafe,
     <<MF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as ReqTaskSender>::Task: DBTag,
 {
-    db_map: DatabaseMap<F>,
+    db_map: DatabaseMap<S>,
     migration_map: MigrationMap<MF>,
     deleting_task_map: DeleteKeysTaskMap,
 }
 
-impl<F: ReqTaskSenderFactory, MF> MetaMap<F, MF>
+impl<S: ReqTaskSender, MF> MetaMap<S, MF>
 where
     MF: ReqTaskSenderFactory + ThreadSafe,
     <MF as ReqTaskSenderFactory>::Sender: ThreadSafe,
     <<MF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as ReqTaskSender>::Task: DBTag,
 {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
@@ -54,14 +54,15 @@ where
         }
     }
 
-    pub fn get_db_map(&self) -> &DatabaseMap<F> {
+    pub fn get_db_map(&self) -> &DatabaseMap<S> {
         &self.db_map
     }
 }
 
 type SenderFactory = BackendSenderFactory<DecompressCommitHandlerFactory<CounterTask<CmdCtx>>>;
 type MigrationSenderFactory = BackendSenderFactory<ReplyCommitHandlerFactory>;
-pub type SharedMetaMap = Arc<ArcSwap<MetaMap<SenderFactory, MigrationSenderFactory>>>;
+pub type SharedMetaMap =
+    Arc<ArcSwap<MetaMap<<SenderFactory as ReqTaskSenderFactory>::Sender, MigrationSenderFactory>>>;
 
 pub struct MetaManager<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,

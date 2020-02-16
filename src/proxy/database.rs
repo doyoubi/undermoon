@@ -42,17 +42,17 @@ pub trait DBTag {
     fn set_db_name(&self, db: String);
 }
 
-pub struct DatabaseMap<F: ReqTaskSenderFactory>
+pub struct DatabaseMap<S: ReqTaskSender>
 where
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as ReqTaskSender>::Task: DBTag,
 {
-    local_dbs: HashMap<String, Database<F>>,
+    local_dbs: HashMap<String, Database<S>>,
     remote_dbs: HashMap<String, RemoteDB>,
 }
 
-impl<F: ReqTaskSenderFactory> Default for DatabaseMap<F>
+impl<S: ReqTaskSender> Default for DatabaseMap<S>
 where
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as ReqTaskSender>::Task: DBTag,
 {
     fn default() -> Self {
         Self {
@@ -62,11 +62,14 @@ where
     }
 }
 
-impl<F: ReqTaskSenderFactory> DatabaseMap<F>
+impl<S: ReqTaskSender> DatabaseMap<S>
 where
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as ReqTaskSender>::Task: DBTag,
 {
-    pub fn from_db_map(db_meta: &ProxyDBMeta, sender_factory: &F) -> Self {
+    pub fn from_db_map<F: ReqTaskSenderFactory<Sender = S>>(
+        db_meta: &ProxyDBMeta,
+        sender_factory: &F,
+    ) -> Self {
         let epoch = db_meta.get_epoch();
 
         let mut local_dbs = HashMap::new();
@@ -111,8 +114,8 @@ where
 
     pub fn send(
         &self,
-        cmd_task: <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>> {
+        cmd_task: <S as ReqTaskSender>::Task,
+    ) -> Result<(), DBSendError<<S as ReqTaskSender>::Task>> {
         let db_name = cmd_task.get_db_name();
         let (cmd_task, db_exists) = match self.local_dbs.get(&db_name) {
             Some(db) => match db.send(cmd_task) {
@@ -213,22 +216,22 @@ struct LocalDB<S: ReqTaskSender> {
     slot_map: SlotMap,
 }
 
-pub struct Database<F: ReqTaskSenderFactory> {
+pub struct Database<S: ReqTaskSender> {
     name: String,
     epoch: u64,
-    local_db: LocalDB<F::Sender>,
+    local_db: LocalDB<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     config: ClusterConfig,
 }
 
-impl<F: ReqTaskSenderFactory> Database<F> {
-    pub fn from_slot_map(
+impl<S: ReqTaskSender> Database<S> {
+    pub fn from_slot_map<F: ReqTaskSenderFactory<Sender = S>>(
         sender_factory: &F,
         name: String,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
         config: ClusterConfig,
-    ) -> Database<F> {
+    ) -> Self {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
             nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
@@ -272,8 +275,8 @@ impl<F: ReqTaskSenderFactory> Database<F> {
 
     pub fn send(
         &self,
-        cmd_task: <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>> {
+        cmd_task: <S as ReqTaskSender>::Task,
+    ) -> Result<(), DBSendError<<S as ReqTaskSender>::Task>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
