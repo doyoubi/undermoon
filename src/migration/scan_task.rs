@@ -42,11 +42,6 @@ pub struct RedisScanMigratingTask<RCF: RedisClientFactory, TSF: ReqTaskSenderFac
     task: ScanMigrationTask,
 }
 
-impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe> ThreadSafe
-    for RedisScanMigratingTask<RCF, TSF>
-{
-}
-
 impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe>
     RedisScanMigratingTask<RCF, TSF>
 {
@@ -396,16 +391,6 @@ where
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     cmd_handler: RestoreDataCmdTaskHandler<CTF, <TSF as ReqTaskSenderFactory>::Sender>,
     _cmd_task_factory: Arc<CTF>,
-}
-
-impl<RCF, TSF, CTF> ThreadSafe for RedisScanImportingTask<RCF, TSF, CTF>
-where
-    RCF: RedisClientFactory,
-    TSF: ReqTaskSenderFactory + ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
-        + ThreadSafe,
-    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
-{
 }
 
 impl<RCF, TSF, CTF> RedisScanImportingTask<RCF, TSF, CTF>

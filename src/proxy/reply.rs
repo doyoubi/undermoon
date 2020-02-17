@@ -2,18 +2,13 @@ use super::backend::{BackendResult, CmdTask, CmdTaskResultHandler, CmdTaskResult
 use super::compress::{CmdReplyDecompressor, CompressionError};
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use crate::common::utils::{ThreadSafe, Wrapper};
+use crate::common::utils::Wrapper;
 use crate::protocol::{BulkStr, Resp, RespPacket};
 use std::marker::PhantomData;
 
 pub struct DecompressCommitHandlerFactory<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> {
     meta_map: SharedMetaMap,
     phanthom: PhantomData<T>,
-}
-
-impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> ThreadSafe
-    for DecompressCommitHandlerFactory<T>
-{
 }
 
 impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> DecompressCommitHandlerFactory<T> {
@@ -82,8 +77,6 @@ impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandler
 }
 
 pub struct ReplyCommitHandlerFactory;
-
-impl ThreadSafe for ReplyCommitHandlerFactory {}
 
 impl Default for ReplyCommitHandlerFactory {
     fn default() -> Self {

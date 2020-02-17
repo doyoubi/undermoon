@@ -5,7 +5,6 @@ use super::command::{
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
-use crate::common::utils::ThreadSafe;
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
 };
@@ -38,8 +37,6 @@ pub struct CmdCtx {
     reply_sender: CmdReplySender,
     slowlog: sync::Arc<Slowlog>,
 }
-
-impl ThreadSafe for CmdCtx {}
 
 impl CmdCtx {
     pub fn new(
@@ -107,6 +104,13 @@ impl CmdTask for CmdCtx {
         self.reply_sender.get_cmd().get_packet()
     }
 
+    fn set_resp_result(self, result: Result<RespVec, CommandError>)
+    where
+        Self: Sized,
+    {
+        self.set_result(result.map(|resp| Box::new(RespPacket::from(resp))))
+    }
+
     fn log_event(&self, event: TaskEvent) {
         self.slowlog.log_event(event);
     }
@@ -123,8 +127,6 @@ impl DBTag for CmdCtx {
 }
 
 pub struct CmdCtxFactory;
-
-impl ThreadSafe for CmdCtxFactory {}
 
 impl Default for CmdCtxFactory {
     fn default() -> Self {

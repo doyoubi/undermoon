@@ -289,6 +289,21 @@ pub enum CommandError {
     InnerError,
 }
 
+impl Clone for CommandError {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Io(ioerr) => {
+                let err = io::Error::from(ioerr.kind());
+                Self::Io(err)
+            }
+            Self::UnexpectedResponse => Self::UnexpectedResponse,
+            Self::Dropped => Self::Dropped,
+            Self::Canceled => Self::Canceled,
+            Self::InnerError => Self::InnerError,
+        }
+    }
+}
+
 impl fmt::Display for CommandError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)

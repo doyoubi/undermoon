@@ -3,7 +3,9 @@ use super::encoder::{command_to_buf, encode_resp};
 use super::fp::{RFunctor, VFunctor};
 use super::resp::{BinSafeStr, IndexedResp, Resp, RespSlice, RespVec};
 use super::stateless::{parse_indexed_resp, ParseError};
-use crate::common::utils::{change_bulk_array_element, change_bulk_str, get_command_element};
+use crate::common::utils::{
+    change_bulk_array_element, change_bulk_str, get_command_element, ThreadSafe,
+};
 use crate::protocol::EncodeError;
 use bytes::BytesMut;
 use std::io;
@@ -17,20 +19,57 @@ use std::sync::Arc;
 // TODO: use EncodedPacket + DecodedPacket in CmdTask.
 
 pub trait EncodedPacket {
+    type Hint;
+
     fn encode<F>(self, f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]);
+    fn get_hint(&self) -> Self::Hint;
 }
 
 pub trait DecodedPacket {
-    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+    type Hint;
+
+    fn decode(buf: &mut BytesMut, hint: Self::Hint) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized;
 }
 
-pub trait Packet: EncodedPacket + DecodedPacket + From<RespVec> {}
+pub trait FromResp {
+    type Hint;
 
-impl<T: EncodedPacket + DecodedPacket + From<RespVec>> Packet for T {}
+    fn from_resp(resp: RespVec, hint: Self::Hint) -> Self;
+}
+
+impl<T: From<RespVec>> FromResp for T {
+    type Hint = ();
+
+    fn from_resp(resp: RespVec, _hint: Self::Hint) -> Self {
+        Self::from(resp)
+    }
+}
+
+pub trait Packet: EncodedPacket + DecodedPacket + ThreadSafe + FromResp
+where
+    Self: DecodedPacket<Hint = <Self as EncodedPacket>::Hint>,
+    Self: FromResp<Hint = <Self as EncodedPacket>::Hint>,
+{
+}
+pub trait MonoPacket:
+    EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()>
+{
+}
+
+impl<T: EncodedPacket + DecodedPacket + ThreadSafe + FromResp> Packet for T
+where
+    Self: DecodedPacket<Hint = <Self as EncodedPacket>::Hint>,
+    Self: FromResp<Hint = <Self as EncodedPacket>::Hint>,
+{
+}
+impl<T: EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()>>
+    MonoPacket for T
+{
+}
 
 pub trait PacketEncoder {
     type Pkt: EncodedPacket;
@@ -42,8 +81,7 @@ pub trait PacketEncoder {
 }
 
 pub trait PacketDecoder {
-    // Pkt can't decode itself for some types.
-    type Pkt;
+    type Pkt: DecodedPacket;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Pkt>, DecodeError>
     where
@@ -126,6 +164,8 @@ impl From<RespVec> for RespPacket {
 }
 
 impl EncodedPacket for Vec<BinSafeStr> {
+    type Hint = ();
+
     fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
@@ -135,10 +175,14 @@ impl EncodedPacket for Vec<BinSafeStr> {
         f(&buf);
         Ok((s, f))
     }
+
+    fn get_hint(&self) -> Self::Hint {}
 }
 
 // Multiple commands
 impl EncodedPacket for Vec<Vec<BinSafeStr>> {
+    type Hint = ();
+
     fn encode<F>(self, f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
@@ -152,9 +196,13 @@ impl EncodedPacket for Vec<Vec<BinSafeStr>> {
         }
         Ok((sum, f))
     }
+
+    fn get_hint(&self) -> Self::Hint {}
 }
 
 impl<T: AsRef<[u8]>> EncodedPacket for Resp<T> {
+    type Hint = ();
+
     fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
@@ -164,14 +212,18 @@ impl<T: AsRef<[u8]>> EncodedPacket for Resp<T> {
         f(&b);
         Ok((s, f))
     }
+
+    fn get_hint(&self) -> Self::Hint {}
 }
 
 impl DecodedPacket for RespVec {
-    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+    type Hint = ();
+
+    fn decode(buf: &mut BytesMut, _hint: Self::Hint) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
     {
-        let item = IndexedResp::decode(buf)?;
+        let item = IndexedResp::decode(buf, ())?;
         match item {
             Some(resp) => Ok(Some(resp.to_resp_vec())),
             None => Ok(None),
@@ -180,7 +232,9 @@ impl DecodedPacket for RespVec {
 }
 
 impl DecodedPacket for IndexedResp {
-    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+    type Hint = ();
+
+    fn decode(buf: &mut BytesMut, _hint: Self::Hint) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
     {
@@ -199,6 +253,8 @@ impl DecodedPacket for IndexedResp {
 }
 
 impl EncodedPacket for RespPacket {
+    type Hint = ();
+
     fn encode<F>(self, mut f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
@@ -217,36 +273,46 @@ impl EncodedPacket for RespPacket {
             }
         }
     }
+
+    fn get_hint(&self) -> Self::Hint {}
 }
 
 impl DecodedPacket for RespPacket {
-    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+    type Hint = ();
+
+    fn decode(buf: &mut BytesMut, _hint: Self::Hint) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
     {
-        Ok(IndexedResp::decode(buf)?.map(RespPacket::Indexed))
+        Ok(IndexedResp::decode(buf, ())?.map(RespPacket::Indexed))
     }
 }
 
 impl<T: EncodedPacket> EncodedPacket for Box<T> {
+    type Hint = ();
+
     fn encode<F>(self, f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
     {
         (*self).encode(f)
     }
+
+    fn get_hint(&self) -> Self::Hint {}
 }
 
 impl<T: DecodedPacket> DecodedPacket for Box<T> {
-    fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError>
+    type Hint = T::Hint;
+
+    fn decode(buf: &mut BytesMut, hint: Self::Hint) -> Result<Option<Self>, DecodeError>
     where
         Self: Sized,
     {
-        Ok(T::decode(buf)?.map(Box::new))
+        Ok(T::decode(buf, hint)?.map(Box::new))
     }
 }
 
-pub fn new_simple_packet_codec<E: EncodedPacket, D: DecodedPacket>(
+pub fn new_simple_packet_codec<E: EncodedPacket<Hint = ()>, D: DecodedPacket<Hint = ()>>(
 ) -> (SimplePacketEncoder<E>, SimplePacketDecoder<D>) {
     (
         SimplePacketEncoder::default(),
@@ -254,16 +320,16 @@ pub fn new_simple_packet_codec<E: EncodedPacket, D: DecodedPacket>(
     )
 }
 
-pub struct SimplePacketEncoder<T: EncodedPacket>(PhantomData<T>);
-pub struct SimplePacketDecoder<T: DecodedPacket>(PhantomData<T>);
+pub struct SimplePacketEncoder<T: EncodedPacket<Hint = ()>>(PhantomData<T>);
+pub struct SimplePacketDecoder<T: DecodedPacket<Hint = ()>>(PhantomData<T>);
 
-impl<T: EncodedPacket> Default for SimplePacketEncoder<T> {
+impl<T: EncodedPacket<Hint = ()>> Default for SimplePacketEncoder<T> {
     fn default() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T: EncodedPacket> PacketEncoder for SimplePacketEncoder<T> {
+impl<T: EncodedPacket<Hint = ()>> PacketEncoder for SimplePacketEncoder<T> {
     type Pkt = T;
 
     fn encode<F>(&mut self, packet: Self::Pkt, f: F) -> Result<usize, EncodeError<Self::Pkt>>
@@ -274,20 +340,20 @@ impl<T: EncodedPacket> PacketEncoder for SimplePacketEncoder<T> {
     }
 }
 
-impl<T: DecodedPacket> Default for SimplePacketDecoder<T> {
+impl<T: DecodedPacket<Hint = ()>> Default for SimplePacketDecoder<T> {
     fn default() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T: DecodedPacket> PacketDecoder for SimplePacketDecoder<T> {
+impl<T: DecodedPacket<Hint = ()>> PacketDecoder for SimplePacketDecoder<T> {
     type Pkt = T;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Pkt>, DecodeError>
     where
         Self: Sized,
     {
-        Self::Pkt::decode(buf)
+        Self::Pkt::decode(buf, ())
     }
 }
 
@@ -297,26 +363,9 @@ pub enum OptionalMulti<T> {
     Multi(Vec<T>),
 }
 
-#[derive(Debug, Clone, Copy)]
-enum OptionalMultiHint<T> {
-    Single,
-    Multi(T),
-}
-
-impl<T> From<T> for OptionalMulti<T> {
-    fn from(t: T) -> Self {
-        Self::Single(t)
-    }
-}
+pub type OptionalMultiHint<T> = OptionalMulti<T>;
 
 impl<T> OptionalMulti<T> {
-    fn to_hint(&self) -> OptionalMultiHint<usize> {
-        match self {
-            Self::Single(_) => OptionalMultiHint::Single,
-            Self::Multi(v) => OptionalMultiHint::Multi(v.len()),
-        }
-    }
-
     pub fn map<F, A>(self, f: F) -> OptionalMulti<A>
     where
         F: Fn(T) -> A,
@@ -328,7 +377,27 @@ impl<T> OptionalMulti<T> {
     }
 }
 
+impl<T: FromResp> FromResp for OptionalMulti<T> {
+    type Hint = OptionalMultiHint<T::Hint>;
+
+    fn from_resp(resp: RespVec, hint: Self::Hint) -> Self {
+        match hint {
+            OptionalMultiHint::Single(hint) => Self::Single(T::from_resp(resp, hint)),
+            OptionalMultiHint::Multi(hints) => {
+                let v = hints
+                    .into_iter()
+                    .map(|hint| T::from_resp(resp.clone(), hint))
+                    .collect();
+                Self::Multi(v)
+            }
+        }
+    }
+}
+
 impl<T: EncodedPacket> EncodedPacket for OptionalMulti<T> {
+    // Vec<()> will be optimized by compiler and will not allocate any memory.
+    type Hint = OptionalMultiHint<T::Hint>;
+
     fn encode<F>(self, f: F) -> io::Result<(usize, F)>
     where
         F: FnMut(&[u8]),
@@ -347,6 +416,47 @@ impl<T: EncodedPacket> EncodedPacket for OptionalMulti<T> {
             }
         }
     }
+
+    fn get_hint(&self) -> Self::Hint {
+        match self {
+            Self::Single(t) => OptionalMultiHint::Single(t.get_hint()),
+            Self::Multi(v) => OptionalMultiHint::Multi(v.iter().map(|p| p.get_hint()).collect()),
+        }
+    }
+}
+
+impl<T: DecodedPacket> DecodedPacket for OptionalMulti<T> {
+    type Hint = OptionalMultiHint<T::Hint>;
+
+    fn decode(buf: &mut BytesMut, hint: Self::Hint) -> Result<Option<Self>, DecodeError>
+    where
+        Self: Sized,
+    {
+        let hints = match hint {
+            OptionalMultiHint::Single(hint) => {
+                return match T::decode(buf, hint)? {
+                    Some(p) => Ok(Some(OptionalMulti::Single(p))),
+                    None => Ok(None),
+                };
+            }
+            OptionalMultiHint::Multi(hints) => hints,
+        };
+
+        if hints.is_empty() {
+            return Ok(Some(OptionalMulti::Multi(vec![])));
+        }
+
+        let mut packets = vec![];
+
+        for hint in hints {
+            let packet = match T::decode(buf, hint)? {
+                Some(p) => p,
+                None => return Ok(None),
+            };
+            packets.push(packet);
+        }
+        Ok(Some(OptionalMulti::Multi(packets)))
+    }
 }
 
 struct OptionalMultiHintState {
@@ -360,24 +470,24 @@ impl OptionalMultiHintState {
         (Self { state: s1 }, Self { state: s2 })
     }
 
-    fn consume(&self) -> Option<OptionalMultiHint<usize>> {
+    fn consume(&self) -> Option<OptionalMultiHint<()>> {
         match self.state.swap(0, Ordering::SeqCst) {
             0 => None,
-            1 => Some(OptionalMultiHint::Single),
-            n => Some(OptionalMultiHint::Multi(n - 2)),
+            1 => Some(OptionalMultiHint::Single(())),
+            n => Some(OptionalMultiHint::Multi((0..n - 2).map(|_| ()).collect())),
         }
     }
 
-    fn produce(&self, hint: OptionalMultiHint<usize>) -> bool {
+    fn produce(&self, hint: OptionalMultiHint<()>) -> bool {
         let n = match hint {
-            OptionalMultiHint::Single => 1,
-            OptionalMultiHint::Multi(n) => n + 2,
+            OptionalMultiHint::Single(()) => 1,
+            OptionalMultiHint::Multi(v) => v.len() + 2,
         };
         self.state.compare_and_swap(0, n, Ordering::SeqCst) == 0
     }
 }
 
-pub fn new_optional_multi_packet_codec<E: EncodedPacket, D: DecodedPacket>(
+pub fn new_optional_multi_packet_codec<E: EncodedPacket<Hint = ()>, D: DecodedPacket<Hint = ()>>(
 ) -> (OptionalMultiPacketEncoder<E>, OptionalMultiPacketDecoder<D>) {
     let (s1, s2) = OptionalMultiHintState::new_pair();
     let encoder = OptionalMultiPacketEncoder::new(s1);
@@ -387,12 +497,12 @@ pub fn new_optional_multi_packet_codec<E: EncodedPacket, D: DecodedPacket>(
 
 // Does not support pipeline for packet.
 // But the packet it self can support pipeline.
-pub struct OptionalMultiPacketEncoder<E: EncodedPacket> {
+pub struct OptionalMultiPacketEncoder<E: EncodedPacket<Hint = ()>> {
     state: OptionalMultiHintState,
     phantom: PhantomData<E>,
 }
 
-impl<E: EncodedPacket> OptionalMultiPacketEncoder<E> {
+impl<E: EncodedPacket<Hint = ()>> OptionalMultiPacketEncoder<E> {
     fn new(state: OptionalMultiHintState) -> Self {
         Self {
             state,
@@ -401,14 +511,14 @@ impl<E: EncodedPacket> OptionalMultiPacketEncoder<E> {
     }
 }
 
-impl<E: EncodedPacket> PacketEncoder for OptionalMultiPacketEncoder<E> {
+impl<E: EncodedPacket<Hint = ()>> PacketEncoder for OptionalMultiPacketEncoder<E> {
     type Pkt = OptionalMulti<E>;
 
     fn encode<F>(&mut self, packet: Self::Pkt, f: F) -> Result<usize, EncodeError<Self::Pkt>>
     where
         F: FnMut(&[u8]),
     {
-        let hint = packet.to_hint();
+        let hint = packet.get_hint();
         if !self.state.produce(hint) {
             return Err(EncodeError::NotReady(packet));
         }
@@ -417,13 +527,13 @@ impl<E: EncodedPacket> PacketEncoder for OptionalMultiPacketEncoder<E> {
     }
 }
 
-pub struct OptionalMultiPacketDecoder<D: DecodedPacket> {
+pub struct OptionalMultiPacketDecoder<D: DecodedPacket<Hint = ()>> {
     state: OptionalMultiHintState,
     buf: Vec<D>,
-    curr_hint: Option<OptionalMultiHint<usize>>,
+    curr_hint: Option<OptionalMultiHint<()>>,
 }
 
-impl<D: DecodedPacket> OptionalMultiPacketDecoder<D> {
+impl<D: DecodedPacket<Hint = ()>> OptionalMultiPacketDecoder<D> {
     fn new(state: OptionalMultiHintState) -> Self {
         Self {
             state,
@@ -433,7 +543,7 @@ impl<D: DecodedPacket> OptionalMultiPacketDecoder<D> {
     }
 }
 
-impl<D: DecodedPacket> PacketDecoder for OptionalMultiPacketDecoder<D> {
+impl<D: DecodedPacket<Hint = ()>> PacketDecoder for OptionalMultiPacketDecoder<D> {
     type Pkt = OptionalMulti<D>;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Pkt>, DecodeError>
@@ -441,38 +551,40 @@ impl<D: DecodedPacket> PacketDecoder for OptionalMultiPacketDecoder<D> {
         Self: Sized,
     {
         let hint = match &self.curr_hint {
-            Some(h) => *h,
+            Some(h) => h.clone(),
             None => {
                 let h = match self.state.consume() {
                     Some(h) => h,
                     None => return Ok(None),
                 };
-                self.curr_hint = Some(h);
+                self.curr_hint = Some(h.clone());
                 h
             }
         };
 
         // Empty requested
-        if let OptionalMultiHint::Multi(0) = hint {
-            self.curr_hint = None;
-            return Ok(Some(OptionalMulti::Multi(vec![])));
+        if let OptionalMultiHint::Multi(v) = &hint {
+            if v.is_empty() {
+                self.curr_hint = None;
+                return Ok(Some(OptionalMulti::Multi(vec![])));
+            }
         }
 
         loop {
-            let packet = match D::decode(buf)? {
+            let packet = match D::decode(buf, ())? {
                 Some(p) => p,
                 None => return Ok(None),
             };
 
-            match hint {
-                OptionalMultiHint::Single => {
+            match &hint {
+                OptionalMultiHint::Single(_) => {
                     self.curr_hint = None;
                     return Ok(Some(OptionalMulti::Single(packet)));
                 }
-                OptionalMultiHint::Multi(size) => {
+                OptionalMultiHint::Multi(hints) => {
                     self.buf.push(packet);
 
-                    if size == self.buf.len() {
+                    if hints.len() == self.buf.len() {
                         self.curr_hint = None;
                         let v = self.buf.drain(..).collect();
 

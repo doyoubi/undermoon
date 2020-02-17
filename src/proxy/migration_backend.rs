@@ -1,8 +1,10 @@
-use super::backend::{BackendSenderFactory, CmdTask, CmdTaskFactory, ReqTask, ReqTaskSender};
+use super::backend::{
+    BackendSenderFactory, CmdTask, CmdTaskFactory, DefaultConnFactory, ReqTask, ReqTaskSender,
+};
 use super::command::CommandError;
 use super::reply::ReplyCommitHandlerFactory;
-use crate::common::utils::{pretty_print_bytes, ThreadSafe};
-use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
+use crate::common::utils::pretty_print_bytes;
+use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespPacket, RespVec, VFunctor};
 use atomic_option::AtomicOption;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{select, Future, FutureExt, StreamExt};
@@ -147,29 +149,6 @@ async fn get_data_entry(
     }
 }
 
-//fn data_entry_future(dump: ReplyFuture, pttl: ReplyFuture) -> DataEntryFuture {
-////    let fut = dump.join(pttl).and_then(|(dump, pttl)| {
-////        let dump_result = match dump {
-////            Resp::Bulk(BulkStr::Str(raw_data)) => Ok(Some(raw_data)),
-////            Resp::Bulk(BulkStr::Nil) => Ok(None),
-////            _others => Err(CommandError::UnexpectedResponse),
-////        };
-////        let pttl_result = match pttl {
-////            // -2 for key not exists
-////            Resp::Integer(pttl) if pttl.as_slice() != b"-2" => Ok(Some(pttl)),
-////            Resp::Integer(_pttl) => Ok(None),
-////            _others => Err(CommandError::UnexpectedResponse),
-////        };
-////        match (dump_result, pttl_result) {
-////            (Ok(Some(raw_data)), Ok(Some(pttl))) => future::ok(Some(DataEntry { raw_data, pttl })),
-////            (Ok(None), _) | (_, Ok(None)) => future::ok(None),
-////            (Err(err), _) => future::err(err),
-////            (_, Err(err)) => future::err(err),
-////        }
-////    });
-//    Box::pin(get_data_entry(dump, pttl))
-//}
-
 #[derive(Debug)]
 struct MgrCmdStateRestoreForward;
 
@@ -199,7 +178,8 @@ impl MgrCmdStateRestoreForward {
     }
 }
 
-pub type SenderFactory = BackendSenderFactory<ReplyCommitHandlerFactory>;
+pub type SenderFactory =
+    BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
 
 type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
@@ -220,11 +200,6 @@ pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: ReqTaskSender<Task = 
         RestoreTaskReceiver,
     )>,
     cmd_task_factory: Arc<F>,
-}
-
-impl<F: CmdTaskFactory + ThreadSafe, S: ReqTaskSender<Task = F::Task> + ThreadSafe> ThreadSafe
-    for RestoreDataCmdTaskHandler<F, S>
-{
 }
 
 impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHandler<F, S> {

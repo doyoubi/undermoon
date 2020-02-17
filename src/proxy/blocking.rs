@@ -1,8 +1,9 @@
 use super::backend::{BackendError, CmdTask, ReqTask, ReqTaskSender, ReqTaskSenderFactory};
-use super::command::CommandResult;
+use super::command::{CommandError, CommandResult};
 use super::database::DBTag;
 use super::slowlog::TaskEvent;
-use crate::common::utils::{ThreadSafe, Wrapper};
+use crate::common::utils::Wrapper;
+use crate::protocol::{Resp, RespVec};
 use crossbeam_channel;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -123,10 +124,10 @@ impl<S: ReqTaskSender> TaskBlockingQueue<S> {
         }
 
         if let Err(err) = self.queue_sender.send(cmd_task) {
-            let _cmd_task = err.into_inner();
-            //            cmd_task.set_resp_result(Ok(Resp::Error(
-            //                b"failed to send to blocking queue".to_vec(),
-            //            )));
+            let cmd_task = err.into_inner();
+            cmd_task.set_resp_result(Ok(Resp::Error(
+                b"failed to send to blocking queue".to_vec(),
+            )));
             error!("failed to send to blocking queue");
             return Err(BackendError::Canceled);
         }
@@ -163,8 +164,6 @@ pub struct TaskBlockingQueueSender<S: ReqTaskSender> {
     queue: Arc<TaskBlockingQueue<S>>,
 }
 
-impl<S: ReqTaskSender + ThreadSafe> ThreadSafe for TaskBlockingQueueSender<S> {}
-
 impl<S: ReqTaskSender> ReqTaskSender for TaskBlockingQueueSender<S> {
     type Task = S::Task;
 
@@ -175,11 +174,6 @@ impl<S: ReqTaskSender> ReqTaskSender for TaskBlockingQueueSender<S> {
 
 pub struct TaskBlockingQueueSenderFactory<F: ReqTaskSenderFactory> {
     blocking_map: Arc<BlockingMap<F>>,
-}
-
-impl<F: ReqTaskSenderFactory + ThreadSafe> ThreadSafe for TaskBlockingQueueSenderFactory<F> where
-    <F as ReqTaskSenderFactory>::Sender: ThreadSafe
-{
 }
 
 impl<F: ReqTaskSenderFactory> TaskBlockingQueueSenderFactory<F> {
@@ -238,8 +232,6 @@ impl<T: CmdTask> From<CounterTask<T>> for Wrapper<T> {
     }
 }
 
-impl<T: CmdTask + ThreadSafe> ThreadSafe for CounterTask<T> {}
-
 impl<T: CmdTask + DBTag> DBTag for CounterTask<T> {
     fn get_db_name(&self) -> String {
         self.inner.get_db_name()
@@ -263,6 +255,13 @@ impl<T: CmdTask> CmdTask for CounterTask<T> {
 
     fn get_packet(&self) -> Self::Pkt {
         self.inner.get_packet()
+    }
+
+    fn set_resp_result(self, result: Result<RespVec, CommandError>)
+    where
+        Self: Sized,
+    {
+        self.inner.set_resp_result(result)
     }
 
     fn log_event(&self, event: TaskEvent) {

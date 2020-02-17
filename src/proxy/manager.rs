@@ -15,8 +15,8 @@ use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
-use crate::protocol::{RedisClientFactory, RespVec};
-use crate::proxy::backend::CmdTask;
+use crate::protocol::{RedisClientFactory, RespPacket, RespVec};
+use crate::proxy::backend::{CmdTask, DefaultConnFactory};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
@@ -59,8 +59,12 @@ where
     }
 }
 
-type SenderFactory = BackendSenderFactory<DecompressCommitHandlerFactory<CounterTask<CmdCtx>>>;
-type MigrationSenderFactory = BackendSenderFactory<ReplyCommitHandlerFactory>;
+type SenderFactory = BackendSenderFactory<
+    DecompressCommitHandlerFactory<CounterTask<CmdCtx>>,
+    DefaultConnFactory<RespPacket>,
+>;
+type MigrationSenderFactory =
+    BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
 pub type SharedMetaMap =
     Arc<ArcSwap<MetaMap<<SenderFactory as ReqTaskSenderFactory>::Sender, MigrationSenderFactory>>>;
 
@@ -85,10 +89,13 @@ impl<F: RedisClientFactory> MetaManager<F> {
         meta_map: SharedMetaMap,
     ) -> Self {
         let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
-        let sender_factory = gen_sender_factory(config.clone(), reply_handler_factory);
+        let conn_factory = Arc::new(DefaultConnFactory::default());
+        let sender_factory =
+            gen_sender_factory(config.clone(), reply_handler_factory, conn_factory.clone());
         let migration_sender_factory = Arc::new(gen_sender_factory(
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
+            conn_factory,
         ));
         let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let migration_config = Arc::new(AtomicMigrationConfig::default());

@@ -2,8 +2,8 @@ use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorError, ReplicatorResult,
 };
 use crate::common::resp_execution::{retry_handle_func, I64Retriever};
-use crate::common::utils::{resolve_first_address, ThreadSafe};
-use crate::protocol::{RedisClientError, RedisClientFactory, RespVec};
+use crate::common::utils::resolve_first_address;
+use crate::protocol::{OptionalMulti, RedisClientError, RedisClientFactory, RespVec};
 use futures::{future, Future};
 use futures::{FutureExt, TryFutureExt};
 use std::pin::Pin;
@@ -16,8 +16,6 @@ pub struct RedisMasterReplicator<F: RedisClientFactory> {
     meta: MasterMeta,
     role_sync: I64Retriever<F>,
 }
-
-impl<F: RedisClientFactory> ThreadSafe for RedisMasterReplicator<F> {}
 
 impl<F: RedisClientFactory> RedisMasterReplicator<F> {
     pub fn new(meta: MasterMeta, client_factory: Arc<F>) -> Self {
@@ -44,7 +42,7 @@ impl<F: RedisClientFactory> RedisMasterReplicator<F> {
     }
 
     fn handle_result(resp: RespVec, data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
-        let r = retry_handle_func(resp.into());
+        let r = retry_handle_func(OptionalMulti::Single(resp));
         if r.is_ok() {
             data.store(1, Ordering::SeqCst);
         }
@@ -78,8 +76,6 @@ pub struct RedisReplicaReplicator<F: RedisClientFactory> {
     meta: ReplicaMeta,
     role_sync: I64Retriever<F>,
 }
-
-impl<F: RedisClientFactory> ThreadSafe for RedisReplicaReplicator<F> {}
 
 impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
     pub fn new(meta: ReplicaMeta, client_factory: Arc<F>) -> Self {
@@ -128,7 +124,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
     }
 
     fn handle_result(resp: RespVec, _data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
-        retry_handle_func(resp.into())
+        retry_handle_func(OptionalMulti::Single(resp))
     }
 }
 

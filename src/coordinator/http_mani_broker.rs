@@ -1,6 +1,5 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
 use crate::common::cluster::{Host, MigrationTaskMeta};
-use crate::common::utils::ThreadSafe;
 use futures::Future;
 use reqwest;
 use std::pin::Pin;
@@ -19,8 +18,6 @@ impl HttpMetaManipulationBroker {
         }
     }
 }
-
-impl ThreadSafe for HttpMetaManipulationBroker {}
 
 impl HttpMetaManipulationBroker {
     async fn replace_proxy_impl(

@@ -3,7 +3,8 @@ use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
 use crate::protocol::{
-    new_simple_packet_codec, DecodeError, EncodeError, Packet, Resp, RespCodec, RespVec,
+    new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
+    OptionalMulti, Packet, Resp, RespCodec, RespVec,
 };
 use futures::channel::mpsc;
 use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
@@ -53,10 +54,7 @@ pub trait CmdTask: ThreadSafe {
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)
     where
-        Self: Sized,
-    {
-        self.set_result(result.map(|resp| Box::new(Self::Pkt::from(resp))))
-    }
+        Self: Sized;
 
     fn log_event(&self, event: TaskEvent);
 }
@@ -86,6 +84,91 @@ pub enum ReqTask<T: CmdTask> {
 impl<T: CmdTask> From<T> for ReqTask<T> {
     fn from(t: T) -> ReqTask<T> {
         ReqTask::Simple(t)
+    }
+}
+
+impl<T: CmdTask> CmdTask for ReqTask<T> {
+    type Pkt = OptionalMulti<T::Pkt>;
+
+    fn get_key(&self) -> Option<&[u8]> {
+        match self {
+            Self::Simple(t) => t.get_key(),
+            Self::Multi(v) => {
+                for t in v.iter() {
+                    let opt = t.get_key();
+                    if opt.is_some() {
+                        return opt;
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    fn set_result(self, result: CommandResult<Self::Pkt>) {
+        match self {
+            Self::Simple(t) => match result {
+                Ok(res) => match *res {
+                    OptionalMulti::Single(r) => t.set_result(Ok(Box::new(r))),
+                    OptionalMulti::Multi(_) => t.set_result(Err(CommandError::InnerError)),
+                },
+                Err(err) => t.set_result(Err(err)),
+            },
+            Self::Multi(v) => match result {
+                Err(err) => {
+                    for t in v.into_iter() {
+                        t.set_result(Err(err.clone()))
+                    }
+                }
+                Ok(res) => match *res {
+                    OptionalMulti::Single(_) => {
+                        for t in v {
+                            t.set_result(Err(CommandError::InnerError))
+                        }
+                    }
+                    OptionalMulti::Multi(results) => {
+                        if v.len() != results.len() {
+                            for t in v.into_iter() {
+                                t.set_result(Err(CommandError::InnerError));
+                            }
+                            return;
+                        }
+                        for (t, r) in v.into_iter().zip(results) {
+                            t.set_result(Ok(Box::new(r)));
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    fn get_packet(&self) -> Self::Pkt {
+        match self {
+            Self::Simple(t) => OptionalMulti::Single(t.get_packet()),
+            Self::Multi(v) => {
+                let packets = v.iter().map(|t| t.get_packet()).collect();
+                OptionalMulti::Multi(packets)
+            }
+        }
+    }
+
+    fn set_resp_result(self, result: Result<RespVec, CommandError>)
+    where
+        Self: Sized,
+    {
+        let hint = self.get_packet().get_hint();
+        self.set_result(result.map(|resp| Box::new(Self::Pkt::from_resp(resp, hint))))
+    }
+
+    fn log_event(&self, event: TaskEvent) {
+        match self {
+            Self::Simple(t) => t.log_event(event),
+            Self::Multi(v) => {
+                for t in v.iter() {
+                    t.log_event(event);
+                }
+            }
+        }
     }
 }
 
@@ -125,25 +208,40 @@ pub struct RecoverableBackendNode<F: CmdTaskResultHandlerFactory> {
     node: BackendNode<<F as CmdTaskResultHandlerFactory>::Handler>,
 }
 
-impl<F: CmdTaskResultHandlerFactory + ThreadSafe> ThreadSafe for RecoverableBackendNode<F> {}
-
-pub struct RecoverableBackendNodeFactory<F: CmdTaskResultHandlerFactory> {
+pub struct RecoverableBackendNodeFactory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    CF::Pkt: Send,
+{
     config: Arc<ServerProxyConfig>,
     handler_factory: Arc<F>,
+    conn_factory: Arc<CF>,
 }
 
-impl<F: CmdTaskResultHandlerFactory + ThreadSafe> ThreadSafe for RecoverableBackendNodeFactory<F> {}
-
-impl<F: CmdTaskResultHandlerFactory> RecoverableBackendNodeFactory<F> {
-    pub fn new(config: Arc<ServerProxyConfig>, handler_factory: Arc<F>) -> Self {
+impl<F: CmdTaskResultHandlerFactory, CF: ConnFactory> RecoverableBackendNodeFactory<F, CF>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    CF::Pkt: Send,
+{
+    pub fn new(
+        config: Arc<ServerProxyConfig>,
+        handler_factory: Arc<F>,
+        conn_factory: Arc<CF>,
+    ) -> Self {
         Self {
             config,
             handler_factory,
+            conn_factory,
         }
     }
 }
 
-impl<F: CmdTaskResultHandlerFactory> CmdTaskSenderFactory for RecoverableBackendNodeFactory<F> {
+impl<F: CmdTaskResultHandlerFactory, CF: ConnFactory> CmdTaskSenderFactory
+    for RecoverableBackendNodeFactory<F, CF>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    CF::Pkt: Send,
+{
     type Sender = RecoverableBackendNode<F>;
 
     fn create(&self, address: String) -> Self::Sender {
@@ -151,7 +249,7 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSenderFactory for RecoverableBackend
             address.clone(),
             Arc::new(self.handler_factory.create()),
             self.config.clone(),
-            |address| Box::pin(create_conn(address)),
+            self.conn_factory.clone(),
         );
         tokio::spawn(fut);
         Self::Sender { address, node }
@@ -188,23 +286,19 @@ pub struct BackendNode<H: CmdTaskResultHandler> {
 }
 
 impl<H: CmdTaskResultHandler> BackendNode<H> {
-    pub fn new<F>(
+    pub fn new<CF>(
         address: String,
         handler: Arc<H>,
         config: Arc<ServerProxyConfig>,
-        create_conn: F,
+        conn_factory: Arc<CF>,
     ) -> (
         BackendNode<H>,
         impl Future<Output = Result<(), BackendError>> + Send,
     )
     where
-        F: Fn(
-                SocketAddr,
-            )
-                -> Pin<Box<dyn Future<Output = CreateConnResult<<H::Task as CmdTask>::Pkt>> + Send>>
-            + Send
-            + Sync
-            + 'static,
+        CF: ConnFactory + Send + Sync + 'static,
+        CF::Pkt: Send,
+        <H as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
     {
         let (tx, rx) = mpsc::unbounded();
         let conn_failed = Arc::new(AtomicBool::new(true));
@@ -215,7 +309,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
             address,
             config.backend_batch_min_time,
             config.backend_batch_buf,
-            create_conn,
+            conn_factory,
         );
         (Self { tx, conn_failed }, handle_backend_fut)
     }
@@ -240,7 +334,38 @@ type ConnSink<T> = Pin<Box<dyn Sink<T, Error = BackendError> + Send>>;
 type ConnStream<T> = Pin<Box<dyn Stream<Item = Result<T, BackendError>> + Send>>;
 type CreateConnResult<T> = Result<(ConnSink<T>, ConnStream<T>), BackendError>;
 
-async fn create_conn<T: Packet + Send + 'static>(address: SocketAddr) -> CreateConnResult<T> {
+pub trait ConnFactory: ThreadSafe {
+    type Pkt: Packet;
+
+    fn create_conn(
+        &self,
+        addr: SocketAddr,
+    ) -> Pin<Box<dyn Future<Output = CreateConnResult<Self::Pkt>> + Send>>;
+}
+
+pub struct DefaultConnFactory<P>(PhantomData<P>);
+
+impl<P> Default for DefaultConnFactory<P> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<P: MonoPacket> ConnFactory for DefaultConnFactory<P> {
+    type Pkt = P;
+
+    fn create_conn(
+        &self,
+        addr: SocketAddr,
+    ) -> Pin<Box<dyn Future<Output = CreateConnResult<Self::Pkt>> + Send>> {
+        Box::pin(create_conn(addr))
+    }
+}
+
+async fn create_conn<T>(address: SocketAddr) -> CreateConnResult<T>
+where
+    T: MonoPacket,
+{
     let socket = match TcpStream::connect(address).await {
         Ok(socket) => socket,
         Err(err) => {
@@ -278,24 +403,18 @@ struct RetryState<T: CmdTask> {
     tasks: Vec<T>,
 }
 
-pub async fn handle_backend<H, F: Send + 'static>(
+pub async fn handle_backend<H, F>(
     handler: Arc<H>,
     task_receiver: mpsc::UnboundedReceiver<H::Task>,
     conn_failed: Arc<AtomicBool>,
     address: String,
     backend_batch_min_time: usize,
     backend_batch_buf: usize,
-    create_conn: F,
+    conn_factory: Arc<F>,
 ) -> Result<(), BackendError>
 where
     H: CmdTaskResultHandler,
-    F: Fn(
-            SocketAddr,
-        )
-            -> Pin<Box<dyn Future<Output = CreateConnResult<<H::Task as CmdTask>::Pkt>> + Send>>
-        + Send
-        + Sync
-        + 'static,
+    F: ConnFactory<Pkt = <H::Task as CmdTask>::Pkt> + Send + Sync + 'static,
 {
     // TODO: move this to upper layer.
     let sock_address = match resolve_first_address(&address) {
@@ -315,7 +434,7 @@ where
 
     loop {
         conn_failed.store(true, Ordering::SeqCst);
-        let (writer, reader) = match create_conn(sock_address).await {
+        let (writer, reader) = match conn_factory.create_conn(sock_address).await {
             Ok(conn) => conn,
             Err(err) => {
                 error!("failed to connect: {:?}", err);
@@ -496,8 +615,6 @@ pub struct ReqAdaptorSender<S: CmdTaskSender> {
     sender: S,
 }
 
-impl<S: CmdTaskSender + ThreadSafe> ThreadSafe for ReqAdaptorSender<S> {}
-
 pub struct ReqAdaptorSenderFactory<F: CmdTaskSenderFactory> {
     inner_factory: F,
 }
@@ -507,8 +624,6 @@ impl<F: CmdTaskSenderFactory> ReqAdaptorSenderFactory<F> {
         Self { inner_factory }
     }
 }
-
-impl<F: CmdTaskSenderFactory + ThreadSafe> ThreadSafe for ReqAdaptorSenderFactory<F> {}
 
 impl<S: CmdTaskSender> ReqTaskSender for ReqAdaptorSender<S> {
     type Task = S::Task;
@@ -541,14 +656,10 @@ pub struct RRSenderGroup<S: ReqTaskSender> {
     cursor: AtomicUsize,
 }
 
-impl<S: ReqTaskSender + ThreadSafe> ThreadSafe for RRSenderGroup<S> {}
-
 pub struct RRSenderGroupFactory<F: ReqTaskSenderFactory> {
     group_size: usize,
     inner_factory: F,
 }
-
-impl<F: ReqTaskSenderFactory + ThreadSafe> ThreadSafe for RRSenderGroupFactory<F> {}
 
 impl<F: ReqTaskSenderFactory> RRSenderGroupFactory<F> {
     pub fn new(group_size: usize, inner_factory: F) -> Self {
@@ -591,19 +702,10 @@ pub struct CachedSender<S: ReqTaskSender> {
     inner_sender: Arc<S>,
 }
 
-impl<S: ReqTaskSender + ThreadSafe> ThreadSafe for CachedSender<S> {}
-
 // TODO: support cleanup here to avoid memory leak.
 pub struct CachedSenderFactory<F: ReqTaskSenderFactory> {
     inner_factory: F,
     cached_senders: Arc<RwLock<HashMap<String, Arc<F::Sender>>>>,
-}
-
-impl<F> ThreadSafe for CachedSenderFactory<F>
-where
-    F: ReqTaskSenderFactory + ThreadSafe,
-    <F as ReqTaskSenderFactory>::Sender: ThreadSafe,
-{
 }
 
 impl<F: ReqTaskSenderFactory> CachedSenderFactory<F> {
@@ -638,19 +740,25 @@ impl<F: ReqTaskSenderFactory> ReqTaskSenderFactory for CachedSenderFactory<F> {
     }
 }
 
-pub type BackendSenderFactory<F> = CachedSenderFactory<
-    RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F>>>,
+pub type BackendSenderFactory<F, CF> = CachedSenderFactory<
+    RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>,
 >;
 
-pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory>(
+pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
     config: Arc<ServerProxyConfig>,
     reply_handler_factory: Arc<F>,
-) -> BackendSenderFactory<F> {
+    conn_factory: Arc<CF>,
+) -> BackendSenderFactory<F, CF>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    CF::Pkt: Send,
+{
     CachedSenderFactory::new(RRSenderGroupFactory::new(
         config.backend_conn_num,
         ReqAdaptorSenderFactory::new(RecoverableBackendNodeFactory::new(
             config.clone(),
             reply_handler_factory,
+            conn_factory,
         )),
     ))
 }
@@ -667,8 +775,6 @@ pub struct RedirectionSender<T: CmdTask> {
     redirection_address: String,
     phantom: PhantomData<T>,
 }
-
-impl<T: CmdTask> ThreadSafe for RedirectionSender<T> {}
 
 impl<T: CmdTask> CmdTaskSender for RedirectionSender<T> {
     type Task = T;
@@ -690,8 +796,6 @@ impl<T: CmdTask> CmdTaskSender for RedirectionSender<T> {
 }
 
 pub struct RedirectionSenderFactory<T: CmdTask>(PhantomData<T>);
-
-impl<T: CmdTask> ThreadSafe for RedirectionSenderFactory<T> {}
 
 impl<T: CmdTask> Default for RedirectionSenderFactory<T> {
     fn default() -> Self {

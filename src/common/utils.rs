@@ -8,6 +8,8 @@ use std::str;
 
 pub trait ThreadSafe: Send + Sync + 'static {}
 
+impl<T: Send + Sync + 'static> ThreadSafe for T {}
+
 #[derive(Debug)]
 pub struct CmdParseError {}
 

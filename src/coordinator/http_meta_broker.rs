@@ -1,6 +1,6 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
 use crate::common::cluster::{Cluster, Host};
-use crate::common::utils::{vec_result_to_stream, ThreadSafe};
+use crate::common::utils::vec_result_to_stream;
 use futures::{Future, FutureExt, Stream};
 use reqwest;
 use serde_derive::Deserialize;
@@ -20,8 +20,6 @@ impl HttpMetaBroker {
         }
     }
 }
-
-impl ThreadSafe for HttpMetaBroker {}
 
 impl HttpMetaBroker {
     async fn get_cluster_names_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {

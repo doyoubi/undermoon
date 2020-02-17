@@ -85,7 +85,7 @@ pub async fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
         None,
         client_factory,
         address,
-        cmd.into(),
+        OptionalMulti::Single(cmd),
         interval,
         handler,
     )
@@ -264,7 +264,6 @@ impl<F: RedisClientFactory> Drop for I64Retriever<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::utils::ThreadSafe;
     use crate::protocol::BinSafeStr;
     use crate::protocol::{OptionalMulti, Resp};
     use futures::future;
@@ -297,8 +296,6 @@ mod tests {
         }
     }
 
-    impl ThreadSafe for DummyRedisClient {}
-
     impl RedisClient for DummyRedisClient {
         fn execute<'s>(
             &'s mut self,
@@ -310,7 +307,11 @@ mod tests {
             if client.counter.count.load(Ordering::SeqCst) < client.counter.max_count {
                 client.counter.count.fetch_add(1, Ordering::SeqCst);
                 // Only works for single command
-                Box::pin(async { Ok(Resp::Simple("OK".to_string().into_bytes()).into()) })
+                Box::pin(async {
+                    Ok(OptionalMulti::Single(Resp::Simple(
+                        "OK".to_string().into_bytes(),
+                    )))
+                })
             } else {
                 Box::pin(async { Err(RedisClientError::Closed) })
             }
@@ -326,8 +327,6 @@ mod tests {
             Self { counter }
         }
     }
-
-    impl ThreadSafe for DummyClientFactory {}
 
     impl RedisClientFactory for DummyClientFactory {
         type Client = DummyRedisClient;
@@ -345,7 +344,13 @@ mod tests {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
         let mut client = DummyRedisClient::new(counter.clone());
-        let res = keep_sending_cmd(&mut client, vec![].into(), interval, retry_handle_func).await;
+        let res = keep_sending_cmd(
+            &mut client,
+            OptionalMulti::Single(vec![]),
+            interval,
+            retry_handle_func,
+        )
+        .await;
         assert!(res.is_err());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
     }
