@@ -8,7 +8,8 @@ use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
 use crate::protocol::RedisClientFactory;
 use crate::protocol::Resp;
-use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTaskSender, ReqTaskSenderFactory};
+use crate::proxy::backend::{CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory};
+use crate::proxy::blocking::TaskBlockingControllerFactory;
 use crate::proxy::database::{DBSendError, DBTag};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
@@ -22,7 +23,7 @@ type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
 type TaskMap<T> = HashMap<String, DBTask<T>>;
 type NewMigrationTuple<TSF> = (
     MigrationMap<TSF>,
-    Vec<NewTask<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>>,
+    Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
 );
 
 pub struct NewTask<T: CmdTask> {
@@ -33,11 +34,11 @@ pub struct NewTask<T: CmdTask> {
     task: TaskRecord<T>,
 }
 
-pub struct MigrationManager<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe, CTF>
+pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
 where
-    <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
         + ThreadSafe,
 {
     config: Arc<ServerProxyConfig>,
@@ -47,12 +48,12 @@ where
     cmd_task_factory: Arc<CTF>,
 }
 
-impl<RCF: RedisClientFactory, TSF: ReqTaskSenderFactory + ThreadSafe, CTF>
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
     MigrationManager<RCF, TSF, CTF>
 where
-    <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
         + ThreadSafe,
 {
     pub fn new(
@@ -71,10 +72,12 @@ where
         }
     }
 
-    pub fn create_new_migration_map(
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_new_migration_map<BCF: TaskBlockingControllerFactory>(
         &self,
         old_migration_map: &MigrationMap<TSF>,
         local_db_map: &HostDBMap,
+        blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<TSF> {
         old_migration_map.update_from_old_task_map(
             local_db_map,
@@ -83,12 +86,13 @@ where
             self.client_factory.clone(),
             self.sender_factory.clone(),
             self.cmd_task_factory.clone(),
+            blocking_ctrl_factory,
         )
     }
 
     pub fn run_tasks(
         &self,
-        new_tasks: Vec<NewTask<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>>,
+        new_tasks: Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
     ) {
         if new_tasks.is_empty() {
             return;
@@ -179,19 +183,19 @@ where
 
 pub struct MigrationMap<TSF>
 where
-    TSF: ReqTaskSenderFactory + ThreadSafe,
-    <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
+    TSF: CmdTaskSenderFactory + ThreadSafe,
+    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
 {
     empty: bool,
-    task_map: TaskMap<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
+    task_map: TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
 }
 
 impl<TSF> MigrationMap<TSF>
 where
-    TSF: ReqTaskSenderFactory + ThreadSafe,
-    <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <TSF as ReqTaskSenderFactory>::Sender: ThreadSafe,
+    TSF: CmdTaskSenderFactory + ThreadSafe,
+    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
 {
     pub fn new() -> Self {
         Self {
@@ -226,8 +230,8 @@ where
 
     pub fn send(
         &self,
-        cmd_task: <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>>
+        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
         cmd_task.log_event(TaskEvent::SentToMigrationDB);
         self.send_to_db(cmd_task)
@@ -235,8 +239,8 @@ where
 
     pub fn send_to_db(
         &self,
-        cmd_task: <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>>
+        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
         // Optimization for not having any migration.
         if self.empty {
@@ -247,9 +251,9 @@ where
     }
 
     fn send_helper(
-        task_map: &TaskMap<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>,
-        cmd_task: <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>>
+        task_map: &TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
         let db_name = cmd_task.get_db_name();
         match task_map.get(&db_name) {
@@ -326,7 +330,8 @@ where
         left_slots
     }
 
-    pub fn update_from_old_task_map<RCF, CTF>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_from_old_task_map<RCF, CTF, BCF>(
         &self,
         local_db_map: &HostDBMap,
         config: Arc<ServerProxyConfig>,
@@ -334,14 +339,16 @@ where
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
+        blocking_ctrl_map: Arc<BCF>,
     ) -> (
         Self,
-        Vec<NewTask<<<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>>,
+        Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
     )
     where
         RCF: RedisClientFactory,
-        CTF: CmdTaskFactory<Task = <<TSF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>
+        CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
             + ThreadSafe,
+        BCF: TaskBlockingControllerFactory,
     {
         let old_task_map = &self.task_map;
 
@@ -416,6 +423,7 @@ where
                                 continue;
                             }
 
+                            let ctrl = blocking_ctrl_map.create(meta.src_node_address.clone());
                             let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
                                 mgr_config.clone(),
@@ -424,6 +432,7 @@ where
                                 meta.clone(),
                                 client_factory.clone(),
                                 sender_factory.clone(),
+                                ctrl,
                             ));
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),

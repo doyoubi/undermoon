@@ -1,126 +1,197 @@
-use super::backend::{BackendError, CmdTask, ReqTask, ReqTaskSender, ReqTaskSenderFactory};
+use super::backend::{
+    BackendError, CachedSenderFactory, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory,
+    CmdTaskSender, CmdTaskSenderFactory, ConnFactory, RRSenderGroupFactory,
+    RecoverableBackendNodeFactory,
+};
 use super::command::{CommandError, CommandResult};
 use super::database::DBTag;
+use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::utils::Wrapper;
+use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
 use crossbeam_channel;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicI64, Ordering};
 use std::sync::Arc;
 
-pub trait TaskBlockingController {
-    type Task: CmdTask;
-
+pub trait TaskBlockingController: ThreadSafe {
     fn blocking_done(&self) -> bool;
     fn is_blocking(&self) -> bool;
-    fn start_blocking(&self);
+    fn start_blocking(&self) -> BlockingHandle;
     fn stop_blocking(&self);
-    fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError>;
 }
 
-pub struct BlockingMap<F: ReqTaskSenderFactory> {
-    ctrl_map: DashMap<String, Arc<QueueBlockingController<F::Sender>>>,
+pub trait TaskBlockingControllerFactory {
+    type Ctrl: TaskBlockingController;
+
+    fn create(&self, address: String) -> Arc<Self::Ctrl>;
+}
+
+pub trait BlockingCmdTaskSender: CmdTaskSender + ThreadSafe {}
+
+pub type BasicBlockingSenderFactory<F, CF> =
+    RRSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>;
+pub type BlockingBackendSenderFactory<F, CF, BS> =
+    CachedSenderFactory<TaskBlockingQueueSenderFactory<BasicBlockingSenderFactory<F, CF>, BS>>;
+
+pub fn gen_basic_blocking_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
+    config: Arc<ServerProxyConfig>,
+    reply_handler_factory: Arc<F>,
+    conn_factory: Arc<CF>,
+) -> BasicBlockingSenderFactory<F, CF>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    CF::Pkt: Send,
+{
+    RRSenderGroupFactory::new(
+        config.backend_conn_num,
+        RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory, conn_factory),
+    )
+}
+
+pub fn gen_blocking_sender_factory<
+    F: CmdTaskResultHandlerFactory,
+    CF: ConnFactory,
+    BS: BlockingCmdTaskSender,
+>(
+    blocking_map: Arc<BlockingMap<BasicBlockingSenderFactory<F, CF>, BS>>,
+) -> BlockingBackendSenderFactory<F, CF, BS>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    F::Handler: CmdTaskResultHandler<Task = CounterTask<BS::Task>>,
+    CF::Pkt: Send,
+{
+    CachedSenderFactory::new(TaskBlockingQueueSenderFactory::new(blocking_map))
+}
+
+pub struct BlockingMap<F, BS>
+where
+    F: CmdTaskSenderFactory,
+    F::Sender: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    ctrl_map: DashMap<String, Arc<TaskBlockingQueue<F::Sender, BS>>>,
     sender_factory: F,
+    blocking_task_sender: Arc<BS>,
 }
 
-impl<F: ReqTaskSenderFactory> BlockingMap<F> {
-    pub fn new(sender_factory: F) -> Self {
+impl<F, BS> BlockingMap<F, BS>
+where
+    F: CmdTaskSenderFactory,
+    F::Sender: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    pub fn new(sender_factory: F, blocking_task_sender: Arc<BS>) -> Self {
         Self {
             ctrl_map: DashMap::new(),
             sender_factory,
+            blocking_task_sender,
         }
     }
 
-    pub fn get_blocking_queue(&self, address: String) -> Arc<TaskBlockingQueue<F::Sender>> {
-        self.get_or_create(address).queue.clone()
+    pub fn get_blocking_queue(&self, address: String) -> Arc<TaskBlockingQueue<F::Sender, BS>> {
+        self.get_or_create(address)
     }
 
-    pub fn get_or_create(&self, address: String) -> Arc<QueueBlockingController<F::Sender>> {
+    pub fn get_or_create(&self, address: String) -> Arc<TaskBlockingQueue<F::Sender, BS>> {
         match self.ctrl_map.entry(address.clone()) {
             Entry::Occupied(ctrl) => ctrl.get().clone(),
             Entry::Vacant(e) => {
                 let sender = self.sender_factory.create(address);
-                let ctrl = QueueBlockingController::new(sender);
+                let ctrl = TaskBlockingQueue::new(sender, self.blocking_task_sender.clone());
                 e.insert(Arc::new(ctrl)).clone()
             }
         }
     }
 }
 
-pub struct QueueBlockingController<S: ReqTaskSender> {
-    queue: Arc<TaskBlockingQueue<S>>,
+impl<F, BS> TaskBlockingControllerFactory for BlockingMap<F, BS>
+where
+    F: CmdTaskSenderFactory,
+    F::Sender: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    type Ctrl = TaskBlockingQueue<F::Sender, BS>;
+
+    fn create(&self, address: String) -> Arc<Self::Ctrl> {
+        self.get_or_create(address)
+    }
+}
+
+pub struct BlockingHandle {
+    blocking: Arc<AtomicUsize>,
+}
+
+impl BlockingHandle {
+    pub fn new(blocking: Arc<AtomicUsize>) -> Self {
+        blocking.fetch_add(1, Ordering::SeqCst);
+        Self { blocking }
+    }
+
+    pub fn stop(self) {}
+}
+
+impl Drop for BlockingHandle {
+    fn drop(&mut self) {
+        self.blocking.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub struct TaskBlockingQueue<S, BS>
+where
+    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    queue_sender: crossbeam_channel::Sender<BS::Task>,
+    queue_receiver: crossbeam_channel::Receiver<BS::Task>,
+    blocking: Arc<AtomicUsize>,
+    inner_sender: S,
+    blocking_task_sender: Arc<BS>,
     running_cmd: Arc<AtomicI64>,
 }
 
-impl<S: ReqTaskSender> QueueBlockingController<S> {
-    pub fn new(sender: S) -> Self {
-        let running_cmd = Arc::new(AtomicI64::new(0));
-        let queue = Arc::new(TaskBlockingQueue::new(sender));
-        Self { queue, running_cmd }
-    }
-}
-
-impl<S: ReqTaskSender> QueueBlockingController<S> {
-    pub fn get_blocking_queue(&self) -> Arc<TaskBlockingQueue<S>> {
-        self.queue.clone()
-    }
-}
-
-impl<S: ReqTaskSender> TaskBlockingController for QueueBlockingController<S> {
-    type Task = S::Task;
-
-    fn blocking_done(&self) -> bool {
-        self.running_cmd.load(Ordering::SeqCst) == 0
-    }
-
-    fn is_blocking(&self) -> bool {
-        self.queue.is_blocking()
-    }
-
-    fn start_blocking(&self) {
-        self.queue.start_blocking();
-    }
-
-    fn stop_blocking(&self) {
-        self.queue.release_all();
-    }
-
-    fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError> {
-        self.queue.send(cmd_task)
-    }
-}
-
-pub struct TaskBlockingQueue<S: ReqTaskSender> {
-    queue_sender: crossbeam_channel::Sender<ReqTask<S::Task>>,
-    queue_receiver: crossbeam_channel::Receiver<ReqTask<S::Task>>,
-    blocking: AtomicBool,
-    inner_sender: S,
-}
-
-impl<S: ReqTaskSender> TaskBlockingQueue<S> {
-    pub fn new(inner_sender: S) -> Self {
+impl<S, BS> TaskBlockingQueue<S, BS>
+where
+    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    pub fn new(inner_sender: S, blocking_task_sender: Arc<BS>) -> Self {
         let (queue_sender, queue_receiver) = crossbeam_channel::unbounded();
         Self {
             queue_sender,
             queue_receiver,
-            blocking: AtomicBool::new(false),
+            blocking: Arc::new(AtomicUsize::new(0)),
             inner_sender,
+            blocking_task_sender,
+            running_cmd: Arc::new(AtomicI64::new(0)),
         }
     }
 
-    pub fn is_blocking(&self) -> bool {
-        self.blocking.load(Ordering::SeqCst)
+    fn release_all(&self) {
+        loop {
+            let cmd_task = match self.queue_receiver.try_recv() {
+                Ok(cmd_task) => cmd_task,
+                Err(err) => {
+                    if let crossbeam_channel::TryRecvError::Disconnected = err {
+                        error!("invalid state, blocking queue is disconnected");
+                    }
+                    return;
+                }
+            };
+            if let Err(err) = self.blocking_task_sender.send(cmd_task) {
+                error!(
+                    "failed to send task when releasing blocking queue: {:?}",
+                    err
+                );
+            }
+        }
     }
 
-    pub fn start_blocking(&self) {
-        self.blocking.store(true, Ordering::SeqCst);
-    }
-
-    pub fn send(&self, cmd_task: ReqTask<S::Task>) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: BS::Task) -> Result<(), BackendError> {
         if !self.is_blocking() {
-            return self.inner_sender.send(cmd_task);
+            let counter_task = CounterTask::new(cmd_task, self.running_cmd.clone());
+            return self.inner_sender.send(counter_task);
         }
 
         if let Err(err) = self.queue_sender.send(cmd_task) {
@@ -137,53 +208,77 @@ impl<S: ReqTaskSender> TaskBlockingQueue<S> {
         }
         Ok(())
     }
+}
 
-    pub fn release_all(&self) {
-        self.blocking.store(false, Ordering::SeqCst);
-        loop {
-            let cmd_task = match self.queue_receiver.try_recv() {
-                Ok(cmd_task) => cmd_task,
-                Err(err) => {
-                    if let crossbeam_channel::TryRecvError::Disconnected = err {
-                        error!("invalid state, blocking queue is disconnected");
-                    }
-                    return;
-                }
-            };
-            if let Err(err) = self.inner_sender.send(cmd_task) {
-                error!(
-                    "failed to send task when releasing blocking queue: {:?}",
-                    err
-                );
-            }
-        }
+impl<S, BS> TaskBlockingController for TaskBlockingQueue<S, BS>
+where
+    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    fn blocking_done(&self) -> bool {
+        self.running_cmd.load(Ordering::SeqCst) == 0
+    }
+
+    fn is_blocking(&self) -> bool {
+        self.blocking.load(Ordering::SeqCst) == 0
+    }
+
+    fn start_blocking(&self) -> BlockingHandle {
+        BlockingHandle::new(self.blocking.clone())
+    }
+
+    fn stop_blocking(&self) {
+        self.release_all();
     }
 }
 
-pub struct TaskBlockingQueueSender<S: ReqTaskSender> {
-    queue: Arc<TaskBlockingQueue<S>>,
+pub struct TaskBlockingQueueSender<S, BS>
+where
+    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    queue: Arc<TaskBlockingQueue<S, BS>>,
 }
 
-impl<S: ReqTaskSender> ReqTaskSender for TaskBlockingQueueSender<S> {
-    type Task = S::Task;
+impl<S, BS> CmdTaskSender for TaskBlockingQueueSender<S, BS>
+where
+    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    type Task = BS::Task;
 
-    fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         self.queue.send(cmd_task)
     }
 }
 
-pub struct TaskBlockingQueueSenderFactory<F: ReqTaskSenderFactory> {
-    blocking_map: Arc<BlockingMap<F>>,
+pub struct TaskBlockingQueueSenderFactory<F, BS>
+where
+    F: CmdTaskSenderFactory,
+    F::Sender: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    blocking_map: Arc<BlockingMap<F, BS>>,
 }
 
-impl<F: ReqTaskSenderFactory> TaskBlockingQueueSenderFactory<F> {
-    pub fn new(blocking_map: Arc<BlockingMap<F>>) -> Self {
+impl<F, BS> TaskBlockingQueueSenderFactory<F, BS>
+where
+    F: CmdTaskSenderFactory,
+    F::Sender: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    pub fn new(blocking_map: Arc<BlockingMap<F, BS>>) -> Self {
         Self { blocking_map }
     }
 }
 
-impl<F: ReqTaskSenderFactory> ReqTaskSenderFactory for TaskBlockingQueueSenderFactory<F> {
-    type Sender = TaskBlockingQueueSender<F::Sender>;
+impl<F, BS> CmdTaskSenderFactory for TaskBlockingQueueSenderFactory<F, BS>
+where
+    F: CmdTaskSenderFactory,
+    F::Sender: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    type Sender = TaskBlockingQueueSender<F::Sender, BS>;
 
     fn create(&self, address: String) -> Self::Sender {
         let queue = self.blocking_map.get_blocking_queue(address);

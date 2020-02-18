@@ -184,25 +184,6 @@ pub trait CmdTaskSenderFactory {
     fn create(&self, address: String) -> Self::Sender;
 }
 
-// ReqTaskSender is used to guarantee a group of commands
-// are sent in the same connection to preserve their order.
-// This could be implemented by making CmdTask a group task
-// consisting of multiple commands at this point.
-// TODO: maybe we will implement a GroupCmdTask and remove
-// this interface in the future.
-pub trait ReqTaskSender {
-    type Task: CmdTask;
-
-    fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError>;
-}
-
-pub trait ReqTaskSenderFactory {
-    type Sender: ReqTaskSender;
-
-    fn create(&self, address: String) -> Self::Sender;
-}
-
-// TODO: change to use AtomicOption
 pub struct RecoverableBackendNode<F: CmdTaskResultHandlerFactory> {
     address: String,
     node: BackendNode<<F as CmdTaskResultHandlerFactory>::Handler>,
@@ -625,10 +606,20 @@ impl<F: CmdTaskSenderFactory> ReqAdaptorSenderFactory<F> {
     }
 }
 
-impl<S: CmdTaskSender> ReqTaskSender for ReqAdaptorSender<S> {
-    type Task = S::Task;
+impl<S: CmdTaskSender> ReqAdaptorSender<S> {
+    pub fn new(sender: S) -> Self {
+        Self { sender }
+    }
 
-    fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError> {
+    pub fn inner_sender(&self) -> &S {
+        &self.sender
+    }
+}
+
+impl<S: CmdTaskSender> CmdTaskSender for ReqAdaptorSender<S> {
+    type Task = ReqTask<S::Task>;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         match cmd_task {
             ReqTask::Simple(t) => self.sender.send(t),
             ReqTask::Multi(ts) => {
@@ -641,7 +632,7 @@ impl<S: CmdTaskSender> ReqTaskSender for ReqAdaptorSender<S> {
     }
 }
 
-impl<F: CmdTaskSenderFactory> ReqTaskSenderFactory for ReqAdaptorSenderFactory<F> {
+impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for ReqAdaptorSenderFactory<F> {
     type Sender = ReqAdaptorSender<F::Sender>;
 
     fn create(&self, address: String) -> Self::Sender {
@@ -651,17 +642,17 @@ impl<F: CmdTaskSenderFactory> ReqTaskSenderFactory for ReqAdaptorSenderFactory<F
 }
 
 // Round robin sender.
-pub struct RRSenderGroup<S: ReqTaskSender> {
+pub struct RRSenderGroup<S: CmdTaskSender> {
     senders: Vec<S>,
     cursor: AtomicUsize,
 }
 
-pub struct RRSenderGroupFactory<F: ReqTaskSenderFactory> {
+pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
     group_size: usize,
     inner_factory: F,
 }
 
-impl<F: ReqTaskSenderFactory> RRSenderGroupFactory<F> {
+impl<F: CmdTaskSenderFactory> RRSenderGroupFactory<F> {
     pub fn new(group_size: usize, inner_factory: F) -> Self {
         Self {
             group_size,
@@ -670,7 +661,7 @@ impl<F: ReqTaskSenderFactory> RRSenderGroupFactory<F> {
     }
 }
 
-impl<F: ReqTaskSenderFactory> ReqTaskSenderFactory for RRSenderGroupFactory<F> {
+impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for RRSenderGroupFactory<F> {
     type Sender = RRSenderGroup<F::Sender>;
 
     fn create(&self, address: String) -> Self::Sender {
@@ -685,10 +676,10 @@ impl<F: ReqTaskSenderFactory> ReqTaskSenderFactory for RRSenderGroupFactory<F> {
     }
 }
 
-impl<S: ReqTaskSender> ReqTaskSender for RRSenderGroup<S> {
+impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
     type Task = S::Task;
 
-    fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         let index = self.cursor.fetch_add(1, Ordering::SeqCst);
         let sender = match self.senders.get(index % self.senders.len()) {
             Some(s) => s,
@@ -698,17 +689,17 @@ impl<S: ReqTaskSender> ReqTaskSender for RRSenderGroup<S> {
     }
 }
 
-pub struct CachedSender<S: ReqTaskSender> {
+pub struct CachedSender<S: CmdTaskSender> {
     inner_sender: Arc<S>,
 }
 
 // TODO: support cleanup here to avoid memory leak.
-pub struct CachedSenderFactory<F: ReqTaskSenderFactory> {
+pub struct CachedSenderFactory<F: CmdTaskSenderFactory> {
     inner_factory: F,
     cached_senders: Arc<RwLock<HashMap<String, Arc<F::Sender>>>>,
 }
 
-impl<F: ReqTaskSenderFactory> CachedSenderFactory<F> {
+impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
     pub fn new(inner_factory: F) -> Self {
         Self {
             inner_factory,
@@ -717,7 +708,7 @@ impl<F: ReqTaskSenderFactory> CachedSenderFactory<F> {
     }
 }
 
-impl<F: ReqTaskSenderFactory> ReqTaskSenderFactory for CachedSenderFactory<F> {
+impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
     type Sender = CachedSender<F::Sender>;
 
     fn create(&self, address: String) -> Self::Sender {
@@ -740,9 +731,8 @@ impl<F: ReqTaskSenderFactory> ReqTaskSenderFactory for CachedSenderFactory<F> {
     }
 }
 
-pub type BackendSenderFactory<F, CF> = CachedSenderFactory<
-    RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>,
->;
+pub type BackendSenderFactory<F, CF> =
+    CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>>;
 
 pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
     config: Arc<ServerProxyConfig>,
@@ -755,18 +745,14 @@ where
 {
     CachedSenderFactory::new(RRSenderGroupFactory::new(
         config.backend_conn_num,
-        ReqAdaptorSenderFactory::new(RecoverableBackendNodeFactory::new(
-            config.clone(),
-            reply_handler_factory,
-            conn_factory,
-        )),
+        RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory, conn_factory),
     ))
 }
 
-impl<S: ReqTaskSender> ReqTaskSender for CachedSender<S> {
+impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
     type Task = S::Task;
 
-    fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         self.inner_sender.send(cmd_task)
     }
 }

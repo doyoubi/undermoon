@@ -1,7 +1,10 @@
 use super::backend::{
-    gen_sender_factory, BackendSenderFactory, ReqTaskSender, ReqTaskSenderFactory,
+    gen_sender_factory, BackendError, BackendSenderFactory, CmdTaskSender, CmdTaskSenderFactory,
 };
-use super::blocking::CounterTask;
+use super::blocking::{
+    gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
+    BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
+};
 use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
@@ -20,27 +23,27 @@ use crate::proxy::backend::{CmdTask, DefaultConnFactory};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub struct MetaMap<S: ReqTaskSender, MF>
+pub struct MetaMap<S: CmdTaskSender, MF>
 where
-    MF: ReqTaskSenderFactory + ThreadSafe,
-    <MF as ReqTaskSenderFactory>::Sender: ThreadSafe,
-    <<MF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <S as ReqTaskSender>::Task: DBTag,
+    MF: CmdTaskSenderFactory + ThreadSafe,
+    <MF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    <<MF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
     db_map: DatabaseMap<S>,
     migration_map: MigrationMap<MF>,
     deleting_task_map: DeleteKeysTaskMap,
 }
 
-impl<S: ReqTaskSender, MF> MetaMap<S, MF>
+impl<S: CmdTaskSender, MF> MetaMap<S, MF>
 where
-    MF: ReqTaskSenderFactory + ThreadSafe,
-    <MF as ReqTaskSenderFactory>::Sender: ThreadSafe,
-    <<MF as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
-    <S as ReqTaskSender>::Task: DBTag,
+    MF: CmdTaskSenderFactory + ThreadSafe,
+    <MF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    <<MF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
@@ -59,14 +62,19 @@ where
     }
 }
 
-type SenderFactory = BackendSenderFactory<
+type BasicSenderFactory = BasicBlockingSenderFactory<
     DecompressCommitHandlerFactory<CounterTask<CmdCtx>>,
     DefaultConnFactory<RespPacket>,
+>;
+type SenderFactory = BlockingBackendSenderFactory<
+    DecompressCommitHandlerFactory<CounterTask<CmdCtx>>,
+    DefaultConnFactory<RespPacket>,
+    BlockingTaskRetrySender,
 >;
 type MigrationSenderFactory =
     BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
 pub type SharedMetaMap =
-    Arc<ArcSwap<MetaMap<<SenderFactory as ReqTaskSenderFactory>::Sender, MigrationSenderFactory>>>;
+    Arc<ArcSwap<MetaMap<<SenderFactory as CmdTaskSenderFactory>::Sender, MigrationSenderFactory>>>;
 
 pub struct MetaManager<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,
@@ -79,7 +87,7 @@ pub struct MetaManager<F: RedisClientFactory> {
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, MigrationSenderFactory, CmdCtxFactory>,
     sender_factory: SenderFactory,
-    running_cmd: Arc<AtomicI64>,
+    blocking_map: Arc<BlockingMap<BasicSenderFactory, BlockingTaskRetrySender>>,
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
@@ -90,8 +98,14 @@ impl<F: RedisClientFactory> MetaManager<F> {
     ) -> Self {
         let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
         let conn_factory = Arc::new(DefaultConnFactory::default());
-        let sender_factory =
-            gen_sender_factory(config.clone(), reply_handler_factory, conn_factory.clone());
+        let blocking_task_sender = Arc::new(BlockingTaskRetrySender::new(meta_map.clone()));
+        let basic_sender_factory = gen_basic_blocking_sender_factory(
+            config.clone(),
+            reply_handler_factory,
+            conn_factory.clone(),
+        );
+        let blocking_map = Arc::new(BlockingMap::new(basic_sender_factory, blocking_task_sender));
+        let sender_factory = gen_blocking_sender_factory(blocking_map.clone());
         let migration_sender_factory = Arc::new(gen_sender_factory(
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
@@ -114,7 +128,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
                 cmd_ctx_factory,
             ),
             sender_factory,
-            running_cmd: Arc::new(AtomicI64::new(0)),
+            blocking_map,
         }
     }
 
@@ -154,8 +168,11 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
         let old_meta_map = self.meta_map.load();
         let db_map = DatabaseMap::from_db_map(&db_meta, sender_factory);
-        let (migration_map, new_tasks) = migration_manager
-            .create_new_migration_map(&old_meta_map.migration_map, db_meta.get_local());
+        let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
+            &old_meta_map.migration_map,
+            db_meta.get_local(),
+            self.blocking_map.clone(),
+        );
         let left_slots_after_change = old_meta_map
             .migration_map
             .get_left_slots_after_change(&migration_map, db_meta.get_local());
@@ -236,7 +253,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
-        send_cmd_ctx(&self.meta_map, cmd_ctx, &self.running_cmd);
+        send_cmd_ctx(&self.meta_map, cmd_ctx);
     }
 
     pub fn try_select_db(&self, cmd_ctx: CmdCtx) -> CmdCtx {
@@ -251,7 +268,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 }
 
-pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx, running_cmd: &Arc<AtomicI64>) {
+pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
     let meta_map = meta_map.lease();
     let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
         Ok(()) => return,
@@ -264,10 +281,30 @@ pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx, running_cmd: &Arc
         },
     };
 
-    let cmd_ctx = CounterTask::new(cmd_ctx, running_cmd.clone());
     cmd_ctx.log_event(TaskEvent::SentToDB);
     let res = meta_map.db_map.send(cmd_ctx);
     if let Err(e) = res {
         warn!("Failed to forward cmd_ctx: {:?}", e)
     }
 }
+
+pub struct BlockingTaskRetrySender {
+    meta_map: SharedMetaMap,
+}
+
+impl BlockingTaskRetrySender {
+    fn new(meta_map: SharedMetaMap) -> Self {
+        Self { meta_map }
+    }
+}
+
+impl CmdTaskSender for BlockingTaskRetrySender {
+    type Task = CmdCtx;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+        send_cmd_ctx(&self.meta_map, cmd_task);
+        Ok(())
+    }
+}
+
+impl BlockingCmdTaskSender for BlockingTaskRetrySender {}

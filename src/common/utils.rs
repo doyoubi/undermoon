@@ -152,6 +152,12 @@ impl<T> Wrapper<T> {
     }
 }
 
+impl<T> From<T> for Wrapper<T> {
+    fn from(t: T) -> Self {
+        Wrapper(t)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
