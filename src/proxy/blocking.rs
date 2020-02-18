@@ -12,7 +12,7 @@ use crate::protocol::{Resp, RespVec};
 use crossbeam_channel;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicUsize, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 pub trait TaskBlockingController: ThreadSafe {
@@ -126,6 +126,7 @@ pub struct BlockingHandle {
 impl BlockingHandle {
     pub fn new(blocking: Arc<AtomicUsize>) -> Self {
         blocking.fetch_add(1, Ordering::SeqCst);
+        info!("migration start blocking");
         Self { blocking }
     }
 
@@ -135,6 +136,7 @@ impl BlockingHandle {
 impl Drop for BlockingHandle {
     fn drop(&mut self) {
         self.blocking.fetch_sub(1, Ordering::SeqCst);
+        info!("migraiton stop blocking");
     }
 }
 

@@ -13,7 +13,7 @@ use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
 use crate::proxy::backend::{
     CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, RedirectionSenderFactory,
 };
-use crate::proxy::blocking::TaskBlockingController;
+use crate::proxy::blocking::{BlockingHandle, TaskBlockingController};
 use crate::proxy::database::DBSendError;
 use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use crate::proxy::service::ServerProxyConfig;
@@ -162,13 +162,20 @@ impl<
         info!("pre_check done");
     }
 
-    async fn pre_block(&self) -> Result<(), MigrationError> {
+    async fn pre_block(&self) -> BlockingHandle {
         let state = self.state.clone();
-        let _ = self.mgr_config.get_max_blocking_time();
-        // TODO: implement this.
+
+        let ctrl = self.blocking_ctrl.clone();
+        let blocking_handle = ctrl.start_blocking();
+        loop {
+            if ctrl.blocking_done() {
+                break;
+            }
+            Delay::new(Duration::from_millis(2)).await;
+        }
         state.set_state(MigrationState::PreSwitch);
         info!("pre_block done");
-        Ok(())
+        blocking_handle
     }
 
     async fn pre_switch(&self) {
@@ -304,8 +311,26 @@ impl<
         let scan_migrate = self.scan_migrate();
 
         pre_check.await;
-        pre_block.await?;
-        pre_switch.await;
+
+        let blocking = async move {
+            let blocking_handle = pre_block.await;
+            pre_switch.await;
+            blocking_handle.stop();
+        };
+
+        let max_blocking_time = self.mgr_config.get_max_blocking_time();
+        let max_blocking_time = Duration::from_millis(max_blocking_time);
+        let blocking_timeout = Delay::new(max_blocking_time);
+
+        let res = select! {
+            () = blocking.fuse() => Ok(()),
+            () = blocking_timeout.fuse() => Err(MigrationError::Timeout),
+        };
+
+        if let Err(err) = res {
+            error!("Migration failed {:?}. Force to go ahead.", err);
+        }
+
         scan_migrate.await
     }
 }
@@ -357,8 +382,11 @@ impl<
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
         let state = self.state.get_state();
-        if state == MigrationState::PreCheck || state == MigrationState::PreBlocking {
-            return Err(DBSendError::SlotNotFound(cmd_task));
+        match state {
+            MigrationState::PreCheck | MigrationState::PreBlocking | MigrationState::PreSwitch => {
+                return Err(DBSendError::SlotNotFound(cmd_task));
+            }
+            _ => (),
         }
 
         // TODO: add blocking for PreBlocking
