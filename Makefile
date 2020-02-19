@@ -23,9 +23,6 @@ coord:
 broker:
 	RUST_LOG=undermoon=debug,mem_broker=debug target/debug/mem_broker conf/mem-broker.toml
 
-test_broker:
-	RUST_LOG=undermoon=debug,test_http_broker=debug target/debug/test_http_broker
-
 flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy conf/server-proxy.toml
 
@@ -34,19 +31,19 @@ docker-build-image:
 	sh scripts/dkrebuild.sh
 	docker image build -f examples/Dockerfile-undermoon -t undermoon .
 
+docker-rebuild-bin:
+	sh scripts/dkrebuild.sh
+
 docker-build-release:
-	docker image build -f examples/Dockerfile-builder-release -t undermoon_builder .
+	docker image build -f examples/Dockerfile-builder-release -t undermoon_builder_release .
 	mkdir -p ./examples/target_volume/release
 	docker rm undermoon-builder-container || true
-	docker create -it --name undermoon-builder-container undermoon_builder bash
+	docker create -it --name undermoon-builder-container undermoon_builder_release bash
 	docker cp undermoon-builder-container:/undermoon/target/release/server_proxy ./examples/target_volume/release/
 	docker cp undermoon-builder-container:/undermoon/target/release/coordinator ./examples/target_volume/release/
 	docker cp undermoon-builder-container:/undermoon/target/release/mem_broker ./examples/target_volume/release/
 	docker rm undermoon-builder-container
 	docker image build -f examples/Dockerfile-undermoon-release -t undermoon .
-
-docker-rebuild-bin:
-	sh scripts/dkrebuild.sh
 
 docker-multi-redis:
 	docker-compose -f examples/docker-compose-multi-redis.yml up
