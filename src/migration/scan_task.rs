@@ -162,16 +162,13 @@ impl<
         info!("pre_check done");
     }
 
-    async fn pre_block(&self) -> BlockingHandle {
+    async fn pre_block(&self) -> BlockingHandle<BC::Sender> {
         let state = self.state.clone();
 
         let ctrl = self.blocking_ctrl.clone();
         let blocking_handle = ctrl.start_blocking();
-        loop {
-            if ctrl.blocking_done() {
-                break;
-            }
-            Delay::new(Duration::from_millis(2)).await;
+        while !ctrl.blocking_done() {
+            Delay::new(Duration::from_millis(1)).await;
         }
         state.set_state(MigrationState::PreSwitch);
         info!("pre_block done");

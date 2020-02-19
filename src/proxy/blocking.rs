@@ -16,9 +16,11 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 pub trait TaskBlockingController: ThreadSafe {
+    type Sender: BlockingCmdTaskSender;
+
     fn blocking_done(&self) -> bool;
     fn is_blocking(&self) -> bool;
-    fn start_blocking(&self) -> BlockingHandle;
+    fn start_blocking(&self) -> BlockingHandle<Self::Sender>;
     fn stop_blocking(&self);
 }
 
@@ -119,57 +121,38 @@ where
     }
 }
 
-pub struct BlockingHandle {
-    blocking: Arc<AtomicUsize>,
+pub struct BlockingHandle<BS: BlockingCmdTaskSender> {
+    inner: Arc<BlockingHandleInner<BS>>,
 }
 
-impl BlockingHandle {
-    pub fn new(blocking: Arc<AtomicUsize>) -> Self {
-        blocking.fetch_add(1, Ordering::SeqCst);
+impl<BS: BlockingCmdTaskSender> BlockingHandle<BS> {
+    fn new(inner: Arc<BlockingHandleInner<BS>>) -> Self {
+        inner.blocking.fetch_add(1, Ordering::SeqCst);
         info!("migration start blocking");
-        Self { blocking }
+        Self { inner }
     }
 
     pub fn stop(self) {}
 }
 
-impl Drop for BlockingHandle {
+impl<BS: BlockingCmdTaskSender> Drop for BlockingHandle<BS> {
     fn drop(&mut self) {
-        self.blocking.fetch_sub(1, Ordering::SeqCst);
-        info!("migraiton stop blocking");
-    }
-}
-
-pub struct TaskBlockingQueue<S, BS>
-where
-    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
-    BS: BlockingCmdTaskSender,
-{
-    queue_sender: crossbeam_channel::Sender<BS::Task>,
-    queue_receiver: crossbeam_channel::Receiver<BS::Task>,
-    blocking: Arc<AtomicUsize>,
-    inner_sender: S,
-    blocking_task_sender: Arc<BS>,
-    running_cmd: Arc<AtomicI64>,
-}
-
-impl<S, BS> TaskBlockingQueue<S, BS>
-where
-    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
-    BS: BlockingCmdTaskSender,
-{
-    pub fn new(inner_sender: S, blocking_task_sender: Arc<BS>) -> Self {
-        let (queue_sender, queue_receiver) = crossbeam_channel::unbounded();
-        Self {
-            queue_sender,
-            queue_receiver,
-            blocking: Arc::new(AtomicUsize::new(0)),
-            inner_sender,
-            blocking_task_sender,
-            running_cmd: Arc::new(AtomicI64::new(0)),
+        info!("blocking handle is dropped");
+        let previous = self.inner.blocking.fetch_sub(1, Ordering::SeqCst);
+        if previous == 1 {
+            info!("migraition stop blocking");
+            self.inner.release_all();
         }
     }
+}
 
+struct BlockingHandleInner<BS: BlockingCmdTaskSender> {
+    blocking: AtomicUsize,
+    queue_receiver: crossbeam_channel::Receiver<BS::Task>,
+    blocking_task_sender: Arc<BS>,
+}
+
+impl<BS: BlockingCmdTaskSender> BlockingHandleInner<BS> {
     fn release_all(&self) {
         loop {
             let cmd_task = match self.queue_receiver.try_recv() {
@@ -189,6 +172,38 @@ where
             }
         }
     }
+}
+
+pub struct TaskBlockingQueue<S, BS>
+where
+    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    queue_sender: crossbeam_channel::Sender<BS::Task>,
+    blocking_handle_inner: Arc<BlockingHandleInner<BS>>,
+    inner_sender: S,
+    running_cmd: Arc<AtomicI64>,
+}
+
+impl<S, BS> TaskBlockingQueue<S, BS>
+where
+    S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
+    BS: BlockingCmdTaskSender,
+{
+    pub fn new(inner_sender: S, blocking_task_sender: Arc<BS>) -> Self {
+        let (queue_sender, queue_receiver) = crossbeam_channel::unbounded();
+        let blocking_handle_inner = Arc::new(BlockingHandleInner {
+            blocking: AtomicUsize::new(0),
+            queue_receiver,
+            blocking_task_sender,
+        });
+        Self {
+            queue_sender,
+            blocking_handle_inner,
+            inner_sender,
+            running_cmd: Arc::new(AtomicI64::new(0)),
+        }
+    }
 
     fn send(&self, cmd_task: BS::Task) -> Result<(), BackendError> {
         if !self.is_blocking() {
@@ -206,7 +221,7 @@ where
         }
 
         if !self.is_blocking() {
-            self.release_all();
+            self.blocking_handle_inner.release_all();
         }
         Ok(())
     }
@@ -217,20 +232,22 @@ where
     S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
     BS: BlockingCmdTaskSender,
 {
+    type Sender = BS;
+
     fn blocking_done(&self) -> bool {
         self.running_cmd.load(Ordering::SeqCst) == 0
     }
 
     fn is_blocking(&self) -> bool {
-        self.blocking.load(Ordering::SeqCst) == 0
+        self.blocking_handle_inner.blocking.load(Ordering::SeqCst) > 0
     }
 
-    fn start_blocking(&self) -> BlockingHandle {
-        BlockingHandle::new(self.blocking.clone())
+    fn start_blocking(&self) -> BlockingHandle<Self::Sender> {
+        BlockingHandle::new(self.blocking_handle_inner.clone())
     }
 
     fn stop_blocking(&self) {
-        self.release_all();
+        self.blocking_handle_inner.release_all();
     }
 }
 
