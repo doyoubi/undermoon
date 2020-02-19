@@ -5,16 +5,17 @@ use super::command::{
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
+use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
 };
 use futures::{stream, Future, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
-use futures_batch::ChunksTimeoutStreamExt;
 use std::boxed::Box;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync;
 use std::time::Duration;
@@ -198,8 +199,8 @@ pub async fn handle_session<H>(
     sock: TcpStream,
     _channel_size: usize,
     session_batch_min_time: usize,
-    _session_batch_max_time: usize,
-    session_batch_buf: usize,
+    session_batch_max_time: usize,
+    session_batch_buf: NonZeroUsize,
 ) -> Result<(), SessionError>
 where
     H: CmdHandler + Send + Sync + 'static,
@@ -211,13 +212,15 @@ where
             DecodeError::Io(e) => SessionError::Io(e),
             DecodeError::InvalidProtocol => SessionError::Canceled,
         })
-        .chunks_timeout(
+        .try_chunks_timeout(
             session_batch_buf,
             Duration::from_nanos(session_batch_min_time as u64),
+            Duration::from_nanos(session_batch_max_time as u64),
+            true,
         );
 
-    let mut reply_receiver_list = Vec::with_capacity(session_batch_buf);
-    let mut replies = Vec::with_capacity(session_batch_buf);
+    let mut reply_receiver_list = Vec::with_capacity(session_batch_buf.get());
+    let mut replies = Vec::with_capacity(session_batch_buf.get());
 
     while let Some(reqs) = reader.next().await {
         for req in reqs.into_iter() {

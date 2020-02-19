@@ -5,6 +5,7 @@ use crate::common::config::ConfigError;
 use crate::common::utils::{resolve_first_address, ThreadSafe};
 use futures::{FutureExt, StreamExt};
 use std::error::Error;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use string_error::into_err;
@@ -15,18 +16,18 @@ pub struct ServerProxyConfig {
     pub address: String,
     pub announce_address: String,
     pub auto_select_db: bool,
-    pub slowlog_len: usize,
+    pub slowlog_len: NonZeroUsize,
     pub slowlog_log_slower_than: AtomicI64,
-    pub thread_number: usize,
+    pub thread_number: NonZeroUsize,
     pub session_channel_size: usize,
     pub backend_channel_size: usize,
-    pub backend_conn_num: usize,
+    pub backend_conn_num: NonZeroUsize,
     pub backend_batch_min_time: usize,
     pub backend_batch_max_time: usize,
-    pub backend_batch_buf: usize,
+    pub backend_batch_buf: NonZeroUsize,
     pub session_batch_min_time: usize,
     pub session_batch_max_time: usize,
-    pub session_batch_buf: usize,
+    pub session_batch_buf: NonZeroUsize,
 }
 
 impl ServerProxyConfig {
