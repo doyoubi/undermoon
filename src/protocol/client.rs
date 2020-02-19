@@ -25,7 +25,7 @@ pub trait RedisClient: Send {
         command: Vec<BinSafeStr>,
     ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
         let fut = async move {
-            match self.execute(command.into()).await {
+            match self.execute(OptionalMulti::Single(command)).await {
                 Ok(opt_mul_resp) => {
                     match opt_mul_resp {
                         OptionalMulti::Single(t) => Ok(t),
@@ -196,8 +196,6 @@ impl PooledRedisClient {
     }
 }
 
-impl ThreadSafe for PooledRedisClient {}
-
 impl Drop for PooledRedisClient {
     fn drop(&mut self) {
         if self.err {
@@ -236,8 +234,6 @@ pub struct PooledRedisClientFactory {
     pool_map: CHashMap<String, Pool<RedisClientConnection>>,
     timeout: Duration,
 }
-
-impl ThreadSafe for PooledRedisClientFactory {}
 
 impl PooledRedisClientFactory {
     pub fn new(capacity: usize, timeout: Duration) -> Self {

@@ -1,8 +1,11 @@
-use super::backend::{BackendSenderFactory, CmdTask, CmdTaskFactory, ReqTask, ReqTaskSender};
+use super::backend::{
+    BackendSenderFactory, CmdTask, CmdTaskFactory, CmdTaskSender, DefaultConnFactory,
+    ReqAdaptorSender, ReqTask,
+};
 use super::command::CommandError;
 use super::reply::ReplyCommitHandlerFactory;
-use crate::common::utils::{pretty_print_bytes, ThreadSafe};
-use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
+use crate::common::utils::pretty_print_bytes;
+use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespPacket, RespVec, VFunctor};
 use atomic_option::AtomicOption;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{select, Future, FutureExt, StreamExt};
@@ -147,29 +150,6 @@ async fn get_data_entry(
     }
 }
 
-//fn data_entry_future(dump: ReplyFuture, pttl: ReplyFuture) -> DataEntryFuture {
-////    let fut = dump.join(pttl).and_then(|(dump, pttl)| {
-////        let dump_result = match dump {
-////            Resp::Bulk(BulkStr::Str(raw_data)) => Ok(Some(raw_data)),
-////            Resp::Bulk(BulkStr::Nil) => Ok(None),
-////            _others => Err(CommandError::UnexpectedResponse),
-////        };
-////        let pttl_result = match pttl {
-////            // -2 for key not exists
-////            Resp::Integer(pttl) if pttl.as_slice() != b"-2" => Ok(Some(pttl)),
-////            Resp::Integer(_pttl) => Ok(None),
-////            _others => Err(CommandError::UnexpectedResponse),
-////        };
-////        match (dump_result, pttl_result) {
-////            (Ok(Some(raw_data)), Ok(Some(pttl))) => future::ok(Some(DataEntry { raw_data, pttl })),
-////            (Ok(None), _) | (_, Ok(None)) => future::ok(None),
-////            (Err(err), _) => future::err(err),
-////            (_, Err(err)) => future::err(err),
-////        }
-////    });
-//    Box::pin(get_data_entry(dump, pttl))
-//}
-
 #[derive(Debug)]
 struct MgrCmdStateRestoreForward;
 
@@ -199,7 +179,8 @@ impl MgrCmdStateRestoreForward {
     }
 }
 
-pub type SenderFactory = BackendSenderFactory<ReplyCommitHandlerFactory>;
+pub type SenderFactory =
+    BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
 
 type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
@@ -208,9 +189,9 @@ type DumpPttlTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateDumpPttl<F>, DataEn
 type RestoreTaskSender = UnboundedSender<ReplyFuture>;
 type RestoreTaskReceiver = UnboundedReceiver<ReplyFuture>;
 
-pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> {
-    src_sender: Arc<S>,
-    dst_sender: Arc<S>,
+pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: CmdTaskSender<Task = F::Task>> {
+    src_sender: Arc<ReqAdaptorSender<S>>,
+    dst_sender: Arc<ReqAdaptorSender<S>>,
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
     restore_task_sender: RestoreTaskSender,
@@ -222,15 +203,10 @@ pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: ReqTaskSender<Task = 
     cmd_task_factory: Arc<F>,
 }
 
-impl<F: CmdTaskFactory + ThreadSafe, S: ReqTaskSender<Task = F::Task> + ThreadSafe> ThreadSafe
-    for RestoreDataCmdTaskHandler<F, S>
-{
-}
-
-impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHandler<F, S> {
+impl<F: CmdTaskFactory, S: CmdTaskSender<Task = F::Task>> RestoreDataCmdTaskHandler<F, S> {
     pub fn new(src_sender: S, dst_sender: S, cmd_task_factory: Arc<F>) -> Self {
-        let src_sender = Arc::new(src_sender);
-        let dst_sender = Arc::new(dst_sender);
+        let src_sender = Arc::new(ReqAdaptorSender::new(src_sender));
+        let dst_sender = Arc::new(ReqAdaptorSender::new(dst_sender));
         let (exists_task_sender, exists_task_receiver) = unbounded();
         let (dump_pttl_task_sender, dump_pttl_task_receiver) = unbounded();
         let (restore_task_sender, restore_task_receiver) = unbounded();
@@ -294,8 +270,8 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
     async fn handle_exists_task(
         mut exists_task_receiver: ExistsTaskReceiver<F>,
         dump_pttl_task_sender: DumpPttlTaskSender<F>,
-        src_sender: Arc<S>,
-        dst_sender: Arc<S>,
+        src_sender: Arc<ReqAdaptorSender<S>>,
+        dst_sender: Arc<ReqAdaptorSender<S>>,
         cmd_task_factory: Arc<F>,
     ) {
         while let Some((state, reply_receiver)) = exists_task_receiver.next().await {
@@ -337,7 +313,7 @@ impl<F: CmdTaskFactory, S: ReqTaskSender<Task = F::Task>> RestoreDataCmdTaskHand
     async fn handle_dump_pttl_task(
         mut dump_pttl_task_receiver: DumpPttlTaskReceiver<F>,
         restore_task_sender: RestoreTaskSender,
-        dst_sender: Arc<S>,
+        dst_sender: Arc<ReqAdaptorSender<S>>,
         cmd_task_factory: Arc<F>,
     ) {
         while let Some((state, reply_fut)) = dump_pttl_task_receiver.next().await {
@@ -447,14 +423,14 @@ mod tests {
         ConnError,
     }
 
-    struct DummyReqTaskSender {
+    struct DummyCmdTaskSender {
         exists: AtomicBool,
         closed: AtomicBool,
         cmd_count: CHashMap<String, AtomicUsize>,
         err_set: HashMap<&'static str, ErrType>,
     }
 
-    impl DummyReqTaskSender {
+    impl DummyCmdTaskSender {
         fn new(exists: bool, err_set: HashMap<&'static str, ErrType>) -> Self {
             Self {
                 exists: AtomicBool::new(exists),
@@ -468,7 +444,7 @@ mod tests {
             let cmd_name = cmd_ctx
                 .get_cmd()
                 .get_command_name()
-                .expect("DummyReqTaskSender::handle")
+                .expect("DummyCmdTaskSender::handle")
                 .to_string()
                 .to_uppercase();
 
@@ -552,18 +528,11 @@ mod tests {
         }
     }
 
-    impl ReqTaskSender for DummyReqTaskSender {
+    impl CmdTaskSender for DummyCmdTaskSender {
         type Task = CmdCtx;
 
-        fn send(&self, cmd_task: ReqTask<Self::Task>) -> Result<(), BackendError> {
-            match cmd_task {
-                ReqTask::Simple(cmd_ctx) => self.handle(cmd_ctx),
-                ReqTask::Multi(cmds) => {
-                    for cmd in cmds.into_iter() {
-                        self.handle(cmd);
-                    }
-                }
-            }
+        fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+            self.handle(cmd_task);
             Ok(())
         }
     }
@@ -597,7 +566,7 @@ mod tests {
     }
 
     async fn run_future(
-        handler: &RestoreDataCmdTaskHandler<CmdCtxFactory, DummyReqTaskSender>,
+        handler: &RestoreDataCmdTaskHandler<CmdCtxFactory, DummyCmdTaskSender>,
         reply_receiver: CmdReplyReceiver,
     ) -> BinSafeStr {
         let reply = gen_reply_future(reply_receiver);
@@ -614,8 +583,8 @@ mod tests {
     #[tokio::test]
     async fn test_key_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
-            DummyReqTaskSender::new(false, HashMap::new()),
-            DummyReqTaskSender::new(true, HashMap::new()),
+            DummyCmdTaskSender::new(false, HashMap::new()),
+            DummyCmdTaskSender::new(true, HashMap::new()),
             Arc::new(CmdCtxFactory::default()),
         );
 
@@ -624,11 +593,26 @@ mod tests {
         handler.handle_cmd_task(cmd_ctx);
         let s = run_future(&handler, reply_receiver).await;
 
-        assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-        assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
-        assert_eq!(handler.src_sender.get_cmd_count("DUMP"), None);
-        assert_eq!(handler.src_sender.get_cmd_count("PTTL"), None);
-        assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("GET"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+            None
+        );
+        assert_eq!(
+            handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+            None
+        );
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+            None
+        );
 
         assert_eq!(s, "get_reply".to_string().into_bytes());
     }
@@ -636,8 +620,8 @@ mod tests {
     #[tokio::test]
     async fn test_key_dst_not_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
-            DummyReqTaskSender::new(true, HashMap::new()),
-            DummyReqTaskSender::new(false, HashMap::new()),
+            DummyCmdTaskSender::new(true, HashMap::new()),
+            DummyCmdTaskSender::new(false, HashMap::new()),
             Arc::new(CmdCtxFactory::default()),
         );
 
@@ -646,11 +630,26 @@ mod tests {
         handler.handle_cmd_task(cmd_ctx);
         let s = run_future(&handler, reply_receiver).await;
 
-        assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-        assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
-        assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
-        assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
-        assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), Some(1));
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("GET"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+            Some(1)
+        );
 
         assert_eq!(s, "get_reply".to_string().into_bytes());
     }
@@ -658,8 +657,8 @@ mod tests {
     #[tokio::test]
     async fn test_key_both_not_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
-            DummyReqTaskSender::new(false, HashMap::new()),
-            DummyReqTaskSender::new(false, HashMap::new()),
+            DummyCmdTaskSender::new(false, HashMap::new()),
+            DummyCmdTaskSender::new(false, HashMap::new()),
             Arc::new(CmdCtxFactory::default()),
         );
 
@@ -668,11 +667,26 @@ mod tests {
         handler.handle_cmd_task(cmd_ctx);
         let s = run_future(&handler, reply_receiver).await;
 
-        assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-        assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
-        assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
-        assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
-        assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("GET"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+            Some(1)
+        );
+        assert_eq!(
+            handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+            None
+        );
 
         assert_eq!(s, "key_not_exists".to_string().into_bytes());
     }
@@ -686,8 +700,8 @@ mod tests {
 
         for err_set in &[err_set1, err_set2] {
             let handler = RestoreDataCmdTaskHandler::new(
-                DummyReqTaskSender::new(false, HashMap::new()),
-                DummyReqTaskSender::new(true, err_set.clone()),
+                DummyCmdTaskSender::new(false, HashMap::new()),
+                DummyCmdTaskSender::new(true, err_set.clone()),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -696,11 +710,23 @@ mod tests {
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
 
-            assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("GET"), None);
-            assert_eq!(handler.src_sender.get_cmd_count("DUMP"), None);
-            assert_eq!(handler.src_sender.get_cmd_count("PTTL"), None);
-            assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+                Some(1)
+            );
+            assert_eq!(handler.dst_sender.inner_sender().get_cmd_count("GET"), None);
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+                None
+            );
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+                None
+            );
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+                None
+            );
 
             assert!(s.starts_with("future_returns_error".as_bytes()));
         }
@@ -715,8 +741,8 @@ mod tests {
 
         for (i, err_set) in [err_set1, err_set2].iter().enumerate() {
             let handler = RestoreDataCmdTaskHandler::new(
-                DummyReqTaskSender::new(false, HashMap::new()),
-                DummyReqTaskSender::new(true, err_set.clone()),
+                DummyCmdTaskSender::new(false, HashMap::new()),
+                DummyCmdTaskSender::new(true, err_set.clone()),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -725,11 +751,26 @@ mod tests {
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
 
-            assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
-            assert_eq!(handler.src_sender.get_cmd_count("DUMP"), None);
-            assert_eq!(handler.src_sender.get_cmd_count("PTTL"), None);
-            assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("GET"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+                None
+            );
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+                None
+            );
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+                None
+            );
 
             if i == 0 {
                 assert_eq!(s, "GET cmd error".as_bytes());
@@ -748,8 +789,8 @@ mod tests {
 
         for err_set in &[err_set1, err_set2] {
             let handler = RestoreDataCmdTaskHandler::new(
-                DummyReqTaskSender::new(true, err_set.clone()),
-                DummyReqTaskSender::new(false, HashMap::new()),
+                DummyCmdTaskSender::new(true, err_set.clone()),
+                DummyCmdTaskSender::new(false, HashMap::new()),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -758,11 +799,23 @@ mod tests {
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
 
-            assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("GET"), None);
-            assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
-            assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+                Some(1)
+            );
+            assert_eq!(handler.dst_sender.inner_sender().get_cmd_count("GET"), None);
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+                None
+            );
 
             assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
@@ -777,8 +830,8 @@ mod tests {
 
         for err_set in &[err_set1, err_set2] {
             let handler = RestoreDataCmdTaskHandler::new(
-                DummyReqTaskSender::new(true, err_set.clone()),
-                DummyReqTaskSender::new(false, HashMap::new()),
+                DummyCmdTaskSender::new(true, err_set.clone()),
+                DummyCmdTaskSender::new(false, HashMap::new()),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -787,11 +840,23 @@ mod tests {
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
 
-            assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("GET"), None);
-            assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
-            assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+                Some(1)
+            );
+            assert_eq!(handler.dst_sender.inner_sender().get_cmd_count("GET"), None);
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+                None
+            );
 
             assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
@@ -806,8 +871,8 @@ mod tests {
 
         for (i, err_set) in [err_set1, err_set2].iter().enumerate() {
             let handler = RestoreDataCmdTaskHandler::new(
-                DummyReqTaskSender::new(true, HashMap::new()),
-                DummyReqTaskSender::new(false, err_set.clone()),
+                DummyCmdTaskSender::new(true, HashMap::new()),
+                DummyCmdTaskSender::new(false, err_set.clone()),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -816,11 +881,26 @@ mod tests {
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
 
-            assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("GET"), Some(1));
-            assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
-            assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
-            assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), Some(1));
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("EXISTS"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("GET"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("DUMP"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.src_sender.inner_sender().get_cmd_count("PTTL"),
+                Some(1)
+            );
+            assert_eq!(
+                handler.dst_sender.inner_sender().get_cmd_count("RESTORE"),
+                Some(1)
+            );
 
             if i == 0 {
                 // Since the last RESTORE and GET command are sent at the same time,

@@ -112,7 +112,6 @@ mod tests {
     use super::super::core::{FailureDetector, SeqFailureDetector};
     use super::*;
     use crate::common::cluster::{Cluster, Host};
-    use crate::common::utils::ThreadSafe;
     use crate::protocol::{
         Array, BinSafeStr, OptionalMulti, RedisClient, RedisClientError, Resp, RespVec,
     };
@@ -129,8 +128,6 @@ mod tests {
         address: String,
     }
 
-    impl ThreadSafe for DummyClient {}
-
     impl RedisClient for DummyClient {
         fn execute<'s>(
             &'s mut self,
@@ -140,7 +137,9 @@ mod tests {
         > {
             if self.address == NODE1 {
                 // only works for single command
-                Box::pin(future::ok(Resp::Arr(Array::Nil).into()))
+                Box::pin(future::ok(OptionalMulti::Single(
+                    Resp::Arr(Array::Nil).into(),
+                )))
             } else {
                 Box::pin(future::err(RedisClientError::InvalidReply))
             }
@@ -148,8 +147,6 @@ mod tests {
     }
 
     struct DummyClientFactory;
-
-    impl ThreadSafe for DummyClientFactory {}
 
     impl RedisClientFactory for DummyClientFactory {
         type Client = DummyClient;
@@ -174,8 +171,6 @@ mod tests {
             }
         }
     }
-
-    impl ThreadSafe for DummyMetaBroker {}
 
     impl MetaDataBroker for DummyMetaBroker {
         fn get_cluster_names<'s>(

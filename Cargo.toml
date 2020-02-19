@@ -39,7 +39,7 @@ futures-batch = "0.6.0"
 config = "0.9"
 btoi = "0.4.0"
 crossbeam = "0.7.1"
-crossbeam-channel = "0.3"
+crossbeam-channel = "0.4"
 chashmap = "2.2.2"
 actix-web = "0.7"
 chrono = "0.4"
@@ -50,6 +50,7 @@ memchr = "2.3.0"
 pin-project = "0.4"
 string-error = "0.1.0"
 matches = "0.1.8"
+dashmap = "3.4.4"
 
 [profile.release]
 debug = true

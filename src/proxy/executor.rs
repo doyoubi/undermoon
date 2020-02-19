@@ -7,9 +7,7 @@ use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::db::ProxyDBMeta;
-use crate::common::utils::{
-    ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
-};
+use crate::common::utils::{NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
 use crate::migration::task::parse_switch_command;
@@ -24,8 +22,6 @@ use std::sync::{self, Arc};
 pub struct SharedForwardHandler<F: RedisClientFactory> {
     handler: sync::Arc<ForwardHandler<F>>,
 }
-
-impl<F: RedisClientFactory> ThreadSafe for SharedForwardHandler<F> {}
 
 impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
     fn clone(&self) -> Self {

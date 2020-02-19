@@ -2,6 +2,10 @@ version: '3'
 services:
   etcd:
     image: "bitnami/etcd:latest"
+    deploy:
+      restart_policy:
+      condition: any
+      delay: 10s
     environment:
       - ALLOW_NONE_AUTHENTICATION=yes
     ports:
@@ -9,9 +13,13 @@ services:
 
   overmoon:
     image: "overmoon"
+    deploy:
+      restart_policy:
+      condition: any
+      delay: 10s
     volumes:
       - ${PWD}/examples/overmoon/config.yaml:/overmoon/config.yaml
-    command: /overmoon/overmoon
+    command: overmoon
     ports:
     - "{{ overmoon_port }}:{{ overmoon_port }}"
 
@@ -19,6 +27,10 @@ services:
 {% for coordinator_id in range(coordinator_num) %}
 coordinator{{ coordinator_id }}:
   image: "undermoon"
+  deploy:
+    restart_policy:
+      condition: any
+      delay: 10s
   volumes:
   - ${PWD}/examples/target_volume:/undermoon/target
   command: /undermoon/target/debug/coordinator
@@ -34,6 +46,10 @@ coordinator{{ coordinator_id }}:
 {% for redis_port in redis_ports %}
 redis{{ redis_port }}:
   image: "redis"
+  deploy:
+    restart_policy:
+    condition: any
+    delay: 10s
   command: redis-server --port {{ redis_port }} --slave-announce-ip redis{{ redis_port }} --slave-announce-port {{ redis_port }} --maxmemory {{ redis_maxmemory }}
   ports:
   - "{{ redis_port }}:{{ redis_port }}"
@@ -44,6 +60,10 @@ redis{{ redis_port }}:
 {% for proxy_port in server_proxy_ports %}
 server_proxy{{ proxy_port }}:
   image: "undermoon"
+  deploy:
+    restart_policy:
+    condition: any
+    delay: 10s
   volumes:
   - ${PWD}/examples/target_volume:/undermoon/target
   command: /undermoon/target/debug/server_proxy

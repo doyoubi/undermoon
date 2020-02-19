@@ -8,6 +8,8 @@ use std::str;
 
 pub trait ThreadSafe: Send + Sync + 'static {}
 
+impl<T: Send + Sync + 'static> ThreadSafe for T {}
+
 #[derive(Debug)]
 pub struct CmdParseError {}
 
@@ -139,6 +141,21 @@ pub fn vec_result_to_stream<T, E>(res: Result<Vec<T>, E>) -> impl Stream<Item = 
         Err(err) => vec![Err(err)],
     };
     stream::iter(elements)
+}
+
+pub struct Wrapper<T>(pub T);
+
+impl<T> Wrapper<T> {
+    pub fn into_inner(self) -> T {
+        let Self(t) = self;
+        t
+    }
+}
+
+impl<T> From<T> for Wrapper<T> {
+    fn from(t: T) -> Self {
+        Wrapper(t)
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-REDIS_NUM = 48
+REDIS_NUM = 12
 REDIS_PORT_RANGE_START = 6000
 REDIS_PORT_RANGE_END = REDIS_PORT_RANGE_START + REDIS_NUM
 
@@ -18,7 +18,7 @@ DOCKER_COMPOSE_CONFIG = {
     'overmoon_address': 'overmoon:7799',
     'etcd_port': 2379,
     'pumba_commands': {
-        'kill': "--random --interval 40s kill 're2:(server_proxy|coordinator|overmoon).*'",
+        'kill': "--random --interval 120s kill 're2:(server_proxy|coordinator|overmoon).*'",
         'delay': "--random --interval 20s netem --duration 5s delay 're2:(server_proxy|coordinator|overmoon).*'",
         'loss': "--random --interval 20s netem --duration 5s loss 're2:(server_proxy|coordinator|overmoon).*'",
         'rate': "--random --interval 20s netem --duration 5s rate 're2:(server_proxy|coordinator|overmoon).*'",

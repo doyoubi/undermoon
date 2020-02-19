@@ -2,43 +2,54 @@ use super::backend::{BackendResult, CmdTask, CmdTaskResultHandler, CmdTaskResult
 use super::compress::{CmdReplyDecompressor, CompressionError};
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use crate::common::utils::ThreadSafe;
-use crate::protocol::{BulkStr, Resp};
+use crate::common::utils::Wrapper;
+use crate::protocol::{BulkStr, Resp, RespPacket};
+use std::marker::PhantomData;
 
-pub struct DecompressCommitHandlerFactory {
+pub struct DecompressCommitHandlerFactory<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> {
     meta_map: SharedMetaMap,
+    phanthom: PhantomData<T>,
 }
 
-impl ThreadSafe for DecompressCommitHandlerFactory {}
-
-impl DecompressCommitHandlerFactory {
+impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> DecompressCommitHandlerFactory<T> {
     pub fn new(meta_map: SharedMetaMap) -> Self {
-        Self { meta_map }
-    }
-}
-
-impl CmdTaskResultHandlerFactory for DecompressCommitHandlerFactory {
-    type Handler = DecompressCommitHandler;
-
-    fn create(&self) -> Self::Handler {
-        DecompressCommitHandler {
-            decompressor: CmdReplyDecompressor::new(self.meta_map.clone()),
+        Self {
+            meta_map,
+            phanthom: PhantomData,
         }
     }
 }
 
-pub struct DecompressCommitHandler {
-    decompressor: CmdReplyDecompressor,
+impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandlerFactory
+    for DecompressCommitHandlerFactory<T>
+{
+    type Handler = DecompressCommitHandler<T>;
+
+    fn create(&self) -> Self::Handler {
+        DecompressCommitHandler {
+            decompressor: CmdReplyDecompressor::new(self.meta_map.clone()),
+            phanthom: PhantomData,
+        }
+    }
 }
 
-impl CmdTaskResultHandler for DecompressCommitHandler {
-    type Task = CmdCtx;
+pub struct DecompressCommitHandler<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> {
+    decompressor: CmdReplyDecompressor,
+    phanthom: PhantomData<T>,
+}
+
+impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandler
+    for DecompressCommitHandler<T>
+{
+    type Task = T;
 
     fn handle_task(
         &self,
-        cmd_ctx: Self::Task,
+        cmd_task: Self::Task,
         result: BackendResult<<Self::Task as CmdTask>::Pkt>,
     ) {
+        let cmd_ctx = cmd_task.into().into_inner();
+
         let mut packet = match result {
             Ok(pkt) => pkt,
             Err(err) => {
@@ -66,8 +77,6 @@ impl CmdTaskResultHandler for DecompressCommitHandler {
 }
 
 pub struct ReplyCommitHandlerFactory;
-
-impl ThreadSafe for ReplyCommitHandlerFactory {}
 
 impl Default for ReplyCommitHandlerFactory {
     fn default() -> Self {

@@ -135,6 +135,7 @@ pub enum MigrationError {
     ReplError(ReplicatorError),
     RedisClient(RedisClientError),
     Io(io::Error),
+    Timeout,
 }
 
 impl fmt::Display for MigrationError {

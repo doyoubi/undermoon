@@ -1,5 +1,5 @@
 use super::backend::CmdTask;
-use super::backend::{BackendError, ReqTaskSender, ReqTaskSenderFactory};
+use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
 use crate::common::cluster::{Range, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
@@ -42,17 +42,17 @@ pub trait DBTag {
     fn set_db_name(&self, db: String);
 }
 
-pub struct DatabaseMap<F: ReqTaskSenderFactory>
+pub struct DatabaseMap<S: CmdTaskSender>
 where
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
-    local_dbs: HashMap<String, Database<F>>,
+    local_dbs: HashMap<String, Database<S>>,
     remote_dbs: HashMap<String, RemoteDB>,
 }
 
-impl<F: ReqTaskSenderFactory> Default for DatabaseMap<F>
+impl<S: CmdTaskSender> Default for DatabaseMap<S>
 where
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
     fn default() -> Self {
         Self {
@@ -62,11 +62,14 @@ where
     }
 }
 
-impl<F: ReqTaskSenderFactory> DatabaseMap<F>
+impl<S: CmdTaskSender> DatabaseMap<S>
 where
-    <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
-    pub fn from_db_map(db_meta: &ProxyDBMeta, sender_factory: &F) -> Self {
+    pub fn from_db_map<F: CmdTaskSenderFactory<Sender = S>>(
+        db_meta: &ProxyDBMeta,
+        sender_factory: &F,
+    ) -> Self {
         let epoch = db_meta.get_epoch();
 
         let mut local_dbs = HashMap::new();
@@ -111,8 +114,8 @@ where
 
     pub fn send(
         &self,
-        cmd_task: <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>> {
+        cmd_task: <S as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
         let db_name = cmd_task.get_db_name();
         let (cmd_task, db_exists) = match self.local_dbs.get(&db_name) {
             Some(db) => match db.send(cmd_task) {
@@ -208,27 +211,27 @@ where
 // We combine the nodes and slot_map to let them fit into
 // the same lock with a smaller critical section
 // compared to the one we need if splitting them.
-struct LocalDB<S: ReqTaskSender> {
+struct LocalDB<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
 }
 
-pub struct Database<F: ReqTaskSenderFactory> {
+pub struct Database<S: CmdTaskSender> {
     name: String,
     epoch: u64,
-    local_db: LocalDB<F::Sender>,
+    local_db: LocalDB<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     config: ClusterConfig,
 }
 
-impl<F: ReqTaskSenderFactory> Database<F> {
-    pub fn from_slot_map(
+impl<S: CmdTaskSender> Database<S> {
+    pub fn from_slot_map<F: CmdTaskSenderFactory<Sender = S>>(
         sender_factory: &F,
         name: String,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
         config: ClusterConfig,
-    ) -> Database<F> {
+    ) -> Self {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
             nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
@@ -272,8 +275,8 @@ impl<F: ReqTaskSenderFactory> Database<F> {
 
     pub fn send(
         &self,
-        cmd_task: <<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as ReqTaskSenderFactory>::Sender as ReqTaskSender>::Task>> {
+        cmd_task: <S as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
@@ -285,7 +288,7 @@ impl<F: ReqTaskSenderFactory> Database<F> {
 
         match self.local_db.slot_map.get_by_key(key) {
             Some(addr) => match self.local_db.nodes.get(&addr) {
-                Some(sender) => sender.send(cmd_task.into()).map_err(DBSendError::Backend),
+                Some(sender) => sender.send(cmd_task).map_err(DBSendError::Backend),
                 None => {
                     warn!("failed to get node");
                     Err(DBSendError::SlotNotFound(cmd_task))
@@ -407,7 +410,6 @@ impl RemoteDB {
     }
 }
 
-#[derive(Debug)]
 pub enum DBSendError<T: CmdTask> {
     MissingKey,
     DBNotFound(String),
@@ -420,6 +422,20 @@ pub enum DBSendError<T: CmdTask> {
 impl<T: CmdTask> fmt::Display for DBSendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl<T: CmdTask> fmt::Debug for DBSendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::MissingKey => "DBSendError::MissingKey".to_string(),
+            Self::DBNotFound(db) => format!("DBSendError::DBNotFound({})", db),
+            Self::SlotNotFound(_) => "DBSendError::SlotNotFound".to_string(),
+            Self::SlotNotCovered => "DBSendError::SlotNotCovered".to_string(),
+            Self::Backend(err) => format!("DBSendError::Backend({})", err),
+            Self::MigrationError => "DBSendError::MigrationError".to_string(),
+        };
+        write!(f, "{}", s)
     }
 }
 

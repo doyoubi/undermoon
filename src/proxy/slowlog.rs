@@ -12,7 +12,7 @@ use std::sync::Arc;
 const MAX_ELEMENT_LENGTH: usize = 100;
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum TaskEvent {
     Created = 0,
 
