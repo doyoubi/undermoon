@@ -1,6 +1,7 @@
 use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
+use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
@@ -8,7 +9,6 @@ use crate::protocol::{
 };
 use futures::channel::mpsc;
 use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
-use futures_batch::ChunksTimeoutStreamExt;
 use futures_timer::Delay;
 use std::boxed::Box;
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ use std::fmt;
 use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -289,6 +290,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
             conn_failed.clone(),
             address,
             config.backend_batch_min_time,
+            config.backend_batch_max_time,
             config.backend_batch_buf,
             conn_factory,
         );
@@ -384,13 +386,15 @@ struct RetryState<T: CmdTask> {
     tasks: Vec<T>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_backend<H, F>(
     handler: Arc<H>,
     task_receiver: mpsc::UnboundedReceiver<H::Task>,
     conn_failed: Arc<AtomicBool>,
     address: String,
     backend_batch_min_time: usize,
-    backend_batch_buf: usize,
+    backend_batch_max_time: usize,
+    backend_batch_buf: NonZeroUsize,
     conn_factory: Arc<F>,
 ) -> Result<(), BackendError>
 where
@@ -409,8 +413,9 @@ where
     let mut retry_state: Option<RetryState<H::Task>> = None;
 
     let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
+    let batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
     let mut task_receiver = task_receiver
-        .chunks_timeout(backend_batch_buf, batch_min_time)
+        .try_chunks_timeout(backend_batch_buf, batch_min_time, batch_max_time)
         .fuse();
 
     loop {
@@ -471,14 +476,14 @@ async fn handle_conn<H, S>(
     mut reader: ConnStream<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
     task_receiver: &mut S,
     handler: Arc<H>,
-    backend_batch_buf: usize,
+    backend_batch_buf: NonZeroUsize,
     mut retry_state_opt: Option<RetryState<H::Task>>,
 ) -> Result<(), (BackendError, Option<RetryState<H::Task>>)>
 where
     H: CmdTaskResultHandler,
     S: Stream<Item = Vec<H::Task>> + Unpin,
 {
-    let mut packets = Vec::with_capacity(backend_batch_buf);
+    let mut packets = Vec::with_capacity(backend_batch_buf.get());
 
     loop {
         let (retry_times_opt, tasks) = match retry_state_opt.take() {
@@ -648,12 +653,12 @@ pub struct RRSenderGroup<S: CmdTaskSender> {
 }
 
 pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
-    group_size: usize,
+    group_size: NonZeroUsize,
     inner_factory: F,
 }
 
 impl<F: CmdTaskSenderFactory> RRSenderGroupFactory<F> {
-    pub fn new(group_size: usize, inner_factory: F) -> Self {
+    pub fn new(group_size: NonZeroUsize, inner_factory: F) -> Self {
         Self {
             group_size,
             inner_factory,
@@ -666,7 +671,7 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for RRSenderGroupFactory<F> {
 
     fn create(&self, address: String) -> Self::Sender {
         let mut senders = Vec::new();
-        for _ in 0..self.group_size {
+        for _ in 0..self.group_size.get() {
             senders.push(self.inner_factory.create(address.clone()));
         }
         Self::Sender {

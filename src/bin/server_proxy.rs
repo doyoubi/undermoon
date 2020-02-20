@@ -9,16 +9,18 @@ extern crate env_logger;
 use arc_swap::ArcSwap;
 use std::env;
 use std::error::Error;
+use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
+use string_error::into_err;
 use undermoon::protocol::PooledRedisClientFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::manager::MetaMap;
 use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 use undermoon::proxy::slowlog::SlowRequestLogger;
 
-fn gen_conf() -> ServerProxyConfig {
+fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
     let mut s = config::Config::new();
     // If config file is specified, load it.
     if let Some(conf_file_path) = env::args().nth(1) {
@@ -35,46 +37,65 @@ fn gen_conf() -> ServerProxyConfig {
         .get::<String>("address")
         .unwrap_or_else(|_| "127.0.0.1:5299".to_string());
 
-    ServerProxyConfig {
+    let slowlog_len = NonZeroUsize::new(s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024))
+        .ok_or_else(|| "slowlog_len")?;
+    let thread_number = NonZeroUsize::new(s.get::<usize>("thread_number").unwrap_or_else(|_| 4))
+        .ok_or_else(|| "thread_number")?;
+    let backend_conn_num =
+        NonZeroUsize::new(s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 16))
+            .ok_or_else(|| "backend_conn_num")?;
+    let backend_batch_buf =
+        NonZeroUsize::new(s.get::<usize>("backend_batch_buf").unwrap_or_else(|_| 10))
+            .ok_or_else(|| "backend_batch_buf")?;
+    let session_batch_buf =
+        NonZeroUsize::new(s.get::<usize>("session_batch_buf").unwrap_or_else(|_| 10))
+            .ok_or_else(|| "session_batch_buf")?;
+
+    let config = ServerProxyConfig {
         address: address.clone(),
         announce_address: s
             .get::<String>("announce_address")
             .unwrap_or_else(|_| address),
         auto_select_db: s.get::<bool>("auto_select_db").unwrap_or_else(|_| false),
-        slowlog_len: s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024),
+        slowlog_len,
         slowlog_log_slower_than: AtomicI64::new(
             s.get::<i64>("slowlog_log_slower_than")
                 .unwrap_or_else(|_| 50000),
         ),
-        thread_number: s.get::<usize>("thread_number").unwrap_or_else(|_| 4),
+        thread_number,
         session_channel_size: s
             .get::<usize>("session_channel_size")
             .unwrap_or_else(|_| 4096),
         backend_channel_size: s
             .get::<usize>("backend_channel_size")
             .unwrap_or_else(|_| 4096),
-        backend_conn_num: s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 16),
+        backend_conn_num,
         backend_batch_min_time: s
             .get::<usize>("backend_batch_min_time")
             .unwrap_or_else(|_| 20000),
         backend_batch_max_time: s
             .get::<usize>("backend_batch_max_time")
             .unwrap_or_else(|_| 400_000),
-        backend_batch_buf: s.get::<usize>("backend_batch_buf").unwrap_or_else(|_| 10),
+        backend_batch_buf,
         session_batch_min_time: s
             .get::<usize>("session_batch_min_time")
             .unwrap_or_else(|_| 20000),
         session_batch_max_time: s
             .get::<usize>("session_batch_max_time")
             .unwrap_or_else(|_| 400_000),
-        session_batch_buf: s.get::<usize>("session_batch_buf").unwrap_or_else(|_| 10),
-    }
+        session_batch_buf,
+    };
+    Ok(config)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+    let conf = gen_conf().map_err(|field| {
+        let err_msg = format!("invalid field {}", field);
+        into_err(err_msg)
+    })?;
 
-    let config = Arc::new(gen_conf());
+    let config = Arc::new(conf);
 
     let timeout = Duration::new(1, 0);
     let pool_size = 4;
@@ -92,7 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut runtime = tokio::runtime::Builder::new()
         .threaded_scheduler()
-        .core_threads(config.thread_number)
+        .core_threads(config.thread_number.get())
         .enable_all()
         .build()?;
 

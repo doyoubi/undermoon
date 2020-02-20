@@ -126,7 +126,7 @@ pub struct SlowRequestLogger {
 impl SlowRequestLogger {
     pub fn new(config: Arc<ServerProxyConfig>) -> Self {
         let mut slowlogs = Vec::new();
-        while slowlogs.len() != config.slowlog_len {
+        while slowlogs.len() != config.slowlog_len.get() {
             slowlogs.push(ArcSwapOption::new(None));
         }
         Self {
