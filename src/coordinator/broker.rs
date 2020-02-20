@@ -1,44 +1,54 @@
-use common::cluster::{Cluster, Host, MigrationTaskMeta};
-use common::utils::ThreadSafe;
+use crate::common::cluster::{Cluster, Host, MigrationTaskMeta};
+use crate::common::utils::ThreadSafe;
 use futures::{Future, Stream};
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::pin::Pin;
 
+// To support large result set, return Stream here in some APIs.
 pub trait MetaDataBroker: ThreadSafe {
-    fn get_cluster_names(
-        &self,
-    ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
-    fn get_cluster(
-        &self,
+    fn get_cluster_names<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+
+    fn get_cluster<'s>(
+        &'s self,
         name: String,
-    ) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send>;
-    fn get_host_addresses(
-        &self,
-    ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
-    fn get_host(
-        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>;
+
+    fn get_host_addresses<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+
+    fn get_host<'s>(
+        &'s self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send>;
-    fn add_failure(
-        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>>;
+
+    fn add_failure<'s>(
+        &'s self,
         address: String,
         reporter_id: String,
-    ) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send>;
-    fn get_failures(&self) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send + 's>>;
+
+    fn get_failures<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
 }
 
 // Maybe we would want to support other database supporting redis protocol.
 // For them, we may need to trigger other action such as migrating data.
 pub trait MetaManipulationBroker: ThreadSafe {
-    fn replace_proxy(
-        &self,
+    fn replace_proxy<'s>(
+        &'s self,
         failed_proxy_address: String,
-    ) -> Box<dyn Future<Item = Host, Error = MetaManipulationBrokerError> + Send>;
-    fn commit_migration(
-        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send + 's>>;
+
+    fn commit_migration<'s>(
+        &'s self,
         meta: MigrationTaskMeta,
-    ) -> Box<dyn Future<Item = (), Error = MetaManipulationBrokerError> + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>>;
 }
 
 #[derive(Debug)]

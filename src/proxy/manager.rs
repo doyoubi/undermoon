@@ -1,38 +1,49 @@
 use super::backend::{
-    CachedSenderFactory, CmdTaskSender, CmdTaskSenderFactory, RRSenderGroupFactory,
-    RecoverableBackendNodeFactory, RedirectionSenderFactory,
+    gen_sender_factory, BackendError, BackendSenderFactory, CmdTaskSender, CmdTaskSenderFactory,
+};
+use super::blocking::{
+    gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
+    BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
 };
 use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
-use super::reply::ReplyCommitHandlerFactory;
+use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
-use super::session::CmdCtx;
+use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
-use ::common::cluster::{MigrationTaskMeta, SlotRangeTag};
-use ::common::config::AtomicMigrationConfig;
-use ::migration::delete_keys::DeleteKeysTaskMap;
-use ::migration::manager::{MigrationManager, MigrationMap, SwitchError};
-use ::migration::task::SwitchArg;
+use crate::common::cluster::{MigrationTaskMeta, SlotRangeTag};
+use crate::common::config::AtomicMigrationConfig;
+use crate::common::db::ProxyDBMeta;
+use crate::common::utils::ThreadSafe;
+use crate::migration::delete_keys::DeleteKeysTaskMap;
+use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
+use crate::migration::task::MgrSubCmd;
+use crate::migration::task::SwitchArg;
+use crate::protocol::{RedisClientFactory, RespPacket, RespVec};
+use crate::proxy::backend::{CmdTask, DefaultConnFactory};
+use crate::replication::manager::ReplicatorManager;
+use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
-use common::db::ProxyDBMeta;
-use protocol::{RedisClientFactory, Resp};
-use proxy::backend::CmdTask;
-use replication::manager::ReplicatorManager;
-use replication::replicator::ReplicatorMeta;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub struct MetaMap<F: CmdTaskSenderFactory>
+pub struct MetaMap<S: CmdTaskSender, MF>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    MF: CmdTaskSenderFactory + ThreadSafe,
+    <MF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    <<MF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
-    db_map: DatabaseMap<F>,
-    migration_map: MigrationMap<RedirectionSenderFactory<CmdCtx>>,
+    db_map: DatabaseMap<S>,
+    migration_map: MigrationMap<MF>,
     deleting_task_map: DeleteKeysTaskMap,
 }
 
-impl<F: CmdTaskSenderFactory> MetaMap<F>
+impl<S: CmdTaskSender, MF> MetaMap<S, MF>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    MF: CmdTaskSenderFactory + ThreadSafe,
+    <MF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    <<MF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
@@ -46,20 +57,24 @@ where
         }
     }
 
-    pub fn get_db_map(&self) -> &DatabaseMap<F> {
+    pub fn get_db_map(&self) -> &DatabaseMap<S> {
         &self.db_map
     }
 }
 
-pub type SharedMetaMap = Arc<
-    ArcSwap<
-        MetaMap<
-            CachedSenderFactory<
-                RRSenderGroupFactory<RecoverableBackendNodeFactory<ReplyCommitHandlerFactory>>,
-            >,
-        >,
-    >,
+type BasicSenderFactory = BasicBlockingSenderFactory<
+    DecompressCommitHandlerFactory<CounterTask<CmdCtx>>,
+    DefaultConnFactory<RespPacket>,
 >;
+type SenderFactory = BlockingBackendSenderFactory<
+    DecompressCommitHandlerFactory<CounterTask<CmdCtx>>,
+    DefaultConnFactory<RespPacket>,
+    BlockingTaskRetrySender,
+>;
+type MigrationSenderFactory =
+    BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
+pub type SharedMetaMap =
+    Arc<ArcSwap<MetaMap<<SenderFactory as CmdTaskSenderFactory>::Sender, MigrationSenderFactory>>>;
 
 pub struct MetaManager<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,
@@ -70,10 +85,9 @@ pub struct MetaManager<F: RedisClientFactory> {
     epoch: AtomicU64,
     lock: Mutex<()>, // This is the write lock for `epoch`, `db`, and `task`.
     replicator_manager: ReplicatorManager<F>,
-    migration_manager: MigrationManager<F, RedirectionSenderFactory<CmdCtx>>,
-    sender_factory: CachedSenderFactory<
-        RRSenderGroupFactory<RecoverableBackendNodeFactory<ReplyCommitHandlerFactory>>,
-    >,
+    migration_manager: MigrationManager<F, MigrationSenderFactory, CmdCtxFactory>,
+    sender_factory: SenderFactory,
+    blocking_map: Arc<BlockingMap<BasicSenderFactory, BlockingTaskRetrySender>>,
 }
 
 impl<F: RedisClientFactory> MetaManager<F> {
@@ -82,13 +96,24 @@ impl<F: RedisClientFactory> MetaManager<F> {
         client_factory: Arc<F>,
         meta_map: SharedMetaMap,
     ) -> Self {
-        let reply_handler_factory = Arc::new(ReplyCommitHandlerFactory::new(meta_map.clone()));
-        let sender_factory = CachedSenderFactory::new(RRSenderGroupFactory::new(
-            config.backend_conn_num,
-            RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory),
+        let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
+        let conn_factory = Arc::new(DefaultConnFactory::default());
+        let blocking_task_sender = Arc::new(BlockingTaskRetrySender::new(meta_map.clone()));
+        let basic_sender_factory = gen_basic_blocking_sender_factory(
+            config.clone(),
+            reply_handler_factory,
+            conn_factory.clone(),
+        );
+        let blocking_map = Arc::new(BlockingMap::new(basic_sender_factory, blocking_task_sender));
+        let sender_factory = gen_blocking_sender_factory(blocking_map.clone());
+        let migration_sender_factory = Arc::new(gen_sender_factory(
+            config.clone(),
+            Arc::new(ReplyCommitHandlerFactory::default()),
+            conn_factory,
         ));
-        let redirection_sender_factory = Arc::new(RedirectionSenderFactory::default());
+        let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let migration_config = Arc::new(AtomicMigrationConfig::default());
+        let config_clone = config.clone();
         Self {
             config,
             meta_map,
@@ -96,26 +121,35 @@ impl<F: RedisClientFactory> MetaManager<F> {
             lock: Mutex::new(()),
             replicator_manager: ReplicatorManager::new(client_factory.clone()),
             migration_manager: MigrationManager::new(
+                config_clone,
                 migration_config,
                 client_factory,
-                redirection_sender_factory,
+                migration_sender_factory,
+                cmd_ctx_factory,
             ),
             sender_factory,
+            blocking_map,
         }
     }
 
     pub fn gen_cluster_nodes(&self, db_name: String) -> String {
-        self.meta_map
-            .load()
-            .db_map
-            .gen_cluster_nodes(db_name, self.config.announce_address.clone())
+        let meta_map = self.meta_map.load();
+        let migration_states = meta_map.migration_map.get_states(&db_name);
+        meta_map.db_map.gen_cluster_nodes(
+            db_name,
+            self.config.announce_address.clone(),
+            &migration_states,
+        )
     }
 
-    pub fn gen_cluster_slots(&self, db_name: String) -> Result<Resp, String> {
-        self.meta_map
-            .load()
-            .db_map
-            .gen_cluster_slots(db_name, self.config.announce_address.clone())
+    pub fn gen_cluster_slots(&self, db_name: String) -> Result<RespVec, String> {
+        let meta_map = self.meta_map.load();
+        let migration_states = meta_map.migration_map.get_states(&db_name);
+        meta_map.db_map.gen_cluster_slots(
+            db_name,
+            self.config.announce_address.clone(),
+            &migration_states,
+        )
     }
 
     pub fn get_dbs(&self) -> Vec<String> {
@@ -134,8 +168,11 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
         let old_meta_map = self.meta_map.load();
         let db_map = DatabaseMap::from_db_map(&db_meta, sender_factory);
-        let (migration_map, new_tasks) = migration_manager
-            .create_new_migration_map(&old_meta_map.migration_map, db_meta.get_local());
+        let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
+            &old_meta_map.migration_map,
+            db_meta.get_local(),
+            self.blocking_map.clone(),
+        );
         let left_slots_after_change = old_meta_map
             .migration_map
             .get_left_slots_after_change(&migration_map, db_meta.get_local());
@@ -179,7 +216,11 @@ impl<F: RedisClientFactory> MetaManager<F> {
         )
     }
 
-    pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
+    pub fn handle_switch(
+        &self,
+        switch_arg: SwitchArg,
+        sub_cmd: MgrSubCmd,
+    ) -> Result<(), SwitchError> {
         let mut task_meta = switch_arg.meta.clone();
 
         // The stored meta is with importing tag.
@@ -198,13 +239,13 @@ impl<F: RedisClientFactory> MetaManager<F> {
             return Err(SwitchError::NotReady);
         }
 
-        self.meta_map
-            .load()
-            .migration_map
-            .commit_importing(SwitchArg {
+        self.meta_map.load().migration_map.handle_switch(
+            SwitchArg {
                 version: switch_arg.version,
                 meta: task_meta,
-            })
+            },
+            sub_cmd,
+        )
     }
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {
@@ -212,23 +253,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
-        let meta_map = self.meta_map.lease();
-        let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
-            Ok(()) => return,
-            Err(e) => match e {
-                DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
-                err => {
-                    error!("migration send task failed: {:?}", err);
-                    return;
-                }
-            },
-        };
-
-        cmd_ctx.get_slowlog().log_event(TaskEvent::SentToDB);
-        let res = meta_map.db_map.send(cmd_ctx);
-        if let Err(e) = res {
-            warn!("Failed to forward cmd_ctx: {:?}", e)
-        }
+        send_cmd_ctx(&self.meta_map, cmd_ctx);
     }
 
     pub fn try_select_db(&self, cmd_ctx: CmdCtx) -> CmdCtx {
@@ -242,3 +267,44 @@ impl<F: RedisClientFactory> MetaManager<F> {
         cmd_ctx
     }
 }
+
+pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
+    let meta_map = meta_map.lease();
+    let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
+        Ok(()) => return,
+        Err(e) => match e {
+            DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
+            err => {
+                error!("migration send task failed: {:?}", err);
+                return;
+            }
+        },
+    };
+
+    cmd_ctx.log_event(TaskEvent::SentToDB);
+    let res = meta_map.db_map.send(cmd_ctx);
+    if let Err(e) = res {
+        warn!("Failed to forward cmd_ctx: {:?}", e)
+    }
+}
+
+pub struct BlockingTaskRetrySender {
+    meta_map: SharedMetaMap,
+}
+
+impl BlockingTaskRetrySender {
+    fn new(meta_map: SharedMetaMap) -> Self {
+        Self { meta_map }
+    }
+}
+
+impl CmdTaskSender for BlockingTaskRetrySender {
+    type Task = CmdCtx;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+        send_cmd_ctx(&self.meta_map, cmd_task);
+        Ok(())
+    }
+}
+
+impl BlockingCmdTaskSender for BlockingTaskRetrySender {}

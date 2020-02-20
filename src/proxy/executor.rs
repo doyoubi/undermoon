@@ -6,25 +6,22 @@ use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
-use ::migration::manager::SwitchError;
-use ::migration::task::parse_tmp_switch_command;
+use crate::common::db::ProxyDBMeta;
+use crate::common::utils::{NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
+use crate::common::version::UNDERMOON_VERSION;
+use crate::migration::manager::SwitchError;
+use crate::migration::task::parse_switch_command;
+use crate::migration::task::MgrSubCmd;
+use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
+use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use caseless;
-use common::db::ProxyDBMeta;
-use common::utils::{
-    get_element, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
-};
-use common::version::UNDERMOON_VERSION;
-use protocol::{Array, BulkStr, RedisClientFactory, Resp};
-use replication::replicator::ReplicatorMeta;
 use std::str;
 use std::sync::{self, Arc};
 
 pub struct SharedForwardHandler<F: RedisClientFactory> {
     handler: sync::Arc<ForwardHandler<F>>,
 }
-
-impl<F: RedisClientFactory> ThreadSafe for SharedForwardHandler<F> {}
 
 impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
     fn clone(&self) -> Self {
@@ -90,7 +87,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             ))),
             Some(db_name) => match str::from_utf8(&db_name) {
                 Ok(ref db) => {
-                    cmd_ctx.set_db_name(db.to_string());
+                    cmd_ctx.set_db_name((*db).to_string());
                     cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
                 }
                 Err(_) => cmd_ctx.set_resp_result(Ok(Resp::Error(
@@ -123,7 +120,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn get_sub_command(cmd_ctx: CmdCtx, index: usize) -> Option<(CmdCtx, String)> {
-        let sub_cmd = match get_element(cmd_ctx.get_resp(), index) {
+        let sub_cmd = match cmd_ctx.get_cmd().get_command_element(index) {
             None => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Missing sub command").into_bytes(),
@@ -166,8 +163,12 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_info_repl(cmd_ctx);
         } else if sub_cmd.eq("INFOMGR") {
             self.handle_umctl_info_migration(cmd_ctx);
-        } else if sub_cmd.eq("TMPSWITCH") {
-            self.handle_umctl_tmp_switch(cmd_ctx);
+        } else if sub_cmd.eq(MgrSubCmd::PreCheck.as_str()) {
+            self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::PreCheck);
+        } else if sub_cmd.eq(MgrSubCmd::PreSwitch.as_str()) {
+            self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::PreSwitch);
+        } else if sub_cmd.eq(MgrSubCmd::FinalSwitch.as_str()) {
+            self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::FinalSwitch);
         } else if sub_cmd.eq("SLOWLOG") {
             self.handle_umctl_slowlog(cmd_ctx);
         } else {
@@ -178,15 +179,16 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_umctl_setdb(&self, cmd_ctx: CmdCtx) {
-        let (db_meta, extended_res) = match ProxyDBMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
-            Ok(r) => r,
-            Err(_) => {
-                cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Invalid arguments").into_bytes(),
-                )));
-                return;
-            }
-        };
+        let (db_meta, extended_res) =
+            match ProxyDBMeta::from_resp(&cmd_ctx.get_cmd().get_resp_slice()) {
+                Ok(r) => r,
+                Err(_) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        String::from("Invalid arguments").into_bytes(),
+                    )));
+                    return;
+                }
+            };
 
         match self.manager.set_meta(db_meta) {
             Ok(()) => match extended_res {
@@ -210,7 +212,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_umctl_setrepl(&self, cmd_ctx: CmdCtx) {
-        let meta = match ReplicatorMeta::from_resp(cmd_ctx.get_cmd().get_resp()) {
+        let meta = match ReplicatorMeta::from_resp(&cmd_ctx.get_cmd().get_resp_slice()) {
             Ok(m) => m,
             Err(_) => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
@@ -242,19 +244,19 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(report.into_bytes()))));
     }
 
-    fn handle_umctl_tmp_switch(&self, cmd_ctx: CmdCtx) {
-        let switch_arg = match parse_tmp_switch_command(cmd_ctx.get_resp()) {
+    fn handle_umctl_mgr_cmd(&self, cmd_ctx: CmdCtx, sub_cmd: MgrSubCmd) {
+        let switch_arg = match parse_switch_command(&cmd_ctx.get_cmd().get_resp_slice()) {
             Some(switch_meta) => switch_meta,
             None => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    "failed to parse TMPSWITCH arguments"
+                    "failed to parse migration switch arguments"
                         .to_string()
                         .into_bytes(),
                 )));
                 return;
             }
         };
-        match self.manager.commit_importing(switch_arg) {
+        match self.manager.handle_switch(switch_arg, sub_cmd) {
             Ok(()) => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
             }
@@ -273,7 +275,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
     fn handle_umctl_info_migration(&self, cmd_ctx: CmdCtx) {
         let finished_tasks = self.manager.get_finished_migration_tasks();
-        let packet: Vec<Resp> = finished_tasks
+        let packet: Vec<RespVec> = finished_tasks
             .into_iter()
             .map(|task| task.into_strings().join(" "))
             .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
@@ -290,8 +292,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         let sub_cmd = sub_cmd.to_uppercase();
 
         if sub_cmd.eq("GET") {
-            let limit =
-                get_element(cmd_ctx.get_resp(), 3).and_then(|element| atoi::<usize>(&element));
+            let limit = cmd_ctx
+                .get_cmd()
+                .get_command_element(3)
+                .and_then(|element| atoi::<usize>(&element));
             let logs = self.slow_request_logger.get(limit);
             let reply = slowlogs_to_resp(logs);
             cmd_ctx.set_resp_result(Ok(reply));
@@ -399,8 +403,14 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Echo => {
-                let req = cmd_ctx.get_cmd().get_resp().clone();
-                cmd_ctx.set_resp_result(Ok(req))
+                match cmd_ctx
+                    .get_cmd()
+                    .get_command_element(1)
+                    .map(|msg| msg.to_vec())
+                {
+                    Some(msg) => cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(msg)))),
+                    None => cmd_ctx.set_resp_result(Ok(Resp::Error(b"Missing message".to_vec()))),
+                }
             }
             CmdType::Select => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
@@ -412,6 +422,9 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             CmdType::UmCtl => self.handle_umctl(cmd_ctx),
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
             CmdType::Config => self.handle_config(cmd_ctx),
+            CmdType::Command => {
+                cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
+            }
         };
     }
 }

@@ -1,4 +1,4 @@
-pub mod batching;
+pub mod batch;
 pub mod cluster;
 pub mod config;
 pub mod db;

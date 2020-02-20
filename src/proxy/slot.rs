@@ -1,5 +1,5 @@
-use ::common::cluster::SlotRange;
-use ::common::utils::{get_slot, SLOT_NUM};
+use crate::common::cluster::SlotRange;
+use crate::common::utils::{get_slot, SLOT_NUM};
 use std::collections::HashMap;
 
 pub struct SlotMap {
@@ -72,7 +72,7 @@ impl SlotMapData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::cluster::{SlotRange, SlotRangeTag};
+    use crate::common::cluster::{SlotRange, SlotRangeTag};
 
     #[test]
     fn test_slot_map() {

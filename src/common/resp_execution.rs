@@ -1,149 +1,171 @@
+use crate::common::utils::pretty_print_bytes;
+use crate::protocol::{
+    BinSafeStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
+};
 use atomic_option::AtomicOption;
-use futures::sync::oneshot;
-use futures::{future, stream, Future, Stream};
+use futures::channel::oneshot;
+use futures::{select, Future, FutureExt};
 use futures_timer::Delay;
-use protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
-use std::iter;
+use std::pin::Pin;
 use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
+pub async fn keep_connecting_and_sending_cmd_with_cached_client<F: RedisClientFactory, Func>(
+    client: Option<F::Client>,
     client_factory: Arc<F>,
     address: String,
-    cmd: Vec<String>,
+    opt_multi_cmd: OptionalMulti<Vec<BinSafeStr>>,
     interval: Duration,
     handle_result: Func,
-) -> impl Future<Item = (), Error = RedisClientError>
+) -> F::Client
 where
-    Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
+    Func: Clone + Fn(OptionalMulti<RespVec>) -> Result<(), RedisClientError>,
 {
-    let infinite_stream = stream::iter_ok(iter::repeat(()));
-    infinite_stream.for_each(move |()| {
-        let client_fut = client_factory.create_client(address.clone());
-        let cmd_clone = cmd.clone();
-        let cmd_clone2 = cmd.clone();
-        let interval_clone = interval;
-        let handle_result_clone = handle_result.clone();
-        client_fut
-            .and_then(move |client| {
-                keep_sending_cmd(client, cmd_clone, interval_clone, handle_result_clone)
-            })
-            .then(move |result| match result {
-                Ok(()) => future::ok(()),
-                Err(RedisClientError::Done) => {
-                    info!("stop keep sending commands {:?}", cmd_clone2);
-                    future::err(RedisClientError::Done)
+    let mut client = client;
+    loop {
+        let mut c = if let Some(c) = client.take() {
+            c
+        } else {
+            match client_factory.create_client(address.clone()).await {
+                Ok(c) => c,
+                Err(err) => {
+                    error!("failed to create client: {:?}", err);
+                    Delay::new(interval).await;
+                    continue;
                 }
-                Err(e) => {
-                    error!(
-                        "failed to send commands {:?} {:?}. Try again.",
-                        e, cmd_clone2
-                    );
-                    future::ok(())
-                }
-            })
-    })
-}
-
-pub fn keep_sending_cmd<C: RedisClient, Func>(
-    client: C,
-    cmd: Vec<String>,
-    interval: Duration,
-    handle_result: Func,
-) -> impl Future<Item = (), Error = RedisClientError>
-where
-    Func: Clone + Fn(Resp) -> Result<(), RedisClientError>,
-{
-    let infinite_stream = stream::iter_ok(iter::repeat(()));
-    infinite_stream
-        .fold(client, move |client, ()| {
-            let byte_cmd = cmd.iter().map(|s| s.clone().into_bytes()).collect();
-            // debug!("sending cmd {:?}", cmd);
-            let handle_result_clone = handle_result.clone();
-            let exec_fut = client
-                .execute(byte_cmd)
-                .map_err(|e| {
-                    error!("failed to send: {}", e);
-                    e
-                })
-                .and_then(move |(client, response)| {
-                    future::result(handle_result_clone(response).map(|()| client))
+            }
+        };
+        match keep_sending_cmd(
+            &mut c,
+            opt_multi_cmd.clone(),
+            interval,
+            handle_result.clone(),
+        )
+        .await
+        {
+            Ok(()) => {
+                client = Some(c);
+            }
+            Err(RedisClientError::Done) => return c,
+            Err(err) => {
+                let debug_cmd = opt_multi_cmd.clone().map(|cmd| {
+                    cmd.iter()
+                        .map(|b| pretty_print_bytes(&b))
+                        .collect::<Vec<String>>()
                 });
-            let delay = Delay::new(interval).map_err(RedisClientError::Io);
-            exec_fut.join(delay).map(move |(client, ())| client)
-        })
-        .map(|_| ())
+                error!(
+                    "failed to send commands {:?} {:?}. Try again.",
+                    err, debug_cmd
+                );
+            }
+        }
+        Delay::new(interval).await;
+    }
 }
 
-pub fn retry_handle_func(response: Resp) -> Result<(), RedisClientError> {
-    if let Resp::Error(err) = response {
-        let err_str = str::from_utf8(&err)
-            .map(ToString::to_string)
-            .unwrap_or_else(|_| format!("{:?}", err));
-        error!("error reply: {}", err_str);
+pub async fn keep_connecting_and_sending_cmd<F: RedisClientFactory, Func>(
+    client_factory: Arc<F>,
+    address: String,
+    cmd: Vec<Vec<u8>>,
+    interval: Duration,
+    handle_result: Func,
+) where
+    Func: Clone + Fn(RespVec) -> Result<(), RedisClientError>,
+{
+    let handler = move |opt_multi_cmd| match opt_multi_cmd {
+        OptionalMulti::Single(r) => handle_result(r),
+        OptionalMulti::Multi(v) => {
+            error!("unexpected multiple replies: {:?}", v);
+            Err(RedisClientError::InvalidReply)
+        }
+    };
+    keep_connecting_and_sending_cmd_with_cached_client(
+        None,
+        client_factory,
+        address,
+        OptionalMulti::Single(cmd),
+        interval,
+        handler,
+    )
+    .await;
+}
+
+pub async fn keep_sending_cmd<C: RedisClient, Func>(
+    client: &mut C,
+    opt_mul_cmd: OptionalMulti<Vec<BinSafeStr>>,
+    interval: Duration,
+    handle_result: Func,
+) -> Result<(), RedisClientError>
+where
+    Func: Fn(OptionalMulti<RespVec>) -> Result<(), RedisClientError>,
+{
+    loop {
+        let response = match client.execute(opt_mul_cmd.clone()).await {
+            Ok(response) => response,
+            Err(err) => return Err(err),
+        };
+        handle_result(response)?;
+        Delay::new(interval).await;
     }
+}
+
+pub fn retry_handle_func(response: OptionalMulti<RespVec>) -> Result<(), RedisClientError> {
+    response.map(|resp| {
+        if let Resp::Error(err) = resp {
+            let err_str = str::from_utf8(&err)
+                .map(ToString::to_string)
+                .unwrap_or_else(|_| format!("{:?}", err));
+            error!("error reply: {}", err_str);
+        }
+    });
     Ok(())
 }
 
-pub fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory, Func>(
+pub async fn keep_connecting_and_sending<T: Send + Clone, F: RedisClientFactory, Func>(
     data: T,
     client_factory: Arc<F>,
     address: String,
     interval: Duration,
     send_func: Func,
-) -> impl Future<Item = T, Error = RedisClientError> + Send
+) -> T
+// dyn Trait has default 'static lifetime.
+// '_ would use the lifetime of &mut F::Client instead.
 where
     Func: Clone
         + Send
-        + Fn(T, F::Client) -> Box<dyn Future<Item = (T, F::Client), Error = RedisClientError> + Send>,
+        + Fn(
+            T,
+            &mut F::Client,
+        ) -> Pin<Box<dyn Future<Output = Result<T, RedisClientError>> + Send + '_>>,
 {
-    let infinite_stream = stream::iter_ok(iter::repeat(()));
-    infinite_stream.fold(data, move |data, ()| {
-        let client_fut = client_factory.create_client(address.clone());
-        let send_func_clone = send_func.clone();
-        let interval_clone = interval;
-        let data_clone = data.clone();
-        client_fut
-            .map_err(move |err| (data_clone, err))
-            .and_then(move |client| keep_sending(data, client, interval_clone, send_func_clone))
-            .then(move |result| match result {
-                Ok(data) => future::ok(data),
-                Err((_, RedisClientError::Done)) => {
-                    info!("Done. Stop keep sending.");
-                    future::err(RedisClientError::Done)
+    let mut data = data;
+    loop {
+        let mut client = match client_factory.create_client(address.clone()).await {
+            Ok(client) => client,
+            Err(err) => {
+                error!("failed to create redis client: {:?}", err);
+                Delay::new(interval).await;
+                continue;
+            }
+        };
+        loop {
+            data = match send_func(data.clone(), &mut client).await {
+                Ok(d) => d,
+                Err(RedisClientError::Done) => return data.clone(),
+                Err(err) => {
+                    error!("failed to send: {:?}. Try again", err);
+                    break;
                 }
-                Err((data, e)) => {
-                    error!("failed to send {:?}. Try again.", e,);
-                    future::ok(data)
-                }
-            })
-    })
+            };
+            Delay::new(interval).await;
+        }
+        Delay::new(interval).await;
+    }
 }
 
-pub fn keep_sending<T: Clone + Send, C: RedisClient, Func>(
-    data: T,
-    client: C,
-    interval: Duration,
-    send_func: Func,
-) -> impl Future<Item = T, Error = (T, RedisClientError)> + Send
-where
-    Func: Send + Fn(T, C) -> Box<dyn Future<Item = (T, C), Error = RedisClientError> + Send>,
-{
-    let infinite_stream = stream::iter_ok(iter::repeat(()));
-    infinite_stream
-        .fold((data, client), move |(data, client), ()| {
-            let data_clone = data.clone();
-            let exec_fut = send_func(data, client);
-            let delay = Delay::new(interval).map_err(RedisClientError::Io);
-            exec_fut
-                .join(delay)
-                .map(|((data, client), ())| (data, client))
-                .map_err(move |err| (data_clone, err))
-        })
-        .map(|(data, _client)| data)
-}
+type RetrieverFut = Pin<Box<dyn Future<Output = Result<(), RedisClientError>> + Send>>;
 
 pub struct I64Retriever<F: RedisClientFactory> {
     data: Arc<atomic::AtomicI64>,
@@ -151,7 +173,7 @@ pub struct I64Retriever<F: RedisClientFactory> {
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     client_factory: Arc<F>,
     address: String,
-    cmd: Vec<String>,
+    cmd: Vec<Vec<u8>>,
     interval: Duration,
 }
 
@@ -174,7 +196,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
             stop_signal_receiver,
             client_factory,
             address,
-            cmd,
+            cmd: cmd.into_iter().map(|e| e.into_bytes()).collect(),
             interval,
         }
     }
@@ -183,20 +205,18 @@ impl<F: RedisClientFactory> I64Retriever<F> {
         self.data.load(atomic::Ordering::SeqCst)
     }
 
-    pub fn start<Func>(
-        &self,
-        handle_func: Func,
-    ) -> Option<Box<dyn Future<Item = (), Error = RedisClientError> + Send>>
+    pub fn start<Func>(&self, handle_func: Func) -> Option<RetrieverFut>
     where
-        Func: Fn(Resp, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
+        Func: Fn(RespVec, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
             + Clone
             + Send
+            + Sync
             + 'static,
     {
         if let Some(stop_signal_receiver) = self.stop_signal_receiver.take(atomic::Ordering::SeqCst)
         {
             let data_clone = self.data.clone();
-            let handle_result = move |resp: Resp| -> Result<(), RedisClientError> {
+            let handle_result = move |resp: RespVec| -> Result<(), RedisClientError> {
                 handle_func(resp, &data_clone)
             };
             let sending = keep_connecting_and_sending_cmd(
@@ -206,12 +226,13 @@ impl<F: RedisClientFactory> I64Retriever<F> {
                 self.interval,
                 handle_result,
             );
-            let fut = stop_signal_receiver
-                .map_err(|_| RedisClientError::Canceled)
-                .select(sending)
-                .map(|_| ())
-                .map_err(|(e, _)| e);
-            Some(Box::new(fut))
+            let fut = async {
+                select! {
+                    () = sending.fuse() => Ok(()),
+                    _ = stop_signal_receiver.fuse() => Err(RedisClientError::Canceled),
+                }
+            };
+            Some(Box::pin(fut))
         } else {
             None
         }
@@ -243,11 +264,11 @@ impl<F: RedisClientFactory> Drop for I64Retriever<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use ::common::utils::ThreadSafe;
-    use ::protocol::BinSafeStr;
+    use crate::protocol::BinSafeStr;
+    use crate::protocol::{OptionalMulti, Resp};
     use futures::future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio;
 
     #[derive(Debug)]
     struct Counter {
@@ -275,23 +296,24 @@ mod tests {
         }
     }
 
-    impl ThreadSafe for DummyRedisClient {}
-
     impl RedisClient for DummyRedisClient {
-        fn execute(
-            self,
-            _command: Vec<BinSafeStr>,
-        ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send + 'static>
-        {
+        fn execute<'s>(
+            &'s mut self,
+            _command: OptionalMulti<Vec<BinSafeStr>>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>,
+        > {
             let client = self;
             if client.counter.count.load(Ordering::SeqCst) < client.counter.max_count {
                 client.counter.count.fetch_add(1, Ordering::SeqCst);
-                Box::new(future::ok((
-                    client,
-                    Resp::Simple("OK".to_string().into_bytes()),
-                )))
+                // Only works for single command
+                Box::pin(async {
+                    Ok(OptionalMulti::Single(Resp::Simple(
+                        "OK".to_string().into_bytes(),
+                    )))
+                })
             } else {
-                Box::new(future::err(RedisClientError::Closed))
+                Box::pin(async { Err(RedisClientError::Closed) })
             }
         }
     }
@@ -306,37 +328,35 @@ mod tests {
         }
     }
 
-    impl ThreadSafe for DummyClientFactory {}
-
     impl RedisClientFactory for DummyClientFactory {
         type Client = DummyRedisClient;
 
         fn create_client(
             &self,
             _address: String,
-        ) -> Box<dyn Future<Item = Self::Client, Error = RedisClientError> + Send + 'static>
-        {
-            Box::new(future::ok(DummyRedisClient::new(self.counter.clone())))
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>> {
+            Box::pin(future::ok(DummyRedisClient::new(self.counter.clone())))
         }
     }
 
-    #[test]
-    fn test_keep_sending_cmd() {
+    #[tokio::test]
+    async fn test_keep_sending_cmd() {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
+        let mut client = DummyRedisClient::new(counter.clone());
         let res = keep_sending_cmd(
-            DummyRedisClient::new(counter.clone()),
-            vec![],
+            &mut client,
+            OptionalMulti::Single(vec![]),
             interval,
             retry_handle_func,
         )
-        .wait();
+        .await;
         assert!(res.is_err());
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
     }
 
-    #[test]
-    fn test_keep_connecting_and_sending() {
+    #[tokio::test]
+    async fn test_keep_connecting_and_sending() {
         let interval = Duration::new(0, 0);
         let counter = Arc::new(Counter::new(3));
         let retry_counter = Arc::new(Counter::new(2));
@@ -350,15 +370,14 @@ mod tests {
             }
         };
         let factory = Arc::new(DummyClientFactory::new(counter.clone()));
-        let res = keep_connecting_and_sending_cmd(
+        keep_connecting_and_sending_cmd(
             factory,
             "host:port".to_string(),
             vec![],
             interval,
             handler,
         )
-        .wait();
-        assert!(res.is_err());
+        .await;
         assert_eq!(counter.count.load(Ordering::SeqCst), 3);
         assert_eq!(retry_counter_clone.count.load(Ordering::SeqCst), 2);
     }

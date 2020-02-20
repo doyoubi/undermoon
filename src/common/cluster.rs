@@ -1,5 +1,5 @@
 use super::utils::{IMPORTING_TAG, MIGRATING_TAG};
-use common::config::ClusterConfig;
+use crate::common::config::ClusterConfig;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -24,10 +24,10 @@ impl MigrationMeta {
         } = self;
         vec![
             epoch.to_string(),
-            src_proxy_address.clone(),
-            src_node_address.clone(),
-            dst_proxy_address.clone(),
-            dst_node_address.clone(),
+            src_proxy_address,
+            src_node_address,
+            dst_proxy_address,
+            dst_node_address,
         ]
     }
 
@@ -76,6 +76,12 @@ impl SlotRangeTag {
             _ => false,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Range {
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -162,6 +168,13 @@ impl SlotRange {
         let start = start_str.parse::<usize>().ok()?;
         let end = end_str.parse::<usize>().ok()?;
         Some((start, end))
+    }
+
+    pub fn to_range(&self) -> Range {
+        Range {
+            start: self.start,
+            end: self.end,
+        }
     }
 }
 

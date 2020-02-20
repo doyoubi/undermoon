@@ -266,8 +266,8 @@ Every running server-side proxy will store its epoch and will reject all the `UM
 - `flags`: Currently it may be NOFLAG or FORCE. When it's `FORCE`, the server-side proxy will ignore the epoch rule above and will always accept the configuration
 - `slot_range` can be like
     - 0-1000
-    - migrating dst_ip:dst_port 0-1000
-    - importing src_ip:src_port 0-1000
+    - migrating 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
+    - importing 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
 - `ip:port` should be the addresses of redis instances or other proxies for `PEER` part.
 
 Note that both these two commands set all the `local` or `peer` meta data of the proxy.
@@ -308,5 +308,5 @@ Refer to [HTTP API documentation](./docs/broker_http_api.md).
 - ~~Support dynamic configuration by CONFIG command~~
 - ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
 - Recover peer meta after reboot to support redirection.
-- Syscall batching
-- String Compression
+- ~~Syscall batching~~ (done)
+- ~~String Compression~~ (done)

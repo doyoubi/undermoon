@@ -156,7 +156,7 @@ class OvermoonClient:
         if r.status_code == 404:
             return
         if r.status_code == 400:
-            print('failed to remove unused nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
+            # print('failed to remove unused nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
             return
 
         print('OVERMOON_ERROR: failed to remove unused nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))

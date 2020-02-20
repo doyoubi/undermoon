@@ -1,18 +1,20 @@
-use super::redis_task::{RedisImportingTask, RedisMigratingTask};
-use super::task::{ImportingTask, MigratingTask};
-use ::common::cluster::{MigrationTaskMeta, SlotRange, SlotRangeTag};
-use ::common::config::AtomicMigrationConfig;
-use ::common::db::HostDBMap;
-use ::common::utils::{get_slot, ThreadSafe};
-use ::protocol::RedisClientFactory;
-use ::protocol::Resp;
-use ::proxy::backend::{CmdTask, CmdTaskSender, CmdTaskSenderFactory};
-use ::proxy::database::{DBSendError, DBTag};
-use ::proxy::slowlog::TaskEvent;
-use futures::Future;
+use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
+use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
+use crate::common::cluster::{MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
+use crate::common::config::AtomicMigrationConfig;
+use crate::common::db::HostDBMap;
+use crate::common::utils::{get_slot, ThreadSafe};
+use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
+use crate::migration::task::MgrSubCmd;
+use crate::protocol::RedisClientFactory;
+use crate::protocol::Resp;
+use crate::proxy::backend::{CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory};
+use crate::proxy::blocking::TaskBlockingControllerFactory;
+use crate::proxy::database::{DBSendError, DBTag};
+use crate::proxy::service::ServerProxyConfig;
+use crate::proxy::slowlog::TaskEvent;
+use futures::TryFutureExt;
 use itertools::Either;
-use migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
-use migration::task::{MigrationError, MigrationState, SwitchArg};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -32,41 +34,59 @@ pub struct NewTask<T: CmdTask> {
     task: TaskRecord<T>,
 }
 
-pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe>
+pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
 where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
+        + ThreadSafe,
 {
-    config: Arc<AtomicMigrationConfig>,
+    config: Arc<ServerProxyConfig>,
+    mgr_config: Arc<AtomicMigrationConfig>,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
+    cmd_task_factory: Arc<CTF>,
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe> MigrationManager<RCF, TSF>
+impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
+    MigrationManager<RCF, TSF, CTF>
 where
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
+        + ThreadSafe,
 {
     pub fn new(
-        config: Arc<AtomicMigrationConfig>,
+        config: Arc<ServerProxyConfig>,
+        mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        cmd_task_factory: Arc<CTF>,
     ) -> Self {
         Self {
             config,
+            mgr_config,
             client_factory,
             sender_factory,
+            cmd_task_factory,
         }
     }
 
-    pub fn create_new_migration_map(
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_new_migration_map<BCF: TaskBlockingControllerFactory>(
         &self,
         old_migration_map: &MigrationMap<TSF>,
         local_db_map: &HostDBMap,
+        blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<TSF> {
         old_migration_map.update_from_old_task_map(
             local_db_map,
             self.config.clone(),
+            self.mgr_config.clone(),
             self.client_factory.clone(),
             self.sender_factory.clone(),
+            self.cmd_task_factory.clone(),
+            blocking_ctrl_factory,
         )
     }
 
@@ -92,24 +112,32 @@ where
                         "spawn slot migrating task {} {} {} {}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
-                    tokio::spawn(migrating_task.start().map_err(move |e| {
-                        error!(
-                            "master slot task {} {} {} {} exit {:?}",
-                            db_name, epoch, slot_range_start, slot_range_end, e
-                        )
-                    }));
+                    let migrating_task = migrating_task.clone();
+                    let fut = async move {
+                        if let Err(err) = migrating_task.start().await {
+                            error!(
+                                "master slot task {} {} {} {} exit {:?}",
+                                db_name, epoch, slot_range_start, slot_range_end, err
+                            );
+                        }
+                    };
+                    tokio::spawn(fut);
                 }
                 Either::Right(importing_task) => {
                     info!(
                         "spawn slot importing replica {} {} {}-{}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
-                    tokio::spawn(importing_task.start().map_err(move |e| {
-                        error!(
-                            "replica slot task {} {} {}-{} exit {:?}",
-                            db_name, epoch, slot_range_start, slot_range_end, e
-                        )
-                    }));
+                    let importing_task = importing_task.clone();
+                    let fut = async move {
+                        if let Err(err) = importing_task.start().await {
+                            error!(
+                                "replica slot task {} {} {}-{} exit {:?}",
+                                db_name, epoch, slot_range_start, slot_range_end, err
+                            );
+                        }
+                    };
+                    tokio::spawn(fut);
                 }
             }
         }
@@ -125,7 +153,7 @@ where
         old_deleting_task_map.update_from_old_task_map(
             local_db_map,
             left_slots_after_change,
-            self.config.clone(),
+            self.mgr_config.clone(),
             self.client_factory.clone(),
         )
     }
@@ -139,7 +167,7 @@ where
             if let Some(fut) = task.start() {
                 let address = task.get_address();
                 tokio::spawn(
-                    fut.map(move |()| info!("deleting keys for {} stopped", address))
+                    fut.map_ok(move |()| info!("deleting keys for {} stopped", address))
                         .map_err(move |e| match e {
                             MigrationError::Canceled => {
                                 info!("task for deleting keys get canceled")
@@ -153,17 +181,21 @@ where
     }
 }
 
-pub struct MigrationMap<TSF: CmdTaskSenderFactory + ThreadSafe>
+pub struct MigrationMap<TSF>
 where
+    TSF: CmdTaskSenderFactory + ThreadSafe,
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
 {
     empty: bool,
     task_map: TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
 }
 
-impl<TSF: CmdTaskSenderFactory + ThreadSafe> MigrationMap<TSF>
+impl<TSF> MigrationMap<TSF>
 where
+    TSF: CmdTaskSenderFactory + ThreadSafe,
     <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
 {
     pub fn new() -> Self {
         Self {
@@ -201,9 +233,7 @@ where
         cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
-        cmd_task
-            .get_slowlog()
-            .log_event(TaskEvent::SentToMigrationDB);
+        cmd_task.log_event(TaskEvent::SentToMigrationDB);
         self.send_to_db(cmd_task)
     }
 
@@ -300,18 +330,25 @@ where
         left_slots
     }
 
-    pub fn update_from_old_task_map<RCF>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_from_old_task_map<RCF, CTF, BCF>(
         &self,
         local_db_map: &HostDBMap,
-        config: Arc<AtomicMigrationConfig>,
+        config: Arc<ServerProxyConfig>,
+        mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        cmd_task_factory: Arc<CTF>,
+        blocking_ctrl_map: Arc<BCF>,
     ) -> (
         Self,
         Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
     )
     where
         RCF: RedisClientFactory,
+        CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
+            + ThreadSafe,
+        BCF: TaskBlockingControllerFactory,
     {
         let old_task_map = &self.task_map;
 
@@ -386,13 +423,16 @@ where
                                 continue;
                             }
 
-                            let task = Arc::new(RedisMigratingTask::new(
+                            let ctrl = blocking_ctrl_map.create(meta.src_node_address.clone());
+                            let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
+                                mgr_config.clone(),
                                 db_name.clone(),
                                 (slot_range.start, slot_range.end),
                                 meta.clone(),
                                 client_factory.clone(),
                                 sender_factory.clone(),
+                                ctrl,
                             ));
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),
@@ -425,12 +465,14 @@ where
                                 continue;
                             }
 
-                            let task = Arc::new(RedisImportingTask::new(
+                            let task = Arc::new(RedisScanImportingTask::new(
                                 config.clone(),
+                                mgr_config.clone(),
                                 db_name.clone(),
                                 meta.clone(),
                                 client_factory.clone(),
                                 sender_factory.clone(),
+                                cmd_task_factory.clone(),
                             ));
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),
@@ -461,7 +503,11 @@ where
         )
     }
 
-    pub fn commit_importing(&self, switch_arg: SwitchArg) -> Result<(), SwitchError> {
+    pub fn handle_switch(
+        &self,
+        switch_arg: SwitchArg,
+        sub_cmd: MgrSubCmd,
+    ) -> Result<(), SwitchError> {
         if let Some(tasks) = self.task_map.get(&switch_arg.meta.db_name) {
             debug!(
                 "found tasks for db {} {}",
@@ -480,10 +526,12 @@ where
                         return Err(SwitchError::PeerMigrating);
                     }
                     Either::Right(importing_task) => {
-                        return importing_task.commit(switch_arg).map_err(|e| match e {
-                            MigrationError::NotReady => SwitchError::NotReady,
-                            others => SwitchError::MgrErr(others),
-                        });
+                        return importing_task.handle_switch(switch_arg, sub_cmd).map_err(
+                            |e| match e {
+                                MigrationError::NotReady => SwitchError::NotReady,
+                                others => SwitchError::MgrErr(others),
+                            },
+                        );
                     }
                 }
             }
@@ -497,15 +545,31 @@ where
         {
             for (_db_name, tasks) in self.task_map.iter() {
                 for (meta, task) in tasks.iter() {
-                    if let Either::Left(migrating_task) = task {
-                        if migrating_task.get_state() == MigrationState::SwitchCommitted {
-                            metadata.push(meta.clone());
-                        }
+                    let state = match task {
+                        Either::Left(migrating_task) => migrating_task.get_state(),
+                        Either::Right(importing_task) => importing_task.get_state(),
+                    };
+                    if state == MigrationState::SwitchCommitted {
+                        metadata.push(meta.clone());
                     }
                 }
             }
         }
         metadata
+    }
+
+    pub fn get_states(&self, db_name: &str) -> HashMap<Range, MigrationState> {
+        let mut m = HashMap::new();
+        if let Some(tasks) = self.task_map.get(db_name) {
+            for (meta, task) in tasks.iter() {
+                let state = match task {
+                    Either::Left(migrating_task) => migrating_task.get_state(),
+                    Either::Right(importing_task) => importing_task.get_state(),
+                };
+                m.insert(meta.slot_range.to_range(), state);
+            }
+        }
+        m
     }
 }
 

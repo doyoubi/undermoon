@@ -51,10 +51,6 @@ impl ClusterConfig {
                 self.compression_strategy.to_str().to_string(),
             ),
             (
-                "migration_offset_threshold",
-                self.migration_config.offset_threshold.to_string(),
-            ),
-            (
                 "migration_max_migration_time",
                 self.migration_config.max_migration_time.to_string(),
             ),
@@ -63,16 +59,20 @@ impl ClusterConfig {
                 self.migration_config.max_blocking_time.to_string(),
             ),
             (
-                "migration_min_blocking_time",
-                self.migration_config.min_blocking_time.to_string(),
+                "migration_delete_interval",
+                self.migration_config.delete_interval.to_string(),
             ),
             (
-                "migration_max_redirection_time",
-                self.migration_config.max_redirection_time.to_string(),
+                "migration_delete_count",
+                self.migration_config.delete_count.to_string(),
             ),
             (
-                "migration_switch_retry_interval",
-                self.migration_config.switch_retry_interval.to_string(),
+                "migration_scan_interval",
+                self.migration_config.scan_interval.to_string(),
+            ),
+            (
+                "migration_scan_count",
+                self.migration_config.scan_count.to_string(),
             ),
         ]
         .into_iter()
@@ -140,25 +140,18 @@ impl<'de> Deserialize<'de> for CompressionStrategy {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct MigrationConfig {
-    pub offset_threshold: u64,
     pub max_migration_time: u64,
     pub max_blocking_time: u64,
-    pub min_blocking_time: u64,
-    pub max_redirection_time: u64,
-    pub switch_retry_interval: u64,
-    pub delete_rate: u64,
+    pub delete_interval: u64,
+    pub delete_count: u64,
+    pub scan_interval: u64,
+    pub scan_count: u64,
 }
 
 impl MigrationConfig {
     fn set_field(&mut self, field: &str, value: &str) -> Result<(), ConfigError> {
         let field = field.to_lowercase();
         match field.as_str() {
-            "offset_threshold" => {
-                let v = value
-                    .parse::<u64>()
-                    .map_err(|_| ConfigError::InvalidValue)?;
-                self.offset_threshold = v;
-            }
             "max_migration_time" => {
                 let v = value
                     .parse::<u64>()
@@ -171,29 +164,29 @@ impl MigrationConfig {
                     .map_err(|_| ConfigError::InvalidValue)?;
                 self.max_blocking_time = v;
             }
-            "min_blocking_time" => {
+            "delete_interval" => {
                 let v = value
                     .parse::<u64>()
                     .map_err(|_| ConfigError::InvalidValue)?;
-                self.min_blocking_time = v;
+                self.delete_interval = v;
             }
-            "max_redirection_time" => {
+            "delete_count" => {
                 let v = value
                     .parse::<u64>()
                     .map_err(|_| ConfigError::InvalidValue)?;
-                self.max_redirection_time = v;
+                self.delete_count = v;
             }
-            "switch_retry_interval" => {
+            "scan_interval" => {
                 let v = value
                     .parse::<u64>()
                     .map_err(|_| ConfigError::InvalidValue)?;
-                self.switch_retry_interval = v;
+                self.scan_interval = v;
             }
-            "delete_rate" => {
+            "scan_count" => {
                 let v = value
                     .parse::<u64>()
                     .map_err(|_| ConfigError::InvalidValue)?;
-                self.delete_rate = v;
+                self.scan_count = v;
             }
             _ => return Err(ConfigError::FieldNotFound),
         }
@@ -204,25 +197,23 @@ impl MigrationConfig {
 impl Default for MigrationConfig {
     fn default() -> Self {
         Self {
-            offset_threshold: 50000,
-            max_migration_time: 10 * 60 * 1000, // 10 minutes, should leave some time for replication
-            max_blocking_time: 10_000,          // 10 seconds waiting for commit
-            min_blocking_time: 100,             // 100ms
-            max_redirection_time: 5000,         // 5s, to wait for coordinator to update meta
-            switch_retry_interval: 10,          // 10ms
-            delete_rate: 10000,                 // 10000 qps
+            max_migration_time: 3 * 60 * 60, // 3 hours
+            max_blocking_time: 10_000,       // 10 seconds waiting for switch
+            delete_interval: 500,            // 500 microseconds
+            delete_count: 16,
+            scan_interval: 500, // 500 microseconds
+            scan_count: 16,
         }
     }
 }
 
 pub struct AtomicMigrationConfig {
-    offset_threshold: AtomicU64,
     max_migration_time: AtomicU64,
     max_blocking_time: AtomicU64,
-    min_blocking_time: AtomicU64,
-    max_redirection_time: AtomicU64,
-    switch_retry_interval: AtomicU64,
-    delete_rate: AtomicU64,
+    delete_interval: AtomicU64,
+    delete_count: AtomicU64,
+    scan_interval: AtomicU64,
+    scan_count: AtomicU64,
 }
 
 impl Default for AtomicMigrationConfig {
@@ -234,71 +225,37 @@ impl Default for AtomicMigrationConfig {
 impl AtomicMigrationConfig {
     pub fn from_config(config: MigrationConfig) -> Self {
         Self {
-            offset_threshold: AtomicU64::new(config.offset_threshold),
             max_migration_time: AtomicU64::new(config.max_migration_time),
             max_blocking_time: AtomicU64::new(config.max_blocking_time),
-            min_blocking_time: AtomicU64::new(config.min_blocking_time),
-            max_redirection_time: AtomicU64::new(config.max_redirection_time),
-            switch_retry_interval: AtomicU64::new(config.switch_retry_interval),
-            delete_rate: AtomicU64::new(config.delete_rate),
+            delete_interval: AtomicU64::new(config.delete_interval),
+            delete_count: AtomicU64::new(config.delete_count),
+            scan_interval: AtomicU64::new(config.scan_interval),
+            scan_count: AtomicU64::new(config.scan_count),
         }
     }
 
-    pub fn get_offset_threshold(&self) -> u64 {
-        self.offset_threshold.load(Ordering::SeqCst)
-    }
     pub fn get_max_migration_time(&self) -> u64 {
         self.max_migration_time.load(Ordering::SeqCst)
     }
+
     pub fn get_max_blocking_time(&self) -> u64 {
         self.max_blocking_time.load(Ordering::SeqCst)
     }
-    pub fn get_min_blocking_time(&self) -> u64 {
-        self.min_blocking_time.load(Ordering::SeqCst)
-    }
-    pub fn get_max_redirection_time(&self) -> u64 {
-        self.max_redirection_time.load(Ordering::SeqCst)
-    }
-    pub fn get_switch_retry_interval(&self) -> u64 {
-        self.switch_retry_interval.load(Ordering::SeqCst)
-    }
-    pub fn get_delete_rate(&self) -> u64 {
-        self.delete_rate.load(Ordering::SeqCst)
+
+    pub fn get_delete_interval(&self) -> u64 {
+        self.delete_interval.load(Ordering::SeqCst)
     }
 
-    #[allow(dead_code)]
-    pub fn set_offset_threshold(&self, offset_threshold: u64) {
-        self.offset_threshold
-            .store(offset_threshold, Ordering::SeqCst)
+    pub fn get_delete_count(&self) -> u64 {
+        self.delete_count.load(Ordering::SeqCst)
     }
-    #[allow(dead_code)]
-    pub fn set_max_migration_time(&self, max_migration_time: u64) {
-        self.max_migration_time
-            .store(max_migration_time, Ordering::SeqCst)
+
+    pub fn get_scan_interval(&self) -> u64 {
+        self.scan_interval.load(Ordering::SeqCst)
     }
-    #[allow(dead_code)]
-    pub fn set_max_blocking_time(&self, max_blocking_time: u64) {
-        self.max_blocking_time
-            .store(max_blocking_time, Ordering::SeqCst)
-    }
-    #[allow(dead_code)]
-    pub fn set_min_blocking_time(&self, min_blocking_time: u64) {
-        self.min_blocking_time
-            .store(min_blocking_time, Ordering::SeqCst)
-    }
-    #[allow(dead_code)]
-    pub fn set_max_redirection_time(&self, max_redirection_time: u64) {
-        self.max_redirection_time
-            .store(max_redirection_time, Ordering::SeqCst)
-    }
-    #[allow(dead_code)]
-    pub fn set_switch_retry_interval(&self, switch_retry_interval: u64) {
-        self.switch_retry_interval
-            .store(switch_retry_interval, Ordering::SeqCst)
-    }
-    #[allow(dead_code)]
-    pub fn set_delete_rate(&self, delete_rate: u64) {
-        self.delete_rate.store(delete_rate, Ordering::SeqCst)
+
+    pub fn get_scan_count(&self) -> u64 {
+        self.scan_count.load(Ordering::SeqCst)
     }
 }
 
@@ -317,14 +274,14 @@ mod tests {
     fn test_config_set_field() {
         let mut migration_config = MigrationConfig::default();
         migration_config
-            .set_field("offset_threshold", "233")
+            .set_field("delete_count", "233")
             .expect("test_config_set_field");
-        assert_eq!(migration_config.offset_threshold, 233);
+        assert_eq!(migration_config.delete_count, 233);
 
         let mut cluster_config = ClusterConfig::default();
         cluster_config
-            .set_field("migration_offset_threshold", "666")
+            .set_field("migration_delete_count", "666")
             .expect("test_config_set_field");
-        assert_eq!(cluster_config.migration_config.offset_threshold, 666);
+        assert_eq!(cluster_config.migration_config.delete_count, 666);
     }
 }

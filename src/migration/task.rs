@@ -1,44 +1,68 @@
-use ::common::cluster::MigrationTaskMeta;
-use ::common::utils::{get_resp_strings, ThreadSafe};
-use ::protocol::Resp;
-use ::proxy::backend::CmdTask;
-use ::proxy::database::DBSendError;
+use crate::common::cluster::MigrationTaskMeta;
+use crate::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
+use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
+use crate::proxy::backend::CmdTask;
+use crate::proxy::database::DBSendError;
+use crate::replication::replicator::ReplicatorError;
 use futures::Future;
-use replication::replicator::ReplicatorError;
+use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::pin::Pin;
+use std::str;
+use std::sync::atomic::{AtomicU16, Ordering};
+
+#[derive(Debug)]
+pub enum MgrSubCmd {
+    PreCheck,
+    PreSwitch,
+    FinalSwitch,
+}
+
+impl MgrSubCmd {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::PreCheck => "PRECHECK",
+            Self::PreSwitch => "PRESWITCH",
+            Self::FinalSwitch => "FINALSWITCH",
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MigrationState {
-    TransferringData = 0,
-    Blocking = 1,
-    SwitchStarted = 2,
-    SwitchCommitted = 3,
+    PreCheck = 0,
+    PreBlocking = 1,
+    PreSwitch = 2,
+    Scanning = 3,
+    FinalSwitch = 4,
+    SwitchCommitted = 5,
 }
 
 #[derive(Debug)]
 pub struct AtomicMigrationState {
-    inner: AtomicU8,
+    inner: AtomicU16,
 }
 
 impl AtomicMigrationState {
     pub fn new() -> Self {
         Self {
-            inner: AtomicU8::new(MigrationState::TransferringData as u8),
+            inner: AtomicU16::new(MigrationState::PreCheck as u16),
         }
     }
 
     pub fn set_state(&self, state: MigrationState) {
-        self.inner.store(state as u8, Ordering::SeqCst);
+        self.inner.store(state as u16, Ordering::SeqCst);
     }
 
     pub fn get_state(&self) -> MigrationState {
         match self.inner.load(Ordering::SeqCst) {
-            0 => MigrationState::TransferringData,
-            1 => MigrationState::Blocking,
-            2 => MigrationState::SwitchStarted,
+            0 => MigrationState::PreCheck,
+            1 => MigrationState::PreBlocking,
+            2 => MigrationState::PreSwitch,
+            3 => MigrationState::Scanning,
+            4 => MigrationState::FinalSwitch,
             _ => MigrationState::SwitchCommitted,
         }
     }
@@ -47,8 +71,9 @@ impl AtomicMigrationState {
 pub trait MigratingTask: ThreadSafe {
     type Task: CmdTask;
 
-    fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
+    fn start<'s>(&'s self)
+        -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
+    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
     fn get_state(&self) -> MigrationState;
 }
@@ -56,10 +81,16 @@ pub trait MigratingTask: ThreadSafe {
 pub trait ImportingTask: ThreadSafe {
     type Task: CmdTask;
 
-    fn start(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
-    fn stop(&self) -> Box<dyn Future<Item = (), Error = MigrationError> + Send>;
+    fn start<'s>(&'s self)
+        -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
+    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
-    fn commit(&self, switch_arg: SwitchArg) -> Result<(), MigrationError>;
+    fn get_state(&self) -> MigrationState;
+    fn handle_switch(
+        &self,
+        switch_arg: SwitchArg,
+        sub_cmd: MgrSubCmd,
+    ) -> Result<(), MigrationError>;
 }
 
 pub struct SwitchArg {
@@ -85,7 +116,7 @@ impl SwitchArg {
     }
 }
 
-pub fn parse_tmp_switch_command(resp: &Resp) -> Option<SwitchArg> {
+pub fn parse_switch_command(resp: &RespSlice) -> Option<SwitchArg> {
     let command = get_resp_strings(resp)?;
     let mut it = command.into_iter();
     // Skip UMCTL TMPSWITCH
@@ -102,7 +133,9 @@ pub enum MigrationError {
     Canceled,
     NotReady,
     ReplError(ReplicatorError),
+    RedisClient(RedisClientError),
     Io(io::Error),
+    Timeout,
 }
 
 impl fmt::Display for MigrationError {
@@ -120,6 +153,54 @@ impl Error for MigrationError {
         match self {
             MigrationError::Io(err) => Some(err),
             MigrationError::ReplError(err) => Some(err),
+            MigrationError::RedisClient(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SlotRangeArray {
+    pub ranges: Vec<(usize, usize)>,
+}
+
+impl SlotRangeArray {
+    pub fn is_key_inside(&self, key: &[u8]) -> bool {
+        let slot = get_slot(key);
+        for (start, end) in self.ranges.iter() {
+            if slot >= *start && slot <= *end {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn info(&self) -> String {
+        self.ranges
+            .iter()
+            .map(|(start, end)| format!("{}-{}", start, end))
+            .join(",")
+    }
+}
+
+pub struct ScanResponse {
+    pub next_index: u64,
+    pub keys: Vec<BinSafeStr>,
+}
+
+impl ScanResponse {
+    pub fn parse_scan(resp: RespVec) -> Option<ScanResponse> {
+        match resp {
+            Resp::Arr(Array::Arr(ref resps)) => {
+                let index_data = resps.get(0).and_then(|resp| match resp {
+                    Resp::Bulk(BulkStr::Str(ref s)) => Some(s.clone()),
+                    Resp::Simple(ref s) => Some(s.clone()),
+                    _ => None,
+                })?;
+                let next_index = str::from_utf8(index_data.as_slice()).ok()?.parse().ok()?;
+                let keys = get_resp_bytes(resps.get(1)?)?;
+                Some(ScanResponse { next_index, keys })
+            }
             _ => None,
         }
     }

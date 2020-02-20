@@ -1,12 +1,13 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
-use common::cluster::{SlotRange, SlotRangeTag};
-use common::config::ClusterConfig;
-use common::db::ProxyDBMeta;
-use common::utils::{gen_moved, get_slot};
+use crate::common::cluster::{Range, SlotRange, SlotRangeTag};
+use crate::common::config::ClusterConfig;
+use crate::common::db::ProxyDBMeta;
+use crate::common::utils::{gen_moved, get_slot};
+use crate::migration::task::MigrationState;
+use crate::protocol::{Array, BulkStr, Resp, RespVec};
 use crc64::crc64;
-use protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -41,17 +42,17 @@ pub trait DBTag {
     fn set_db_name(&self, db: String);
 }
 
-pub struct DatabaseMap<F: CmdTaskSenderFactory>
+pub struct DatabaseMap<S: CmdTaskSender>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
-    local_dbs: HashMap<String, Database<F>>,
+    local_dbs: HashMap<String, Database<S>>,
     remote_dbs: HashMap<String, RemoteDB>,
 }
 
-impl<F: CmdTaskSenderFactory> Default for DatabaseMap<F>
+impl<S: CmdTaskSender> Default for DatabaseMap<S>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
     fn default() -> Self {
         Self {
@@ -61,11 +62,14 @@ where
     }
 }
 
-impl<F: CmdTaskSenderFactory> DatabaseMap<F>
+impl<S: CmdTaskSender> DatabaseMap<S>
 where
-    <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: DBTag,
 {
-    pub fn from_db_map(db_meta: &ProxyDBMeta, sender_factory: &F) -> Self {
+    pub fn from_db_map<F: CmdTaskSenderFactory<Sender = S>>(
+        db_meta: &ProxyDBMeta,
+        sender_factory: &F,
+    ) -> Self {
         let epoch = db_meta.get_epoch();
 
         let mut local_dbs = HashMap::new();
@@ -110,8 +114,8 @@ where
 
     pub fn send(
         &self,
-        cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
+        cmd_task: <S as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
         let db_name = cmd_task.get_db_name();
         let (cmd_task, db_exists) = match self.local_dbs.get(&db_name) {
             Some(db) => match db.send(cmd_task) {
@@ -144,14 +148,21 @@ where
         self.local_dbs.keys().cloned().collect()
     }
 
-    pub fn gen_cluster_nodes(&self, dbname: String, service_address: String) -> String {
+    pub fn gen_cluster_nodes(
+        &self,
+        dbname: String,
+        service_address: String,
+        migration_states: &HashMap<Range, MigrationState>,
+    ) -> String {
         let local = self.local_dbs.get(&dbname).map_or("".to_string(), |db| {
-            db.gen_local_cluster_nodes(service_address)
+            db.gen_local_cluster_nodes(service_address, migration_states)
         });
         let remote = self
             .remote_dbs
             .get(&dbname)
-            .map_or("".to_string(), RemoteDB::gen_remote_cluster_nodes);
+            .map_or("".to_string(), |remote_db| {
+                remote_db.gen_remote_cluster_nodes(migration_states)
+            });
         format!("{}{}", local, remote)
     }
 
@@ -159,15 +170,17 @@ where
         &self,
         dbname: String,
         service_address: String,
-    ) -> Result<Resp, String> {
-        let mut local = self
-            .local_dbs
-            .get(&dbname)
-            .map_or(Ok(vec![]), |db| db.gen_local_cluster_slots(service_address))?;
+        migration_states: &HashMap<Range, MigrationState>,
+    ) -> Result<RespVec, String> {
+        let mut local = self.local_dbs.get(&dbname).map_or(Ok(vec![]), |db| {
+            db.gen_local_cluster_slots(service_address, migration_states)
+        })?;
         let mut remote = self
             .remote_dbs
             .get(&dbname)
-            .map_or(Ok(vec![]), RemoteDB::gen_remote_cluster_slots)?;
+            .map_or(Ok(vec![]), |remote_db| {
+                remote_db.gen_remote_cluster_slots(migration_states)
+            })?;
         local.append(&mut remote);
         Ok(Resp::Arr(Array::Arr(local)))
     }
@@ -175,10 +188,10 @@ where
     pub fn auto_select_db(&self) -> Option<String> {
         {
             let local = &self.local_dbs;
-            if local.len() == 1 {
-                return local.keys().next().cloned();
-            } else if local.len() > 1 {
-                return None;
+            match local.len() {
+                0 => (),
+                1 => return local.keys().next().cloned(),
+                _ => return None,
             }
         }
         {
@@ -203,22 +216,22 @@ struct LocalDB<S: CmdTaskSender> {
     slot_map: SlotMap,
 }
 
-pub struct Database<F: CmdTaskSenderFactory> {
+pub struct Database<S: CmdTaskSender> {
     name: String,
     epoch: u64,
-    local_db: LocalDB<F::Sender>,
+    local_db: LocalDB<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     config: ClusterConfig,
 }
 
-impl<F: CmdTaskSenderFactory> Database<F> {
-    pub fn from_slot_map(
+impl<S: CmdTaskSender> Database<S> {
+    pub fn from_slot_map<F: CmdTaskSenderFactory<Sender = S>>(
         sender_factory: &F,
         name: String,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
         config: ClusterConfig,
-    ) -> Database<F> {
+    ) -> Self {
         let mut nodes = HashMap::new();
         for addr in slot_map.keys() {
             nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
@@ -262,8 +275,8 @@ impl<F: CmdTaskSenderFactory> Database<F> {
 
     pub fn send(
         &self,
-        cmd_task: <<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<F as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>> {
+        cmd_task: <S as CmdTaskSender>::Task,
+    ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
@@ -285,7 +298,11 @@ impl<F: CmdTaskSenderFactory> Database<F> {
         }
     }
 
-    pub fn gen_local_cluster_nodes(&self, service_address: String) -> String {
+    pub fn gen_local_cluster_nodes(
+        &self,
+        service_address: String,
+        migration_states: &HashMap<Range, MigrationState>,
+    ) -> String {
         let slots: Vec<SlotRange> = self
             .slot_ranges
             .values()
@@ -294,10 +311,14 @@ impl<F: CmdTaskSenderFactory> Database<F> {
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
-        gen_cluster_nodes_helper(&self.name, self.epoch, &slot_ranges)
+        gen_cluster_nodes_helper(&self.name, self.epoch, &slot_ranges, migration_states)
     }
 
-    pub fn gen_local_cluster_slots(&self, service_address: String) -> Result<Vec<Resp>, String> {
+    pub fn gen_local_cluster_slots(
+        &self,
+        service_address: String,
+        migration_states: &HashMap<Range, MigrationState>,
+    ) -> Result<Vec<RespVec>, String> {
         let slots: Vec<SlotRange> = self
             .slot_ranges
             .values()
@@ -306,7 +327,7 @@ impl<F: CmdTaskSenderFactory> Database<F> {
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
-        gen_cluster_slots_helper(&slot_ranges)
+        gen_cluster_slots_helper(&slot_ranges, migration_states)
     }
 }
 
@@ -374,16 +395,21 @@ impl RemoteDB {
         }
     }
 
-    pub fn gen_remote_cluster_nodes(&self) -> String {
-        gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges)
+    pub fn gen_remote_cluster_nodes(
+        &self,
+        migration_states: &HashMap<Range, MigrationState>,
+    ) -> String {
+        gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges, migration_states)
     }
 
-    pub fn gen_remote_cluster_slots(&self) -> Result<Vec<Resp>, String> {
-        gen_cluster_slots_helper(&self.slot_ranges)
+    pub fn gen_remote_cluster_slots(
+        &self,
+        migration_states: &HashMap<Range, MigrationState>,
+    ) -> Result<Vec<RespVec>, String> {
+        gen_cluster_slots_helper(&self.slot_ranges, migration_states)
     }
 }
 
-#[derive(Debug)]
 pub enum DBSendError<T: CmdTask> {
     MissingKey,
     DBNotFound(String),
@@ -396,6 +422,20 @@ pub enum DBSendError<T: CmdTask> {
 impl<T: CmdTask> fmt::Display for DBSendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl<T: CmdTask> fmt::Debug for DBSendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::MissingKey => "DBSendError::MissingKey".to_string(),
+            Self::DBNotFound(db) => format!("DBSendError::DBNotFound({})", db),
+            Self::SlotNotFound(_) => "DBSendError::SlotNotFound".to_string(),
+            Self::SlotNotCovered => "DBSendError::SlotNotCovered".to_string(),
+            Self::Backend(err) => format!("DBSendError::Backend({})", err),
+            Self::MigrationError => "DBSendError::MigrationError".to_string(),
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -427,6 +467,7 @@ fn gen_cluster_nodes_helper(
     name: &str,
     epoch: u64,
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
+    migration_states: &HashMap<Range, MigrationState>,
 ) -> String {
     let mut cluster_nodes = String::from("");
     let mut name_seg = format!("{:_<20}", name);
@@ -440,7 +481,20 @@ fn gen_cluster_nodes_helper(
         let slot_range = ranges
             .iter()
             .map(|range| match range.tag {
-                SlotRangeTag::Importing(ref _meta) => None,
+                // In the new migration protocol, after switching at the very beginning,
+                // the importing nodes will take care of all the migrating slots.
+                SlotRangeTag::Migrating(ref _meta)
+                    if migration_states.get(&range.to_range()).cloned()
+                        != Some(MigrationState::PreCheck) =>
+                {
+                    None
+                }
+                SlotRangeTag::Importing(ref _meta)
+                    if migration_states.get(&range.to_range()).cloned()
+                        == Some(MigrationState::PreCheck) =>
+                {
+                    None
+                }
                 _ if range.start == range.end => Some(range.start.to_string()),
                 _ => Some(format!("{}-{}", range.start, range.end)),
             })
@@ -464,7 +518,8 @@ fn gen_cluster_nodes_helper(
 
 fn gen_cluster_slots_helper(
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
-) -> Result<Vec<Resp>, String> {
+    migration_states: &HashMap<Range, MigrationState>,
+) -> Result<Vec<RespVec>, String> {
     let mut slot_range_element = Vec::new();
     for (addr, ranges) in slot_ranges {
         let mut segs = addr.split(':');
@@ -476,8 +531,22 @@ fn gen_cluster_slots_helper(
             .ok_or_else(|| format!("invalid address {}", addr))?;
 
         for slot_range in ranges {
-            if let SlotRangeTag::Importing(_) = slot_range.tag {
-                continue;
+            // In the new migration protocol, after switching at the very beginning,
+            // the importing nodes will take care of all the migrating slots.
+            match slot_range.tag {
+                SlotRangeTag::Migrating(ref _meta)
+                    if migration_states.get(&slot_range.to_range()).cloned()
+                        != Some(MigrationState::PreCheck) =>
+                {
+                    continue
+                }
+                SlotRangeTag::Importing(ref _meta)
+                    if migration_states.get(&slot_range.to_range()).cloned()
+                        == Some(MigrationState::PreCheck) =>
+                {
+                    continue
+                }
+                _ => (),
             }
 
             let mut arr = vec![
@@ -498,7 +567,8 @@ fn gen_cluster_slots_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::common::cluster::MigrationMeta;
+    use crate::common::cluster::MigrationMeta;
+    use crate::protocol::{Array, BulkStr};
     use std::iter::repeat;
 
     fn gen_testing_slot_ranges(address: &str) -> HashMap<String, Vec<SlotRange>> {
@@ -521,20 +591,26 @@ mod tests {
         slot_ranges
     }
 
-    fn gen_testing_impporting_slot_ranges() -> HashMap<String, Vec<SlotRange>> {
+    fn gen_testing_migration_slot_ranges(migrating: bool) -> HashMap<String, Vec<SlotRange>> {
         let mut slot_ranges = HashMap::new();
+        let meta = MigrationMeta {
+            epoch: 200,
+            src_proxy_address: "127.0.0.1:7000".to_string(),
+            src_node_address: "127.0.0.1:6379".to_string(),
+            dst_proxy_address: "127.0.0.1:7001".to_string(),
+            dst_node_address: "127.0.0.1:6380".to_string(),
+        };
+        let tag = if migrating {
+            SlotRangeTag::Migrating(meta)
+        } else {
+            SlotRangeTag::Importing(meta)
+        };
         slot_ranges.insert(
             "127.0.0.1:5299".to_string(),
             vec![SlotRange {
                 start: 0,
                 end: 1000,
-                tag: SlotRangeTag::Importing(MigrationMeta {
-                    epoch: 200,
-                    src_proxy_address: "127.0.0.1:7000".to_string(),
-                    src_node_address: "127.0.0.1:6379".to_string(),
-                    dst_proxy_address: "127.0.0.1:7001".to_string(),
-                    dst_node_address: "127.0.0.1:6380".to_string(),
-                }),
+                tag,
             }],
         );
         slot_ranges
@@ -542,23 +618,105 @@ mod tests {
 
     #[test]
     fn test_gen_cluster_nodes() {
+        let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
         assert_eq!(output, "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
     }
 
     #[test]
     fn test_gen_cluster_nodes_with_long_address() {
+        // Should always be able to find the migration state.
+        // This will never be empty. But should also work.
+        let m = HashMap::new();
         let long_address: String = repeat('x').take(50).collect();
         let slot_ranges = gen_testing_slot_ranges(&long_address);
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
         assert_eq!(output, format!("testdb______________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
     #[test]
     fn test_gen_importing_cluster_nodes() {
-        let slot_ranges = gen_testing_impporting_slot_ranges();
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges);
+        let m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(false);
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        assert_eq!(
+            output,
+            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+        );
+    }
+
+    #[test]
+    fn test_gen_importing_cluster_nodes_without_pre_check() {
+        let mut m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(false);
+        for slot_ranges in slot_ranges.values() {
+            for slot_range in slot_ranges {
+                m.insert(slot_range.to_range(), MigrationState::PreCheck);
+            }
+        }
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        assert_eq!(
+            output,
+            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+        );
+    }
+
+    #[test]
+    fn test_gen_importing_cluster_nodes_with_pre_check() {
+        let mut m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(false);
+        for slot_ranges in slot_ranges.values() {
+            for slot_range in slot_ranges {
+                m.insert(slot_range.to_range(), MigrationState::PreBlocking);
+            }
+        }
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        assert_eq!(
+            output,
+            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+        );
+    }
+
+    #[test]
+    fn test_gen_migrating_cluster_nodes() {
+        // Should always be able to find the migration state.
+        // This will never be empty. But should also work.
+        let m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(true);
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        assert_eq!(
+            output,
+            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+        );
+    }
+
+    #[test]
+    fn test_gen_migrating_cluster_nodes_without_pre_check() {
+        let mut m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(true);
+        for slot_ranges in slot_ranges.values() {
+            for slot_range in slot_ranges {
+                m.insert(slot_range.to_range(), MigrationState::PreCheck);
+            }
+        }
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        assert_eq!(
+            output,
+            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+        );
+    }
+
+    #[test]
+    fn test_gen_migrating_cluster_nodes_with_pre_check() {
+        let mut m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(true);
+        for slot_ranges in slot_ranges.values() {
+            for slot_range in slot_ranges {
+                m.insert(slot_range.to_range(), MigrationState::PreBlocking);
+            }
+        }
+        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
@@ -567,8 +725,9 @@ mod tests {
 
     #[test]
     fn test_gen_cluster_slots() {
+        let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
-        let output = gen_cluster_slots_helper(&slot_ranges).expect("test_gen_cluster_slots");
+        let output = gen_cluster_slots_helper(&slot_ranges, &m).expect("test_gen_cluster_slots");
         let slot_range1 = Resp::Arr(Array::Arr(vec![
             Resp::Integer(0.to_string().into_bytes()),
             Resp::Integer(100.to_string().into_bytes()),
@@ -592,8 +751,17 @@ mod tests {
 
     #[test]
     fn test_gen_importing_cluster_slots() {
-        let slot_ranges = gen_testing_impporting_slot_ranges();
-        let output = gen_cluster_slots_helper(&slot_ranges).expect("test_gen_cluster_slots");
-        assert_eq!(output, vec![]);
+        let m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(false);
+        let output = gen_cluster_slots_helper(&slot_ranges, &m).expect("test_gen_cluster_slots");
+        assert_eq!(output.len(), 1);
+    }
+
+    #[test]
+    fn test_gen_migrating_cluster_slots() {
+        let m = HashMap::new();
+        let slot_ranges = gen_testing_migration_slot_ranges(true);
+        let output = gen_cluster_slots_helper(&slot_ranges, &m).expect("test_gen_cluster_slots");
+        assert_eq!(output.len(), 0);
     }
 }

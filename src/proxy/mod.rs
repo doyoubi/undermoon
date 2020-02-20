@@ -1,10 +1,12 @@
 pub mod backend;
+pub mod blocking;
 mod command;
 mod compress;
 pub mod database;
 pub mod executor;
 pub mod manager;
-mod reply;
+pub mod migration_backend;
+pub mod reply;
 pub mod service;
 pub mod session;
 mod slot;

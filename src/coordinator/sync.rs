@@ -1,12 +1,13 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
-use common::cluster::{Host, Role, SlotRange};
-use common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
-use common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
-use futures::{future, Future};
-use protocol::{RedisClient, RedisClientFactory, Resp};
-use replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
+use crate::common::cluster::{Host, Role, SlotRange};
+use crate::common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
+use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
+use crate::protocol::{RedisClient, RedisClientFactory, Resp};
+use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
+use futures::{Future, TryFutureExt};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct HostMetaRespSender<F: RedisClientFactory> {
@@ -19,38 +20,36 @@ impl<F: RedisClientFactory> HostMetaRespSender<F> {
     }
 }
 
-impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
-    fn send_meta(&self, host: Host) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        let address = host.get_address().clone();
-
-        let client_fut = self
+impl<F: RedisClientFactory> HostMetaRespSender<F> {
+    async fn send_meta_impl(&self, host: Host) -> Result<(), CoordinateError> {
+        let mut client = self
             .client_factory
-            .create_client(address)
-            .map_err(CoordinateError::Redis);
-
+            .create_client(host.get_address().clone())
+            .await
+            .map_err(CoordinateError::Redis)?;
         let host_with_only_masters = filter_host_masters(host.clone());
-        Box::new(
-            client_fut
-                .and_then(move |client| {
-                    // SETREPL should be sent before SETDB to eliminate the possibility sending to replica while handling slots.
-                    send_meta(
-                        client,
-                        "SETREPL".to_string(),
-                        generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
-                    )
-                })
-                .and_then(|client| {
-                    send_meta(
-                        client,
-                        "SETDB".to_string(),
-                        generate_host_meta_cmd_args(
-                            DBMapFlags { force: false },
-                            host_with_only_masters,
-                        ),
-                    )
-                })
-                .map(|_| ()),
+        send_meta(
+            &mut client,
+            "SETREPL".to_string(),
+            generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
         )
+        .await?;
+        send_meta(
+            &mut client,
+            "SETDB".to_string(),
+            generate_host_meta_cmd_args(DBMapFlags { force: false }, host_with_only_masters),
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
+    fn send_meta<'s>(
+        &'s self,
+        host: Host,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
+        Box::pin(self.send_meta_impl(host))
     }
 }
 
@@ -80,13 +79,13 @@ impl<B: MetaDataBroker> BrokerMetaRetriever<B> {
 }
 
 impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
-    fn get_host_meta(
-        &self,
+    fn get_host_meta<'s>(
+        &'s self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<Host>, Error = CoordinateError> + Send> {
-        Box::new(
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, CoordinateError>> + Send + 's>> {
+        Box::pin(
             self.broker
-                .get_host(address.clone())
+                .get_host(address)
                 .map_err(CoordinateError::MetaData),
         )
     }
@@ -116,45 +115,46 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
     }
     let local = HostDBMap::new(db_map);
 
-    let proxy_db_meta = ProxyDBMeta::new(epoch, flags.clone(), local, peer, clusters_config);
+    let proxy_db_meta = ProxyDBMeta::new(epoch, flags, local, peer, clusters_config);
     proxy_db_meta.to_args()
 }
 
 // sub_command should be SETDB
-fn send_meta<C: RedisClient>(
-    client: C,
+async fn send_meta<C: RedisClient>(
+    client: &mut C,
     sub_command: String,
     args: Vec<String>,
-) -> impl Future<Item = C, Error = CoordinateError> + Send + 'static {
+) -> Result<(), CoordinateError> {
     debug!("sending meta {} {:?}", sub_command, args);
     let mut cmd = vec!["UMCTL".to_string(), sub_command.clone()];
     cmd.extend(args);
-    client
-        .execute(cmd.into_iter().map(String::into_bytes).collect())
+    let resp = client
+        .execute_single(cmd.into_iter().map(String::into_bytes).collect())
+        .await
         .map_err(|e| {
             error!("failed to send meta data of host {:?}", e);
             CoordinateError::Redis(e)
-        })
-        .and_then(move |(client, resp)| match resp {
-            Resp::Error(err_str) => {
-                if err_str == OLD_EPOCH_REPLY.as_bytes() {
-                    future::ok(client)
-                } else {
-                    error!("failed to send meta, invalid reply {:?}", err_str);
-                    future::err(CoordinateError::InvalidReply)
-                }
+        })?;
+    match resp {
+        Resp::Error(err_str) => {
+            if err_str == OLD_EPOCH_REPLY.as_bytes() {
+                Ok(())
+            } else {
+                error!("failed to send meta, invalid reply {:?}", err_str);
+                Err(CoordinateError::InvalidReply)
             }
-            Resp::Simple(s) => {
-                if s != OK_REPLY.as_bytes() {
-                    warn!("unexpected reply: {:?}", s);
-                }
-                future::ok(client)
+        }
+        Resp::Simple(s) => {
+            if s != OK_REPLY.as_bytes() {
+                warn!("unexpected reply: {:?}", s);
             }
-            reply => {
-                debug!("Successfully set meta {} {:?}", sub_command, reply);
-                future::ok(client)
-            }
-        })
+            Ok(())
+        }
+        reply => {
+            debug!("Successfully set meta {} {:?}", sub_command, reply);
+            Ok(())
+        }
+    }
 }
 
 fn generate_repl_meta_cmd_args(host: Host, flags: DBMapFlags) -> Vec<String> {

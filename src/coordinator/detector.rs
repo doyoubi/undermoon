@@ -1,7 +1,8 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, FailureChecker, FailureReporter, ProxiesRetriever};
-use futures::{future, Future, Stream};
-use protocol::{RedisClient, RedisClientFactory};
+use crate::protocol::{RedisClient, RedisClientFactory};
+use futures::{Future, Stream, TryFutureExt, TryStreamExt};
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
@@ -15,8 +16,10 @@ impl<B: MetaDataBroker> BrokerProxiesRetriever<B> {
 }
 
 impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
-    fn retrieve_proxies(&self) -> Box<dyn Stream<Item = String, Error = CoordinateError> + Send> {
-        Box::new(
+    fn retrieve_proxies<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send + 's>> {
+        Box::pin(
             self.meta_data_broker
                 .get_host_addresses()
                 .map_err(CoordinateError::MetaData),
@@ -32,34 +35,47 @@ impl<F: RedisClientFactory> PingFailureDetector<F> {
     pub fn new(client_factory: Arc<F>) -> Self {
         Self { client_factory }
     }
+
+    async fn ping(&self, address: String) -> Result<Option<String>, CoordinateError> {
+        let mut client = match self.client_factory.create_client(address.clone()).await {
+            Ok(client) => client,
+            Err(err) => {
+                error!("PingFailureDetector::check failed to connect: {:?}", err);
+                return Ok(Some(address));
+            }
+        };
+
+        // The connection pool might get a stale connection.
+        // Return err instead for retry.
+        let ping_command = vec!["PING".to_string().into_bytes()];
+        match client.execute_single(ping_command).await {
+            Ok(_) => Ok(None),
+            Err(err) => {
+                error!("PingFailureDetector::check failed to send PING: {:?}", err);
+                Err(CoordinateError::Redis(err))
+            }
+        }
+    }
+
+    async fn check_impl(&self, address: String) -> Result<Option<String>, CoordinateError> {
+        const RETRY: usize = 3;
+        for i in 1..=RETRY {
+            match self.ping(address.clone()).await {
+                Ok(None) => return Ok(None),
+                _ if i == RETRY => return Ok(Some(address)),
+                _ => continue,
+            }
+        }
+        Ok(Some(address))
+    }
 }
 
 impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
-    fn check(
-        &self,
+    fn check<'s>(
+        &'s self,
         address: String,
-    ) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send + 'static> {
-        let address_clone = address.clone();
-        let client_fut = self.client_factory.create_client(address.clone());
-        Box::new(
-            client_fut
-                .and_then(|client| {
-                    let ping_command = vec!["ping".to_string().into_bytes()];
-                    client
-                        .execute(ping_command)
-                        .then(move |result| match result {
-                            Ok(_) => future::ok(None),
-                            Err(_) => {
-                                error!("PingFailureDetector::check failed to send PING");
-                                future::ok(Some(address))
-                            }
-                        })
-                })
-                .or_else(move |_err| {
-                    error!("PingFailureDetector::check failed to connect");
-                    Ok(Some(address_clone))
-                }),
-        )
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, CoordinateError>> + Send + 's>> {
+        Box::pin(self.check_impl(address))
     }
 }
 
@@ -78,11 +94,11 @@ impl<B: MetaDataBroker> BrokerFailureReporter<B> {
 }
 
 impl<B: MetaDataBroker> FailureReporter for BrokerFailureReporter<B> {
-    fn report(
-        &self,
+    fn report<'s>(
+        &'s self,
         address: String,
-    ) -> Box<dyn Future<Item = (), Error = CoordinateError> + Send> {
-        Box::new(
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
+        Box::pin(
             self.meta_data_broker
                 .add_failure(address, self.reporter_id.clone())
                 .map_err(CoordinateError::MetaData),
@@ -95,11 +111,14 @@ mod tests {
     use super::super::broker::{MetaDataBroker, MetaDataBrokerError};
     use super::super::core::{FailureDetector, SeqFailureDetector};
     use super::*;
-    use common::cluster::{Cluster, Host};
-    use common::utils::ThreadSafe;
-    use futures::stream;
-    use protocol::{Array, BinSafeStr, RedisClient, RedisClientError, Resp};
+    use crate::common::cluster::{Cluster, Host};
+    use crate::protocol::{
+        Array, BinSafeStr, OptionalMulti, RedisClient, RedisClientError, Resp, RespVec,
+    };
+    use futures::{future, stream};
+    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+    use tokio;
 
     const NODE1: &'static str = "127.0.0.1:7000";
     const NODE2: &'static str = "127.0.0.1:7001";
@@ -109,24 +128,25 @@ mod tests {
         address: String,
     }
 
-    impl ThreadSafe for DummyClient {}
-
     impl RedisClient for DummyClient {
-        fn execute(
-            self,
-            _command: Vec<BinSafeStr>,
-        ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send> {
+        fn execute<'s>(
+            &'s mut self,
+            _command: OptionalMulti<Vec<BinSafeStr>>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>,
+        > {
             if self.address == NODE1 {
-                Box::new(future::ok((self, Resp::Arr(Array::Nil))))
+                // only works for single command
+                Box::pin(future::ok(OptionalMulti::Single(
+                    Resp::Arr(Array::Nil).into(),
+                )))
             } else {
-                Box::new(future::err(RedisClientError::InvalidReply))
+                Box::pin(future::err(RedisClientError::InvalidReply))
             }
         }
     }
 
     struct DummyClientFactory;
-
-    impl ThreadSafe for DummyClientFactory {}
 
     impl RedisClientFactory for DummyClientFactory {
         type Client = DummyClient;
@@ -134,8 +154,8 @@ mod tests {
         fn create_client(
             &self,
             address: String,
-        ) -> Box<dyn Future<Item = Self::Client, Error = RedisClientError> + Send> {
-            Box::new(future::ok(DummyClient { address }))
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>> {
+            Box::pin(future::ok(DummyClient { address }))
         }
     }
 
@@ -152,57 +172,61 @@ mod tests {
         }
     }
 
-    impl ThreadSafe for DummyMetaBroker {}
-
     impl MetaDataBroker for DummyMetaBroker {
-        fn get_cluster_names(
-            &self,
-        ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
-            Box::new(stream::empty())
+        fn get_cluster_names<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+            Box::pin(stream::iter(vec![]))
         }
-        fn get_cluster(
-            &self,
+        fn get_cluster<'s>(
+            &'s self,
             _name: String,
-        ) -> Box<dyn Future<Item = Option<Cluster>, Error = MetaDataBrokerError> + Send> {
-            Box::new(future::ok(None))
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>
+        {
+            Box::pin(future::ok(None))
         }
-        fn get_host_addresses(
-            &self,
-        ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
-            Box::new(stream::iter_ok(vec![NODE1.to_string(), NODE2.to_string()]))
+        fn get_host_addresses<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+            Box::pin(stream::iter(vec![
+                Ok(NODE1.to_string()),
+                Ok(NODE2.to_string()),
+            ]))
         }
-        fn get_host(
-            &self,
+        fn get_host<'s>(
+            &'s self,
             _address: String,
-        ) -> Box<dyn Future<Item = Option<Host>, Error = MetaDataBrokerError> + Send> {
-            Box::new(future::ok(None))
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>>
+        {
+            Box::pin(future::ok(None))
         }
-        fn add_failure(
-            &self,
+        fn add_failure<'s>(
+            &'s self,
             address: String,
             _reporter_id: String,
-        ) -> Box<dyn Future<Item = (), Error = MetaDataBrokerError> + Send> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), MetaDataBrokerError>> + Send + 's>> {
             self.reported_failures
                 .lock()
                 .expect("dummy_add_failure")
                 .push(address);
-            Box::new(future::ok(()))
+            Box::pin(future::ok(()))
         }
-        fn get_failures(
-            &self,
-        ) -> Box<dyn Stream<Item = String, Error = MetaDataBrokerError> + Send> {
-            Box::new(stream::iter_ok(vec![]))
+        fn get_failures<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+            Box::pin(stream::iter(vec![]))
         }
     }
 
-    #[test]
-    fn test_detector() {
+    #[tokio::test]
+    async fn test_detector() {
         let broker = Arc::new(DummyMetaBroker::new());
         let retriever = BrokerProxiesRetriever::new(broker.clone());
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
         let detector = SeqFailureDetector::new(retriever, checker, reporter);
-        let res = detector.run().into_future().wait();
+
+        let res = detector.run().into_future().await;
         assert!(res.is_ok());
         let failed_nodes = broker
             .reported_failures

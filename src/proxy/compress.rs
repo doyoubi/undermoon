@@ -1,10 +1,10 @@
-use super::backend::CmdTask;
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use ::protocol::{BulkStr, Resp, RespPacket};
-use common::config::{ClusterConfig, CompressionStrategy};
-use proxy::database::DBTag;
+use crate::common::config::{ClusterConfig, CompressionStrategy};
+use crate::protocol::RespPacket;
+use crate::protocol::{BulkStr, Resp};
+use crate::proxy::database::DBTag;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -96,8 +96,8 @@ impl CmdReplyDecompressor {
         let data_cmd_type = cmd_ctx.get_data_cmd_type();
         match data_cmd_type {
             DataCmdType::GET | DataCmdType::GETSET => {
-                let compressed = if let Resp::Bulk(BulkStr::Str(s)) = packet.get_resp() {
-                    let compressed = match zstd::decode_all(s.as_slice()) {
+                let compressed = if let Resp::Bulk(BulkStr::Str(s)) = packet.to_resp_slice() {
+                    let compressed = match zstd::decode_all(s) {
                         Ok(c) => c,
                         Err(err) => {
                             return Err(CompressionError::Io(err));

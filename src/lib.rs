@@ -9,8 +9,6 @@ extern crate futures_timer;
 extern crate reqwest;
 extern crate serde;
 extern crate tokio;
-extern crate tokio_core;
-extern crate tokio_timer;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
@@ -26,6 +24,7 @@ extern crate chashmap;
 extern crate chrono;
 extern crate crossbeam_channel;
 extern crate itertools;
+extern crate memchr;
 extern crate zstd;
 
 pub mod broker;
