@@ -216,7 +216,6 @@ where
             session_batch_buf,
             Duration::from_nanos(session_batch_min_time as u64),
             Duration::from_nanos(session_batch_max_time as u64),
-            true,
         );
 
     let mut reply_receiver_list = Vec::with_capacity(session_batch_buf.get());

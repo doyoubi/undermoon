@@ -415,7 +415,7 @@ where
     let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
     let batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
     let mut task_receiver = task_receiver
-        .try_chunks_timeout(backend_batch_buf, batch_min_time, batch_max_time, false)
+        .try_chunks_timeout(backend_batch_buf, batch_min_time, batch_max_time)
         .fuse();
 
     loop {

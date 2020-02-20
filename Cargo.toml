@@ -51,6 +51,7 @@ pin-project = "0.4"
 string-error = "0.1.0"
 matches = "0.1.8"
 dashmap = "3.4.4"
+coarsetime = "0.1"
 
 [profile.release]
 debug = true
