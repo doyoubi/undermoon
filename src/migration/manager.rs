@@ -256,7 +256,7 @@ where
     ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
     {
         let db_name = cmd_task.get_db_name();
-        match task_map.get(&db_name) {
+        match task_map.get(db_name.as_str()) {
             Some(tasks) => {
                 let key = match cmd_task.get_key() {
                     Some(key) => key,

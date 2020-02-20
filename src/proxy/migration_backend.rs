@@ -411,6 +411,7 @@ mod tests {
     use super::*;
     use crate::protocol::RespPacket;
     use crate::protocol::{BulkStr, Resp};
+    use crate::proxy::database::DBName;
     use chashmap::CHashMap;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -542,7 +543,7 @@ mod tests {
             Resp::Bulk(BulkStr::Str("GET".to_string().into())),
             Resp::Bulk(BulkStr::Str("somekey".to_string().into())),
         ]));
-        let db = Arc::new(RwLock::new("mydb".to_string()));
+        let db = Arc::new(RwLock::new(DBName::try_from_str("mydb").unwrap()));
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));
         let cmd_ctx = CmdCtx::new(db, reply_sender, 0);

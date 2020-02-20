@@ -1,7 +1,9 @@
 use super::slowlog::Slowlog;
+use crate::common::utils::byte_to_uppercase;
 use crate::protocol::{RespPacket, RespSlice, RespVec};
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
+use stackvec::StackVec;
 use std::convert::identity;
 use std::error::Error;
 use std::fmt;
@@ -10,6 +12,8 @@ use std::result::Result;
 use std::str;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+const MAX_COMMAND_NAME_LENGTH: usize = 64;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmdType {
@@ -28,40 +32,39 @@ pub enum CmdType {
 }
 
 impl CmdType {
-    fn from_cmd_name(cmd_name: &str) -> Self {
-        let cmd_name = cmd_name.to_uppercase();
-        if cmd_name.eq("PING") {
-            CmdType::Ping
-        } else if cmd_name.eq("INFO") {
-            CmdType::Info
-        } else if cmd_name.eq("AUTH") {
-            CmdType::Auth
-        } else if cmd_name.eq("QUIT") {
-            CmdType::Quit
-        } else if cmd_name.eq("ECHO") {
-            CmdType::Echo
-        } else if cmd_name.eq("SELECT") {
-            CmdType::Select
-        } else if cmd_name.eq("UMCTL") {
-            CmdType::UmCtl
-        } else if cmd_name.eq("CLUSTER") {
-            CmdType::Cluster
-        } else if cmd_name.eq("CONFIG") {
-            CmdType::Config
-        } else if cmd_name.eq("COMMAND") {
-            CmdType::Command
-        } else {
-            CmdType::Others
+    fn from_cmd_name(cmd_name: &[u8]) -> Self {
+        let mut stack_cmd_name = StackVec::<[u8; MAX_COMMAND_NAME_LENGTH]>::new();
+        for b in cmd_name {
+            if let Err(err) = stack_cmd_name.try_push(byte_to_uppercase(*b)) {
+                error!("Unexpected long command name: {:?} {:?}", cmd_name, err);
+                return CmdType::Others;
+            }
+        }
+        // The underlying `deref` will take the real length intead of the whole MAX_COMMAND_NAME_LENGTH array;
+        let cmd_name: &[u8] = &stack_cmd_name;
+
+        match cmd_name {
+            b"PING" => CmdType::Ping,
+            b"INFO" => CmdType::Info,
+            b"AUTH" => CmdType::Auth,
+            b"QUIT" => CmdType::Quit,
+            b"ECHO" => CmdType::Echo,
+            b"SELECT" => CmdType::Select,
+            b"UMCTL" => CmdType::UmCtl,
+            b"CLUSTER" => CmdType::Cluster,
+            b"CONFIG" => CmdType::Config,
+            b"COMMAND" => CmdType::Command,
+            _ => CmdType::Others,
         }
     }
 
     pub fn from_packet(packet: &RespPacket) -> Self {
-        let cmd_name = match packet.get_command_name() {
+        let cmd_name = match packet.get_array_element(0) {
             Some(cmd_name) => cmd_name,
             None => return CmdType::Invalid,
         };
 
-        CmdType::from_cmd_name(&cmd_name)
+        CmdType::from_cmd_name(cmd_name)
     }
 }
 
@@ -97,46 +100,58 @@ pub enum DataCmdType {
 }
 
 impl DataCmdType {
-    fn from_cmd_name(cmd_name: &str) -> Self {
-        let cmd_name = cmd_name.to_uppercase();
-        match cmd_name.as_str() {
-            "APPEND" => DataCmdType::APPEND,
-            "BITCOUNT" => DataCmdType::BITCOUNT,
-            "BITFIELD" => DataCmdType::BITFIELD,
-            "BITOP" => DataCmdType::BITOP,
-            "BITPOS" => DataCmdType::BITPOS,
-            "DECR" => DataCmdType::DECR,
-            "DECRBY" => DataCmdType::DECRBY,
-            "GET" => DataCmdType::GET,
-            "GETBIT" => DataCmdType::GETBIT,
-            "GETRANGE" => DataCmdType::GETRANGE,
-            "GETSET" => DataCmdType::GETSET,
-            "INCR" => DataCmdType::INCR,
-            "INCRBY" => DataCmdType::INCRBY,
-            "INCRBYFLOAT" => DataCmdType::INCRBYFLOAT,
-            "MGET" => DataCmdType::MGET,
-            "MSET" => DataCmdType::MSET,
-            "MSETNX" => DataCmdType::MSETNX,
-            "PSETEX" => DataCmdType::PSETEX,
-            "SET" => DataCmdType::SET,
-            "SETBIT" => DataCmdType::SETBIT,
-            "SETEX" => DataCmdType::SETEX,
-            "SETNX" => DataCmdType::SETNX,
-            "SETRANGE" => DataCmdType::SETRANGE,
-            "STRLEN" => DataCmdType::STRLEN,
-            "EVAL" => DataCmdType::EVAL,
-            "EVALSHA" => DataCmdType::EVALSHA,
+    fn from_cmd_name(cmd_name: &[u8]) -> Self {
+        let mut stack_cmd_name = StackVec::<[u8; MAX_COMMAND_NAME_LENGTH]>::new();
+        for b in cmd_name {
+            if let Err(err) = stack_cmd_name.try_push(byte_to_uppercase(*b)) {
+                error!(
+                    "Unexpected long data command name: {:?} {:?}",
+                    cmd_name, err
+                );
+                return DataCmdType::Others;
+            }
+        }
+        // The underlying `deref` will take the real length intead of the whole MAX_COMMAND_NAME_LENGTH array;
+        let cmd_name: &[u8] = &stack_cmd_name;
+
+        match cmd_name {
+            b"APPEND" => DataCmdType::APPEND,
+            b"BITCOUNT" => DataCmdType::BITCOUNT,
+            b"BITFIELD" => DataCmdType::BITFIELD,
+            b"BITOP" => DataCmdType::BITOP,
+            b"BITPOS" => DataCmdType::BITPOS,
+            b"DECR" => DataCmdType::DECR,
+            b"DECRBY" => DataCmdType::DECRBY,
+            b"GET" => DataCmdType::GET,
+            b"GETBIT" => DataCmdType::GETBIT,
+            b"GETRANGE" => DataCmdType::GETRANGE,
+            b"GETSET" => DataCmdType::GETSET,
+            b"INCR" => DataCmdType::INCR,
+            b"INCRBY" => DataCmdType::INCRBY,
+            b"INCRBYFLOAT" => DataCmdType::INCRBYFLOAT,
+            b"MGET" => DataCmdType::MGET,
+            b"MSET" => DataCmdType::MSET,
+            b"MSETNX" => DataCmdType::MSETNX,
+            b"PSETEX" => DataCmdType::PSETEX,
+            b"SET" => DataCmdType::SET,
+            b"SETBIT" => DataCmdType::SETBIT,
+            b"SETEX" => DataCmdType::SETEX,
+            b"SETNX" => DataCmdType::SETNX,
+            b"SETRANGE" => DataCmdType::SETRANGE,
+            b"STRLEN" => DataCmdType::STRLEN,
+            b"EVAL" => DataCmdType::EVAL,
+            b"EVALSHA" => DataCmdType::EVALSHA,
             _ => DataCmdType::Others,
         }
     }
 
     pub fn from_packet(packet: &RespPacket) -> Self {
-        let cmd_name = match packet.get_command_name() {
+        let cmd_name = match packet.get_array_element(0) {
             Some(cmd_name) => cmd_name,
             None => return DataCmdType::Others,
         };
 
-        DataCmdType::from_cmd_name(&cmd_name)
+        DataCmdType::from_cmd_name(cmd_name)
     }
 }
 
@@ -320,5 +335,24 @@ impl Error for CommandError {
             CommandError::Io(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cmd_type() {
+        assert_eq!(CmdType::from_cmd_name(b"pInG"), CmdType::Ping);
+        assert_eq!(CmdType::from_cmd_name(b"get"), CmdType::Others);
+    }
+
+    #[test]
+    fn test_parse_data_cmd_type() {
+        assert_eq!(DataCmdType::from_cmd_name(b"aPPend"), DataCmdType::APPEND);
+        assert_eq!(DataCmdType::from_cmd_name(b"get"), DataCmdType::GET);
+        assert_eq!(DataCmdType::from_cmd_name(b"eVaL"), DataCmdType::EVAL);
+        assert_eq!(DataCmdType::from_cmd_name(b"HMGET"), DataCmdType::Others);
     }
 }

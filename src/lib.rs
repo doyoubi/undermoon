@@ -1,7 +1,6 @@
 extern crate arc_swap;
 extern crate atomic_option;
 extern crate bytes;
-extern crate caseless;
 extern crate crc16;
 extern crate crc64;
 extern crate futures;

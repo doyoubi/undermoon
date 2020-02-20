@@ -5,7 +5,7 @@ use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
     BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
 };
-use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
+use super::database::{DBError, DBName, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
@@ -256,13 +256,17 @@ impl<F: RedisClientFactory> MetaManager<F> {
         send_cmd_ctx(&self.meta_map, cmd_ctx);
     }
 
-    pub fn try_select_db(&self, cmd_ctx: CmdCtx) -> CmdCtx {
-        if cmd_ctx.get_db_name() != DEFAULT_DB {
+    pub fn try_select_db(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
+        if cmd_ctx.get_db_name().as_str() != DEFAULT_DB {
             return cmd_ctx;
         }
 
         if let Some(db_name) = self.meta_map.load().db_map.auto_select_db() {
-            cmd_ctx.set_db_name(db_name);
+            let db = match DBName::try_from_str(&db_name) {
+                Ok(db) => db,
+                _err => return cmd_ctx,
+            };
+            cmd_ctx.set_db_name(db);
         }
         cmd_ctx
     }

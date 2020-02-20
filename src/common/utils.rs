@@ -1,6 +1,5 @@
 use crate::protocol::RespVec;
 use crate::protocol::{Array, BulkStr, Resp};
-use caseless;
 use crc16::{State, XMODEM};
 use futures::{stream, Stream};
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -15,7 +14,7 @@ pub struct CmdParseError {}
 
 pub fn has_flags(s: &str, delimiter: char, flag: &'static str) -> bool {
     s.split(delimiter)
-        .any(|s| caseless::canonical_caseless_match_str(s, flag))
+        .any(|s| str_ascii_case_insensitive_eq(s, flag))
 }
 
 pub fn resolve_first_address(address: &str) -> Option<SocketAddr> {
@@ -158,6 +157,44 @@ impl<T> From<T> for Wrapper<T> {
     }
 }
 
+pub fn str_ascii_case_insensitive_eq(lhs: &str, rhs: &str) -> bool {
+    bytes_ascii_case_insensitive_eq(lhs.as_bytes(), rhs.as_bytes())
+}
+
+pub fn bytes_ascii_case_insensitive_eq(lhs: &[u8], rhs: &[u8]) -> bool {
+    const DELTA: u8 = b'a' - b'A';
+    if lhs.len() != rhs.len() {
+        return false;
+    }
+    // Use this trick if needed:
+    // https://blog.cloudflare.com/the-oldest-trick-in-the-ascii-book/
+    for (a, b) in lhs.iter().zip(rhs) {
+        let a = *a;
+        let b = *b;
+        if a == b {
+            continue;
+        }
+        if b'a' <= a && a <= b'z' && a == b + DELTA {
+            continue;
+        }
+        if b'A' <= a && a <= b'Z' && a + DELTA == b {
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+#[inline]
+pub fn byte_to_uppercase(b: u8) -> u8 {
+    const DELTA: u8 = b'a' - b'A';
+    if b'a' <= b && b <= b'z' {
+        b - DELTA
+    } else {
+        b
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +212,29 @@ mod tests {
         assert_eq!(get_hash_tag("foo{{bar}}".as_bytes()), "{bar".as_bytes());
         assert_eq!(get_hash_tag("foo{bar}{zap}".as_bytes()), "bar".as_bytes());
         assert_eq!(get_hash_tag("{}xxxxx".as_bytes()), "{}xxxxx".as_bytes());
+    }
+
+    #[test]
+    fn test_bytes_ascii_case_insensitive_eq() {
+        assert!(bytes_ascii_case_insensitive_eq(b"a", b"a"));
+        assert!(bytes_ascii_case_insensitive_eq(b"a", b"A"));
+        assert!(bytes_ascii_case_insensitive_eq(b"za", b"zA"));
+        assert!(bytes_ascii_case_insensitive_eq(b"cUi", b"CuI"));
+        assert!(!bytes_ascii_case_insensitive_eq(b"a", b"aa"));
+        assert!(!bytes_ascii_case_insensitive_eq(b"ab", b"aa"));
+
+        for (l, u) in (b'a'..=b'z').into_iter().zip(b'A'..=b'Z') {
+            let a = [l];
+            let b = [u];
+            assert!(bytes_ascii_case_insensitive_eq(&a, &b));
+        }
+    }
+
+    #[test]
+    fn test_byte_to_uppercase() {
+        assert_eq!(byte_to_uppercase(b'@'), b'@');
+        for (l, u) in (b'a'..=b'z').into_iter().zip(b'A'..=b'Z') {
+            assert_eq!(byte_to_uppercase(l), u);
+        }
     }
 }

@@ -7,6 +7,7 @@ use crate::common::db::ProxyDBMeta;
 use crate::common::utils::{gen_moved, get_slot};
 use crate::migration::task::MigrationState;
 use crate::protocol::{Array, BulkStr, Resp, RespVec};
+use arraystring;
 use crc64::crc64;
 use std::collections::HashMap;
 use std::error::Error;
@@ -37,9 +38,11 @@ impl Error for DBError {
     }
 }
 
+pub type DBName = arraystring::ArrayString<arraystring::typenum::U32>;
+
 pub trait DBTag {
-    fn get_db_name(&self) -> String;
-    fn set_db_name(&self, db: String);
+    fn get_db_name(&self) -> DBName;
+    fn set_db_name(&mut self, db: DBName);
 }
 
 pub struct DatabaseMap<S: CmdTaskSender>
@@ -116,8 +119,7 @@ where
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
-        let db_name = cmd_task.get_db_name();
-        let (cmd_task, db_exists) = match self.local_dbs.get(&db_name) {
+        let (cmd_task, db_exists) = match self.local_dbs.get(cmd_task.get_db_name().as_str()) {
             Some(db) => match db.send(cmd_task) {
                 Err(DBSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
                 others => return others,
@@ -125,18 +127,19 @@ where
             None => (cmd_task, false),
         };
 
-        match self.remote_dbs.get(&db_name) {
+        match self.remote_dbs.get(cmd_task.get_db_name().as_str()) {
             Some(remote_db) => remote_db.send_remote(cmd_task),
             None => {
                 if db_exists {
-                    let resp =
-                        Resp::Error(format!("slot not found: {}", db_name.clone()).into_bytes());
+                    let resp = Resp::Error(
+                        format!("slot not found: {}", cmd_task.get_db_name()).into_bytes(),
+                    );
                     cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::SlotNotCovered)
                 } else {
+                    let db_name = cmd_task.get_db_name().to_string();
                     debug!("db not found: {}", db_name);
-                    let resp =
-                        Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes());
+                    let resp = Resp::Error(format!("db not found: {}", db_name).into_bytes());
                     cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::DBNotFound(db_name))
                 }

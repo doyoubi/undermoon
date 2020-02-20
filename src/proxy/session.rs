@@ -3,7 +3,7 @@ use super::command::TaskReply;
 use super::command::{
     new_command_pair, CmdReplySender, CmdType, Command, CommandError, CommandResult, DataCmdType,
 };
-use super::database::{DBTag, DEFAULT_DB};
+use super::database::{DBName, DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::protocol::{
@@ -34,14 +34,14 @@ pub trait CmdCtxHandler {
 
 #[derive(Debug)]
 pub struct CmdCtx {
-    db: sync::Arc<sync::RwLock<String>>,
+    db: sync::Arc<sync::RwLock<DBName>>,
     reply_sender: CmdReplySender,
     slowlog: sync::Arc<Slowlog>,
 }
 
 impl CmdCtx {
     pub fn new(
-        db: sync::Arc<sync::RwLock<String>>,
+        db: sync::Arc<sync::RwLock<DBName>>,
         reply_sender: CmdReplySender,
         session_id: usize,
     ) -> CmdCtx {
@@ -57,7 +57,7 @@ impl CmdCtx {
         self.reply_sender.get_cmd()
     }
 
-    pub fn get_db(&self) -> sync::Arc<sync::RwLock<String>> {
+    pub fn get_db(&self) -> sync::Arc<sync::RwLock<DBName>> {
         self.db.clone()
     }
 
@@ -118,12 +118,12 @@ impl CmdTask for CmdCtx {
 }
 
 impl DBTag for CmdCtx {
-    fn get_db_name(&self) -> String {
-        self.db.read().unwrap().clone()
+    fn get_db_name(&self) -> DBName {
+        self.db.read().expect("CmdCtx::new").clone()
     }
 
-    fn set_db_name(&self, db: String) {
-        *self.db.write().unwrap() = db
+    fn set_db_name(&mut self, db: DBName) {
+        *self.db.write().expect("CmdCtx::set_db_name") = db
     }
 }
 
@@ -162,7 +162,7 @@ impl CmdTaskFactory for CmdCtxFactory {
 
 pub struct Session<H: CmdCtxHandler> {
     session_id: usize,
-    db: sync::Arc<sync::RwLock<String>>,
+    db: sync::Arc<sync::RwLock<DBName>>,
     cmd_ctx_handler: H,
     slow_request_logger: sync::Arc<SlowRequestLogger>,
 }
@@ -173,9 +173,10 @@ impl<H: CmdCtxHandler> Session<H> {
         cmd_ctx_handler: H,
         slow_request_logger: sync::Arc<SlowRequestLogger>,
     ) -> Self {
+        let dbname = DBName::try_from_str(DEFAULT_DB).unwrap();
         Session {
             session_id,
-            db: sync::Arc::new(sync::RwLock::new(DEFAULT_DB.to_string())),
+            db: sync::Arc::new(sync::RwLock::new(dbname)),
             cmd_ctx_handler,
             slow_request_logger,
         }
