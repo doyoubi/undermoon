@@ -28,7 +28,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 
 pub type BackendResult<T> = Result<T, BackendError>;
-pub type TaskResult = Result<RespVec, CommandError>;
+pub type CmdTaskResult = Result<RespVec, CommandError>;
 
 pub trait CmdTaskResultHandler: Send + Sync + 'static {
     type Task: CmdTask;
@@ -71,7 +71,7 @@ pub trait CmdTaskFactory {
     ) -> (
         Self::Task,
         // TODO: return indexed resp
-        Pin<Box<dyn Future<Output = TaskResult> + Send + 'static>>,
+        Pin<Box<dyn Future<Output = CmdTaskResult> + Send + 'static>>,
     );
 }
 

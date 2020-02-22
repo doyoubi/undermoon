@@ -295,7 +295,7 @@ impl Drop for CmdReplySender {
 }
 
 impl CmdReplyReceiver {
-    pub async fn wait_response(self) -> Result<Box<TaskReply>, CommandError> {
+    pub async fn wait_response(self) -> TaskResult {
         self.reply_receiver
             .await
             .map_err(|_| CommandError::Canceled)
