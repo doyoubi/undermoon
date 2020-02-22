@@ -4,9 +4,10 @@ use super::backend::{
     RecoverableBackendNodeFactory,
 };
 use super::command::{CommandError, CommandResult};
-use super::database::{DBName, DBTag};
+use super::database::DBTag;
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
+use crate::common::cluster::DBName;
 use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
 use crossbeam_channel;

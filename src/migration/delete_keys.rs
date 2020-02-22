@@ -1,5 +1,5 @@
 use super::task::{ScanResponse, SlotRangeArray};
-use crate::common::cluster::SlotRange;
+use crate::common::cluster::{DBName, SlotRange};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::HostDBMap;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct DeleteKeysTaskMap {
-    task_map: HashMap<String, HashMap<String, Arc<DeleteKeysTask>>>,
+    task_map: HashMap<DBName, HashMap<String, Arc<DeleteKeysTask>>>,
 }
 
 impl DeleteKeysTaskMap {
@@ -45,7 +45,7 @@ impl DeleteKeysTaskMap {
     pub fn update_from_old_task_map<F: RedisClientFactory>(
         &self,
         local_db_map: &HostDBMap,
-        left_slots_after_change: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+        left_slots_after_change: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
         config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<F>,
     ) -> (Self, Vec<Arc<DeleteKeysTask>>) {

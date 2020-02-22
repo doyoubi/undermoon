@@ -5,12 +5,12 @@ use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
     BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
 };
-use super::database::{DBError, DBName, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
+use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
-use crate::common::cluster::{MigrationTaskMeta, SlotRangeTag};
+use crate::common::cluster::{DBName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMeta;
 use crate::common::utils::ThreadSafe;
@@ -132,7 +132,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         }
     }
 
-    pub fn gen_cluster_nodes(&self, db_name: String) -> String {
+    pub fn gen_cluster_nodes(&self, db_name: DBName) -> String {
         let meta_map = self.meta_map.load();
         let migration_states = meta_map.migration_map.get_states(&db_name);
         meta_map.db_map.gen_cluster_nodes(
@@ -142,7 +142,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         )
     }
 
-    pub fn gen_cluster_slots(&self, db_name: String) -> Result<RespVec, String> {
+    pub fn gen_cluster_slots(&self, db_name: DBName) -> Result<RespVec, String> {
         let meta_map = self.meta_map.load();
         let migration_states = meta_map.migration_map.get_states(&db_name);
         meta_map.db_map.gen_cluster_slots(
@@ -152,7 +152,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         )
     }
 
-    pub fn get_dbs(&self) -> Vec<String> {
+    pub fn get_dbs(&self) -> Vec<DBName> {
         self.meta_map.load().db_map.get_dbs()
     }
 
@@ -160,7 +160,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         let sender_factory = &self.sender_factory;
         let migration_manager = &self.migration_manager;
 
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.lock.lock().expect("MetaManager::set_meta");
 
         if db_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst) && !db_meta.get_flags().force {
             return Err(DBError::OldEpoch);
@@ -262,11 +262,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         }
 
         if let Some(db_name) = self.meta_map.load().db_map.auto_select_db() {
-            let db = match DBName::try_from_str(&db_name) {
-                Ok(db) => db,
-                _err => return cmd_ctx,
-            };
-            cmd_ctx.set_db_name(db);
+            cmd_ctx.set_db_name(db_name);
         }
         cmd_ctx
     }

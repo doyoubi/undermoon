@@ -409,9 +409,9 @@ mod tests {
     use super::super::command::{new_command_pair, CmdReplyReceiver, Command};
     use super::super::session::{CmdCtx, CmdCtxFactory};
     use super::*;
+    use crate::common::cluster::DBName;
     use crate::protocol::RespPacket;
     use crate::protocol::{BulkStr, Resp};
-    use crate::proxy::database::DBName;
     use chashmap::CHashMap;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -543,10 +543,11 @@ mod tests {
             Resp::Bulk(BulkStr::Str("GET".to_string().into())),
             Resp::Bulk(BulkStr::Str("somekey".to_string().into())),
         ]));
-        let db = Arc::new(RwLock::new(DBName::try_from_str("mydb").unwrap()));
+        let db = Arc::new(RwLock::new(DBName::from("mydb").unwrap()));
         let packet = Box::new(RespPacket::from_resp_vec(resp));
-        let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));
-        let cmd_ctx = CmdCtx::new(db, reply_sender, 0);
+        let cmd = Command::new(packet);
+        let (reply_sender, reply_receiver) = new_command_pair();
+        let cmd_ctx = CmdCtx::new(db, cmd, reply_sender, 0);
         (cmd_ctx, reply_receiver)
     }
 
@@ -556,7 +557,7 @@ mod tests {
             .await
             .map_err(|err| error!("cmd err: {:?}", err))
             .map(|task_reply| {
-                let (packet, _) = task_reply.into_inner();
+                let (_, packet, _) = task_reply.into_inner();
                 match packet.to_resp_slice() {
                     Resp::Bulk(BulkStr::Str(s)) => s.to_vec(),
                     Resp::Bulk(BulkStr::Nil) => "key_not_exists".to_string().into_bytes(),

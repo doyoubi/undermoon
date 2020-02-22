@@ -21,12 +21,12 @@ impl SlotMap {
         }
     }
 
-    pub fn get_by_key(&self, key: &[u8]) -> Option<String> {
+    pub fn get_by_key(&self, key: &[u8]) -> Option<&str> {
         let slot = get_slot(key);
         self.get(slot)
     }
 
-    pub fn get(&self, slot: usize) -> Option<String> {
+    pub fn get(&self, slot: usize) -> Option<&str> {
         self.data.get(slot)
     }
 }
@@ -63,9 +63,9 @@ impl SlotMapData {
         SlotMapData { slot_arr, addrs }
     }
 
-    pub fn get(&self, slot: usize) -> Option<String> {
+    pub fn get(&self, slot: usize) -> Option<&str> {
         let addr_index = self.slot_arr.get(slot).and_then(|opt| *opt)?;
-        self.addrs.get(addr_index).cloned()
+        self.addrs.get(addr_index).map(|s| s.as_str())
     }
 }
 
@@ -89,8 +89,8 @@ mod tests {
 
         let slot_map = SlotMap::from_ranges(range_map);
         for slot in 0..SLOT_NUM {
-            let node = slot_map.get(slot);
-            assert_eq!(node, Some(backend.clone()));
+            let node = slot_map.get(slot).unwrap();
+            assert_eq!(node, backend);
         }
     }
 }

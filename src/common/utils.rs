@@ -104,11 +104,16 @@ pub fn gen_moved(slot: usize, addr: String) -> String {
 
 pub fn get_hash_tag(key: &[u8]) -> &[u8] {
     if let Some(begin) = key.iter().position(|x| *x as char == '{') {
-        if let Some(end_offset) = key[begin + 1..].iter().position(|x| *x as char == '}') {
+        if let Some(end_offset) = key
+            .get(begin + 1..)
+            .and_then(|t| t.iter().position(|x| *x as char == '}'))
+        {
             if end_offset == 0 {
                 return key;
             }
-            return &key[begin + 1..begin + 1 + end_offset];
+            return key
+                .get(begin + 1..begin + 1 + end_offset)
+                .expect("get_hash_tag");
         }
     }
     key
@@ -212,6 +217,7 @@ mod tests {
         assert_eq!(get_hash_tag("foo{{bar}}".as_bytes()), "{bar".as_bytes());
         assert_eq!(get_hash_tag("foo{bar}{zap}".as_bytes()), "bar".as_bytes());
         assert_eq!(get_hash_tag("{}xxxxx".as_bytes()), "{}xxxxx".as_bytes());
+        assert_eq!(get_hash_tag("{".as_bytes()), "{".as_bytes());
     }
 
     #[test]

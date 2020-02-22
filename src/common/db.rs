@@ -1,5 +1,6 @@
 use super::cluster::{SlotRange, SlotRangeTag};
 use super::utils::{has_flags, CmdParseError};
+use crate::common::cluster::DBName;
 use crate::common::config::ClusterConfig;
 use crate::protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
@@ -179,15 +180,15 @@ impl ProxyDBMeta {
 
 #[derive(Debug, Clone)]
 pub struct HostDBMap {
-    db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+    db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
 }
 
 impl HostDBMap {
-    pub fn new(db_map: HashMap<String, HashMap<String, Vec<SlotRange>>>) -> Self {
+    pub fn new(db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>>) -> Self {
         Self { db_map }
     }
 
-    pub fn get_map(&self) -> &HashMap<String, HashMap<String, Vec<SlotRange>>> {
+    pub fn get_map(&self) -> &HashMap<DBName, HashMap<String, Vec<SlotRange>>> {
         &self.db_map
     }
 
@@ -196,7 +197,7 @@ impl HostDBMap {
         for (db_name, node_map) in &self.db_map {
             for (node, slot_ranges) in node_map {
                 for slot_range in slot_ranges {
-                    args.push(db_name.clone());
+                    args.push(db_name.to_string());
                     args.push(node.clone());
                     match &slot_range.tag {
                         SlotRangeTag::Migrating(ref meta) => {
@@ -255,11 +256,12 @@ impl HostDBMap {
         Ok(Self { db_map })
     }
 
-    fn parse_db<It>(it: &mut It) -> Result<(String, String, SlotRange), CmdParseError>
+    fn parse_db<It>(it: &mut It) -> Result<(DBName, String, SlotRange), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
         let dbname = try_get!(it.next());
+        let dbname = DBName::from(&dbname).map_err(|_| CmdParseError {})?;
         let addr = try_get!(it.next());
         let slot_range = try_parse!(Self::parse_tagged_slot_range(it));
         Ok((dbname, addr, slot_range))
@@ -275,7 +277,7 @@ impl HostDBMap {
 
 #[derive(Debug, Clone)]
 pub struct ClusterConfigMap {
-    config_map: HashMap<String, ClusterConfig>,
+    config_map: HashMap<DBName, ClusterConfig>,
 }
 
 impl Default for ClusterConfigMap {
@@ -287,18 +289,18 @@ impl Default for ClusterConfigMap {
 }
 
 impl ClusterConfigMap {
-    pub fn new(config_map: HashMap<String, ClusterConfig>) -> Self {
+    pub fn new(config_map: HashMap<DBName, ClusterConfig>) -> Self {
         Self { config_map }
     }
 
-    pub fn get(&self, dbname: &str) -> ClusterConfig {
+    pub fn get(&self, dbname: &DBName) -> ClusterConfig {
         self.config_map
             .get(dbname)
             .cloned()
             .unwrap_or_else(ClusterConfig::default)
     }
 
-    pub fn get_map(&self) -> &HashMap<String, ClusterConfig> {
+    pub fn get_map(&self) -> &HashMap<DBName, ClusterConfig> {
         &self.config_map
     }
 
@@ -334,11 +336,12 @@ impl ClusterConfigMap {
         Ok(Self { config_map })
     }
 
-    fn parse_config<It>(it: &mut It) -> Result<(String, String, String), CmdParseError>
+    fn parse_config<It>(it: &mut It) -> Result<(DBName, String, String), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
         let dbname = try_get!(it.next());
+        let dbname = DBName::from(&dbname).map_err(|_| CmdParseError {})?;
         let field = try_get!(it.next());
         let value = try_get!(it.next());
         Ok((dbname, field, value))
@@ -348,7 +351,7 @@ impl ClusterConfigMap {
         let mut args = vec![];
         for (db_name, config) in &self.config_map {
             for (k, v) in config.to_str_map().into_iter() {
-                args.push(db_name.clone());
+                args.push(db_name.to_string());
                 args.push(k);
                 args.push(v);
             }
@@ -395,10 +398,11 @@ mod tests {
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_slots");
         assert_eq!(host_db_map.db_map.len(), 1);
+        let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_slots")
                 .len(),
             1
@@ -406,7 +410,7 @@ mod tests {
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_slots")
                 .get("127.0.0.1:6379")
                 .expect("test_multiple_slots")
@@ -432,10 +436,11 @@ mod tests {
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_nodes");
         assert_eq!(host_db_map.db_map.len(), 1);
+        let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_nodes")
                 .len(),
             2
@@ -443,7 +448,7 @@ mod tests {
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_nodes")
                 .get("127.0.0.1:7000")
                 .expect("test_multiple_nodes")
@@ -453,7 +458,7 @@ mod tests {
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_nodes")
                 .get("127.0.0.1:7001")
                 .expect("test_multiple_nodes")
@@ -482,10 +487,11 @@ mod tests {
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_db");
         assert_eq!(host_db_map.db_map.len(), 2);
+        let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_db")
                 .len(),
             2
@@ -493,7 +499,7 @@ mod tests {
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_db")
                 .get("127.0.0.1:7000")
                 .expect("test_multiple_db")
@@ -503,17 +509,18 @@ mod tests {
         assert_eq!(
             host_db_map
                 .db_map
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_multiple_db")
                 .get("127.0.0.1:7001")
                 .expect("test_multiple_db")
                 .len(),
             1
         );
+        let another_db = DBName::from("another_db").unwrap();
         assert_eq!(
             host_db_map
                 .db_map
-                .get("another_db")
+                .get(&another_db)
                 .expect("test_multiple_nodes")
                 .len(),
             1
@@ -521,7 +528,7 @@ mod tests {
         assert_eq!(
             host_db_map
                 .db_map
-                .get("another_db")
+                .get(&another_db)
                 .expect("test_multiple_db")
                 .get("127.0.0.1:7002")
                 .expect("test_multiple_db")
@@ -546,10 +553,11 @@ mod tests {
         let mut it = args.iter().map(|s| s.to_string()).peekable();
         let clusters_config = ClusterConfigMap::parse(&mut it).expect("test_clusters_config");
         assert_eq!(clusters_config.config_map.len(), 2);
+        let mydb = DBName::from("mydb").unwrap();
         assert_eq!(
             clusters_config
                 .config_map
-                .get("mydb")
+                .get(&mydb)
                 .expect("test_clusters_config")
                 .compression_strategy,
             CompressionStrategy::AllowAll
@@ -557,7 +565,7 @@ mod tests {
         assert_eq!(
             clusters_config
                 .config_map
-                .get("mydb")
+                .get(&mydb)
                 .expect("test_clusters_config")
                 .migration_config
                 .max_migration_time,
@@ -566,7 +574,7 @@ mod tests {
         assert_eq!(
             clusters_config
                 .config_map
-                .get("otherdb")
+                .get(&DBName::from("otherdb").unwrap())
                 .expect("test_clusters_config")
                 .migration_config
                 .delete_count,
@@ -703,13 +711,14 @@ mod tests {
         let peer = db_meta.peer.get_map();
         let config = db_meta.clusters_config.get_map();
         assert_eq!(local.len(), 1);
+        let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
-            local.get("dbname").expect("test_parse_proxy_db_meta").len(),
+            local.get(&db_name).expect("test_parse_proxy_db_meta").len(),
             2
         );
         assert_eq!(
             local
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.1:7000")
                 .expect("test_parse_proxy_db_meta")
@@ -720,7 +729,7 @@ mod tests {
         );
         assert_eq!(
             local
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.1:7001")
                 .expect("test_parse_proxy_db_meta")
@@ -731,11 +740,11 @@ mod tests {
         );
         assert_eq!(peer.len(), 1);
         assert_eq!(
-            peer.get("dbname").expect("test_parse_proxy_db_meta").len(),
+            peer.get(&db_name).expect("test_parse_proxy_db_meta").len(),
             2
         );
         assert_eq!(
-            peer.get("dbname")
+            peer.get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.2:7001")
                 .expect("test_parse_proxy_db_meta")
@@ -745,7 +754,7 @@ mod tests {
             2001
         );
         assert_eq!(
-            peer.get("dbname")
+            peer.get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.2:7002")
                 .expect("test_parse_proxy_db_meta")
@@ -757,7 +766,7 @@ mod tests {
         assert_eq!(config.len(), 1);
         assert_eq!(
             config
-                .get("dbname")
+                .get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .compression_strategy,
             CompressionStrategy::SetGetOnly
@@ -818,7 +827,10 @@ mod tests {
         assert_eq!(db_meta.epoch, 233);
         assert!(db_meta.flags.force);
         assert_eq!(
-            db_meta.get_configs().get("dbname").compression_strategy,
+            db_meta
+                .get_configs()
+                .get(&DBName::from("dbname").unwrap())
+                .compression_strategy,
             CompressionStrategy::SetGetOnly
         );
     }

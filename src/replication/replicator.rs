@@ -1,4 +1,4 @@
-use crate::common::cluster::ReplPeer;
+use crate::common::cluster::{DBName, ReplPeer};
 use crate::common::db::DBMapFlags;
 use crate::common::utils::{CmdParseError, ThreadSafe};
 use crate::protocol::{Array, BulkStr, RedisClientError, Resp};
@@ -41,14 +41,14 @@ impl ReplicatorMeta {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct MasterMeta {
-    pub db_name: String,
+    pub db_name: DBName,
     pub master_node_address: String,
     pub replicas: Vec<ReplPeer>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ReplicaMeta {
-    pub db_name: String,
+    pub db_name: DBName,
     pub replica_node_address: String,
     pub masters: Vec<ReplPeer>,
 }
@@ -82,6 +82,7 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
 
         let role = it.next().ok_or(CmdParseError {})?;
         let db_name = it.next().ok_or(CmdParseError {})?;
+        let db_name = DBName::from(&db_name).map_err(|_| CmdParseError {})?;
         let node_address = it.next().ok_or(CmdParseError {})?;
         let peer_num = it
             .next()
@@ -137,7 +138,7 @@ pub fn encode_repl_meta(meta: ReplicatorMeta) -> Vec<String> {
 
     for master in masters.iter() {
         args.push("master".to_string());
-        args.push(master.db_name.clone());
+        args.push(master.db_name.to_string());
         args.push(master.master_node_address.clone());
         args.push(master.replicas.len().to_string());
         for replica in master.replicas.iter() {
@@ -147,7 +148,7 @@ pub fn encode_repl_meta(meta: ReplicatorMeta) -> Vec<String> {
     }
     for replica in replicas.iter() {
         args.push("replica".to_string());
-        args.push(replica.db_name.clone());
+        args.push(replica.db_name.to_string());
         args.push(replica.replica_node_address.clone());
         args.push(replica.masters.len().to_string());
         for master in replica.masters.iter() {
@@ -233,14 +234,14 @@ mod tests {
         assert_eq!(meta.replicas.len(), 1);
 
         let master = &meta.masters[0];
-        assert_eq!(master.db_name, "testdb");
+        assert_eq!(master.db_name.as_str(), "testdb");
         assert_eq!(master.master_node_address, "localhost:6000");
         assert_eq!(master.replicas.len(), 1);
         assert_eq!(master.replicas[0].node_address, "localhost:6001");
         assert_eq!(master.replicas[0].proxy_address, "localhost:5299");
 
         let replica = &meta.replicas[0];
-        assert_eq!(replica.db_name, "testdb");
+        assert_eq!(replica.db_name.as_str(), "testdb");
         assert_eq!(replica.replica_node_address, "localhost:6001");
         assert_eq!(replica.masters.len(), 1);
         assert_eq!(replica.masters[0].node_address, "localhost:6000");

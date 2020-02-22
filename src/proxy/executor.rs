@@ -1,11 +1,12 @@
 use super::backend::CmdTask;
 use super::command::CmdType;
 use super::compress::{CmdCompressor, CompressionError};
-use super::database::{DBError, DBName, DBTag};
+use super::database::{DBError, DBTag};
 use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
+use crate::common::cluster::DBName;
 use crate::common::db::ProxyDBMeta;
 use crate::common::utils::{
     str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
@@ -97,7 +98,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 }
             },
         };
-        let dbname = match DBName::try_from_str(&db) {
+        let dbname = match DBName::from(&db) {
             Ok(dbname) => dbname,
             _err => {
                 return cmd_ctx.set_resp_result(Ok(Resp::Error(
@@ -116,14 +117,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         };
 
         if str_ascii_case_insensitive_eq(&sub_cmd, "nodes") {
-            let cluster_nodes = self
-                .manager
-                .gen_cluster_nodes(cmd_ctx.get_db_name().to_string());
+            let cluster_nodes = self.manager.gen_cluster_nodes(cmd_ctx.get_db_name());
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else if str_ascii_case_insensitive_eq(&sub_cmd, "slots") {
-            let cluster_slots = self
-                .manager
-                .gen_cluster_slots(cmd_ctx.get_db_name().to_string());
+            let cluster_slots = self.manager.gen_cluster_slots(cmd_ctx.get_db_name());
             match cluster_slots {
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
                 Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),
@@ -168,7 +165,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             let dbs = self.manager.get_dbs();
             let resps = dbs
                 .into_iter()
-                .map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes())))
+                .map(|db| Resp::Bulk(BulkStr::Str(db.to_string().into_bytes())))
                 .collect();
             cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
         } else if sub_cmd.eq("SETDB") {

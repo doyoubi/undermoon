@@ -1,11 +1,12 @@
 use super::backend::{CmdTask, CmdTaskFactory, TaskResult};
-use super::command::TaskReply;
 use super::command::{
     new_command_pair, CmdReplySender, CmdType, Command, CommandError, CommandResult, DataCmdType,
+    TaskReply,
 };
-use super::database::{DBName, DBTag, DEFAULT_DB};
+use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::batch::TryChunksTimeoutStreamExt;
+use crate::common::cluster::DBName;
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
 };
@@ -24,8 +25,8 @@ use tokio_util::codec::Decoder;
 
 // TODO: Let it return future to support multi-key commands.
 pub trait CmdHandler {
-    fn handle_cmd(&self, sender: CmdReplySender);
-    fn handle_slowlog(&self, slowlog: sync::Arc<Slowlog>);
+    fn handle_cmd(&self, cmd: Command, sender: CmdReplySender);
+    fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog);
 }
 
 pub trait CmdCtxHandler {
@@ -35,26 +36,29 @@ pub trait CmdCtxHandler {
 #[derive(Debug)]
 pub struct CmdCtx {
     db: sync::Arc<sync::RwLock<DBName>>,
+    cmd: Command,
     reply_sender: CmdReplySender,
-    slowlog: sync::Arc<Slowlog>,
+    slowlog: Slowlog,
 }
 
 impl CmdCtx {
     pub fn new(
         db: sync::Arc<sync::RwLock<DBName>>,
+        cmd: Command,
         reply_sender: CmdReplySender,
         session_id: usize,
     ) -> CmdCtx {
-        let slowlog = sync::Arc::new(Slowlog::from_command(reply_sender.get_cmd(), session_id));
+        let slowlog = Slowlog::new(session_id);
         CmdCtx {
             db,
+            cmd,
             reply_sender,
             slowlog,
         }
     }
 
     pub fn get_cmd(&self) -> &Command {
-        self.reply_sender.get_cmd()
+        &self.cmd
     }
 
     pub fn get_db(&self) -> sync::Arc<sync::RwLock<DBName>> {
@@ -66,22 +70,15 @@ impl CmdCtx {
     }
 
     pub fn change_cmd_element(&mut self, index: usize, data: Vec<u8>) -> bool {
-        self.reply_sender.get_mut_cmd().change_element(index, data)
+        self.cmd.change_element(index, data)
     }
 
     pub fn get_cmd_type(&self) -> CmdType {
-        self.reply_sender.get_cmd().get_type()
+        self.cmd.get_type()
     }
 
     pub fn get_data_cmd_type(&self) -> DataCmdType {
-        self.reply_sender.get_cmd().get_data_cmd_type()
-    }
-}
-
-// Make sure that ctx will always be sent back.
-impl Drop for CmdCtx {
-    fn drop(&mut self) {
-        self.reply_sender.try_send(Err(CommandError::Dropped));
+        self.cmd.get_data_cmd_type()
     }
 }
 
@@ -93,16 +90,22 @@ impl CmdTask for CmdCtx {
     }
 
     fn set_result(self, result: CommandResult<Self::Pkt>) {
-        let slowlog = self.slowlog.clone();
-        let task_result = result.map(|packet| Box::new(TaskReply::new(packet, slowlog)));
-        let res = self.reply_sender.send(task_result);
+        let Self {
+            cmd,
+            mut reply_sender,
+            slowlog,
+            ..
+        } = self;
+        let task_result =
+            result.map(|packet| Box::new(TaskReply::new(cmd.into_packet(), packet, slowlog)));
+        let res = reply_sender.send(task_result);
         if let Err(e) = res {
             error!("Failed to send result: {:?}", e);
         }
     }
 
     fn get_packet(&self) -> Self::Pkt {
-        self.reply_sender.get_cmd().get_packet()
+        self.cmd.get_packet()
     }
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)
@@ -147,9 +150,11 @@ impl CmdTaskFactory for CmdCtxFactory {
         Pin<Box<dyn Future<Output = TaskResult> + Send + 'static>>,
     ) {
         let packet = Box::new(RespPacket::from_resp_vec(resp));
-        let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));
+        let cmd = Command::new(packet);
+        let (reply_sender, reply_receiver) = new_command_pair();
         let cmd_ctx = CmdCtx::new(
             another_task.get_db(),
+            cmd,
             reply_sender,
             another_task.get_session_id(),
         );
@@ -173,7 +178,7 @@ impl<H: CmdCtxHandler> Session<H> {
         cmd_ctx_handler: H,
         slow_request_logger: sync::Arc<SlowRequestLogger>,
     ) -> Self {
-        let dbname = DBName::try_from_str(DEFAULT_DB).unwrap();
+        let dbname = DBName::from(DEFAULT_DB).expect("Session::new");
         Session {
             session_id,
             db: sync::Arc::new(sync::RwLock::new(dbname)),
@@ -184,14 +189,14 @@ impl<H: CmdCtxHandler> Session<H> {
 }
 
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
-    fn handle_cmd(&self, reply_sender: CmdReplySender) {
-        let cmd_ctx = CmdCtx::new(self.db.clone(), reply_sender, self.session_id);
+    fn handle_cmd(&self, cmd: Command, reply_sender: CmdReplySender) {
+        let cmd_ctx = CmdCtx::new(self.db.clone(), cmd, reply_sender, self.session_id);
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx);
     }
 
-    fn handle_slowlog(&self, slowlog: sync::Arc<Slowlog>) {
-        self.slow_request_logger.add_slow_log(slowlog)
+    fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog) {
+        self.slow_request_logger.add_slow_log(request, slowlog)
     }
 }
 
@@ -231,9 +236,10 @@ where
                     return Err(err);
                 }
             };
-            let (reply_sender, reply_receiver) = new_command_pair(Command::new(packet));
+            let cmd = Command::new(packet);
+            let (reply_sender, reply_receiver) = new_command_pair();
 
-            handler.handle_cmd(reply_sender);
+            handler.handle_cmd(cmd, reply_sender);
             reply_receiver_list.push(reply_receiver);
         }
 
@@ -244,9 +250,9 @@ where
                 .map_err(SessionError::CmdErr);
             let packet = match res {
                 Ok(task_reply) => {
-                    let (packet, slowlog) = (*task_reply).into_inner();
+                    let (request, packet, slowlog) = (*task_reply).into_inner();
                     slowlog.log_event(TaskEvent::WaitDone);
-                    handler.handle_slowlog(slowlog);
+                    handler.handle_slowlog(request, slowlog);
                     packet
                 }
                 Err(e) => {
@@ -300,5 +306,31 @@ impl Error for SessionError {
             SessionError::CmdErr(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{Array, BulkStr, Resp};
+    use matches::assert_matches;
+    use std::sync::{Arc, RwLock};
+    use tokio;
+
+    #[tokio::test]
+    async fn test_cmd_ctx_auto_send() {
+        let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(
+            b"PING".to_vec(),
+        ))])));
+        let db = Arc::new(RwLock::new(DBName::from("mydb").unwrap()));
+        let cmd = Command::new(Box::new(request));
+        let (sender, receiver) = new_command_pair();
+        let cmd_ctx = CmdCtx::new(db, cmd, sender, 7799);
+        drop(cmd_ctx);
+        let err = match receiver.wait_response().await {
+            Ok(_) => panic!(),
+            Err(err) => err,
+        };
+        assert_matches!(err, CommandError::Dropped);
     }
 }

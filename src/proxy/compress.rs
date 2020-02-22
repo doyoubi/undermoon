@@ -1,6 +1,7 @@
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
+use crate::common::cluster::DBName;
 use crate::common::config::{ClusterConfig, CompressionStrategy};
 use crate::protocol::RespPacket;
 use crate::protocol::{BulkStr, Resp};
@@ -119,7 +120,7 @@ impl CmdReplyDecompressor {
     }
 }
 
-fn get_strategy(dbname: &str, meta_map: &SharedMetaMap) -> CompressionStrategy {
+fn get_strategy(dbname: &DBName, meta_map: &SharedMetaMap) -> CompressionStrategy {
     let meta_map = meta_map.lease();
     match meta_map.get_db_map().get_config(&dbname) {
         Some(config) => config.compression_strategy,
