@@ -426,14 +426,16 @@ where
                 error!("failed to connect: {:?}", err);
                 retry_state.take();
 
+                // Let the pending requests fail fast.
+                // Also wait 1 second for next retry.
                 let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
                 loop {
-                    let mut tasks_fut = task_receiver.next().fuse();
-                    let tasks_opt = select! {
+                    let mut signal_fut = task_receiver.next().fuse();
+                    let signal_opt = select! {
                         () = timeout_fut => break,
-                        tasks_opt = tasks_fut => tasks_opt,
+                        signal_opt = signal_fut => signal_opt,
                     };
-                    if tasks_opt.is_none() {
+                    if signal_opt.is_none() {
                         break;
                     }
                     let output = task_receiver.get_output_buf();
@@ -512,10 +514,8 @@ where
                 let mut guard = match output_buf.lock() {
                     Ok(guard) => guard,
                     Err(_) => {
-                        return {
-                            error!("handle_conn: failed to get lock");
-                            Err((BackendError::InvalidState, None))
-                        }
+                        error!("handle_conn: failed to get lock");
+                        return Err((BackendError::InvalidState, None));
                     }
                 };
                 output_tasks.append(guard.deref_mut());

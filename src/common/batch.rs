@@ -13,11 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 // The following codes are copied from github.com/mre/futures-batch
-// with some optimization which might not be for general purpose:
+// with some optimization which might not be able to fit into general purpose:
 // - Reset timer instead of setting `clock` to None for better performance.
 // - Has two different timeout to avoid triggering the real timer too many times.
-// - Flush if there's only one item even it's not timed out yet for non-pipeline requests.
-// - Read data from a shared Vec instead of returned value.
+// - Flush also depends on the last flushed size to support non-pipeline requests.
+// - Read data from a shared Vec instead of the returned value from `poll_next` to reduce heap allocation.
 
 pub trait TryChunksTimeoutStreamExt: Stream {
     fn try_chunks_timeout(
@@ -79,11 +79,15 @@ where
         self.items.clone()
     }
 
-    fn flush(mut self: Pin<&mut Self>, now: coarsetime::Instant) -> Poll<Option<()>> {
-        let this = self.as_mut().project();
-        *this.last_flush_time = now;
-        *this.flush_size = *this.items_len;
-        *this.items_len = 0;
+    fn flush(
+        last_flush_time: &mut coarsetime::Instant,
+        flush_size: &mut usize,
+        items_len: &mut usize,
+        now: coarsetime::Instant,
+    ) -> Poll<Option<()>> {
+        *last_flush_time = now;
+        *flush_size = *items_len;
+        *items_len = 0;
         Poll::Ready(Some(()))
     }
 }
@@ -91,9 +95,18 @@ where
 impl<St: Stream> Stream for TryChunksTimeout<St> {
     type Item = ();
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let items_clone = self.as_mut().project().items.clone();
-        let mut items = match items_clone.lock() {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        let items_lock = this.items;
+        let mut stream = this.stream;
+        let flush_size = this.flush_size;
+        let last_flush_time = this.last_flush_time;
+        let items_len = this.items_len;
+        let min_duration = *this.min_duration;
+        let max_duration = *this.max_duration;
+        let mut clock = this.clock;
+
+        let mut items = match items_lock.lock() {
             Ok(items) => items,
             _err => {
                 error!("TryChunksTimeout: failed to get lock");
@@ -103,14 +116,18 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
         let start_empty = items.is_empty();
 
         loop {
-            match self.as_mut().project().stream.poll_next(cx) {
+            match stream.as_mut().poll_next(cx) {
                 Poll::Ready(item) => match item {
                     Some(item) => {
-                        let this = self.as_mut().project();
-                        *this.items_len += 1;
+                        *items_len += 1;
                         items.push(item);
                         if items.len() >= this.cap.get() {
-                            return self.flush(coarsetime::Instant::recent());
+                            return Self::flush(
+                                last_flush_time,
+                                flush_size,
+                                items_len,
+                                coarsetime::Instant::recent(),
+                            );
                         } else {
                             // Continue the loop
                             continue;
@@ -134,26 +151,33 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
             }
 
             // Learn from the last flush size.
-            if items.len() >= self.flush_size {
-                return self.flush(coarsetime::Instant::recent());
+            if items.len() >= *flush_size {
+                return Self::flush(
+                    last_flush_time,
+                    flush_size,
+                    items_len,
+                    coarsetime::Instant::recent(),
+                );
             }
 
             let now = coarsetime::Instant::now();
-            if now > self.last_flush_time
-                && now.duration_since(self.last_flush_time) >= self.min_duration
-            {
-                return self.flush(now);
+            if now > *last_flush_time && now.duration_since(*last_flush_time) >= min_duration {
+                return Self::flush(last_flush_time, flush_size, items_len, now);
             }
 
             if start_empty {
-                let mut this = self.as_mut().project();
-                this.clock.reset(*this.max_duration);
+                clock.reset(max_duration);
                 return Poll::Pending;
             }
 
-            match self.as_mut().project().clock.poll(cx) {
+            match clock.poll(cx) {
                 Poll::Ready(()) => {
-                    return self.flush(coarsetime::Instant::recent());
+                    return Self::flush(
+                        last_flush_time,
+                        flush_size,
+                        items_len,
+                        coarsetime::Instant::recent(),
+                    );
                 }
                 Poll::Pending => {}
             }
@@ -224,10 +248,10 @@ mod tests {
         let output = chunk_stream.get_output_buf();
         chunk_stream.next().await;
         let tasks: Vec<_> = output.lock().unwrap().drain(..).collect();
-        assert_eq!(vec![0, 1, 2, 3, 4], tasks,);
+        assert_eq!(vec![0, 1, 2, 3, 4], tasks);
         chunk_stream.next().await;
         let tasks: Vec<_> = output.lock().unwrap().drain(..).collect();
-        assert_eq!(vec![5, 6, 7, 8, 9], tasks,)
+        assert_eq!(vec![5, 6, 7, 8, 9], tasks)
     }
 
     #[tokio::test]
