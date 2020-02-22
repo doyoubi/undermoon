@@ -1,7 +1,7 @@
 use crate::common::cluster::{
     Cluster, Host, MigrationTaskMeta, Node, PeerProxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
 };
-use crate::common::cluster::{MigrationMeta, Role};
+use crate::common::cluster::{DBName, MigrationMeta, Role};
 use crate::common::config::ClusterConfig;
 use crate::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -20,7 +20,7 @@ pub struct NodeSlot {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NodeResource {
     pub node_addresses: HashSet<String>,
-    pub cluster_name: Option<String>,
+    pub cluster_name: Option<DBName>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +32,7 @@ pub enum MigrationType {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct MetaStore {
     global_epoch: u64,
-    clusters: HashMap<String, Cluster>,
+    clusters: HashMap<DBName, Cluster>,
     // proxy_address => nodes and cluster_name
     all_nodes: HashMap<String, NodeResource>,
     failed_proxies: HashMap<String, HashSet<String>>,
@@ -136,11 +136,12 @@ impl MetaStore {
     }
 
     pub fn get_cluster_names(&self) -> Vec<String> {
-        self.clusters.keys().cloned().collect()
+        self.clusters.keys().map(|name| name.to_string()).collect()
     }
 
     pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
-        self.clusters.get(name).cloned()
+        let name = DBName::from(name).ok()?;
+        self.clusters.get(&name).cloned()
     }
 
     pub fn add_failure(&mut self, address: String, _reporter_id: String) {
@@ -191,6 +192,8 @@ impl MetaStore {
     }
 
     pub fn add_cluster(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+        let cluster_name =
+            DBName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
         if self.clusters.contains_key(&cluster_name) {
             return Err(MetaStoreError::AlreadyExisted);
         }
@@ -232,6 +235,8 @@ impl MetaStore {
     }
 
     pub fn remove_cluster(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+        let cluster_name =
+            DBName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
         let cluster = self
             .clusters
             .remove(&cluster_name)
@@ -253,6 +258,8 @@ impl MetaStore {
     }
 
     pub fn auto_add_nodes(&mut self, cluster_name: String) -> Result<Vec<Node>, MetaStoreError> {
+        let cluster_name =
+            DBName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
         if self.clusters.get(&cluster_name).is_none() {
             return Err(MetaStoreError::ClusterNotFound);
         }
@@ -309,10 +316,12 @@ impl MetaStore {
         proxy_address: &str,
         force: bool,
     ) -> Result<(), MetaStoreError> {
+        let cluster_name =
+            DBName::from(cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.bump_global_epoch();
         let cluster = self
             .clusters
-            .get_mut(cluster_name)
+            .get_mut(&cluster_name)
             .ok_or(MetaStoreError::ClusterNotFound)?;
 
         if !force {
@@ -406,6 +415,8 @@ impl MetaStore {
         dst_node_address: String,
         migration_type: MigrationType,
     ) -> Result<(), MetaStoreError> {
+        let cluster_name =
+            DBName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.bump_global_epoch();
 
         let cluster = self
@@ -567,6 +578,8 @@ impl MetaStore {
         src_node_address: String,
         dst_node_address: String,
     ) -> Result<(), MetaStoreError> {
+        let cluster_name =
+            DBName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.bump_global_epoch();
 
         let cluster = self
@@ -631,6 +644,8 @@ impl MetaStore {
         master_node_address: String,
         replica_node_address: String,
     ) -> Result<(), MetaStoreError> {
+        let cluster_name =
+            DBName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.bump_global_epoch();
 
         let cluster = self
@@ -713,9 +728,9 @@ impl MetaStore {
             };
             let cluster =
                 clusters
-                    .get(cluster_name)
+                    .get(&cluster_name)
                     .ok_or_else(|| InconsistentError::ClusterNotFound {
-                        cluster_name: cluster_name.clone(),
+                        cluster_name: cluster_name.to_string(),
                     })?;
             for node_address in node_resource.node_addresses.iter() {
                 let node = cluster.get_node(node_address).ok_or_else(|| {
@@ -742,15 +757,15 @@ impl MetaStore {
         for (cluster_name, cluster) in clusters.iter() {
             if cluster_name != cluster.get_name() {
                 return Err(InconsistentError::InvalidClusterName {
-                    expected_name: cluster_name.clone(),
-                    unexpected_name: cluster.get_name().clone(),
+                    expected_name: cluster_name.to_string(),
+                    unexpected_name: cluster.get_name().to_string(),
                 });
             }
             for node in cluster.get_nodes().iter() {
                 if node.get_cluster_name() != cluster_name {
                     return Err(InconsistentError::InvalidClusterName {
-                        expected_name: cluster_name.clone(),
-                        unexpected_name: node.get_cluster_name().clone(),
+                        expected_name: cluster_name.to_string(),
+                        unexpected_name: node.get_cluster_name().to_string(),
                     });
                 }
                 let proxy_address = node.get_proxy_address();
@@ -854,7 +869,10 @@ impl MetaStore {
         Ok(())
     }
 
-    fn consume_node_slot(&mut self, cluster_name: &str) -> Result<Vec<NodeSlot>, MetaStoreError> {
+    fn consume_node_slot(
+        &mut self,
+        cluster_name: &DBName,
+    ) -> Result<Vec<NodeSlot>, MetaStoreError> {
         let failures = self.failures.clone();
 
         let (proxy_address, node_resource) = self
@@ -876,7 +894,7 @@ impl MetaStore {
             )
             .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
 
-        node_resource.cluster_name = Some(cluster_name.to_string());
+        node_resource.cluster_name = Some(cluster_name.clone());
 
         Ok(node_resource
             .node_addresses
@@ -1023,7 +1041,7 @@ impl MetaStore {
         }
 
         try_state!(self.remove_proxy_from_cluster_helper(
-            &cluster_name,
+            cluster_name.as_str(),
             &failed_proxy_address,
             false
         ));
@@ -1036,7 +1054,7 @@ impl MetaStore {
 
     fn takeover_master(
         &mut self,
-        cluster_name: &str,
+        cluster_name: &DBName,
         node_address: &str,
     ) -> Result<Node, MetaStoreError> {
         let new_epoch = self.bump_global_epoch();
@@ -1213,7 +1231,7 @@ impl MetaStore {
 
     fn replace_node(
         &mut self,
-        cluster_name: &str,
+        cluster_name: &DBName,
         old_node_address: &str,
         node_slot: NodeSlot,
     ) -> Result<Node, MetaStoreError> {
@@ -1291,7 +1309,10 @@ impl MetaStore {
         Ok(new_node)
     }
 
-    fn consume_new_proxy(&mut self, cluster_name: &str) -> Result<Vec<NodeSlot>, MetaStoreError> {
+    fn consume_new_proxy(
+        &mut self,
+        cluster_name: &DBName,
+    ) -> Result<Vec<NodeSlot>, MetaStoreError> {
         let nodes = self.auto_add_nodes(cluster_name.to_string())?;
         Ok(nodes
             .into_iter()
@@ -1392,6 +1413,7 @@ pub enum MetaStoreError {
     NotMigrating,
     MismatchEpoch,
     InvalidNodeNum,
+    InvalidClusterName,
 }
 
 impl fmt::Display for MetaStoreError {
@@ -1424,6 +1446,7 @@ impl Error for MetaStoreError {
             MetaStoreError::NotMigrating => "NOT_MIGRATING",
             MetaStoreError::MismatchEpoch => "MISMATCH_EPOCH",
             MetaStoreError::InvalidNodeNum => "INVALID_NODE_NUM",
+            MetaStoreError::InvalidClusterName => "INVALID_CLUSTER_NAME",
         }
     }
 

@@ -1,7 +1,7 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
-use crate::common::cluster::{Range, SlotRange, SlotRangeTag};
+use crate::common::cluster::{DBName, Range, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::db::ProxyDBMeta;
 use crate::common::utils::{gen_moved, get_slot};
@@ -38,16 +38,16 @@ impl Error for DBError {
 }
 
 pub trait DBTag {
-    fn get_db_name(&self) -> String;
-    fn set_db_name(&self, db: String);
+    fn get_db_name(&self) -> DBName;
+    fn set_db_name(&mut self, db: DBName);
 }
 
 pub struct DatabaseMap<S: CmdTaskSender>
 where
     <S as CmdTaskSender>::Task: DBTag,
 {
-    local_dbs: HashMap<String, Database<S>>,
-    remote_dbs: HashMap<String, RemoteDB>,
+    local_dbs: HashMap<DBName, Database<S>>,
+    remote_dbs: HashMap<DBName, RemoteDB>,
 }
 
 impl<S: CmdTaskSender> Default for DatabaseMap<S>
@@ -116,8 +116,7 @@ where
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
     ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
-        let db_name = cmd_task.get_db_name();
-        let (cmd_task, db_exists) = match self.local_dbs.get(&db_name) {
+        let (cmd_task, db_exists) = match self.local_dbs.get(&cmd_task.get_db_name()) {
             Some(db) => match db.send(cmd_task) {
                 Err(DBSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
                 others => return others,
@@ -125,18 +124,19 @@ where
             None => (cmd_task, false),
         };
 
-        match self.remote_dbs.get(&db_name) {
+        match self.remote_dbs.get(&cmd_task.get_db_name()) {
             Some(remote_db) => remote_db.send_remote(cmd_task),
             None => {
                 if db_exists {
-                    let resp =
-                        Resp::Error(format!("slot not found: {}", db_name.clone()).into_bytes());
+                    let resp = Resp::Error(
+                        format!("slot not found: {}", cmd_task.get_db_name()).into_bytes(),
+                    );
                     cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::SlotNotCovered)
                 } else {
+                    let db_name = cmd_task.get_db_name().to_string();
                     debug!("db not found: {}", db_name);
-                    let resp =
-                        Resp::Error(format!("db not found: {}", db_name.clone()).into_bytes());
+                    let resp = Resp::Error(format!("db not found: {}", db_name).into_bytes());
                     cmd_task.set_resp_result(Ok(resp));
                     Err(DBSendError::DBNotFound(db_name))
                 }
@@ -144,13 +144,13 @@ where
         }
     }
 
-    pub fn get_dbs(&self) -> Vec<String> {
+    pub fn get_dbs(&self) -> Vec<DBName> {
         self.local_dbs.keys().cloned().collect()
     }
 
     pub fn gen_cluster_nodes(
         &self,
-        dbname: String,
+        dbname: DBName,
         service_address: String,
         migration_states: &HashMap<Range, MigrationState>,
     ) -> String {
@@ -168,7 +168,7 @@ where
 
     pub fn gen_cluster_slots(
         &self,
-        dbname: String,
+        dbname: DBName,
         service_address: String,
         migration_states: &HashMap<Range, MigrationState>,
     ) -> Result<RespVec, String> {
@@ -185,7 +185,7 @@ where
         Ok(Resp::Arr(Array::Arr(local)))
     }
 
-    pub fn auto_select_db(&self) -> Option<String> {
+    pub fn auto_select_db(&self) -> Option<DBName> {
         {
             let local = &self.local_dbs;
             match local.len() {
@@ -203,7 +203,7 @@ where
         None
     }
 
-    pub fn get_config(&self, dbname: &str) -> Option<&ClusterConfig> {
+    pub fn get_config(&self, dbname: &DBName) -> Option<&ClusterConfig> {
         self.local_dbs.get(dbname).map(|db| &db.config)
     }
 }
@@ -217,7 +217,7 @@ struct LocalDB<S: CmdTaskSender> {
 }
 
 pub struct Database<S: CmdTaskSender> {
-    name: String,
+    name: DBName,
     epoch: u64,
     local_db: LocalDB<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
@@ -227,7 +227,7 @@ pub struct Database<S: CmdTaskSender> {
 impl<S: CmdTaskSender> Database<S> {
     pub fn from_slot_map<F: CmdTaskSenderFactory<Sender = S>>(
         sender_factory: &F,
-        name: String,
+        name: DBName,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
         config: ClusterConfig,
@@ -287,7 +287,7 @@ impl<S: CmdTaskSender> Database<S> {
         };
 
         match self.local_db.slot_map.get_by_key(key) {
-            Some(addr) => match self.local_db.nodes.get(&addr) {
+            Some(addr) => match self.local_db.nodes.get(addr) {
                 Some(sender) => sender.send(cmd_task).map_err(DBSendError::Backend),
                 None => {
                     warn!("failed to get node");
@@ -332,7 +332,7 @@ impl<S: CmdTaskSender> Database<S> {
 }
 
 pub struct RemoteDB {
-    name: String,
+    name: DBName,
     epoch: u64,
     slot_map: SlotMap,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
@@ -340,7 +340,7 @@ pub struct RemoteDB {
 
 impl RemoteDB {
     pub fn from_slot_map(
-        name: String,
+        name: DBName,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
     ) -> RemoteDB {
@@ -383,7 +383,7 @@ impl RemoteDB {
         };
         match self.slot_map.get_by_key(key) {
             Some(addr) => {
-                let resp = Resp::Error(gen_moved(get_slot(key), addr).into_bytes());
+                let resp = Resp::Error(gen_moved(get_slot(key), addr.to_string()).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
                 Ok(())
             }
@@ -464,13 +464,13 @@ impl<T: CmdTask> Error for DBSendError<T> {
 }
 
 fn gen_cluster_nodes_helper(
-    name: &str,
+    name: &DBName,
     epoch: u64,
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<Range, MigrationState>,
 ) -> String {
     let mut cluster_nodes = String::from("");
-    let mut name_seg = format!("{:_<20}", name);
+    let mut name_seg = format!("{:_<20}", name.to_string());
     name_seg.truncate(20);
     for (addr, ranges) in slot_ranges {
         let mut addr_hash_seg = format!("{:_<20x}", crc64(0, addr.as_bytes()));
@@ -620,7 +620,8 @@ mod tests {
     fn test_gen_cluster_nodes() {
         let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(output, "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
     }
 
@@ -631,7 +632,8 @@ mod tests {
         let m = HashMap::new();
         let long_address: String = repeat('x').take(50).collect();
         let slot_ranges = gen_testing_slot_ranges(&long_address);
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(output, format!("testdb______________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
@@ -639,7 +641,8 @@ mod tests {
     fn test_gen_importing_cluster_nodes() {
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
@@ -655,7 +658,8 @@ mod tests {
                 m.insert(slot_range.to_range(), MigrationState::PreCheck);
             }
         }
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
@@ -671,7 +675,8 @@ mod tests {
                 m.insert(slot_range.to_range(), MigrationState::PreBlocking);
             }
         }
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
@@ -684,7 +689,8 @@ mod tests {
         // This will never be empty. But should also work.
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
@@ -700,7 +706,8 @@ mod tests {
                 m.insert(slot_range.to_range(), MigrationState::PreCheck);
             }
         }
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
@@ -716,7 +723,8 @@ mod tests {
                 m.insert(slot_range.to_range(), MigrationState::PreBlocking);
             }
         }
-        let output = gen_cluster_nodes_helper("testdb", 233, &slot_ranges, &m);
+        let output =
+            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
@@ -763,5 +771,10 @@ mod tests {
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         let output = gen_cluster_slots_helper(&slot_ranges, &m).expect("test_gen_cluster_slots");
         assert_eq!(output.len(), 0);
+    }
+
+    #[test]
+    fn test_default_db_length() {
+        DBName::from(DEFAULT_DB).unwrap();
     }
 }

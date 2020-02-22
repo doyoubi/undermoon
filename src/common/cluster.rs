@@ -1,8 +1,10 @@
 use super::utils::{IMPORTING_TAG, MIGRATING_TAG};
 use crate::common::config::ClusterConfig;
+use arrayvec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationMeta {
@@ -178,9 +180,80 @@ impl SlotRange {
     }
 }
 
+// To optimize the DBTag::get_db_name, we need to eliminate the heap allocation.
+// Thus we make DBName a stack string with limited size.
+pub const DB_NAME_MAX_LENGTH: usize = 31;
+
+#[derive(Debug)]
+pub struct InvalidDBName;
+
+#[derive(Debug)]
+pub struct CapacityError;
+
+type DBNameInner = arrayvec::ArrayString<[u8; DB_NAME_MAX_LENGTH]>;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct DBName(DBNameInner);
+
+impl DBName {
+    pub fn new() -> Self {
+        Self(DBNameInner::new())
+    }
+
+    pub fn from(s: &str) -> Result<Self, InvalidDBName> {
+        Ok(Self(DBNameInner::from(s).map_err(|_| InvalidDBName)?))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn try_push(&mut self, c: char) -> Result<(), CapacityError> {
+        self.0.try_push(c).map_err(|_| CapacityError)
+    }
+}
+
+impl Default for DBName {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for DBName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0.to_string())
+    }
+}
+
+impl fmt::Debug for DBName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0.to_string())
+    }
+}
+
+impl Serialize for DBName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DBName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        DBName::from(&s)
+            .map_err(|err| D::Error::custom(format!("invalid db name {}: {:?}", s, err)))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationTaskMeta {
-    pub db_name: String,
+    pub db_name: DBName,
     pub slot_range: SlotRange,
 }
 
@@ -190,7 +263,7 @@ impl MigrationTaskMeta {
             db_name,
             slot_range,
         } = self;
-        let mut strs = vec![db_name];
+        let mut strs = vec![db_name.to_string()];
         strs.extend(slot_range.into_strings());
         strs
     }
@@ -198,7 +271,8 @@ impl MigrationTaskMeta {
     where
         It: Iterator<Item = String>,
     {
-        let db_name = it.next()?;
+        let db_name_str = it.next()?;
+        let db_name = DBName::from(&db_name_str).ok()?;
         let slot_range = SlotRange::from_strings(it)?;
         Some(Self {
             db_name,
@@ -286,7 +360,7 @@ impl ReplMeta {
 pub struct Node {
     address: String,
     proxy_address: String,
-    cluster_name: String,
+    cluster_name: DBName,
     slots: Vec<SlotRange>,
     repl: ReplMeta,
 }
@@ -295,7 +369,7 @@ impl Node {
     pub fn new(
         address: String,
         proxy_address: String,
-        cluster_name: String,
+        cluster_name: DBName,
         slots: Vec<SlotRange>,
         repl: ReplMeta,
     ) -> Self {
@@ -313,7 +387,7 @@ impl Node {
     pub fn get_proxy_address(&self) -> &String {
         &self.proxy_address
     }
-    pub fn get_cluster_name(&self) -> &String {
+    pub fn get_cluster_name(&self) -> &DBName {
         &self.cluster_name
     }
     pub fn get_slots(&self) -> &Vec<SlotRange> {
@@ -339,7 +413,7 @@ impl Node {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cluster {
-    name: String,
+    name: DBName,
     epoch: u64,
     nodes: Vec<Node>,
     #[serde(default)]
@@ -347,7 +421,7 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub fn new(name: String, epoch: u64, nodes: Vec<Node>, config: ClusterConfig) -> Self {
+    pub fn new(name: DBName, epoch: u64, nodes: Vec<Node>, config: ClusterConfig) -> Self {
         Self {
             name,
             epoch,
@@ -355,7 +429,7 @@ impl Cluster {
             config,
         }
     }
-    pub fn get_name(&self) -> &String {
+    pub fn get_name(&self) -> &DBName {
         &self.name
     }
     pub fn get_nodes(&self) -> &Vec<Node> {
@@ -401,7 +475,7 @@ impl Cluster {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PeerProxy {
     pub proxy_address: String,
-    pub cluster_name: String,
+    pub cluster_name: DBName,
     pub slots: Vec<SlotRange>,
 }
 
@@ -413,7 +487,7 @@ pub struct Host {
     free_nodes: Vec<String>,
     peers: Vec<PeerProxy>,
     #[serde(default)]
-    clusters_config: HashMap<String, ClusterConfig>,
+    clusters_config: HashMap<DBName, ClusterConfig>,
 }
 
 impl Host {
@@ -423,7 +497,7 @@ impl Host {
         nodes: Vec<Node>,
         free_nodes: Vec<String>,
         peers: Vec<PeerProxy>,
-        clusters_config: HashMap<String, ClusterConfig>,
+        clusters_config: HashMap<DBName, ClusterConfig>,
     ) -> Self {
         Self {
             address,
@@ -469,7 +543,7 @@ impl Host {
         &self.peers
     }
 
-    pub fn get_clusters_config(&self) -> &HashMap<String, ClusterConfig> {
+    pub fn get_clusters_config(&self) -> &HashMap<DBName, ClusterConfig> {
         &self.clusters_config
     }
 }
@@ -479,6 +553,7 @@ mod tests {
     use super::super::config::CompressionStrategy;
     use super::*;
     use serde_json;
+    use std::mem::size_of;
 
     #[test]
     fn test_deserialize_slot_range_tag() {
@@ -579,7 +654,6 @@ mod tests {
         let host: Host = match serde_json::from_str(host_str) {
             Ok(h) => h,
             Err(e) => {
-                println!("### 4 {:?}", e);
                 panic!(e);
             }
         };
@@ -587,7 +661,7 @@ mod tests {
         let mut config = ClusterConfig::default();
         config.compression_strategy = CompressionStrategy::SetGetOnly;
         let mut clusters_config = HashMap::new();
-        clusters_config.insert("mydb".to_string(), config);
+        clusters_config.insert(DBName::from("mydb").unwrap(), config);
 
         let expected_host = Host::new(
             "server_proxy1:6001".to_string(),
@@ -596,7 +670,7 @@ mod tests {
                 Node::new(
                     "redis1:7001".to_string(),
                     "server_proxy1:6001".to_string(),
-                    "mydb".to_string(),
+                    DBName::from("mydb").unwrap(),
                     vec![SlotRange {
                         start: 0,
                         end: 5461,
@@ -613,7 +687,7 @@ mod tests {
                 Node::new(
                     "redis4:7004".to_string(),
                     "server_proxy1:6001".to_string(),
-                    "mydb".to_string(),
+                    DBName::from("mydb").unwrap(),
                     vec![],
                     ReplMeta::new(
                         Role::Replica,
@@ -627,7 +701,7 @@ mod tests {
             Vec::new(),
             vec![PeerProxy {
                 proxy_address: "server_proxy2:6002".to_string(),
-                cluster_name: "mydb".to_string(),
+                cluster_name: DBName::from("mydb").unwrap(),
                 slots: vec![SlotRange {
                     start: 5462,
                     end: 10000,
@@ -637,5 +711,25 @@ mod tests {
             clusters_config,
         );
         assert_eq!(expected_host, host);
+    }
+
+    #[test]
+    fn test_db_name_size() {
+        assert_eq!(size_of::<DBName>(), DB_NAME_MAX_LENGTH + 1);
+        // Align to 32 bytes.
+        assert_eq!(size_of::<DBName>(), 32);
+        let mut name = DBName::new();
+        // DBName should be able to store ASCII with just a byte unlike char.
+        for _ in 0..DB_NAME_MAX_LENGTH {
+            name.try_push('a').unwrap();
+        }
+        assert!(name.0.is_full());
+        assert_eq!(
+            name.as_str(),
+            (0..DB_NAME_MAX_LENGTH)
+                .into_iter()
+                .map(|_| 'a')
+                .collect::<String>()
+        )
     }
 }

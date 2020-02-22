@@ -1,6 +1,6 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
-use crate::common::cluster::{MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
+use crate::common::cluster::{DBName, MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::HostDBMap;
 use crate::common::utils::{get_slot, ThreadSafe};
@@ -20,14 +20,14 @@ use std::sync::Arc;
 
 type TaskRecord<T> = Either<Arc<dyn MigratingTask<Task = T>>, Arc<dyn ImportingTask<Task = T>>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
-type TaskMap<T> = HashMap<String, DBTask<T>>;
+type TaskMap<T> = HashMap<DBName, DBTask<T>>;
 type NewMigrationTuple<TSF> = (
     MigrationMap<TSF>,
     Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
 );
 
 pub struct NewTask<T: CmdTask> {
-    db_name: String,
+    db_name: DBName,
     epoch: u64,
     slot_range_start: usize,
     slot_range_end: usize,
@@ -148,7 +148,7 @@ where
         &self,
         old_deleting_task_map: &DeleteKeysTaskMap,
         local_db_map: &HostDBMap,
-        left_slots_after_change: HashMap<String, HashMap<String, Vec<SlotRange>>>,
+        left_slots_after_change: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
     ) -> (DeleteKeysTaskMap, Vec<Arc<DeleteKeysTask>>) {
         old_deleting_task_map.update_from_old_task_map(
             local_db_map,
@@ -292,7 +292,7 @@ where
         &self,
         new_migration_map: &Self,
         new_db_map: &HostDBMap,
-    ) -> HashMap<String, HashMap<String, Vec<SlotRange>>> {
+    ) -> HashMap<DBName, HashMap<String, Vec<SlotRange>>> {
         let mut left_slots = HashMap::new();
         for (dbname, db) in self.task_map.iter() {
             let nodes = match new_db_map.get_map().get(dbname) {
@@ -558,7 +558,7 @@ where
         metadata
     }
 
-    pub fn get_states(&self, db_name: &str) -> HashMap<Range, MigrationState> {
+    pub fn get_states(&self, db_name: &DBName) -> HashMap<Range, MigrationState> {
         let mut m = HashMap::new();
         if let Some(tasks) = self.task_map.get(db_name) {
             for (meta, task) in tasks.iter() {

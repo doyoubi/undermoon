@@ -2,6 +2,7 @@ use super::redis_replicator::{RedisMasterReplicator, RedisReplicaReplicator};
 use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorMeta,
 };
+use crate::common::cluster::DBName;
 use crate::protocol::RedisClientFactory;
 use crate::proxy::database::DBError;
 use itertools::Either;
@@ -10,7 +11,7 @@ use std::sync::{atomic, Arc, RwLock};
 use tokio;
 
 type ReplicatorRecord = Either<Arc<dyn MasterReplicator>, Arc<dyn ReplicaReplicator>>;
-type ReplicatorMap = HashMap<(String, String), ReplicatorRecord>;
+type ReplicatorMap = HashMap<(DBName, String), ReplicatorRecord>;
 
 pub struct ReplicatorManager<F: RedisClientFactory> {
     updating_epoch: atomic::AtomicU64,
@@ -65,7 +66,13 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
 
         let mut new_replicators = HashMap::new();
         // Add existing replicators
-        for (key, replicator) in self.replicators.read().unwrap().1.iter() {
+        for (key, replicator) in self
+            .replicators
+            .read()
+            .expect("ReplicatorManager::update_replicators")
+            .1
+            .iter()
+        {
             if Some(true)
                 == master_key_set
                     .get(key)
@@ -115,7 +122,10 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         }
 
         {
-            let mut replicators = self.replicators.write().unwrap();
+            let mut replicators = self
+                .replicators
+                .write()
+                .expect("ReplicatorManager::update_replicators");
             if !force && epoch <= replicators.0 {
                 // We're fooled by the `updating_epoch`, update it.
                 self.updating_epoch
@@ -155,7 +165,10 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         let mut master_metadata = Vec::new();
         let mut replica_metadata = Vec::new();
 
-        let replicators = self.replicators.read().unwrap();
+        let replicators = self
+            .replicators
+            .read()
+            .expect("ReplicatorManager::get_metadata");
         for (_key, replicator) in replicators.1.iter() {
             match replicator {
                 Either::Left(master) => {

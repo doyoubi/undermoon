@@ -717,7 +717,12 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
     type Sender = CachedSender<F::Sender>;
 
     fn create(&self, address: String) -> Self::Sender {
-        if let Some(sender) = self.cached_senders.read().unwrap().get(&address) {
+        if let Some(sender) = self
+            .cached_senders
+            .read()
+            .expect("CachedSenderFactory::create")
+            .get(&address)
+        {
             return CachedSender {
                 inner_sender: sender.clone(),
             };
@@ -726,7 +731,10 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
         // Acceptable race condition here. Multiple threads might be creating at the same time.
         let inner_sender = Arc::new(self.inner_factory.create(address.clone()));
         let inner_sender_clone = {
-            let mut guard = self.cached_senders.write().unwrap();
+            let mut guard = self
+                .cached_senders
+                .write()
+                .expect("CachedSenderFactory::create");
             guard.entry(address).or_insert(inner_sender).clone()
         };
 

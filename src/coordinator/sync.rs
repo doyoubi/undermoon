@@ -1,6 +1,6 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
-use crate::common::cluster::{Host, Role, SlotRange};
+use crate::common::cluster::{DBName, Host, Role, SlotRange};
 use crate::common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
 use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
@@ -95,7 +95,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
     let epoch = proxy.get_epoch();
     let clusters_config = ClusterConfigMap::new(proxy.get_clusters_config().clone());
 
-    let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+    let mut db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
 
     for peer_proxy in proxy.get_peers().iter() {
         let dbs = db_map
@@ -105,7 +105,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
     }
     let peer = HostDBMap::new(db_map);
 
-    let mut db_map: HashMap<String, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+    let mut db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
 
     for node in proxy.into_nodes() {
         let dbs = db_map
@@ -166,7 +166,7 @@ fn generate_repl_meta_cmd_args(host: Host, flags: DBMapFlags) -> Vec<String> {
     for free_node in host.get_free_nodes().iter() {
         // For free nodes we use empty cluster name.
         masters.push(MasterMeta {
-            db_name: String::new(),
+            db_name: DBName::new(),
             master_node_address: free_node.clone(),
             replicas: Vec::new(),
         })

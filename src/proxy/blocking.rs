@@ -7,6 +7,7 @@ use super::command::{CommandError, CommandResult};
 use super::database::DBTag;
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
+use crate::common::cluster::DBName;
 use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
 use crossbeam_channel;
@@ -347,11 +348,11 @@ impl<T: CmdTask> From<CounterTask<T>> for Wrapper<T> {
 }
 
 impl<T: CmdTask + DBTag> DBTag for CounterTask<T> {
-    fn get_db_name(&self) -> String {
+    fn get_db_name(&self) -> DBName {
         self.inner.get_db_name()
     }
 
-    fn set_db_name(&self, db: String) {
+    fn set_db_name(&mut self, db: DBName) {
         self.inner.set_db_name(db)
     }
 }

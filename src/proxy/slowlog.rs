@@ -1,6 +1,5 @@
-use super::command::Command;
 use super::service::ServerProxyConfig;
-use crate::protocol::{Array, BulkStr, Resp, RespVec};
+use crate::protocol::{Array, BulkStr, Resp, RespPacket, RespVec};
 use arc_swap::ArcSwapOption;
 use arr_macro::arr;
 use chrono::{naive, DateTime, Utc};
@@ -36,11 +35,17 @@ struct RequestEventMap {
 
 impl RequestEventMap {
     fn set_event_time(&self, event: TaskEvent, timestamp: i64) {
-        self.events[event as usize].store(timestamp, atomic::Ordering::SeqCst)
+        self.events
+            .get(event as usize)
+            .expect("RequestEventMap::set_event_time")
+            .store(timestamp, atomic::Ordering::SeqCst)
     }
 
     fn get_event_time(&self, event: TaskEvent) -> i64 {
-        self.events[event as usize].load(atomic::Ordering::SeqCst)
+        self.events
+            .get(event as usize)
+            .expect("RequestEventMap::get_event_time")
+            .load(atomic::Ordering::SeqCst)
     }
 
     fn get_used_time(&self, event: TaskEvent) -> i64 {
@@ -65,46 +70,22 @@ impl Default for RequestEventMap {
 #[derive(Debug)]
 pub struct Slowlog {
     event_map: RequestEventMap,
+    session_id: usize,
+}
+
+#[derive(Debug)]
+pub struct SlowlogRecord {
+    event_map: RequestEventMap,
     command: Vec<String>,
     session_id: usize,
 }
 
 impl Slowlog {
-    pub fn from_command(command: &Command, session_id: usize) -> Self {
-        let command = Self::get_brief_command(command);
+    pub fn new(session_id: usize) -> Self {
         Slowlog {
             event_map: RequestEventMap::default(),
-            command,
             session_id,
         }
-    }
-
-    fn get_brief_command(command: &Command) -> Vec<String> {
-        let resp_slice = command.get_resp_slice();
-        let resps = match resp_slice {
-            Resp::Arr(Array::Arr(ref resps)) => resps,
-            others => return vec![format!("{:?}", others)],
-        };
-        resps
-            .iter()
-            .take(LOG_ELEMENT_NUMBER)
-            .map(|element| match element {
-                Resp::Bulk(BulkStr::Str(data)) => match str::from_utf8(&data) {
-                    Ok(s) => s.to_string(),
-                    _ => format!("{:?}", data),
-                },
-                others => format!("{:?}", others),
-            })
-            .map(|mut s| {
-                let real_len = s.len();
-                s.truncate(MAX_ELEMENT_LENGTH);
-                if real_len > MAX_ELEMENT_LENGTH {
-                    let postfix = format!("({}bytes)", real_len);
-                    s.push_str(&postfix)
-                }
-                s
-            })
-            .collect()
     }
 
     pub fn log_event(&self, event: TaskEvent) {
@@ -117,8 +98,66 @@ impl Slowlog {
     }
 }
 
+impl SlowlogRecord {
+    fn from_slow_log(request: Box<RespPacket>, slowlog: Slowlog) -> Self {
+        let Slowlog {
+            event_map,
+            session_id,
+        } = slowlog;
+        let command = Self::get_brief_command(&request);
+        Self {
+            event_map,
+            command,
+            session_id,
+        }
+    }
+
+    fn get_brief_command(request: &RespPacket) -> Vec<String> {
+        let data_to_string = |data: &[u8]| match str::from_utf8(&data) {
+            Ok(s) => s.to_string(),
+            _ => format!("{:?}", data),
+        };
+
+        let limit_len = |mut s: String| {
+            let real_len = s.len();
+            s.truncate(MAX_ELEMENT_LENGTH);
+            if real_len > MAX_ELEMENT_LENGTH {
+                let postfix = format!("({}bytes)", real_len);
+                s.push_str(&postfix)
+            }
+            s
+        };
+
+        // RespPacket::to_resp_slice needs heap memory allocation.
+        // Manually use pattern match for performance.
+        match request {
+            RespPacket::Data(resp) => match resp {
+                Resp::Arr(Array::Arr(resps)) => resps
+                    .iter()
+                    .take(LOG_ELEMENT_NUMBER)
+                    .map(|element| match element {
+                        Resp::Bulk(BulkStr::Str(data)) => data_to_string(&data),
+                        others => format!("{:?}", others),
+                    })
+                    .map(limit_len)
+                    .collect(),
+                others => vec![format!("{:?}", others)],
+            },
+            RespPacket::Indexed(indexed_resp) => match indexed_resp.get_array_len() {
+                Some(num) => (0..num)
+                    .take(LOG_ELEMENT_NUMBER)
+                    .filter_map(|i| indexed_resp.get_array_element(i))
+                    .map(data_to_string)
+                    .map(limit_len)
+                    .collect(),
+                others => vec![format!("{:?}", others)],
+            },
+        }
+    }
+}
+
 pub struct SlowRequestLogger {
-    slowlogs: Vec<ArcSwapOption<Slowlog>>,
+    slowlogs: Vec<ArcSwapOption<SlowlogRecord>>,
     curr_index: atomic::AtomicUsize,
     config: Arc<ServerProxyConfig>,
 }
@@ -136,7 +175,7 @@ impl SlowRequestLogger {
         }
     }
 
-    pub fn add_slow_log(&self, log: Arc<Slowlog>) {
+    pub fn add_slow_log(&self, request: Box<RespPacket>, log: Slowlog) {
         let dt = log.event_map.get_used_time(TaskEvent::WaitDone);
         let threshold = self
             .config
@@ -144,18 +183,19 @@ impl SlowRequestLogger {
             .load(atomic::Ordering::SeqCst);
         // ms to ns
         if dt > threshold * 1000 {
-            self.add(log);
+            self.add(request, log);
         }
     }
 
-    pub fn add(&self, log: Arc<Slowlog>) {
+    pub fn add(&self, request: Box<RespPacket>, log: Slowlog) {
+        let log = SlowlogRecord::from_slow_log(request, log);
         let index = self.curr_index.fetch_add(1, atomic::Ordering::SeqCst) % self.slowlogs.len();
         if let Some(log_slot) = self.slowlogs.get(index) {
-            log_slot.store(Some(log))
+            log_slot.store(Some(Arc::new(log)))
         }
     }
 
-    pub fn get(&self, limit: Option<usize>) -> Vec<Arc<Slowlog>> {
+    pub fn get(&self, limit: Option<usize>) -> Vec<Arc<SlowlogRecord>> {
         let num = limit.unwrap_or_else(|| self.slowlogs.len());
         self.slowlogs
             .iter()
@@ -171,7 +211,7 @@ impl SlowRequestLogger {
     }
 }
 
-pub fn slowlogs_to_resp(logs: Vec<Arc<Slowlog>>) -> RespVec {
+pub fn slowlogs_to_resp(logs: Vec<Arc<SlowlogRecord>>) -> RespVec {
     let elements = logs
         .into_iter()
         .map(|log| slowlog_to_report(&(*log)))
@@ -179,7 +219,7 @@ pub fn slowlogs_to_resp(logs: Vec<Arc<Slowlog>>) -> RespVec {
     Resp::Arr(Array::Arr(elements))
 }
 
-fn slowlog_to_report(log: &Slowlog) -> RespVec {
+fn slowlog_to_report(log: &SlowlogRecord) -> RespVec {
     let start = log.event_map.get_event_time(TaskEvent::Created);
     let start_date = match naive::NaiveDateTime::from_timestamp_opt(
         start / 1_000_000_000,

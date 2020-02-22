@@ -39,10 +39,21 @@ impl IndexedResp {
         match self.resp {
             RespIndex::Arr(ArrayIndex::Arr(ref resps)) => {
                 resps.get(index).and_then(|resp| match resp {
-                    RespIndex::Bulk(BulkStrIndex::Str(s)) => Some(&self.data[s.to_range()]),
+                    RespIndex::Bulk(BulkStrIndex::Str(s)) => Some(
+                        self.data
+                            .get(s.to_range())
+                            .expect("IndexedResp::get_array_element"),
+                    ),
                     _ => None,
                 })
             }
+            _ => None,
+        }
+    }
+
+    pub fn get_array_len(&self) -> Option<usize> {
+        match self.resp {
+            RespIndex::Arr(ArrayIndex::Arr(ref resps)) => Some(resps.len()),
             _ => None,
         }
     }
@@ -52,9 +63,9 @@ impl IndexedResp {
     }
 
     pub fn to_resp_vec(&self) -> RespVec {
-        self.resp
-            .as_ref()
-            .map(|DataIndex(s, e)| (&self.data[*s..*e]).to_vec())
+        self.resp.as_ref().map(|DataIndex(s, e)| {
+            (&self.data.get(*s..*e).expect("IndexedResp::to_resp_vec")).to_vec()
+        })
     }
 
     pub fn get_data(&self) -> &[u8] {
@@ -273,13 +284,15 @@ impl BulkStrIndex {
 
 impl ArrayIndex {
     pub fn map_to_slice<'a>(&self, data: &'a [u8]) -> ArraySlice<'a> {
-        self.as_ref().map(|DataIndex(s, e)| &data[*s..*e])
+        self.as_ref()
+            .map(|DataIndex(s, e)| data.get(*s..*e).expect("ArrayIndex::map_to_slice"))
     }
 }
 
 impl RespIndex {
     pub fn map_to_slice<'a>(&self, data: &'a [u8]) -> RespSlice<'a> {
-        self.as_ref().map(|DataIndex(s, e)| &data[*s..*e])
+        self.as_ref()
+            .map(|DataIndex(s, e)| data.get(*s..*e).expect("RespIndex::map_to_slice"))
     }
 }
 

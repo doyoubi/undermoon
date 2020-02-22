@@ -3,7 +3,7 @@ use super::task::{
     AtomicMigrationState, ImportingTask, MgrSubCmd, MigratingTask, MigrationError, MigrationState,
     SwitchArg,
 };
-use crate::common::cluster::{MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
+use crate::common::cluster::{DBName, MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
 use crate::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
@@ -32,7 +32,7 @@ pub struct RedisScanMigratingTask<
     BC: TaskBlockingController,
 > {
     mgr_config: Arc<AtomicMigrationConfig>,
-    db_name: String,
+    db_name: DBName,
     slot_range: (usize, usize),
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
@@ -56,7 +56,7 @@ impl<
     pub fn new(
         _config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
-        db_name: String,
+        db_name: DBName,
         slot_range: (usize, usize),
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
@@ -444,7 +444,7 @@ where
     pub fn new(
         _config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
-        _db_name: String,
+        _db_name: DBName,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,

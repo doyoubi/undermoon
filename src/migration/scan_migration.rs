@@ -23,7 +23,7 @@ use std::time::Duration;
 
 const PEXPIRE_NO_EXPIRE: &str = "-1";
 const RESTORE_NO_EXPIRE: &str = "0";
-const BUSYKEY_ERROR: &str = "BUSYKEY";
+const BUSYKEY_ERROR: &[u8] = b"BUSYKEY";
 const DATA_QUEUE_SIZE: usize = 4096;
 
 #[derive(Clone)]
@@ -205,7 +205,7 @@ impl ScanMigrationTask {
         };
         for resp in resps.into_iter() {
             if let Resp::Error(err_msg) = resp {
-                if &err_msg[..BUSYKEY_ERROR.as_bytes().len()] != BUSYKEY_ERROR.as_bytes() {
+                if err_msg.get(..BUSYKEY_ERROR.len()) != Some(BUSYKEY_ERROR) {
                     error!("RESTORE error: {:?}", pretty_print_bytes(&err_msg));
                     return Err(RedisClientError::InvalidReply);
                 }

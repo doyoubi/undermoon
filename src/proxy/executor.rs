@@ -6,8 +6,11 @@ use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxHandler};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
+use crate::common::cluster::DBName;
 use crate::common::db::ProxyDBMeta;
-use crate::common::utils::{NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY};
+use crate::common::utils::{
+    str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
+};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
 use crate::migration::task::parse_switch_command;
@@ -15,7 +18,6 @@ use crate::migration::task::MgrSubCmd;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
-use caseless;
 use std::str;
 use std::sync::{self, Arc};
 
@@ -79,22 +81,33 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
-    fn handle_auth(&self, cmd_ctx: CmdCtx) {
+    fn handle_auth(&self, mut cmd_ctx: CmdCtx) {
         let key = cmd_ctx.get_key();
-        match key {
-            None => cmd_ctx.set_resp_result(Ok(Resp::Error(
-                String::from("Missing database name").into_bytes(),
-            ))),
+        let db = match key {
+            None => {
+                return cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    String::from("Missing database name").into_bytes(),
+                )))
+            }
             Some(db_name) => match str::from_utf8(&db_name) {
-                Ok(ref db) => {
-                    cmd_ctx.set_db_name((*db).to_string());
-                    cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+                Ok(db) => db.to_string(),
+                Err(_) => {
+                    return cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        String::from("Invalid database name").into_bytes(),
+                    )))
                 }
-                Err(_) => cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Invalid database name").into_bytes(),
-                ))),
             },
-        }
+        };
+        let dbname = match DBName::from(&db) {
+            Ok(dbname) => dbname,
+            _err => {
+                return cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    String::from("Database name is too long").into_bytes(),
+                )))
+            }
+        };
+        cmd_ctx.set_db_name(dbname);
+        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
     }
 
     fn handle_cluster(&self, cmd_ctx: CmdCtx) {
@@ -103,10 +116,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             None => return,
         };
 
-        if caseless::canonical_caseless_match_str(&sub_cmd, "nodes") {
+        if str_ascii_case_insensitive_eq(&sub_cmd, "nodes") {
             let cluster_nodes = self.manager.gen_cluster_nodes(cmd_ctx.get_db_name());
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
-        } else if caseless::canonical_caseless_match_str(&sub_cmd, "slots") {
+        } else if str_ascii_case_insensitive_eq(&sub_cmd, "slots") {
             let cluster_slots = self.manager.gen_cluster_slots(cmd_ctx.get_db_name());
             match cluster_slots {
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
@@ -152,7 +165,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             let dbs = self.manager.get_dbs();
             let resps = dbs
                 .into_iter()
-                .map(|db| Resp::Bulk(BulkStr::Str(db.into_bytes())))
+                .map(|db| Resp::Bulk(BulkStr::Str(db.to_string().into_bytes())))
                 .collect();
             cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
         } else if sub_cmd.eq("SETDB") {
