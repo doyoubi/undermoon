@@ -1,7 +1,7 @@
 use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::batch::TryChunksTimeoutStreamExt;
+use crate::common::batch::{TryChunksTimeout, TryChunksTimeoutStreamExt};
 use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
@@ -18,6 +18,7 @@ use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use std::ops::DerefMut;
 use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -414,9 +415,8 @@ where
 
     let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
     let batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
-    let mut task_receiver = task_receiver
-        .try_chunks_timeout(backend_batch_buf, batch_min_time, batch_max_time)
-        .fuse();
+    let mut task_receiver =
+        task_receiver.try_chunks_timeout(backend_batch_buf, batch_min_time, batch_max_time);
 
     loop {
         conn_failed.store(true, Ordering::SeqCst);
@@ -433,11 +433,19 @@ where
                         () = timeout_fut => break,
                         tasks_opt = tasks_fut => tasks_opt,
                     };
-                    let tasks = match tasks_opt {
-                        Some(tasks) => tasks,
-                        None => break,
+                    if tasks_opt.is_none() {
+                        break;
+                    }
+                    let output = task_receiver.get_output_buf();
+                    let mut tasks = match output.lock() {
+                        Ok(tasks) => tasks,
+                        Err(_) => {
+                            error!("handle_backend: lock failed");
+                            // TODO: return receiver;
+                            return Err(BackendError::InvalidState);
+                        }
                     };
-                    for task in tasks.into_iter() {
+                    for task in tasks.drain(..) {
                         task.set_resp_result(Ok(Resp::Error(
                             format!("failed to connect to {}", address).into_bytes(),
                         )))
@@ -474,30 +482,50 @@ where
 async fn handle_conn<H, S>(
     mut writer: ConnSink<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
     mut reader: ConnStream<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
-    task_receiver: &mut S,
+    task_receiver: &mut TryChunksTimeout<S>,
     handler: Arc<H>,
     backend_batch_buf: NonZeroUsize,
     mut retry_state_opt: Option<RetryState<H::Task>>,
 ) -> Result<(), (BackendError, Option<RetryState<H::Task>>)>
 where
     H: CmdTaskResultHandler,
-    S: Stream<Item = Vec<H::Task>> + Unpin,
+    S: Stream<Item = H::Task> + Unpin,
 {
     let mut packets = Vec::with_capacity(backend_batch_buf.get());
+    let output_buf = task_receiver.get_output_buf();
+    let mut output_tasks = Vec::with_capacity(backend_batch_buf.get());
 
     loop {
-        let (retry_times_opt, tasks) = match retry_state_opt.take() {
-            Some(RetryState { retry_times, tasks }) => (Some(retry_times), tasks),
+        let retry_times_opt = match retry_state_opt.take() {
+            Some(RetryState {
+                retry_times,
+                mut tasks,
+            }) => {
+                output_tasks.append(&mut tasks);
+                Some(retry_times)
+            }
             None => {
-                let tasks = match task_receiver.next().await {
-                    Some(tasks) => tasks,
+                match task_receiver.next().await {
+                    Some(()) => (),
                     None => return Ok(()),
+                }
+                let mut guard = match output_buf.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        return {
+                            error!("handle_conn: failed to get lock");
+                            Err((BackendError::InvalidState, None))
+                        }
+                    }
                 };
-                (None, tasks)
+                output_tasks.append(guard.deref_mut());
+                None
             }
         };
 
-        for task in &tasks {
+        let tasks = &mut output_tasks;
+
+        for task in tasks.iter() {
             task.log_event(TaskEvent::WritingQueueReceived);
             packets.push(task.get_packet());
         }
@@ -515,7 +543,7 @@ where
             return Err((err, retry_state));
         }
 
-        let mut tasks_iter = tasks.into_iter();
+        let mut tasks_iter = tasks.drain(..);
         // `while let` will consume ownership.
         #[allow(clippy::while_let_loop)]
         loop {
@@ -530,7 +558,7 @@ where
                     let mut failed_tasks = vec![task];
                     failed_tasks.extend(tasks_iter);
                     let err = BackendError::Io(io::Error::from(io::ErrorKind::BrokenPipe));
-                    let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
+                    let retry_state = handle_conn_err(retry_times_opt, &mut failed_tasks, &err);
                     return Err((err, retry_state));
                 }
             };
@@ -543,12 +571,12 @@ where
 
 fn handle_conn_err<T: CmdTask>(
     retry_times_opt: Option<usize>,
-    tasks: Vec<T>,
+    tasks: &mut Vec<T>,
     err: &BackendError,
 ) -> Option<RetryState<T>> {
     let retry_times = retry_times_opt.unwrap_or(0);
     if retry_times >= MAX_BACKEND_RETRY {
-        for task in tasks.into_iter() {
+        for task in tasks.drain(..) {
             let cmd_err = match err {
                 BackendError::Io(e) => CommandError::Io(io::Error::from(e.kind())),
                 others => {
@@ -562,7 +590,7 @@ fn handle_conn_err<T: CmdTask>(
     } else {
         let retry_state = RetryState {
             retry_times: retry_times + 1,
-            tasks,
+            tasks: tasks.drain(..).collect(),
         };
         Some(retry_state)
     }

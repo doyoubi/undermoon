@@ -226,21 +226,29 @@ where
 
     let mut reply_receiver_list = Vec::with_capacity(session_batch_buf.get());
     let mut replies = Vec::with_capacity(session_batch_buf.get());
+    let output = reader.get_output_buf();
 
-    while let Some(reqs) = reader.next().await {
-        for req in reqs.into_iter() {
-            let packet = match req {
-                Ok(packet) => packet,
-                Err(err) => {
-                    error!("session reader error {:?}", err);
-                    return Err(err);
-                }
+    while let Some(()) = reader.next().await {
+        {
+            let mut reqs = match output.lock() {
+                Ok(reqs) => reqs,
+                Err(_) => return Err(SessionError::InvalidState),
             };
-            let cmd = Command::new(packet);
-            let (reply_sender, reply_receiver) = new_command_pair();
 
-            handler.handle_cmd(cmd, reply_sender);
-            reply_receiver_list.push(reply_receiver);
+            for req in reqs.drain(..) {
+                let packet = match req {
+                    Ok(packet) => packet,
+                    Err(err) => {
+                        error!("session reader error {:?}", err);
+                        return Err(err);
+                    }
+                };
+                let cmd = Command::new(packet);
+                let (reply_sender, reply_receiver) = new_command_pair();
+
+                handler.handle_cmd(cmd, reply_sender);
+                reply_receiver_list.push(reply_receiver);
+            }
         }
 
         for reply_receiver in reply_receiver_list.drain(..) {

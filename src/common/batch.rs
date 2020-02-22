@@ -1,5 +1,4 @@
 use coarsetime;
-use core::mem;
 use core::pin::Pin;
 use futures::stream::{Fuse, FusedStream, Stream};
 use futures::task::{Context, Poll};
@@ -10,6 +9,7 @@ use futures_sink::Sink;
 use futures_timer::Delay;
 use pin_project::pin_project;
 use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 // The following codes are copied from github.com/mre/futures-batch
@@ -17,6 +17,7 @@ use std::time::Duration;
 // - Reset timer instead of setting `clock` to None for better performance.
 // - Has two different timeout to avoid triggering the real timer too many times.
 // - Flush if there's only one item even it's not timed out yet for non-pipeline requests.
+// - Read data from a shared Vec instead of returned value.
 
 pub trait TryChunksTimeoutStreamExt: Stream {
     fn try_chunks_timeout(
@@ -39,7 +40,8 @@ impl<T: ?Sized> TryChunksTimeoutStreamExt for T where T: Stream {}
 pub struct TryChunksTimeout<St: Stream> {
     #[pin]
     stream: Fuse<St>,
-    items: Vec<St::Item>,
+    items: Arc<Mutex<Vec<St::Item>>>,
+    items_len: usize,
     cap: NonZeroUsize,
     // https://github.com/rust-lang-nursery/futures-rs/issues/1475
     #[pin]
@@ -62,7 +64,8 @@ where
     ) -> TryChunksTimeout<St> {
         TryChunksTimeout {
             stream: stream.fuse(),
-            items: Vec::with_capacity(capacity.get()),
+            items: Arc::new(Mutex::new(Vec::with_capacity(capacity.get()))),
+            items_len: 0,
             cap: capacity,
             clock: Delay::new(max_duration),
             min_duration: coarsetime::Duration::from(min_duration),
@@ -72,35 +75,41 @@ where
         }
     }
 
-    fn take(mut self: Pin<&mut Self>) -> Vec<St::Item> {
-        let this = self.as_mut().project();
-        let cap = this.cap.get();
-        mem::replace(this.items, Vec::with_capacity(cap))
+    pub fn get_output_buf(&self) -> Arc<Mutex<Vec<St::Item>>> {
+        self.items.clone()
     }
 
-    fn flush(mut self: Pin<&mut Self>, now: coarsetime::Instant) -> Poll<Option<Vec<St::Item>>> {
+    fn flush(mut self: Pin<&mut Self>, now: coarsetime::Instant) -> Poll<Option<()>> {
         let this = self.as_mut().project();
         *this.last_flush_time = now;
-        *this.flush_size = this.items.len();
-        Poll::Ready(Some(self.take()))
+        *this.flush_size = *this.items_len;
+        *this.items_len = 0;
+        Poll::Ready(Some(()))
     }
 }
 
 impl<St: Stream> Stream for TryChunksTimeout<St> {
-    type Item = Vec<St::Item>;
+    type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let start_empty = self.as_mut().items.is_empty();
+        let items_clone = self.as_mut().project().items.clone();
+        let mut items = match items_clone.lock() {
+            Ok(items) => items,
+            _err => {
+                error!("TryChunksTimeout: failed to get lock");
+                return Poll::Ready(None);
+            }
+        };
+        let start_empty = items.is_empty();
+
         loop {
             match self.as_mut().project().stream.poll_next(cx) {
                 Poll::Ready(item) => match item {
-                    // Push the item into the buffer and check whether it is full.
-                    // If so, replace our buffer with a new and empty one and return
-                    // the full one.
                     Some(item) => {
                         let this = self.as_mut().project();
-                        this.items.push(item);
-                        if this.items.len() >= this.cap.get() {
+                        *this.items_len += 1;
+                        items.push(item);
+                        if items.len() >= this.cap.get() {
                             return self.flush(coarsetime::Instant::recent());
                         } else {
                             // Continue the loop
@@ -111,13 +120,7 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
                     // Since the underlying stream ran out of values, return what we
                     // have buffered, if we have anything.
                     None => {
-                        let this = self.as_mut().project();
-                        let last = if this.items.is_empty() {
-                            None
-                        } else {
-                            let full_buf = mem::replace(this.items, Vec::new());
-                            Some(full_buf)
-                        };
+                        let last = if items.is_empty() { None } else { Some(()) };
 
                         return Poll::Ready(last);
                     }
@@ -126,12 +129,12 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
                 Poll::Pending => {}
             }
 
-            if self.items.is_empty() {
+            if items.is_empty() {
                 return Poll::Pending;
             }
 
             // Learn from the last flush size.
-            if self.items.len() >= self.flush_size {
+            if items.len() >= self.flush_size {
                 return self.flush(coarsetime::Instant::recent());
             }
 
@@ -160,7 +163,7 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let chunk_len = if self.items.is_empty() { 0 } else { 1 };
+        let chunk_len = if self.items_len == 0 { 0 } else { 1 };
         let (lower, upper) = self.stream.size_hint();
         let lower = lower.saturating_add(chunk_len);
         let upper = match upper {
@@ -173,7 +176,7 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
 
 impl<St: FusedStream> FusedStream for TryChunksTimeout<St> {
     fn is_terminated(&self) -> bool {
-        self.stream.is_terminated() & self.items.is_empty()
+        self.stream.is_terminated() & (self.items_len == 0)
     }
 }
 
@@ -197,14 +200,14 @@ mod tests {
 
     #[tokio::test]
     async fn messages_pass_through() {
-        let results = stream::iter(iter::once(5))
-            .try_chunks_timeout(
-                NonZeroUsize::new(5).unwrap(),
-                Duration::new(1, 0),
-                Duration::new(1, 0),
-            )
-            .collect::<Vec<_>>();
-        assert_eq!(vec![vec![5]], results.await);
+        let mut chunk_stream = stream::iter(iter::once(5)).try_chunks_timeout(
+            NonZeroUsize::new(5).unwrap(),
+            Duration::new(1, 0),
+            Duration::new(1, 0),
+        );
+        let output = chunk_stream.get_output_buf();
+        chunk_stream.next().await;
+        assert_eq!(vec![5], output.lock().unwrap().clone());
     }
 
     #[tokio::test]
@@ -212,16 +215,19 @@ mod tests {
         let iter = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into_iter();
         let stream = stream::iter(iter);
 
-        let chunk_stream = TryChunksTimeout::new(
+        let mut chunk_stream = TryChunksTimeout::new(
             stream,
             NonZeroUsize::new(5).unwrap(),
             Duration::new(1, 0),
             Duration::new(1, 0),
         );
-        assert_eq!(
-            vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9]],
-            chunk_stream.collect::<Vec<_>>().await
-        );
+        let output = chunk_stream.get_output_buf();
+        chunk_stream.next().await;
+        let tasks: Vec<_> = output.lock().unwrap().drain(..).collect();
+        assert_eq!(vec![0, 1, 2, 3, 4], tasks,);
+        chunk_stream.next().await;
+        let tasks: Vec<_> = output.lock().unwrap().drain(..).collect();
+        assert_eq!(vec![5, 6, 7, 8, 9], tasks,)
     }
 
     #[tokio::test]
@@ -229,15 +235,14 @@ mod tests {
         let iter = vec![1, 2, 3, 4].into_iter();
         let stream = stream::iter(iter);
 
-        let chunk_stream = TryChunksTimeout::new(
+        let mut chunk_stream = TryChunksTimeout::new(
             stream,
             NonZeroUsize::new(5).unwrap(),
             Duration::new(1, 0),
             Duration::new(1, 0),
         );
-        assert_eq!(
-            vec![vec![1, 2, 3, 4]],
-            chunk_stream.collect::<Vec<_>>().await
-        );
+        let output = chunk_stream.get_output_buf();
+        chunk_stream.next().await;
+        assert_eq!(vec![1, 2, 3, 4], output.lock().unwrap().clone(),);
     }
 }
