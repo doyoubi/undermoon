@@ -2,7 +2,7 @@ use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
 use crate::common::cluster::{DBName, MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
-use crate::common::db::HostDBMap;
+use crate::common::db::ProxyDBMap;
 use crate::common::utils::{get_slot, ThreadSafe};
 use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
@@ -76,7 +76,7 @@ where
     pub fn create_new_migration_map<BCF: TaskBlockingControllerFactory>(
         &self,
         old_migration_map: &MigrationMap<TSF>,
-        local_db_map: &HostDBMap,
+        local_db_map: &ProxyDBMap,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<TSF> {
         old_migration_map.update_from_old_task_map(
@@ -147,7 +147,7 @@ where
     pub fn create_new_deleting_task_map(
         &self,
         old_deleting_task_map: &DeleteKeysTaskMap,
-        local_db_map: &HostDBMap,
+        local_db_map: &ProxyDBMap,
         left_slots_after_change: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
     ) -> (DeleteKeysTaskMap, Vec<Arc<DeleteKeysTask>>) {
         old_deleting_task_map.update_from_old_task_map(
@@ -291,7 +291,7 @@ where
     pub fn get_left_slots_after_change(
         &self,
         new_migration_map: &Self,
-        new_db_map: &HostDBMap,
+        new_db_map: &ProxyDBMap,
     ) -> HashMap<DBName, HashMap<String, Vec<SlotRange>>> {
         let mut left_slots = HashMap::new();
         for (dbname, db) in self.task_map.iter() {
@@ -333,7 +333,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn update_from_old_task_map<RCF, CTF, BCF>(
         &self,
-        local_db_map: &HostDBMap,
+        local_db_map: &ProxyDBMap,
         config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
@@ -362,7 +362,7 @@ where
                     match slot_range.tag {
                         SlotRangeTag::Migrating(ref _meta) => {
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
                             if let Some(Either::Left(migrating_task)) = old_task_map
@@ -377,7 +377,7 @@ where
                         }
                         SlotRangeTag::Importing(ref _meta) => {
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
                             if let Some(Either::Right(importing_task)) = old_task_map
@@ -407,7 +407,7 @@ where
                         SlotRangeTag::Migrating(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: db_name.clone(),
                                 slot_range: SlotRange {
                                     start,
                                     end,
@@ -449,7 +449,7 @@ where
                         SlotRangeTag::Importing(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: db_name.clone(),
                                 slot_range: SlotRange {
                                     start,
                                     end,
@@ -508,15 +508,15 @@ where
         switch_arg: SwitchArg,
         sub_cmd: MgrSubCmd,
     ) -> Result<(), SwitchError> {
-        if let Some(tasks) = self.task_map.get(&switch_arg.meta.db_name) {
+        if let Some(tasks) = self.task_map.get(&switch_arg.meta.cluster_name) {
             debug!(
                 "found tasks for db {} {}",
-                switch_arg.meta.db_name,
+                switch_arg.meta.cluster_name,
                 tasks.len()
             );
 
             if let Some(record) = tasks.get(&switch_arg.meta) {
-                debug!("found record for db {}", switch_arg.meta.db_name);
+                debug!("found record for db {}", switch_arg.meta.cluster_name);
                 match record {
                     Either::Left(_migrating_task) => {
                         error!(

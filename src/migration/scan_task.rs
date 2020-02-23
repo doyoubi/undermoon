@@ -104,7 +104,7 @@ impl<
         let arg = SwitchArg {
             version: UNDERMOON_MIGRATION_VERSION.to_string(),
             meta: MigrationTaskMeta {
-                db_name: self.db_name.clone(),
+                cluster_name: self.db_name.clone(),
                 slot_range: SlotRange {
                     start: self.slot_range.0,
                     end: self.slot_range.1,

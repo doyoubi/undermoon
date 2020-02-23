@@ -1,7 +1,7 @@
 use super::task::{ScanResponse, SlotRangeArray};
 use crate::common::cluster::{DBName, SlotRange};
 use crate::common::config::AtomicMigrationConfig;
-use crate::common::db::HostDBMap;
+use crate::common::db::ProxyDBMap;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::keep_connecting_and_sending;
 use crate::migration::task::MigrationError;
@@ -44,7 +44,7 @@ impl DeleteKeysTaskMap {
 
     pub fn update_from_old_task_map<F: RedisClientFactory>(
         &self,
-        local_db_map: &HostDBMap,
+        local_db_map: &ProxyDBMap,
         left_slots_after_change: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
         config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<F>,

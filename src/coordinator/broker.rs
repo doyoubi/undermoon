@@ -1,4 +1,4 @@
-use crate::common::cluster::{Cluster, Host, MigrationTaskMeta};
+use crate::common::cluster::{Cluster, MigrationTaskMeta, Proxy};
 use crate::common::utils::ThreadSafe;
 use futures::{Future, Stream};
 use std::error::Error;
@@ -24,7 +24,7 @@ pub trait MetaDataBroker: ThreadSafe {
     fn get_host<'s>(
         &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaDataBrokerError>> + Send + 's>>;
 
     fn add_failure<'s>(
         &'s self,
@@ -43,7 +43,7 @@ pub trait MetaManipulationBroker: ThreadSafe {
     fn replace_proxy<'s>(
         &'s self,
         failed_proxy_address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Proxy, MetaManipulationBrokerError>> + Send + 's>>;
 
     fn commit_migration<'s>(
         &'s self,

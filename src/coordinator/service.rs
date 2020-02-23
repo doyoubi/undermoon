@@ -1,13 +1,13 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{
-    CoordinateError, FailureDetector, FailureHandler, HostMetaRespSynchronizer,
-    HostMetaSynchronizer, MigrationStateSynchronizer, SeqFailureDetector, SeqFailureHandler,
+    CoordinateError, FailureDetector, FailureHandler, HostMetaSynchronizer,
+    MigrationStateSynchronizer, ProxyMetaRespSynchronizer, SeqFailureDetector, SeqFailureHandler,
     SeqMigrationStateSynchronizer,
 };
 use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailureDetector};
 use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
 use super::recover::{BrokerProxyFailureRetriever, ReplaceNodeHandler};
-use super::sync::{BrokerMetaRetriever, HostMetaRespSender};
+use super::sync::{BrokerMetaRetriever, ProxyMetaRespSender};
 use crate::common::utils::ThreadSafe;
 use crate::protocol::RedisClientFactory;
 use futures::future::select_all;
@@ -88,8 +88,8 @@ impl<
     ) -> impl HostMetaSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
-        let sender = HostMetaRespSender::new(client_factory);
-        HostMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)
+        let sender = ProxyMetaRespSender::new(client_factory);
+        ProxyMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)
     }
 
     fn gen_failure_handler(data_broker: Arc<DB>, mani_broker: Arc<MB>) -> impl FailureHandler {
@@ -107,7 +107,7 @@ impl<
         let checker = MigrationStateRespChecker::new(client_factory.clone());
         let committer = BrokerMigrationCommitter::new(mani_broker);
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
-        let sender = HostMetaRespSender::new(client_factory);
+        let sender = ProxyMetaRespSender::new(client_factory);
         SeqMigrationStateSynchronizer::new(
             proxy_retriever,
             checker,

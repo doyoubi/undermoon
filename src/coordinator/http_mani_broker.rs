@@ -1,5 +1,5 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
-use crate::common::cluster::{Host, MigrationTaskMeta};
+use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use futures::Future;
 use reqwest;
 use std::pin::Pin;
@@ -23,7 +23,7 @@ impl HttpMetaManipulationBroker {
     async fn replace_proxy_impl(
         &self,
         failed_proxy_address: String,
-    ) -> Result<Host, MetaManipulationBrokerError> {
+    ) -> Result<Proxy, MetaManipulationBrokerError> {
         let url = format!(
             "http://{}/api/proxies/failover/{}",
             self.broker_address, failed_proxy_address
@@ -107,7 +107,7 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
     fn replace_proxy<'s>(
         &'s self,
         failed_proxy_address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Host, MetaManipulationBrokerError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Proxy, MetaManipulationBrokerError>> + Send + 's>> {
         Box::pin(self.replace_proxy_impl(failed_proxy_address))
     }
 

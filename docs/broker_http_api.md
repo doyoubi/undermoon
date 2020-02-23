@@ -162,7 +162,7 @@ Try to do the migration
 ```
 Request:
 {
-    "db_name": "mydb",
+    "cluster_name": "mydb",
     "slot_range": {
         "start": 0,
         "end": 5000,

@@ -1,5 +1,5 @@
 use crate::common::cluster::{
-    Cluster, Host, MigrationTaskMeta, Node, PeerProxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
+    Cluster, MigrationTaskMeta, Node, PeerProxy, Proxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
 };
 use crate::common::cluster::{DBName, MigrationMeta, Role};
 use crate::common::config::ClusterConfig;
@@ -73,7 +73,7 @@ impl MetaStore {
         self.all_nodes.keys().cloned().collect()
     }
 
-    pub fn get_host_by_address(&self, address: &str) -> Option<Host> {
+    pub fn get_host_by_address(&self, address: &str) -> Option<Proxy> {
         let all_nodes = &self.all_nodes;
         let clusters = &self.clusters;
         all_nodes.get(address).and_then(|node_resource| {
@@ -109,7 +109,7 @@ impl MetaStore {
                             }
                         })
                         .collect();
-                    Host::new(
+                    Proxy::new(
                         address.to_string(),
                         epoch,
                         nodes,
@@ -119,7 +119,7 @@ impl MetaStore {
                     )
                 })
                 .or_else(|| {
-                    Some(Host::new(
+                    Some(Proxy::new(
                         address.to_string(),
                         self.global_epoch,
                         vec![],
@@ -511,7 +511,7 @@ impl MetaStore {
     pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
         debug!("MetaStore::commit_migration {:?}", task);
         let MigrationTaskMeta {
-            db_name,
+            cluster_name,
             slot_range,
         } = task;
 
@@ -519,7 +519,7 @@ impl MetaStore {
 
         let cluster = self
             .clusters
-            .get_mut(&db_name)
+            .get_mut(&cluster_name)
             .ok_or(MetaStoreError::ClusterNotFound)?;
 
         let migration_meta = slot_range
@@ -974,7 +974,7 @@ impl MetaStore {
     pub fn replace_failed_proxy(
         &mut self,
         failed_proxy_address: String,
-    ) -> Result<Host, MetaStoreError> {
+    ) -> Result<Proxy, MetaStoreError> {
         let (cluster_name, node_addresses) = {
             let node_resource = self
                 .all_nodes

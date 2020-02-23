@@ -253,17 +253,18 @@ impl<'de> Deserialize<'de> for DBName {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationTaskMeta {
-    pub db_name: DBName,
+    #[serde(alias = "db_name")]
+    pub cluster_name: DBName,
     pub slot_range: SlotRange,
 }
 
 impl MigrationTaskMeta {
     pub fn into_strings(self) -> Vec<String> {
         let MigrationTaskMeta {
-            db_name,
+            cluster_name,
             slot_range,
         } = self;
-        let mut strs = vec![db_name.to_string()];
+        let mut strs = vec![cluster_name.to_string()];
         strs.extend(slot_range.into_strings());
         strs
     }
@@ -272,10 +273,10 @@ impl MigrationTaskMeta {
         It: Iterator<Item = String>,
     {
         let db_name_str = it.next()?;
-        let db_name = DBName::from(&db_name_str).ok()?;
+        let cluster_name = DBName::from(&db_name_str).ok()?;
         let slot_range = SlotRange::from_strings(it)?;
         Some(Self {
-            db_name,
+            cluster_name,
             slot_range,
         })
     }
@@ -480,7 +481,7 @@ pub struct PeerProxy {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct Host {
+pub struct Proxy {
     address: String,
     epoch: u64,
     nodes: Vec<Node>,
@@ -490,7 +491,7 @@ pub struct Host {
     clusters_config: HashMap<DBName, ClusterConfig>,
 }
 
-impl Host {
+impl Proxy {
     pub fn new(
         address: String,
         epoch: u64,
@@ -651,7 +652,7 @@ mod tests {
                 }
             }
         }"#;
-        let host: Host = match serde_json::from_str(host_str) {
+        let host: Proxy = match serde_json::from_str(host_str) {
             Ok(h) => h,
             Err(e) => {
                 panic!(e);
@@ -663,7 +664,7 @@ mod tests {
         let mut clusters_config = HashMap::new();
         clusters_config.insert(DBName::from("mydb").unwrap(), config);
 
-        let expected_host = Host::new(
+        let expected_host = Proxy::new(
             "server_proxy1:6001".to_string(),
             1,
             vec![
