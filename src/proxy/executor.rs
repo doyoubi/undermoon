@@ -4,7 +4,7 @@ use super::compress::{CmdCompressor, CompressionError};
 use super::database::{DBError, DBTag};
 use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
-use super::session::{CmdCtx, CmdCtxHandler, CmdCtxFactory};
+use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::cluster::DBName;
 use crate::common::db::ProxyDBMeta;
@@ -18,8 +18,7 @@ use crate::migration::task::MgrSubCmd;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
-use futures::{future, Future};
-use std::pin::Pin;
+use futures::future;
 use std::str;
 use std::sync::{self, Arc};
 
@@ -54,11 +53,7 @@ impl<F: RedisClientFactory> SharedForwardHandler<F> {
 }
 
 impl<F: RedisClientFactory> CmdCtxHandler for SharedForwardHandler<F> {
-    fn handle_cmd_ctx<'s>(
-        &'s self,
-        cmd_ctx: CmdCtx,
-        reply_receiver: CmdReplyReceiver,
-    ) -> Pin<Box<dyn Future<Output = TaskResult> + Send + 's>> {
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         self.handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
     }
 }
@@ -373,16 +368,14 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         }
     }
 
-    async fn handle_data_cmd(
-        &self,
-        cmd_ctx: CmdCtx,
-        reply_receiver: CmdReplyReceiver,
-    ) -> TaskResult {
+    fn handle_data_cmd(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         match cmd_ctx.get_data_cmd_type() {
-            DataCmdType::MGET => self.handle_mget(cmd_ctx, reply_receiver).await,
+            DataCmdType::MGET => {
+                CmdReplyFuture::Right(Box::pin(self.handle_mget(cmd_ctx, reply_receiver)))
+            }
             _ => {
                 self.handle_single_key_data_cmd(cmd_ctx);
-                reply_receiver.wait_response().await
+                CmdReplyFuture::Left(reply_receiver)
             }
         }
     }
@@ -444,11 +437,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 }
 
 impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
-    fn handle_cmd_ctx<'s>(
-        &'s self,
-        cmd_ctx: CmdCtx,
-        reply_receiver: CmdReplyReceiver,
-    ) -> Pin<Box<dyn Future<Output = TaskResult> + Send + 's>> {
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         let mut cmd_ctx = cmd_ctx;
         if self.config.auto_select_db {
             cmd_ctx = self.manager.try_select_db(cmd_ctx);
@@ -493,8 +482,8 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             CmdType::Command => {
                 cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
             }
-            CmdType::Others => return Box::pin(self.handle_data_cmd(cmd_ctx, reply_receiver)),
+            CmdType::Others => return self.handle_data_cmd(cmd_ctx, reply_receiver),
         };
-        Box::pin(reply_receiver.wait_response())
+        CmdReplyFuture::Left(reply_receiver)
     }
 }

@@ -3,10 +3,14 @@ use crate::common::utils::byte_to_uppercase;
 use crate::protocol::{RespPacket, RespSlice, RespVec};
 use arrayvec::ArrayVec;
 use futures::channel::oneshot;
+use futures::task::{Context, Poll};
+use futures::Future;
+use pin_project::pin_project;
 use std::convert::identity;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::pin::Pin;
 use std::result::Result;
 use std::str;
 
@@ -243,6 +247,15 @@ impl TaskReply {
 pub type CommandResult<T> = Result<Box<T>, CommandError>;
 pub type TaskResult = Result<Box<TaskReply>, CommandError>;
 
+pub fn new_command_pair() -> (CmdReplySender, CmdReplyReceiver) {
+    let (s, r) = oneshot::channel::<TaskResult>();
+    let reply_sender = CmdReplySender {
+        reply_sender: Some(s),
+    };
+    let reply_receiver = CmdReplyReceiver { reply_receiver: r };
+    (reply_sender, reply_receiver)
+}
+
 pub struct CmdReplySender {
     reply_sender: Option<oneshot::Sender<TaskResult>>,
 }
@@ -251,19 +264,6 @@ impl fmt::Debug for CmdReplySender {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "CmdReplySender")
     }
-}
-
-pub struct CmdReplyReceiver {
-    reply_receiver: oneshot::Receiver<TaskResult>,
-}
-
-pub fn new_command_pair() -> (CmdReplySender, CmdReplyReceiver) {
-    let (s, r) = oneshot::channel::<TaskResult>();
-    let reply_sender = CmdReplySender {
-        reply_sender: Some(s),
-    };
-    let reply_receiver = CmdReplyReceiver { reply_receiver: r };
-    (reply_sender, reply_receiver)
 }
 
 impl CmdReplySender {
@@ -291,6 +291,24 @@ impl CmdReplySender {
 impl Drop for CmdReplySender {
     fn drop(&mut self) {
         self.try_send(Err(CommandError::Dropped));
+    }
+}
+
+#[pin_project]
+pub struct CmdReplyReceiver {
+    #[pin]
+    reply_receiver: oneshot::Receiver<TaskResult>,
+}
+
+impl Future for CmdReplyReceiver {
+    type Output = TaskResult;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().reply_receiver.poll(cx).map(|result| {
+            result
+                .map_err(|_| CommandError::Canceled)
+                .and_then(identity)
+        })
     }
 }
 

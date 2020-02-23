@@ -10,7 +10,7 @@ use crate::common::cluster::DBName;
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
 };
-use futures::{stream, Future, TryFutureExt};
+use futures::{future, stream, Future, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use std::boxed::Box;
 use std::error::Error;
@@ -23,20 +23,17 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 
+// CmdReplyReceiver is the fast path without heap allocation.
+pub type CmdReplyFuture<'a> =
+    future::Either<CmdReplyReceiver, Pin<Box<dyn Future<Output = TaskResult> + Send + 'a>>>;
+
 pub trait CmdHandler {
-    fn handle_cmd<'s>(
-        &'s self,
-        cmd: Command,
-    ) -> Pin<Box<dyn Future<Output = TaskResult> + Send + 's>>;
+    fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture;
     fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog);
 }
 
 pub trait CmdCtxHandler {
-    fn handle_cmd_ctx<'s>(
-        &'s self,
-        cmd_ctx: CmdCtx,
-        result_receiver: CmdReplyReceiver,
-    ) -> Pin<Box<dyn Future<Output = TaskResult> + Send + 's>>;
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, result_receiver: CmdReplyReceiver) -> CmdReplyFuture;
 }
 
 #[derive(Debug)]
@@ -195,10 +192,7 @@ impl<H: CmdCtxHandler> Session<H> {
 }
 
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
-    fn handle_cmd<'s>(
-        &'s self,
-        cmd: Command,
-    ) -> Pin<Box<dyn Future<Output = TaskResult> + Send + 's>> {
+    fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
         let (reply_sender, reply_receiver) = new_command_pair();
         let cmd_ctx = CmdCtx::new(self.db.clone(), cmd, reply_sender, self.session_id);
         cmd_ctx.log_event(TaskEvent::Created);
