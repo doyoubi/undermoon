@@ -40,7 +40,6 @@ config = "0.9"
 btoi = "0.4.2"
 crossbeam = "0.7.1"
 crossbeam-channel = "0.4"
-chashmap = "2.2.2"
 actix-web = "0.7"
 chrono = "0.4"
 arr_macro = "0.1.2"
@@ -53,6 +52,7 @@ matches = "0.1.8"
 dashmap = "3.4.4"
 coarsetime = "0.1"
 arrayvec = "0.5.1"
+either = "1.5.3"
 
 [profile.release]
 debug = true
