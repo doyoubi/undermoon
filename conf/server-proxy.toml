@@ -10,7 +10,7 @@ auto_select_db = true
 slowlog_len = 1024
 
 # In microseconds like redis.
-slowlog_log_slower_than = 0
+slowlog_log_slower_than = 20000
 
 thread_number = 2
 

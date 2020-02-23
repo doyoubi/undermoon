@@ -1,15 +1,16 @@
-use super::backend::CmdTask;
-use super::command::CmdType;
+use super::backend::{CmdTask, CmdTaskFactory};
+use super::command::{CmdReplyReceiver, CmdType, DataCmdType, TaskResult};
 use super::compress::{CmdCompressor, CompressionError};
 use super::database::{DBError, DBTag};
 use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
-use super::session::{CmdCtx, CmdCtxHandler};
+use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::cluster::DBName;
 use crate::common::db::ProxyDBMeta;
 use crate::common::utils::{
-    str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
+    str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY,
+    TRY_AGAIN_REPLY,
 };
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
@@ -18,6 +19,8 @@ use crate::migration::task::MgrSubCmd;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
+use btoi::btou;
+use futures::future;
 use std::str;
 use std::sync::{self, Arc};
 
@@ -52,8 +55,8 @@ impl<F: RedisClientFactory> SharedForwardHandler<F> {
 }
 
 impl<F: RedisClientFactory> CmdCtxHandler for SharedForwardHandler<F> {
-    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
-        self.handler.handle_cmd_ctx(cmd_ctx)
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
+        self.handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
     }
 }
 
@@ -367,7 +370,197 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         }
     }
 
-    fn handle_data_cmd(&self, cmd_ctx: CmdCtx) {
+    fn handle_data_cmd(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
+        match cmd_ctx.get_data_cmd_type() {
+            DataCmdType::MGET => {
+                CmdReplyFuture::Right(Box::pin(self.handle_mget(cmd_ctx, reply_receiver)))
+            }
+            DataCmdType::MSET => {
+                CmdReplyFuture::Right(Box::pin(self.handle_mset(cmd_ctx, reply_receiver)))
+            }
+            DataCmdType::DEL if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
+                CmdReplyFuture::Right(Box::pin(self.handle_multi_int_cmd(
+                    cmd_ctx,
+                    reply_receiver,
+                    "DEL",
+                )))
+            }
+            DataCmdType::EXISTS if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
+                CmdReplyFuture::Right(Box::pin(self.handle_multi_int_cmd(
+                    cmd_ctx,
+                    reply_receiver,
+                    "EXISTS",
+                )))
+            }
+            _ => {
+                self.handle_single_key_data_cmd(cmd_ctx);
+                CmdReplyFuture::Left(reply_receiver)
+            }
+        }
+    }
+
+    async fn handle_mget(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        let factory = CmdCtxFactory::default();
+        let mut futs = vec![];
+        for i in 1.. {
+            let key = match cmd_ctx.get_cmd().get_command_element(i) {
+                Some(key) => key,
+                None => break,
+            };
+            let resp = Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(b"GET".to_vec())),
+                Resp::Bulk(BulkStr::Str(key.to_vec())),
+            ]));
+            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            futs.push(fut);
+            self.handle_single_key_data_cmd(sub_cmd_ctx);
+        }
+
+        if futs.is_empty() {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                b"ERR wrong number of arguments for 'mget' command".to_vec(),
+            )));
+            return reply_receiver.await;
+        }
+
+        let mut values = vec![];
+        let res = future::join_all(futs).await;
+        for sub_result in res.into_iter() {
+            let reply = match sub_result {
+                Ok(reply) => reply,
+                Err(err) => return Err(err),
+            };
+            if let Resp::Error(err) = &reply {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(err.clone())));
+                return reply_receiver.await;
+            }
+            values.push(reply);
+        }
+
+        let resp = Resp::Arr(Array::Arr(values));
+        cmd_ctx.set_resp_result(Ok(resp));
+        reply_receiver.await
+    }
+
+    async fn handle_mset(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        let factory = CmdCtxFactory::default();
+        let mut futs = vec![];
+        for i in 0.. {
+            let key = match cmd_ctx.get_cmd().get_command_element(2 * i + 1) {
+                Some(key) => key,
+                None => break,
+            };
+            let value = match cmd_ctx.get_cmd().get_command_element(2 * i + 2) {
+                Some(value) => value,
+                None => {
+                    // The existing sub commands will be set with Canceled.
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        b"ERR wrong number of arguments for 'mset' command".to_vec(),
+                    )));
+                    return reply_receiver.await;
+                }
+            };
+            let resp = Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(b"SET".to_vec())),
+                Resp::Bulk(BulkStr::Str(key.to_vec())),
+                Resp::Bulk(BulkStr::Str(value.to_vec())),
+            ]));
+            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            futs.push(fut);
+            self.handle_single_key_data_cmd(sub_cmd_ctx);
+        }
+
+        if futs.is_empty() {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                b"ERR wrong number of arguments for 'mset' command".to_vec(),
+            )));
+            return reply_receiver.await;
+        }
+
+        let res = future::join_all(futs).await;
+        for sub_result in res.into_iter() {
+            let reply = match sub_result {
+                Ok(reply) => reply,
+                Err(err) => return Err(err),
+            };
+            if let Resp::Error(err) = reply {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(err)));
+                return reply_receiver.await;
+            }
+        }
+
+        let resp = Resp::Simple(OK_REPLY.to_string().into_bytes());
+        cmd_ctx.set_resp_result(Ok(resp));
+        reply_receiver.await
+    }
+
+    async fn handle_multi_int_cmd(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+        cmd_name: &'static str,
+    ) -> TaskResult {
+        let factory = CmdCtxFactory::default();
+        let mut futs = vec![];
+        for i in 1.. {
+            let key = match cmd_ctx.get_cmd().get_command_element(i) {
+                Some(key) => key,
+                None => break,
+            };
+            let resp = Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(cmd_name.to_string().into_bytes())),
+                Resp::Bulk(BulkStr::Str(key.to_vec())),
+            ]));
+            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            futs.push(fut);
+            self.handle_single_key_data_cmd(sub_cmd_ctx);
+        }
+
+        if futs.is_empty() {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                format!("ERR wrong number of arguments for '{}' command", cmd_name).into_bytes(),
+            )));
+            return reply_receiver.await;
+        }
+
+        let mut count: usize = 0;
+        let res = future::join_all(futs).await;
+        for sub_result in res.into_iter() {
+            let reply = match sub_result {
+                Ok(reply) => reply,
+                Err(err) => return Err(err),
+            };
+            match reply {
+                Resp::Error(err) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(err.clone())));
+                    return reply_receiver.await;
+                }
+                Resp::Integer(data) => {
+                    let n = match btou::<usize>(&data) {
+                        Ok(n) => n,
+                        Err(err) => {
+                            let err_str =
+                                format!("unexpected reply from {}: {:?} {:?}", cmd_name, data, err);
+                            cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
+                            return reply_receiver.await;
+                        }
+                    };
+                    count += n;
+                }
+                others => {
+                    let err_str = format!("unexpected reply from {}: {:?}", cmd_name, others);
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
+                    return reply_receiver.await;
+                }
+            }
+        }
+
+        let resp = Resp::Integer(count.to_string().into_bytes());
+        cmd_ctx.set_resp_result(Ok(resp));
+        reply_receiver.await
+    }
+
+    fn handle_single_key_data_cmd(&self, cmd_ctx: CmdCtx) {
         let mut cmd_ctx = cmd_ctx;
         match self.compressor.try_compressing_cmd_ctx(&mut cmd_ctx) {
             Ok(())
@@ -387,12 +580,12 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 )));
             }
         }
-        self.manager.send(cmd_ctx)
+        self.manager.send(cmd_ctx);
     }
 }
 
 impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
-    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx) {
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         let mut cmd_ctx = cmd_ctx;
         if self.config.auto_select_db {
             cmd_ctx = self.manager.try_select_db(cmd_ctx);
@@ -428,7 +621,6 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             CmdType::Select => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
-            CmdType::Others => self.handle_data_cmd(cmd_ctx),
             CmdType::Invalid => cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid command").into_bytes(),
             ))),
@@ -438,6 +630,8 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
             CmdType::Command => {
                 cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
             }
+            CmdType::Others => return self.handle_data_cmd(cmd_ctx, reply_receiver),
         };
+        CmdReplyFuture::Left(reply_receiver)
     }
 }

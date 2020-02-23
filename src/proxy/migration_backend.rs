@@ -553,7 +553,6 @@ mod tests {
 
     async fn gen_reply_future(reply_receiver: CmdReplyReceiver) -> Result<BinSafeStr, ()> {
         reply_receiver
-            .wait_response()
             .await
             .map_err(|err| error!("cmd err: {:?}", err))
             .map(|task_reply| {

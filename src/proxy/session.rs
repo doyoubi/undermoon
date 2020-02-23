@@ -1,7 +1,7 @@
-use super::backend::{CmdTask, CmdTaskFactory, TaskResult};
+use super::backend::{CmdTask, CmdTaskFactory, CmdTaskResult};
 use super::command::{
-    new_command_pair, CmdReplySender, CmdType, Command, CommandError, CommandResult, DataCmdType,
-    TaskReply,
+    new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
+    CommandResult, DataCmdType, TaskReply, TaskResult,
 };
 use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
@@ -10,7 +10,7 @@ use crate::common::cluster::DBName;
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
 };
-use futures::{stream, Future, TryFutureExt};
+use futures::{future, stream, Future, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use std::boxed::Box;
 use std::error::Error;
@@ -23,14 +23,17 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 
-// TODO: Let it return future to support multi-key commands.
+// CmdReplyReceiver is the fast path without heap allocation.
+pub type CmdReplyFuture<'a> =
+    future::Either<CmdReplyReceiver, Pin<Box<dyn Future<Output = TaskResult> + Send + 'a>>>;
+
 pub trait CmdHandler {
-    fn handle_cmd(&self, cmd: Command, sender: CmdReplySender);
+    fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture;
     fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog);
 }
 
 pub trait CmdCtxHandler {
-    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx);
+    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, result_receiver: CmdReplyReceiver) -> CmdReplyFuture;
 }
 
 #[derive(Debug)]
@@ -147,7 +150,7 @@ impl CmdTaskFactory for CmdCtxFactory {
         resp: RespVec,
     ) -> (
         Self::Task,
-        Pin<Box<dyn Future<Output = TaskResult> + Send + 'static>>,
+        Pin<Box<dyn Future<Output = CmdTaskResult> + Send + 'static>>,
     ) {
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
@@ -158,9 +161,7 @@ impl CmdTaskFactory for CmdCtxFactory {
             reply_sender,
             another_task.get_session_id(),
         );
-        let fut = reply_receiver
-            .wait_response()
-            .map_ok(|reply| reply.into_resp_vec());
+        let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
     }
 }
@@ -189,10 +190,11 @@ impl<H: CmdCtxHandler> Session<H> {
 }
 
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
-    fn handle_cmd(&self, cmd: Command, reply_sender: CmdReplySender) {
+    fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
+        let (reply_sender, reply_receiver) = new_command_pair();
         let cmd_ctx = CmdCtx::new(self.db.clone(), cmd, reply_sender, self.session_id);
         cmd_ctx.log_event(TaskEvent::Created);
-        self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx);
+        self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
     }
 
     fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog) {
@@ -237,17 +239,13 @@ where
                 }
             };
             let cmd = Command::new(packet);
-            let (reply_sender, reply_receiver) = new_command_pair();
 
-            handler.handle_cmd(cmd, reply_sender);
-            reply_receiver_list.push(reply_receiver);
+            let fut = handler.handle_cmd(cmd);
+            reply_receiver_list.push(fut);
         }
 
         for reply_receiver in reply_receiver_list.drain(..) {
-            let res = reply_receiver
-                .wait_response()
-                .await
-                .map_err(SessionError::CmdErr);
+            let res = reply_receiver.await.map_err(SessionError::CmdErr);
             let packet = match res {
                 Ok(task_reply) => {
                     let (request, packet, slowlog) = (*task_reply).into_inner();
@@ -327,7 +325,7 @@ mod tests {
         let (sender, receiver) = new_command_pair();
         let cmd_ctx = CmdCtx::new(db, cmd, sender, 7799);
         drop(cmd_ctx);
-        let err = match receiver.wait_response().await {
+        let err = match receiver.await {
             Ok(_) => panic!(),
             Err(err) => err,
         };
