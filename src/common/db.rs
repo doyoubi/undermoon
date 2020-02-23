@@ -52,8 +52,8 @@ const CONFIG_PREFIX: &str = "CONFIG";
 pub struct ProxyDBMeta {
     epoch: u64,
     flags: DBMapFlags,
-    local: HostDBMap,
-    peer: HostDBMap,
+    local: ProxyDBMap,
+    peer: ProxyDBMap,
     clusters_config: ClusterConfigMap,
 }
 
@@ -61,8 +61,8 @@ impl ProxyDBMeta {
     pub fn new(
         epoch: u64,
         flags: DBMapFlags,
-        local: HostDBMap,
-        peer: HostDBMap,
+        local: ProxyDBMap,
+        peer: ProxyDBMap,
         clusters_config: ClusterConfigMap,
     ) -> Self {
         Self {
@@ -82,10 +82,10 @@ impl ProxyDBMeta {
         self.flags.clone()
     }
 
-    pub fn get_local(&self) -> &HostDBMap {
+    pub fn get_local(&self) -> &ProxyDBMap {
         &self.local
     }
-    pub fn get_peer(&self) -> &HostDBMap {
+    pub fn get_peer(&self) -> &ProxyDBMap {
         &self.peer
     }
 
@@ -125,14 +125,14 @@ impl ProxyDBMeta {
 
         let flags = DBMapFlags::from_arg(&try_get!(it.next()));
 
-        let local = HostDBMap::parse(it)?;
-        let mut peer = HostDBMap::new(HashMap::new());
+        let local = ProxyDBMap::parse(it)?;
+        let mut peer = ProxyDBMap::new(HashMap::new());
         let mut clusters_config = ClusterConfigMap::default();
         let mut extended_meta_result = Ok(());
 
         while let Some(token) = it.next() {
             match token.to_uppercase().as_str() {
-                PEER_PREFIX => peer = HostDBMap::parse(it)?,
+                PEER_PREFIX => peer = ProxyDBMap::parse(it)?,
                 CONFIG_PREFIX => match ClusterConfigMap::parse(it) {
                     Ok(c) => clusters_config = c,
                     Err(_) => {
@@ -179,11 +179,11 @@ impl ProxyDBMeta {
 }
 
 #[derive(Debug, Clone)]
-pub struct HostDBMap {
+pub struct ProxyDBMap {
     db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
 }
 
-impl HostDBMap {
+impl ProxyDBMap {
     pub fn new(db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>>) -> Self {
         Self { db_map }
     }
@@ -374,7 +374,7 @@ mod tests {
             .into_iter()
             .map(|s| s.to_string())
             .peekable();
-        let r = HostDBMap::parse(&mut arguments);
+        let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_single_db");
         assert_eq!(host_db_map.db_map.len(), 1);
@@ -394,7 +394,7 @@ mod tests {
         .map(|s| s.to_string())
         .peekable();
 
-        let r = HostDBMap::parse(&mut arguments);
+        let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_slots");
         assert_eq!(host_db_map.db_map.len(), 1);
@@ -432,7 +432,7 @@ mod tests {
         .into_iter()
         .map(|s| s.to_string())
         .peekable();
-        let r = HostDBMap::parse(&mut arguments);
+        let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_nodes");
         assert_eq!(host_db_map.db_map.len(), 1);
@@ -483,7 +483,7 @@ mod tests {
         .into_iter()
         .map(|s| s.to_string())
         .peekable();
-        let r = HostDBMap::parse(&mut arguments);
+        let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_db");
         assert_eq!(host_db_map.db_map.len(), 2);
@@ -662,10 +662,10 @@ mod tests {
             .into_iter()
             .map(|s| s.to_string())
             .peekable();
-        let r = HostDBMap::parse(&mut it);
+        let r = ProxyDBMap::parse(&mut it);
         let host_db_map = r.expect("test_to_map");
 
-        let db_map = HostDBMap::new(host_db_map.db_map);
+        let db_map = ProxyDBMap::new(host_db_map.db_map);
         let mut args = db_map.db_map_to_args();
         let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         args.sort();

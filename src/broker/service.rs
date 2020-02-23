@@ -1,9 +1,9 @@
 use super::store::{MetaStore, MetaStoreError, MigrationType};
 use crate::broker::store::InconsistentError;
-use crate::common::cluster::{Cluster, Host, MigrationTaskMeta, Node};
+use crate::common::cluster::{Cluster, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_meta_broker::{
-    ClusterNamesPayload, ClusterPayload, FailuresPayload, HostAddressesPayload, HostPayload,
+    ClusterNamesPayload, ClusterPayload, FailuresPayload, ProxyAddressesPayload, ProxyPayload,
 };
 use actix_web::{
     error, http, middleware, App, HttpRequest, HttpResponse, Json, Path, Responder, State,
@@ -113,7 +113,7 @@ impl MemBrokerService {
             .get_hosts()
     }
 
-    pub fn get_host_by_address(&self, address: &str) -> Option<Host> {
+    pub fn get_host_by_address(&self, address: &str) -> Option<Proxy> {
         self.store
             .read()
             .expect("MemBrokerService::get_host_by_address")
@@ -134,8 +134,8 @@ impl MemBrokerService {
             .get_cluster_by_name(name)
     }
 
-    pub fn add_hosts(&self, host_resource: HostResource) -> Result<(), MetaStoreError> {
-        let HostResource {
+    pub fn add_hosts(&self, host_resource: ProxyResource) -> Result<(), MetaStoreError> {
+        let ProxyResource {
             proxy_address,
             nodes,
         } = host_resource;
@@ -251,7 +251,7 @@ impl MemBrokerService {
     pub fn replace_failed_node(
         &self,
         failed_proxy_address: String,
-    ) -> Result<Host, MetaStoreError> {
+    ) -> Result<Proxy, MetaStoreError> {
         self.store
             .write()
             .expect("MemBrokerService::replace_failed_node")
@@ -277,13 +277,13 @@ fn get_all_metadata(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Respon
 
 fn get_host_addresses(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
     let addresses = request.state().get_host_addresses();
-    Json(HostAddressesPayload { addresses })
+    Json(ProxyAddressesPayload { addresses })
 }
 
 fn get_host_by_address((path, state): (Path<(String,)>, ServiceState)) -> impl Responder {
     let name = path.into_inner().0;
     let host = state.get_host_by_address(&name);
-    Json(HostPayload { host })
+    Json(ProxyPayload { host })
 }
 
 fn get_cluster_names(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
@@ -303,7 +303,7 @@ fn get_failures(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder 
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct HostResource {
+pub struct ProxyResource {
     proxy_address: String,
     nodes: Vec<String>,
 }
@@ -311,7 +311,7 @@ pub struct HostResource {
 type ServiceState = State<Arc<MemBrokerService>>;
 
 fn add_host(
-    (host_resource, state): (Json<HostResource>, ServiceState),
+    (host_resource, state): (Json<ProxyResource>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     state.add_hosts(host_resource.into_inner()).map(|()| "")
 }
@@ -413,7 +413,7 @@ fn commit_migration(
 
 fn replace_failed_node(
     (path, state): (Path<(String,)>, ServiceState),
-) -> Result<Json<Host>, MetaStoreError> {
+) -> Result<Json<Proxy>, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
     state.replace_failed_node(proxy_address).map(Json)
 }

@@ -292,20 +292,19 @@ Refer to [HTTP API documentation](./docs/broker_http_api.md).
 - ~~Implement AUTH command to select database~~ (done)
 - ~~Implement meta data manipulation api~~ (done)
 - ~~Basic coordinator implementation~~ (done)
-- Implement Redis Replication Protocol
 - ~~Support slot migration via replication~~ (done)
 - ~~Optimize RESP parsing~~ (done)
 - ~~Implement CLUSTER SLOTS~~ (done)
-- ~~Implement commands to get proxy meta~~
+- ~~Implement commands to get proxy meta~~ (done)
 - Track spawned futures
 - ~~Simple script to push configuration to proxy for demonstration~~ (done)
-- Batch write operations with interval flushing
+- ~~Batch write operations with interval flushing~~ (done)
 - ~~Add configuration~~ (done)
 - Limit running commands, connections
 - ~~Slow log~~ (done)
 - Statistics
-- Support multi-key commands
-- ~~Support dynamic configuration by CONFIG command~~
+- ~~Support multi-key commands~~ (done)
+- ~~Support dynamic configuration by CONFIG command~~ (done)
 - ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
 - Recover peer meta after reboot to support redirection.
 - ~~Syscall batching~~ (done)

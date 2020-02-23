@@ -1,7 +1,7 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
-use crate::common::cluster::{DBName, Host, Role, SlotRange};
-use crate::common::db::{ClusterConfigMap, DBMapFlags, HostDBMap, ProxyDBMeta};
+use crate::common::cluster::{DBName, Proxy, Role, SlotRange};
+use crate::common::db::{ClusterConfigMap, DBMapFlags, ProxyDBMap, ProxyDBMeta};
 use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
@@ -10,18 +10,18 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-pub struct HostMetaRespSender<F: RedisClientFactory> {
+pub struct ProxyMetaRespSender<F: RedisClientFactory> {
     client_factory: Arc<F>,
 }
 
-impl<F: RedisClientFactory> HostMetaRespSender<F> {
+impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
     pub fn new(client_factory: Arc<F>) -> Self {
         Self { client_factory }
     }
 }
 
-impl<F: RedisClientFactory> HostMetaRespSender<F> {
-    async fn send_meta_impl(&self, host: Host) -> Result<(), CoordinateError> {
+impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
+    async fn send_meta_impl(&self, host: Proxy) -> Result<(), CoordinateError> {
         let mut client = self
             .client_factory
             .create_client(host.get_address().clone())
@@ -44,16 +44,16 @@ impl<F: RedisClientFactory> HostMetaRespSender<F> {
     }
 }
 
-impl<F: RedisClientFactory> HostMetaSender for HostMetaRespSender<F> {
+impl<F: RedisClientFactory> HostMetaSender for ProxyMetaRespSender<F> {
     fn send_meta<'s>(
         &'s self,
-        host: Host,
+        host: Proxy,
     ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
         Box::pin(self.send_meta_impl(host))
     }
 }
 
-fn filter_host_masters(host: Host) -> Host {
+fn filter_host_masters(host: Proxy) -> Proxy {
     let address = host.get_address().clone();
     let epoch = host.get_epoch();
     let free_nodes = host.get_free_nodes().clone();
@@ -65,7 +65,7 @@ fn filter_host_masters(host: Host) -> Host {
         .filter(|node| node.get_role() == Role::Master)
         .collect();
 
-    Host::new(address, epoch, masters, free_nodes, peers, clusters_config)
+    Proxy::new(address, epoch, masters, free_nodes, peers, clusters_config)
 }
 
 pub struct BrokerMetaRetriever<B: MetaDataBroker> {
@@ -82,7 +82,7 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
     fn get_host_meta<'s>(
         &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, CoordinateError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, CoordinateError>> + Send + 's>> {
         Box::pin(
             self.broker
                 .get_host(address)
@@ -91,7 +91,7 @@ impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
     }
 }
 
-fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
+fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Proxy) -> Vec<String> {
     let epoch = proxy.get_epoch();
     let clusters_config = ClusterConfigMap::new(proxy.get_clusters_config().clone());
 
@@ -103,7 +103,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
             .or_insert_with(HashMap::new);
         dbs.insert(peer_proxy.proxy_address.clone(), peer_proxy.slots.clone());
     }
-    let peer = HostDBMap::new(db_map);
+    let peer = ProxyDBMap::new(db_map);
 
     let mut db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
 
@@ -113,7 +113,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Host) -> Vec<String> {
             .or_insert_with(HashMap::new);
         dbs.insert(node.get_address().clone(), node.into_slots().clone());
     }
-    let local = HostDBMap::new(db_map);
+    let local = ProxyDBMap::new(db_map);
 
     let proxy_db_meta = ProxyDBMeta::new(epoch, flags, local, peer, clusters_config);
     proxy_db_meta.to_args()
@@ -157,7 +157,7 @@ async fn send_meta<C: RedisClient>(
     }
 }
 
-fn generate_repl_meta_cmd_args(host: Host, flags: DBMapFlags) -> Vec<String> {
+fn generate_repl_meta_cmd_args(host: Proxy, flags: DBMapFlags) -> Vec<String> {
     let epoch = host.get_epoch();
 
     let mut masters = Vec::new();

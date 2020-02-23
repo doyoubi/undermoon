@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBrokerError, MetaManipulationBrokerError};
-use crate::common::cluster::{Host, MigrationTaskMeta};
+use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use crate::protocol::RedisClientError;
 use futures::{future, stream, Future, FutureExt, Stream, StreamExt, TryFutureExt};
 use futures_batch::ChunksTimeoutStreamExt;
@@ -222,7 +222,7 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFai
 pub trait HostMetaSender: Sync + Send + 'static {
     fn send_meta<'s>(
         &'s self,
-        host: Host,
+        host: Proxy,
     ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
 }
 
@@ -230,7 +230,7 @@ pub trait HostMetaRetriever: Sync + Send + 'static {
     fn get_host_meta<'s>(
         &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, CoordinateError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, CoordinateError>> + Send + 's>>;
 }
 
 pub trait HostMetaSynchronizer {
@@ -246,7 +246,7 @@ pub trait HostMetaSynchronizer {
     fn run<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send + 's>>;
 }
 
-pub struct HostMetaRespSynchronizer<
+pub struct ProxyMetaRespSynchronizer<
     PRetriever: ProxiesRetriever,
     MRetriever: HostMetaRetriever,
     Sender: HostMetaSender,
@@ -257,7 +257,7 @@ pub struct HostMetaRespSynchronizer<
 }
 
 impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender>
-    HostMetaRespSynchronizer<P, M, S>
+    ProxyMetaRespSynchronizer<P, M, S>
 {
     async fn retrieve_and_send_meta(
         meta_retriever: &M,
@@ -315,7 +315,7 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender>
 }
 
 impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynchronizer
-    for HostMetaRespSynchronizer<P, M, S>
+    for ProxyMetaRespSynchronizer<P, M, S>
 {
     type PRetriever = P;
     type MRetriever = M;

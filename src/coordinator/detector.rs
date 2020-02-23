@@ -111,7 +111,7 @@ mod tests {
     use super::super::broker::{MetaDataBroker, MetaDataBrokerError};
     use super::super::core::{FailureDetector, SeqFailureDetector};
     use super::*;
-    use crate::common::cluster::{Cluster, Host};
+    use crate::common::cluster::{Cluster, Proxy};
     use crate::protocol::{
         Array, BinSafeStr, OptionalMulti, RedisClient, RedisClientError, Resp, RespVec,
     };
@@ -196,7 +196,7 @@ mod tests {
         fn get_host<'s>(
             &'s self,
             _address: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>>
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaDataBrokerError>> + Send + 's>>
         {
             Box::pin(future::ok(None))
         }

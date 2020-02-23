@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use crate::common::cluster::{Cluster, Host};
+use crate::common::cluster::{Cluster, Proxy};
 use crate::common::utils::vec_result_to_stream;
 use futures::{Future, FutureExt, Stream};
 use reqwest;
@@ -54,14 +54,14 @@ impl HttpMetaBroker {
             error!("failed to get host addresses {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
-        let HostAddressesPayload { addresses } = response.json().await.map_err(|e| {
+        let ProxyAddressesPayload { addresses } = response.json().await.map_err(|e| {
             error!("failed to get host adddresses from json {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
         Ok(addresses)
     }
 
-    async fn get_host_impl(&self, address: String) -> Result<Option<Host>, MetaDataBrokerError> {
+    async fn get_host_impl(&self, address: String) -> Result<Option<Proxy>, MetaDataBrokerError> {
         let url = format!(
             "http://{}/api/proxies/meta/{}",
             self.broker_address, address
@@ -70,7 +70,7 @@ impl HttpMetaBroker {
             error!("failed to get host {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
-        let HostPayload { host } = response.json().await.map_err(move |e| {
+        let ProxyPayload { host } = response.json().await.map_err(move |e| {
             error!("failed to get host {} from json {:?}", address, e);
             MetaDataBrokerError::InvalidReply
         })?;
@@ -154,7 +154,7 @@ impl MetaDataBroker for HttpMetaBroker {
     fn get_host<'s>(
         &'s self,
         address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Host>, MetaDataBrokerError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(self.get_host_impl(address))
     }
 
@@ -188,13 +188,13 @@ pub struct ClusterPayload {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct HostAddressesPayload {
+pub struct ProxyAddressesPayload {
     pub addresses: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct HostPayload {
-    pub host: Option<Host>,
+pub struct ProxyPayload {
+    pub host: Option<Proxy>,
 }
 
 #[derive(Deserialize, Serialize)]
