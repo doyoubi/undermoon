@@ -9,7 +9,8 @@ use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::cluster::DBName;
 use crate::common::db::ProxyDBMeta;
 use crate::common::utils::{
-    str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
+    str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY,
+    TRY_AGAIN_REPLY,
 };
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
@@ -373,6 +374,9 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             DataCmdType::MGET => {
                 CmdReplyFuture::Right(Box::pin(self.handle_mget(cmd_ctx, reply_receiver)))
             }
+            DataCmdType::MSET => {
+                CmdReplyFuture::Right(Box::pin(self.handle_mset(cmd_ctx, reply_receiver)))
+            }
             _ => {
                 self.handle_single_key_data_cmd(cmd_ctx);
                 CmdReplyFuture::Left(reply_receiver)
@@ -397,6 +401,13 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_single_key_data_cmd(sub_cmd_ctx);
         }
 
+        if futs.is_empty() {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                b"ERR wrong number of arguments for 'mget' command".to_vec(),
+            )));
+            return reply_receiver.wait_response().await;
+        }
+
         let mut values = vec![];
         let res = future::join_all(futs).await;
         for sub_result in res.into_iter() {
@@ -404,10 +415,66 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 Ok(reply) => reply,
                 Err(err) => return Err(err),
             };
+            if let Resp::Error(err) = &reply {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(err.clone())));
+                return reply_receiver.wait_response().await;
+            }
             values.push(reply);
         }
 
         let resp = Resp::Arr(Array::Arr(values));
+        cmd_ctx.set_resp_result(Ok(resp));
+        reply_receiver.wait_response().await
+    }
+
+    async fn handle_mset(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        let factory = CmdCtxFactory::default();
+        let mut futs = vec![];
+        for i in 0.. {
+            let key = match cmd_ctx.get_cmd().get_command_element(2 * i + 1) {
+                Some(key) => key,
+                None => break,
+            };
+            let value = match cmd_ctx.get_cmd().get_command_element(2 * i + 2) {
+                Some(value) => value,
+                None => {
+                    // The existing sub commands will be set with Canceled.
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        b"ERR wrong number of arguments for 'mset' command".to_vec(),
+                    )));
+                    return reply_receiver.wait_response().await;
+                }
+            };
+            let resp = Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(b"SET".to_vec())),
+                Resp::Bulk(BulkStr::Str(key.to_vec())),
+                Resp::Bulk(BulkStr::Str(value.to_vec())),
+            ]));
+            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            futs.push(fut);
+            self.handle_single_key_data_cmd(sub_cmd_ctx);
+        }
+
+        if futs.is_empty() {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                b"ERR wrong number of arguments for 'mset' command".to_vec(),
+            )));
+            return reply_receiver.wait_response().await;
+        }
+
+        let res = future::join_all(futs).await;
+        for sub_result in res.into_iter() {
+            let reply = match sub_result {
+                Ok(reply) => reply,
+                Err(err) => return Err(err),
+            };
+            if let Resp::Error(err) = reply {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(err)));
+                return reply_receiver.wait_response().await;
+            }
+        }
+
+        let resp = Resp::Simple(OK_REPLY.to_string().into_bytes());
         cmd_ctx.set_resp_result(Ok(resp));
         reply_receiver.wait_response().await
     }
