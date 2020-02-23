@@ -379,7 +379,18 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 CmdReplyFuture::Right(Box::pin(self.handle_mset(cmd_ctx, reply_receiver)))
             }
             DataCmdType::DEL if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
-                CmdReplyFuture::Right(Box::pin(self.handle_multi_del(cmd_ctx, reply_receiver)))
+                CmdReplyFuture::Right(Box::pin(self.handle_multi_int_cmd(
+                    cmd_ctx,
+                    reply_receiver,
+                    "DEL",
+                )))
+            }
+            DataCmdType::EXISTS if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
+                CmdReplyFuture::Right(Box::pin(self.handle_multi_int_cmd(
+                    cmd_ctx,
+                    reply_receiver,
+                    "EXISTS",
+                )))
             }
             _ => {
                 self.handle_single_key_data_cmd(cmd_ctx);
@@ -409,7 +420,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 b"ERR wrong number of arguments for 'mget' command".to_vec(),
             )));
-            return reply_receiver.wait_response().await;
+            return reply_receiver.await;
         }
 
         let mut values = vec![];
@@ -421,14 +432,14 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             };
             if let Resp::Error(err) = &reply {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err.clone())));
-                return reply_receiver.wait_response().await;
+                return reply_receiver.await;
             }
             values.push(reply);
         }
 
         let resp = Resp::Arr(Array::Arr(values));
         cmd_ctx.set_resp_result(Ok(resp));
-        reply_receiver.wait_response().await
+        reply_receiver.await
     }
 
     async fn handle_mset(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
@@ -446,7 +457,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(
                         b"ERR wrong number of arguments for 'mset' command".to_vec(),
                     )));
-                    return reply_receiver.wait_response().await;
+                    return reply_receiver.await;
                 }
             };
             let resp = Resp::Arr(Array::Arr(vec![
@@ -463,7 +474,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 b"ERR wrong number of arguments for 'mset' command".to_vec(),
             )));
-            return reply_receiver.wait_response().await;
+            return reply_receiver.await;
         }
 
         let res = future::join_all(futs).await;
@@ -474,19 +485,20 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             };
             if let Resp::Error(err) = reply {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err)));
-                return reply_receiver.wait_response().await;
+                return reply_receiver.await;
             }
         }
 
         let resp = Resp::Simple(OK_REPLY.to_string().into_bytes());
         cmd_ctx.set_resp_result(Ok(resp));
-        reply_receiver.wait_response().await
+        reply_receiver.await
     }
 
-    async fn handle_multi_del(
+    async fn handle_multi_int_cmd(
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
+        cmd_name: &'static str,
     ) -> TaskResult {
         let factory = CmdCtxFactory::default();
         let mut futs = vec![];
@@ -496,7 +508,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 None => break,
             };
             let resp = Resp::Arr(Array::Arr(vec![
-                Resp::Bulk(BulkStr::Str(b"DEL".to_vec())),
+                Resp::Bulk(BulkStr::Str(cmd_name.to_string().into_bytes())),
                 Resp::Bulk(BulkStr::Str(key.to_vec())),
             ]));
             let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
@@ -506,12 +518,12 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
         if futs.is_empty() {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
-                b"ERR wrong number of arguments for 'del' command".to_vec(),
+                format!("ERR wrong number of arguments for '{}' command", cmd_name).into_bytes(),
             )));
-            return reply_receiver.wait_response().await;
+            return reply_receiver.await;
         }
 
-        let mut del_count: usize = 0;
+        let mut count: usize = 0;
         let res = future::join_all(futs).await;
         for sub_result in res.into_iter() {
             let reply = match sub_result {
@@ -528,24 +540,24 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                         Ok(n) => n,
                         Err(err) => {
                             let err_str =
-                                format!("unexpected reply from DEL: {:?} {:?}", data, err);
+                                format!("unexpected reply from {}: {:?} {:?}", cmd_name, data, err);
                             cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
                             return reply_receiver.await;
                         }
                     };
-                    del_count += n;
+                    count += n;
                 }
                 others => {
-                    let err_str = format!("unexpected reply from DEL: {:?}", others);
+                    let err_str = format!("unexpected reply from {}: {:?}", cmd_name, others);
                     cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
                     return reply_receiver.await;
                 }
             }
         }
 
-        let resp = Resp::Integer(del_count.to_string().into_bytes());
+        let resp = Resp::Integer(count.to_string().into_bytes());
         cmd_ctx.set_resp_result(Ok(resp));
-        reply_receiver.wait_response().await
+        reply_receiver.await
     }
 
     fn handle_single_key_data_cmd(&self, cmd_ctx: CmdCtx) {

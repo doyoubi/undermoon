@@ -161,9 +161,7 @@ impl CmdTaskFactory for CmdCtxFactory {
             reply_sender,
             another_task.get_session_id(),
         );
-        let fut = reply_receiver
-            .wait_response()
-            .map_ok(|reply| reply.into_resp_vec());
+        let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
     }
 }
@@ -327,7 +325,7 @@ mod tests {
         let (sender, receiver) = new_command_pair();
         let cmd_ctx = CmdCtx::new(db, cmd, sender, 7799);
         drop(cmd_ctx);
-        let err = match receiver.wait_response().await {
+        let err = match receiver.await {
             Ok(_) => panic!(),
             Err(err) => err,
         };
