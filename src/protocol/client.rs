@@ -4,15 +4,15 @@ use crate::protocol::{
     new_optional_multi_packet_codec, EncodeError, OptionalMulti, OptionalMultiPacketDecoder,
     OptionalMultiPacketEncoder, RespCodec,
 };
-use atomic_option::AtomicOption;
-use chashmap::CHashMap;
 use crossbeam_channel;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
+use either::Either;
 use futures::{Future, SinkExt, StreamExt};
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -127,7 +127,6 @@ struct PoolItemHandle<T> {
 
 type ClientCodec =
     RespCodec<OptionalMultiPacketEncoder<Vec<BinSafeStr>>, OptionalMultiPacketDecoder<RespVec>>;
-type RawConnHandle = PoolItemHandle<RedisClientConnection>;
 
 struct RedisClientConnectionHandle {
     frame: Framed<TcpStream, ClientCodec>,
@@ -231,7 +230,7 @@ impl RedisClient for PooledRedisClient {
 pub struct PooledRedisClientFactory {
     capacity: usize,
     // TODO: need to cleanup unused pools.
-    pool_map: CHashMap<String, Pool<RedisClientConnection>>,
+    pool_map: DashMap<String, Pool<RedisClientConnection>>,
     timeout: Duration,
 }
 
@@ -239,7 +238,7 @@ impl PooledRedisClientFactory {
     pub fn new(capacity: usize, timeout: Duration) -> Self {
         Self {
             capacity,
-            pool_map: CHashMap::new(),
+            pool_map: DashMap::new(),
             timeout,
         }
     }
@@ -263,71 +262,61 @@ impl PooledRedisClientFactory {
         &self,
         address: String,
     ) -> Result<PooledRedisClient, RedisClientError> {
-        let mut existing_conn: Option<RawConnHandle> = None;
-        let new_reclaim_sender: AtomicOption<Arc<_>> = AtomicOption::empty();
-
-        self.pool_map.upsert(
-            address.clone(),
-            || {
-                let pool = Pool::new(self.capacity);
-                new_reclaim_sender
-                    .replace(Some(Box::new(pool.get_reclaim_sender())), Ordering::SeqCst);
-                pool
-            },
-            |pool| {
+        let state = match self.pool_map.entry(address.clone()) {
+            Entry::Occupied(mut entry) => {
+                let pool = entry.get_mut();
                 match pool.get() {
-                    Ok(Some(conn_handle)) => {
-                        existing_conn = Some(conn_handle);
-                        return;
-                    }
-                    Ok(None) => (),
-                    Err(()) => *pool = Pool::new(self.capacity),
-                };
-                new_reclaim_sender
-                    .replace(Some(Box::new(pool.get_reclaim_sender())), Ordering::SeqCst);
-            },
-        );
-
-        if let Some(conn_handle) = existing_conn.take() {
-            let PoolItemHandle {
-                item,
-                reclaim_sender,
-            } = conn_handle;
-            let (encoder, decoder) = new_optional_multi_packet_codec();
-            let conn_handle = RedisClientConnectionHandle {
-                frame: ClientCodec::new(encoder, decoder).framed(item.into()),
-                reclaim_sender,
-            };
-            return Ok(PooledRedisClient::new(conn_handle, self.timeout));
-        }
-
-        let timeout = self.timeout;
-
-        match new_reclaim_sender.take(Ordering::SeqCst) {
-            Some(reclaim_sender) => {
-                let conn_fut = self.create_conn(address);
-                match time::timeout(timeout, conn_fut).await {
-                    Err(err) => {
-                        warn!("create connection timeout: {:?}", err);
-                        Err(RedisClientError::Timeout)
-                    }
-                    Ok(Err(err)) => {
-                        warn!("failed to create connection: {:?}", err);
-                        Err(err)
-                    }
-                    Ok(Ok(conn)) => {
-                        let (encoder, decoder) = new_optional_multi_packet_codec();
-                        let conn_handle = RedisClientConnectionHandle {
-                            frame: ClientCodec::new(encoder, decoder).framed(conn.into()),
-                            reclaim_sender: *reclaim_sender,
-                        };
-                        Ok(PooledRedisClient::new(conn_handle, timeout))
+                    Ok(Some(conn_handle)) => Either::Left(conn_handle),
+                    Ok(None) => Either::Right(pool.get_reclaim_sender()),
+                    Err(()) => {
+                        *pool = Pool::new(self.capacity);
+                        Either::Right(pool.get_reclaim_sender())
                     }
                 }
             }
-            None => {
-                error!("invalid state, can't get the reclaim_sender");
-                Err(RedisClientError::InitError)
+            Entry::Vacant(entry) => {
+                let pool = Pool::new(self.capacity);
+                let reclaim_sender = pool.get_reclaim_sender();
+                entry.insert(pool);
+                Either::Right(reclaim_sender)
+            }
+        };
+
+        let reclaim_sender = match state {
+            Either::Left(conn_handle) => {
+                let PoolItemHandle {
+                    item,
+                    reclaim_sender,
+                } = conn_handle;
+                let (encoder, decoder) = new_optional_multi_packet_codec();
+                let conn_handle = RedisClientConnectionHandle {
+                    frame: ClientCodec::new(encoder, decoder).framed(item.into()),
+                    reclaim_sender,
+                };
+                return Ok(PooledRedisClient::new(conn_handle, self.timeout));
+            }
+            Either::Right(reclaim_sender) => reclaim_sender,
+        };
+
+        let timeout = self.timeout;
+
+        let conn_fut = self.create_conn(address);
+        match time::timeout(timeout, conn_fut).await {
+            Err(err) => {
+                warn!("create connection timeout: {:?}", err);
+                Err(RedisClientError::Timeout)
+            }
+            Ok(Err(err)) => {
+                warn!("failed to create connection: {:?}", err);
+                Err(err)
+            }
+            Ok(Ok(conn)) => {
+                let (encoder, decoder) = new_optional_multi_packet_codec();
+                let conn_handle = RedisClientConnectionHandle {
+                    frame: ClientCodec::new(encoder, decoder).framed(conn.into()),
+                    reclaim_sender,
+                };
+                Ok(PooledRedisClient::new(conn_handle, timeout))
             }
         }
     }

@@ -412,7 +412,7 @@ mod tests {
     use crate::common::cluster::DBName;
     use crate::protocol::RespPacket;
     use crate::protocol::{BulkStr, Resp};
-    use chashmap::CHashMap;
+    use dashmap::DashMap;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::RwLock;
@@ -427,7 +427,7 @@ mod tests {
     struct DummyCmdTaskSender {
         exists: AtomicBool,
         closed: AtomicBool,
-        cmd_count: CHashMap<String, AtomicUsize>,
+        cmd_count: DashMap<String, AtomicUsize>,
         err_set: HashMap<&'static str, ErrType>,
     }
 
@@ -436,7 +436,7 @@ mod tests {
             Self {
                 exists: AtomicBool::new(exists),
                 closed: AtomicBool::new(false),
-                cmd_count: CHashMap::new(),
+                cmd_count: DashMap::new(),
                 err_set,
             }
         }
@@ -451,7 +451,8 @@ mod tests {
 
             let cmd = cmd_name.as_str();
             self.cmd_count
-                .upsert(cmd_name.clone(), || AtomicUsize::new(0), |_| ());
+                .entry(cmd_name.clone())
+                .or_insert_with(|| AtomicUsize::new(0));
             if let Some(counter) = self.cmd_count.get(cmd) {
                 counter.fetch_add(1, Ordering::SeqCst);
             }
