@@ -19,6 +19,7 @@ use crate::migration::task::MgrSubCmd;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
+use btoi::btou;
 use futures::future;
 use std::str;
 use std::sync::{self, Arc};
@@ -377,6 +378,9 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             DataCmdType::MSET => {
                 CmdReplyFuture::Right(Box::pin(self.handle_mset(cmd_ctx, reply_receiver)))
             }
+            DataCmdType::DEL if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
+                CmdReplyFuture::Right(Box::pin(self.handle_multi_del(cmd_ctx, reply_receiver)))
+            }
             _ => {
                 self.handle_single_key_data_cmd(cmd_ctx);
                 CmdReplyFuture::Left(reply_receiver)
@@ -475,6 +479,71 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         }
 
         let resp = Resp::Simple(OK_REPLY.to_string().into_bytes());
+        cmd_ctx.set_resp_result(Ok(resp));
+        reply_receiver.wait_response().await
+    }
+
+    async fn handle_multi_del(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+    ) -> TaskResult {
+        let factory = CmdCtxFactory::default();
+        let mut futs = vec![];
+        for i in 1.. {
+            let key = match cmd_ctx.get_cmd().get_command_element(i) {
+                Some(key) => key,
+                None => break,
+            };
+            let resp = Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(b"DEL".to_vec())),
+                Resp::Bulk(BulkStr::Str(key.to_vec())),
+            ]));
+            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            futs.push(fut);
+            self.handle_single_key_data_cmd(sub_cmd_ctx);
+        }
+
+        if futs.is_empty() {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                b"ERR wrong number of arguments for 'del' command".to_vec(),
+            )));
+            return reply_receiver.wait_response().await;
+        }
+
+        let mut del_count: usize = 0;
+        let res = future::join_all(futs).await;
+        for sub_result in res.into_iter() {
+            let reply = match sub_result {
+                Ok(reply) => reply,
+                Err(err) => return Err(err),
+            };
+            match reply {
+                Resp::Error(err) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(err.clone())));
+                    return reply_receiver.await;
+                }
+                Resp::Integer(data) => {
+                    let n = match btou::<usize>(&data) {
+                        Ok(n) => n,
+                        Err(err) => {
+                            let err_str =
+                                format!("unexpected reply from DEL: {:?} {:?}", data, err);
+                            cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
+                            return reply_receiver.await;
+                        }
+                    };
+                    del_count += n;
+                }
+                others => {
+                    let err_str = format!("unexpected reply from DEL: {:?}", others);
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
+                    return reply_receiver.await;
+                }
+            }
+        }
+
+        let resp = Resp::Integer(del_count.to_string().into_bytes());
         cmd_ctx.set_resp_result(Ok(resp));
         reply_receiver.wait_response().await
     }

@@ -284,7 +284,10 @@ pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
     cmd_ctx.log_event(TaskEvent::SentToDB);
     let res = meta_map.db_map.send(cmd_ctx);
     if let Err(e) = res {
-        warn!("Failed to forward cmd_ctx: {:?}", e)
+        match e {
+            DBSendError::MissingKey => (),
+            err => warn!("Failed to forward cmd_ctx: {:?}", err),
+        }
     }
 }
 

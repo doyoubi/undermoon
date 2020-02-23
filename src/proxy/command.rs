@@ -97,6 +97,8 @@ pub enum DataCmdType {
     STRLEN,
     EVAL,
     EVALSHA,
+    DEL,
+    EXISTS,
     Others,
 }
 
@@ -142,6 +144,8 @@ impl DataCmdType {
             b"STRLEN" => DataCmdType::STRLEN,
             b"EVAL" => DataCmdType::EVAL,
             b"EVALSHA" => DataCmdType::EVALSHA,
+            b"DEL" => DataCmdType::DEL,
+            b"EXISTS" => DataCmdType::EXISTS,
             _ => DataCmdType::Others,
         }
     }
