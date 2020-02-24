@@ -145,7 +145,8 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
             if start_empty {
                 let mut this = self.as_mut().project();
                 this.clock.reset(*this.max_duration);
-                return Poll::Pending;
+                // This return might cause the timer not to be able to wake up.
+                // return Poll::Pending;
             }
 
             match self.as_mut().project().clock.poll(cx) {
