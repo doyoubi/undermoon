@@ -9,7 +9,7 @@ use futures::{future, Future};
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{Ordering, AtomicBool};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{write_all, AsyncRead, ReadHalf, WriteHalf};
@@ -82,6 +82,7 @@ type RedisClientConnectionHandle = PoolItemHandle<Box<RedisClientConnection>>;
 pub struct PooledRedisClient {
     conn_handle: Option<RedisClientConnectionHandle>,
     timeout: Duration,
+    err_flag: Arc<AtomicBool>,
 }
 
 impl PooledRedisClient {
@@ -89,13 +90,15 @@ impl PooledRedisClient {
         Self {
             conn_handle: Some(conn_handle),
             timeout,
+            err_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn destruct(mut self) -> (Option<RedisClientConnectionHandle>, Duration) {
+    fn destruct(mut self) -> (Option<RedisClientConnectionHandle>, Duration, Arc<AtomicBool>) {
         let handle = self.conn_handle.take();
         let timeout = self.timeout;
-        (handle, timeout)
+        let err_flag = self.err_flag.clone();
+        (handle, timeout, err_flag)
     }
 }
 
@@ -103,6 +106,9 @@ impl ThreadSafe for PooledRedisClient {}
 
 impl Drop for PooledRedisClient {
     fn drop(&mut self) {
+        if self.err_flag.load(Ordering::SeqCst) {
+            return;
+        }
         if let Some(conn_handle) = self.conn_handle.take() {
             let RedisClientConnectionHandle {
                 item: conn,
@@ -122,7 +128,7 @@ impl RedisClient for PooledRedisClient {
         self,
         command: Vec<BinSafeStr>,
     ) -> Box<dyn Future<Item = (Self, Resp), Error = RedisClientError> + Send + 'static> {
-        let (conn_handle, timeout) = self.destruct();
+        let (conn_handle, timeout, err_flag) = self.destruct();
         let timeout_clone = timeout;
 
         let (conn, reclaim_sender) = match conn_handle {
@@ -131,6 +137,7 @@ impl RedisClient for PooledRedisClient {
                 reclaim_sender,
             }) => (item, reclaim_sender),
             None => {
+                err_flag.store(true, Ordering::SeqCst);
                 // Should not reach here. self.conn should only get taken in drop.
                 return Box::new(future::err(RedisClientError::Closed));
             }
@@ -140,10 +147,12 @@ impl RedisClient for PooledRedisClient {
         command_to_buf(&mut buf, command);
         let conn = *conn;
         let RedisClientConnection { reader, writer } = conn;
+        let err_flag_clone = err_flag.clone();
 
         let exec_fut = write_all(writer, buf)
             .map_err(RedisClientError::Io)
             .and_then(move |(writer, _buf)| {
+                let err_flag = err_flag_clone.clone();
                 decode_resp(reader)
                     .map_err(|e| match e {
                         DecodeError::Io(e) => RedisClientError::Io(e),
@@ -158,12 +167,14 @@ impl RedisClient for PooledRedisClient {
                         let client = Self {
                             conn_handle: Some(conn_handle),
                             timeout,
+                            err_flag,
                         };
                         (client, resp)
                     })
             });
 
         let f = exec_fut.timeout(timeout_clone).map_err(move |err| {
+            err_flag.store(true, Ordering::SeqCst);
             if err.is_inner() {
                 match err.into_inner() {
                     Some(redis_err) => redis_err,
