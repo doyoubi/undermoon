@@ -3,6 +3,7 @@ use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorMeta,
 };
 use crate::common::cluster::DBName;
+use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::protocol::RedisClientFactory;
 use crate::proxy::database::DBError;
 use itertools::Either;
@@ -15,7 +16,7 @@ type ReplicatorMap = HashMap<(DBName, String), ReplicatorRecord>;
 
 pub struct ReplicatorManager<F: RedisClientFactory> {
     updating_epoch: atomic::AtomicU64,
-    replicators: RwLock<(u64, ReplicatorMap)>,
+    replicators: RwLock<(u64, ReplicatorMap, Vec<FutureAutoStopHandle>)>,
     client_factory: Arc<F>,
 }
 
@@ -23,7 +24,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
     pub fn new(client_factory: Arc<F>) -> Self {
         Self {
             updating_epoch: atomic::AtomicU64::new(0),
-            replicators: RwLock::new((0, HashMap::new())),
+            replicators: RwLock::new((0, HashMap::new(), vec![])),
             client_factory,
         }
     }
@@ -132,6 +133,8 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                     .store(replicators.0, atomic::Ordering::SeqCst);
                 return Err(DBError::OldEpoch);
             }
+
+            let mut handles = vec![];
             for (key, master) in new_masters.into_iter() {
                 debug!("spawn master {} {}", key.0, key.1);
                 let master = master.clone();
@@ -142,6 +145,8 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                         }
                     }
                 };
+                let (fut, handle) = new_auto_drop_future(fut);
+                handles.push(handle);
                 tokio::spawn(fut);
             }
             for (key, replica) in new_replicas.into_iter() {
@@ -154,9 +159,11 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                         }
                     }
                 };
+                let (fut, handle) = new_auto_drop_future(fut);
+                handles.push(handle);
                 tokio::spawn(fut);
             }
-            *replicators = (epoch, new_replicators);
+            *replicators = (epoch, new_replicators, handles);
         }
         Ok(())
     }
