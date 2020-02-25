@@ -335,7 +335,7 @@ impl ReplMeta {
         self.role
     }
 
-    pub fn get_peers(&self) -> &Vec<ReplPeer> {
+    pub fn get_peers(&self) -> &[ReplPeer] {
         &self.peers
     }
 
@@ -382,16 +382,16 @@ impl Node {
             repl,
         }
     }
-    pub fn get_address(&self) -> &String {
+    pub fn get_address(&self) -> &str {
         &self.address
     }
-    pub fn get_proxy_address(&self) -> &String {
+    pub fn get_proxy_address(&self) -> &str {
         &self.proxy_address
     }
     pub fn get_cluster_name(&self) -> &DBName {
         &self.cluster_name
     }
-    pub fn get_slots(&self) -> &Vec<SlotRange> {
+    pub fn get_slots(&self) -> &[SlotRange] {
         &self.slots
     }
     pub fn into_slots(self) -> Vec<SlotRange> {
@@ -433,7 +433,7 @@ impl Cluster {
     pub fn get_name(&self) -> &DBName {
         &self.name
     }
-    pub fn get_nodes(&self) -> &Vec<Node> {
+    pub fn get_nodes(&self) -> &[Node] {
         &self.nodes
     }
     pub fn get_epoch(&self) -> u64 {
@@ -509,10 +509,10 @@ impl Proxy {
             clusters_config,
         }
     }
-    pub fn get_address(&self) -> &String {
+    pub fn get_address(&self) -> &str {
         &self.address
     }
-    pub fn get_nodes(&self) -> &Vec<Node> {
+    pub fn get_nodes(&self) -> &[Node] {
         &self.nodes
     }
     pub fn get_epoch(&self) -> u64 {
@@ -521,7 +521,7 @@ impl Proxy {
     pub fn into_nodes(self) -> Vec<Node> {
         self.nodes
     }
-    pub fn get_free_nodes(&self) -> &Vec<String> {
+    pub fn get_free_nodes(&self) -> &[String] {
         &self.free_nodes
     }
 
@@ -540,7 +540,7 @@ impl Proxy {
         self.nodes.retain(|node| node.get_address() != node_address);
         Some(node)
     }
-    pub fn get_peers(&self) -> &Vec<PeerProxy> {
+    pub fn get_peers(&self) -> &[PeerProxy] {
         &self.peers
     }
 

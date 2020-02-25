@@ -24,7 +24,7 @@ impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
     async fn send_meta_impl(&self, host: Proxy) -> Result<(), CoordinateError> {
         let mut client = self
             .client_factory
-            .create_client(host.get_address().clone())
+            .create_client(host.get_address().to_string())
             .await
             .map_err(CoordinateError::Redis)?;
         let host_with_only_masters = filter_host_masters(host.clone());
@@ -54,10 +54,10 @@ impl<F: RedisClientFactory> HostMetaSender for ProxyMetaRespSender<F> {
 }
 
 fn filter_host_masters(host: Proxy) -> Proxy {
-    let address = host.get_address().clone();
+    let address = host.get_address().to_string();
     let epoch = host.get_epoch();
-    let free_nodes = host.get_free_nodes().clone();
-    let peers = host.get_peers().clone();
+    let free_nodes = host.get_free_nodes().to_vec();
+    let peers = host.get_peers().to_vec();
     let clusters_config = host.get_clusters_config().clone();
     let masters = host
         .into_nodes()
@@ -111,7 +111,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Proxy) -> Vec<String> {
         let dbs = db_map
             .entry(node.get_cluster_name().clone())
             .or_insert_with(HashMap::new);
-        dbs.insert(node.get_address().clone(), node.into_slots().clone());
+        dbs.insert(node.get_address().to_string(), node.into_slots().clone());
     }
     let local = ProxyDBMap::new(db_map);
 
@@ -183,8 +183,8 @@ fn generate_repl_meta_cmd_args(host: Proxy, flags: DBMapFlags) -> Vec<String> {
                     continue;
                 }
 
-                let master_node_address = node.get_address().clone();
-                let replicas = meta.get_peers().clone();
+                let master_node_address = node.get_address().to_string();
+                let replicas = meta.get_peers().to_vec();
                 let master_meta = MasterMeta {
                     db_name,
                     master_node_address,
@@ -193,8 +193,8 @@ fn generate_repl_meta_cmd_args(host: Proxy, flags: DBMapFlags) -> Vec<String> {
                 masters.push(master_meta);
             }
             Role::Replica => {
-                let replica_node_address = node.get_address().clone();
-                let masters = meta.get_peers().clone();
+                let replica_node_address = node.get_address().to_string();
+                let masters = meta.get_peers().to_vec();
                 let replica_meta = ReplicaMeta {
                     db_name,
                     replica_node_address,

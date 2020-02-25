@@ -53,6 +53,7 @@ dashmap = "3.4.4"
 coarsetime = "0.1"
 arrayvec = "0.5.1"
 either = "1.5.3"
+mockall = "0.6.0"
 
 [profile.release]
 debug = true

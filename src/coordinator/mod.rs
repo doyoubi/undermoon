@@ -1,3 +1,4 @@
+#[allow(clippy::ptr_arg)]
 pub mod broker;
 mod core;
 mod detector;

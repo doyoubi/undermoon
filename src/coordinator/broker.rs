@@ -1,12 +1,14 @@
 use crate::common::cluster::{Cluster, MigrationTaskMeta, Proxy};
 use crate::common::utils::ThreadSafe;
 use futures::{Future, Stream};
+use mockall::automock;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::pin::Pin;
 
 // To support large result set, return Stream here in some APIs.
+#[automock]
 pub trait MetaDataBroker: ThreadSafe {
     fn get_cluster_names<'s>(
         &'s self,
@@ -39,6 +41,7 @@ pub trait MetaDataBroker: ThreadSafe {
 
 // Maybe we would want to support other database supporting redis protocol.
 // For them, we may need to trigger other action such as migrating data.
+#[automock]
 pub trait MetaManipulationBroker: ThreadSafe {
     fn replace_proxy<'s>(
         &'s self,
