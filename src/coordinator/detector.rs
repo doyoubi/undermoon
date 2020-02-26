@@ -1,6 +1,6 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, FailureChecker, FailureReporter, ProxiesRetriever};
-use futures::{future, Future, Stream};
+use futures::{future, stream, Future, Stream};
 use protocol::{RedisClient, RedisClientFactory};
 use std::sync::Arc;
 
@@ -40,26 +40,33 @@ impl<F: RedisClientFactory> FailureChecker for PingFailureDetector<F> {
         address: String,
     ) -> Box<dyn Future<Item = Option<String>, Error = CoordinateError> + Send + 'static> {
         let address_clone = address.clone();
-        let client_fut = self.client_factory.create_client(address.clone());
-        Box::new(
-            client_fut
-                .and_then(|client| {
-                    let ping_command = vec!["ping".to_string().into_bytes()];
-                    client
-                        .execute(ping_command)
-                        .then(move |result| match result {
-                            Ok(_) => future::ok(None),
-                            Err(_) => {
-                                error!("PingFailureDetector::check failed to send PING");
-                                future::ok(Some(address))
-                            }
-                        })
-                })
-                .or_else(move |_err| {
+        let client_factory = self.client_factory.clone();
+        const RETRY_TIMES: usize = 3;
+        let retry_stream = stream::iter_ok(0..RETRY_TIMES);
+        let fut = retry_stream
+            .fold((), move |(), _| {
+                let client_fut = client_factory.create_client(address.clone());
+                client_fut
+                    .and_then(|client| {
+                        let ping_command = vec!["ping".to_string().into_bytes()];
+                        client.execute(ping_command)
+                    })
+                    .then(|res| match res {
+                        Ok(_) => future::err(()), // success, use error to exit.
+                        Err(err) => {
+                            error!("PingFailureDetector::check failed to send PING {:?}", err);
+                            future::ok(()) // retry
+                        }
+                    })
+            })
+            .then(move |r| match r {
+                Ok(()) => {
                     error!("PingFailureDetector::check failed to connect");
                     Ok(Some(address_clone))
-                }),
-        )
+                }
+                Err(()) => Ok(None),
+            });
+        Box::new(fut)
     }
 }
 
