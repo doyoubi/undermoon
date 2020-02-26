@@ -5,7 +5,9 @@ use futures::{Future, Stream, TryFutureExt, TryStreamExt};
 use std::pin::Pin;
 use std::sync::Arc;
 
-// TODO: Remove this retriever if there's not logic inside it.
+// The current implementation is trivial.
+// But in the future when we need to support a large amount af data,
+// we might need to retrieve the data page by page.
 pub struct BrokerProxiesRetriever<B: MetaDataBroker> {
     meta_data_broker: Arc<B>,
 }
@@ -160,7 +162,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_detector() {
+    async fn test_proxy_retriever() {
+        let mut mock_broker = MockMetaDataBroker::new();
+        let addresses: Vec<String> = vec!["host1:port1", "host2:port2"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let addresses_clone = addresses.clone();
+        mock_broker
+            .expect_get_host_addresses()
+            .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
+        let broker = Arc::new(mock_broker);
+        let retriever = BrokerProxiesRetriever::new(broker);
+        let addrs: Vec<Result<String, CoordinateError>> =
+            retriever.retrieve_proxies().collect().await;
+        let addrs: Vec<String> = addrs.into_iter().map(|r| r.unwrap()).collect();
+        assert_eq!(addrs, addresses);
+    }
+
+    #[tokio::test]
+    async fn test_failure_detector() {
+        let mut mock_broker = MockMetaDataBroker::new();
+
+        let addresses: Vec<String> = vec![NODE1, NODE2]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let addresses_clone = addresses.clone();
+        mock_broker
+            .expect_get_host_addresses()
+            .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
+
+        let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
+        let res = checker.check(NODE1.to_string()).await;
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_none());
+
+        let res = checker.check(NODE2.to_string()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().unwrap(), NODE2);
+    }
+
+    #[tokio::test]
+    async fn test_reporter() {
+        let mut mock_broker = MockMetaDataBroker::new();
+        mock_broker
+            .expect_add_failure()
+            .withf(|address: &String, _| address == NODE2)
+            .times(1)
+            .returning(|_, _| Box::pin(future::ok(())));
+
+        let broker = Arc::new(mock_broker);
+        let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
+        let res = reporter.report(NODE2.to_string()).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_seq_failure_detector() {
         let mut mock_broker = MockMetaDataBroker::new();
 
         let addresses: Vec<String> = vec![NODE1, NODE2]
@@ -213,24 +272,5 @@ mod tests {
 
         let res = detector.run().into_future().await;
         assert!(res.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_proxy_retriever() {
-        let mut mock_broker = MockMetaDataBroker::new();
-        let addresses: Vec<String> = vec!["host1:port1", "host2:port2"]
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
-        let addresses_clone = addresses.clone();
-        mock_broker
-            .expect_get_host_addresses()
-            .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
-        let broker = Arc::new(mock_broker);
-        let retriever = BrokerProxiesRetriever::new(broker);
-        let addrs: Vec<Result<String, CoordinateError>> =
-            retriever.retrieve_proxies().collect().await;
-        let addrs: Vec<String> = addrs.into_iter().map(|r| r.unwrap()).collect();
-        assert_eq!(addrs, addresses);
     }
 }

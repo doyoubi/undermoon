@@ -1,5 +1,5 @@
 use super::broker::MetaDataBroker;
-use super::core::{CoordinateError, HostMetaRetriever, HostMetaSender};
+use super::core::{CoordinateError, ProxyMetaRetriever, ProxyMetaSender};
 use crate::common::cluster::{DBName, Proxy, Role, SlotRange};
 use crate::common::db::{ClusterConfigMap, DBMapFlags, ProxyDBMap, ProxyDBMeta};
 use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
@@ -44,7 +44,7 @@ impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
     }
 }
 
-impl<F: RedisClientFactory> HostMetaSender for ProxyMetaRespSender<F> {
+impl<F: RedisClientFactory> ProxyMetaSender for ProxyMetaRespSender<F> {
     fn send_meta<'s>(
         &'s self,
         host: Proxy,
@@ -78,7 +78,7 @@ impl<B: MetaDataBroker> BrokerMetaRetriever<B> {
     }
 }
 
-impl<B: MetaDataBroker> HostMetaRetriever for BrokerMetaRetriever<B> {
+impl<B: MetaDataBroker> ProxyMetaRetriever for BrokerMetaRetriever<B> {
     fn get_host_meta<'s>(
         &'s self,
         address: String,
@@ -157,13 +157,13 @@ async fn send_meta<C: RedisClient>(
     }
 }
 
-fn generate_repl_meta_cmd_args(host: Proxy, flags: DBMapFlags) -> Vec<String> {
-    let epoch = host.get_epoch();
+fn generate_repl_meta_cmd_args(proxy: Proxy, flags: DBMapFlags) -> Vec<String> {
+    let epoch = proxy.get_epoch();
 
     let mut masters = Vec::new();
     let mut replicas = Vec::new();
 
-    for free_node in host.get_free_nodes().iter() {
+    for free_node in proxy.get_free_nodes().iter() {
         // For free nodes we use empty cluster name.
         masters.push(MasterMeta {
             db_name: DBName::new(),
@@ -172,16 +172,19 @@ fn generate_repl_meta_cmd_args(host: Proxy, flags: DBMapFlags) -> Vec<String> {
         })
     }
 
-    for node in host.into_nodes().into_iter() {
+    for node in proxy.into_nodes().into_iter() {
         let role = node.get_role();
         let meta = node.get_repl_meta();
         let db_name = node.get_cluster_name().clone();
         match role {
             Role::Master => {
-                // For importing nodes, the role is controlled by the migration progress.
-                if node.get_slots().iter().any(|sr| sr.tag.is_importing()) {
-                    continue;
-                }
+                // For importing nodes in 0.1 migration protocol,
+                // the role is controlled by the migration progress.
+                // And the role cannot be affected by replicator set in this place.
+                // But this has been changed in 0.2 migration protocol.
+                // if node.get_slots().iter().any(|sr| sr.tag.is_importing()) {
+                //     continue;
+                // }
 
                 let master_node_address = node.get_address().to_string();
                 let replicas = meta.get_peers().to_vec();
@@ -213,4 +216,167 @@ fn generate_repl_meta_cmd_args(host: Proxy, flags: DBMapFlags) -> Vec<String> {
     };
 
     encode_repl_meta(repl_meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::cluster::{Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
+    use crate::common::config::ClusterConfig;
+    use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient, Resp};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio;
+
+    fn gen_testing_proxy(role: Role) -> Proxy {
+        let dbname = DBName::from("mydb").unwrap();
+        let slot_range = SlotRange {
+            start: 233,
+            end: 666,
+            tag: SlotRangeTag::None,
+        };
+        let repl = ReplMeta::new(
+            role,
+            vec![ReplPeer {
+                node_address: "127.0.0.1:7002".to_string(),
+                proxy_address: "127.0.0.1:6001".to_string(),
+            }],
+        );
+        let nodes = vec![Node::new(
+            "127.0.0.1:7001".to_string(),
+            "127.0.0.1:6000".to_string(),
+            dbname.clone(),
+            vec![slot_range],
+            repl,
+        )];
+        let mut clusters_config = HashMap::new();
+        clusters_config.insert(dbname, ClusterConfig::default());
+        Proxy::new(
+            "127.0.0.1:6000".to_string(),
+            7799,
+            nodes,
+            vec![],
+            vec![],
+            clusters_config,
+        )
+    }
+
+    fn gen_master_args() -> Vec<String> {
+        vec![
+            "7799",
+            "NOFLAG",
+            "master",
+            "mydb",
+            "127.0.0.1:7001",
+            "1",
+            "127.0.0.1:7002",
+            "127.0.0.1:6001",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    fn gen_replica_args() -> Vec<String> {
+        vec![
+            "7799",
+            "FORCE",
+            "replica",
+            "mydb",
+            "127.0.0.1:7001",
+            "1",
+            "127.0.0.1:7002",
+            "127.0.0.1:6001",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    fn gen_set_db_args() -> Vec<String> {
+        vec!["7799", "NOFLAG", "mydb", "127.0.0.1:7001", "233-666"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_master_generate_repl_meta_cmd_args() {
+        let proxy = gen_testing_proxy(Role::Master);
+        let args = generate_repl_meta_cmd_args(proxy, DBMapFlags { force: false });
+        assert_eq!(args, gen_master_args())
+    }
+
+    #[test]
+    fn test_replica_generate_repl_meta_cmd_args() {
+        let proxy = gen_testing_proxy(Role::Replica);
+        let args = generate_repl_meta_cmd_args(proxy, DBMapFlags { force: true });
+        assert_eq!(args, gen_replica_args())
+    }
+
+    #[tokio::test]
+    async fn test_send_meta() {
+        let mut mock_client = MockRedisClient::new();
+        let cmd = vec![b"UMCTL".to_vec(), b"SETDB".to_vec(), b"test_args".to_vec()];
+        mock_client
+            .expect_execute_single()
+            .withf(move |command: &Vec<BinSafeStr>| command.eq(&cmd))
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(Resp::Simple(b"ok".to_vec())) }));
+        let res = send_meta(
+            &mut mock_client,
+            "SETDB".to_string(),
+            vec!["test_args".to_string()],
+        )
+        .await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_meta_resp_sender() {
+        let create_func = || {
+            let call_times = Arc::new(AtomicUsize::new(0));
+
+            let mut mock_client = MockRedisClient::new();
+
+            let mut set_repl_cmd = vec![b"UMCTL".to_vec(), b"SETREPL".to_vec()];
+            set_repl_cmd.append(
+                &mut gen_master_args()
+                    .into_iter()
+                    .map(|s| s.into_bytes())
+                    .collect(),
+            );
+            let mut set_db_cmd = vec![b"UMCTL".to_vec(), b"SETDB".to_vec()];
+            set_db_cmd.append(
+                &mut gen_set_db_args()
+                    .into_iter()
+                    .map(|s| s.into_bytes())
+                    .collect(),
+            );
+            set_db_cmd.push(b"CONFIG".to_vec());
+
+            mock_client
+                .expect_execute_single()
+                .withf(move |command: &Vec<BinSafeStr>| {
+                    if call_times.load(Ordering::SeqCst) == 0 {
+                        call_times.fetch_add(1, Ordering::SeqCst);
+                        command.eq(&set_repl_cmd)
+                    } else {
+                        // Ignore the config part
+                        let cmd = command.get(0..set_db_cmd.len()).unwrap().to_vec();
+                        cmd.eq(&set_db_cmd)
+                    }
+                })
+                .times(2)
+                .returning(|_| Box::pin(async { Ok(Resp::Simple(b"ok".to_vec())) }));
+
+            mock_client
+        };
+
+        let client_factory = DummyRedisClientFactory::new(create_func);
+        let sender = ProxyMetaRespSender::new(Arc::new(client_factory));
+        let proxy = gen_testing_proxy(Role::Master);
+        let res = sender.send_meta(proxy).await;
+        assert!(res.is_ok());
+    }
 }

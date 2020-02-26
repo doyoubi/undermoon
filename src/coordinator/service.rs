@@ -1,7 +1,7 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{
-    CoordinateError, FailureDetector, FailureHandler, HostMetaSynchronizer,
-    MigrationStateSynchronizer, ProxyMetaRespSynchronizer, SeqFailureDetector, SeqFailureHandler,
+    CoordinateError, FailureDetector, FailureHandler, MigrationStateSynchronizer,
+    ProxyMetaRespSynchronizer, ProxyMetaSynchronizer, SeqFailureDetector, SeqFailureHandler,
     SeqMigrationStateSynchronizer,
 };
 use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailureDetector};
@@ -85,7 +85,7 @@ impl<
     fn gen_host_meta_synchronizer(
         data_broker: Arc<DB>,
         client_factory: Arc<F>,
-    ) -> impl HostMetaSynchronizer {
+    ) -> impl ProxyMetaSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
         let sender = ProxyMetaRespSender::new(client_factory);

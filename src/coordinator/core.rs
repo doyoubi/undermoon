@@ -219,24 +219,24 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFai
     }
 }
 
-pub trait HostMetaSender: Sync + Send + 'static {
+pub trait ProxyMetaSender: Sync + Send + 'static {
     fn send_meta<'s>(
         &'s self,
         host: Proxy,
     ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
 }
 
-pub trait HostMetaRetriever: Sync + Send + 'static {
+pub trait ProxyMetaRetriever: Sync + Send + 'static {
     fn get_host_meta<'s>(
         &'s self,
         address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, CoordinateError>> + Send + 's>>;
 }
 
-pub trait HostMetaSynchronizer {
+pub trait ProxyMetaSynchronizer {
     type PRetriever: ProxiesRetriever;
-    type MRetriever: HostMetaRetriever;
-    type Sender: HostMetaSender;
+    type MRetriever: ProxyMetaRetriever;
+    type Sender: ProxyMetaSender;
 
     fn new(
         proxy_retriever: Self::PRetriever,
@@ -248,15 +248,15 @@ pub trait HostMetaSynchronizer {
 
 pub struct ProxyMetaRespSynchronizer<
     PRetriever: ProxiesRetriever,
-    MRetriever: HostMetaRetriever,
-    Sender: HostMetaSender,
+    MRetriever: ProxyMetaRetriever,
+    Sender: ProxyMetaSender,
 > {
     proxy_retriever: PRetriever,
     meta_retriever: Arc<MRetriever>,
     sender: Arc<Sender>,
 }
 
-impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender>
+impl<P: ProxiesRetriever, M: ProxyMetaRetriever, S: ProxyMetaSender>
     ProxyMetaRespSynchronizer<P, M, S>
 {
     async fn retrieve_and_send_meta(
@@ -314,7 +314,7 @@ impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender>
     }
 }
 
-impl<P: ProxiesRetriever, M: HostMetaRetriever, S: HostMetaSender> HostMetaSynchronizer
+impl<P: ProxiesRetriever, M: ProxyMetaRetriever, S: ProxyMetaSender> ProxyMetaSynchronizer
     for ProxyMetaRespSynchronizer<P, M, S>
 {
     type PRetriever = P;
@@ -360,8 +360,8 @@ pub trait MigrationStateSynchronizer: Sync + Send + 'static {
     type PRetriever: ProxiesRetriever;
     type Checker: MigrationStateChecker;
     type Committer: MigrationCommitter;
-    type MRetriever: HostMetaRetriever;
-    type Sender: HostMetaSender;
+    type MRetriever: ProxyMetaRetriever;
+    type Sender: ProxyMetaSender;
 
     fn new(
         proxy_retriever: Self::PRetriever,
@@ -377,8 +377,8 @@ pub struct SeqMigrationStateSynchronizer<
     PR: ProxiesRetriever,
     SC: MigrationStateChecker,
     MC: MigrationCommitter,
-    MR: HostMetaRetriever,
-    S: HostMetaSender,
+    MR: ProxyMetaRetriever,
+    S: ProxyMetaSender,
 > {
     proxy_retriever: PR,
     checker: Arc<SC>,
@@ -391,8 +391,8 @@ impl<
         PR: ProxiesRetriever,
         SC: MigrationStateChecker,
         MC: MigrationCommitter,
-        MR: HostMetaRetriever,
-        S: HostMetaSender,
+        MR: ProxyMetaRetriever,
+        S: ProxyMetaSender,
     > SeqMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
     async fn set_db_meta(
@@ -506,8 +506,8 @@ impl<
         PR: ProxiesRetriever,
         SC: MigrationStateChecker,
         MC: MigrationCommitter,
-        MR: HostMetaRetriever,
-        S: HostMetaSender,
+        MR: ProxyMetaRetriever,
+        S: ProxyMetaSender,
     > MigrationStateSynchronizer for SeqMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
     type PRetriever = PR;

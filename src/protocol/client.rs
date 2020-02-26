@@ -20,6 +20,7 @@ use tokio::net::TcpStream;
 use tokio::time;
 use tokio_util::codec::{Decoder, Framed};
 
+// Suppress warning from automock.
 #[allow(clippy::ptr_arg)]
 mod client_trait {
     use super::*;
@@ -74,7 +75,7 @@ mod client_trait {
     }
 }
 
-pub use client_trait::RedisClient;
+pub use client_trait::{MockRedisClient, RedisClient};
 
 pub trait RedisClientFactory: ThreadSafe {
     type Client: RedisClient;
@@ -86,18 +87,36 @@ pub trait RedisClientFactory: ThreadSafe {
 }
 
 // For unit tests.
-pub struct DummyRedisClientFactory<C: RedisClient + Clone + Sync + 'static> {
-    client: C,
+pub struct DummyRedisClientFactory<C, F>
+where
+    C: RedisClient + Sync + 'static,
+    F: Fn() -> C + ThreadSafe,
+{
+    create_func: F,
 }
 
-impl<C: RedisClient + Clone + Sync + 'static> RedisClientFactory for DummyRedisClientFactory<C> {
+impl<C, F> DummyRedisClientFactory<C, F>
+where
+    C: RedisClient + Sync + 'static,
+    F: Fn() -> C + ThreadSafe,
+{
+    pub fn new(create_func: F) -> Self {
+        Self { create_func }
+    }
+}
+
+impl<C, F> RedisClientFactory for DummyRedisClientFactory<C, F>
+where
+    C: RedisClient + Sync + 'static,
+    F: Fn() -> C + ThreadSafe,
+{
     type Client = C;
 
     fn create_client<'s>(
         &'s self,
         _address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>> {
-        let client = self.client.clone();
+        let client = (self.create_func)();
         Box::pin(async move { Ok(client) })
     }
 }
