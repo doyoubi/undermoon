@@ -268,6 +268,7 @@ impl MigrationTaskMeta {
         strs.extend(slot_range.into_strings());
         strs
     }
+
     pub fn from_strings<It>(it: &mut It) -> Option<Self>
     where
         It: Iterator<Item = String>,

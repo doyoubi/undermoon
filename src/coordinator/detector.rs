@@ -112,7 +112,7 @@ impl<B: MetaDataBroker> FailureReporter for BrokerFailureReporter<B> {
 #[cfg(test)]
 mod tests {
     use super::super::broker::{MetaDataBrokerError, MockMetaDataBroker};
-    use super::super::core::{FailureDetector, SeqFailureDetector};
+    use super::super::core::{FailureDetector, ParFailureDetector};
     use super::*;
     use crate::protocol::{
         Array, BinSafeStr, OptionalMulti, RedisClient, RedisClientError, Resp, RespVec,
@@ -218,6 +218,7 @@ mod tests {
         assert!(res.is_ok());
     }
 
+    // Integrate together
     #[tokio::test]
     async fn test_seq_failure_detector() {
         let mut mock_broker = MockMetaDataBroker::new();
@@ -240,7 +241,7 @@ mod tests {
         let retriever = BrokerProxiesRetriever::new(broker.clone());
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
-        let detector = SeqFailureDetector::new(retriever, checker, reporter);
+        let detector = ParFailureDetector::new(retriever, checker, reporter);
 
         let res = detector.run().into_future().await;
         assert!(res.is_ok());
@@ -268,7 +269,7 @@ mod tests {
         let retriever = BrokerProxiesRetriever::new(broker.clone());
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
         let reporter = BrokerFailureReporter::new("test_id".to_string(), broker.clone());
-        let detector = SeqFailureDetector::new(retriever, checker, reporter);
+        let detector = ParFailureDetector::new(retriever, checker, reporter);
 
         let res = detector.run().into_future().await;
         assert!(res.is_err());

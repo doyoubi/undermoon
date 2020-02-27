@@ -53,13 +53,13 @@ impl<F: RedisClientFactory> ProxyMetaSender for ProxyMetaRespSender<F> {
     }
 }
 
-fn filter_host_masters(host: Proxy) -> Proxy {
-    let address = host.get_address().to_string();
-    let epoch = host.get_epoch();
-    let free_nodes = host.get_free_nodes().to_vec();
-    let peers = host.get_peers().to_vec();
-    let clusters_config = host.get_clusters_config().clone();
-    let masters = host
+fn filter_host_masters(proxy: Proxy) -> Proxy {
+    let address = proxy.get_address().to_string();
+    let epoch = proxy.get_epoch();
+    let free_nodes = proxy.get_free_nodes().to_vec();
+    let peers = proxy.get_peers().to_vec();
+    let clusters_config = proxy.get_clusters_config().clone();
+    let masters = proxy
         .into_nodes()
         .into_iter()
         .filter(|node| node.get_role() == Role::Master)
@@ -220,10 +220,14 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: DBMapFlags) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::broker::{MetaDataBrokerError, MockMetaDataBroker};
+    use super::super::core::{ProxyMetaRespSynchronizer, ProxyMetaSynchronizer};
+    use super::super::detector::BrokerProxiesRetriever;
     use super::*;
     use crate::common::cluster::{Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
     use crate::common::config::ClusterConfig;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient, Resp};
+    use futures::{stream, StreamExt};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio;
@@ -332,51 +336,117 @@ mod tests {
         assert!(res.is_ok());
     }
 
+    fn create_client_func() -> impl RedisClient {
+        let call_times = Arc::new(AtomicUsize::new(0));
+
+        let mut mock_client = MockRedisClient::new();
+
+        let mut set_repl_cmd = vec![b"UMCTL".to_vec(), b"SETREPL".to_vec()];
+        set_repl_cmd.append(
+            &mut gen_master_args()
+                .into_iter()
+                .map(|s| s.into_bytes())
+                .collect(),
+        );
+        let mut set_db_cmd = vec![b"UMCTL".to_vec(), b"SETDB".to_vec()];
+        set_db_cmd.append(
+            &mut gen_set_db_args()
+                .into_iter()
+                .map(|s| s.into_bytes())
+                .collect(),
+        );
+        set_db_cmd.push(b"CONFIG".to_vec());
+
+        mock_client
+            .expect_execute_single()
+            .withf(move |command: &Vec<BinSafeStr>| {
+                if call_times.load(Ordering::SeqCst) == 0 {
+                    call_times.fetch_add(1, Ordering::SeqCst);
+                    command.eq(&set_repl_cmd)
+                } else {
+                    // Ignore the config part
+                    let cmd = command.get(0..set_db_cmd.len()).unwrap().to_vec();
+                    cmd.eq(&set_db_cmd)
+                }
+            })
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(Resp::Simple(b"ok".to_vec())) }));
+
+        mock_client
+    }
+
     #[tokio::test]
     async fn test_meta_resp_sender() {
-        let create_func = || {
-            let call_times = Arc::new(AtomicUsize::new(0));
-
-            let mut mock_client = MockRedisClient::new();
-
-            let mut set_repl_cmd = vec![b"UMCTL".to_vec(), b"SETREPL".to_vec()];
-            set_repl_cmd.append(
-                &mut gen_master_args()
-                    .into_iter()
-                    .map(|s| s.into_bytes())
-                    .collect(),
-            );
-            let mut set_db_cmd = vec![b"UMCTL".to_vec(), b"SETDB".to_vec()];
-            set_db_cmd.append(
-                &mut gen_set_db_args()
-                    .into_iter()
-                    .map(|s| s.into_bytes())
-                    .collect(),
-            );
-            set_db_cmd.push(b"CONFIG".to_vec());
-
-            mock_client
-                .expect_execute_single()
-                .withf(move |command: &Vec<BinSafeStr>| {
-                    if call_times.load(Ordering::SeqCst) == 0 {
-                        call_times.fetch_add(1, Ordering::SeqCst);
-                        command.eq(&set_repl_cmd)
-                    } else {
-                        // Ignore the config part
-                        let cmd = command.get(0..set_db_cmd.len()).unwrap().to_vec();
-                        cmd.eq(&set_db_cmd)
-                    }
-                })
-                .times(2)
-                .returning(|_| Box::pin(async { Ok(Resp::Simple(b"ok".to_vec())) }));
-
-            mock_client
-        };
-
-        let client_factory = DummyRedisClientFactory::new(create_func);
+        let client_factory = DummyRedisClientFactory::new(create_client_func);
         let sender = ProxyMetaRespSender::new(Arc::new(client_factory));
         let proxy = gen_testing_proxy(Role::Master);
         let res = sender.send_meta(proxy).await;
         assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_meta_retriever() {
+        let proxy_addr = "127.0.0.1:6000";
+        let mut mock_broker = MockMetaDataBroker::new();
+
+        mock_broker
+            .expect_get_host()
+            .withf(move |addr| addr == proxy_addr)
+            .returning(move |_| {
+                let proxy = gen_testing_proxy(Role::Master);
+                Box::pin(async { Ok(Some(proxy)) })
+            });
+
+        let retriever = BrokerMetaRetriever::new(Arc::new(mock_broker));
+        let res = retriever.get_host_meta(proxy_addr.to_string()).await;
+        assert!(res.is_ok());
+        let opt = res.unwrap();
+        assert!(opt.is_some());
+        let proxy = opt.unwrap();
+        assert_eq!(proxy, gen_testing_proxy(Role::Master))
+    }
+
+    // Integrate together
+    #[tokio::test]
+    async fn test_meta_sync() {
+        let mut mock_broker = MockMetaDataBroker::new();
+        let proxy_addr = gen_testing_proxy(Role::Master).get_address().to_string();
+        let proxy_addr2 = proxy_addr.clone();
+        let not_exist_proxy = "127.0.0.1:99999".to_string();
+        let not_exist_proxy2 = not_exist_proxy.clone();
+
+        mock_broker.expect_get_host_addresses().returning(move || {
+            let results = vec![
+                Err(MetaDataBrokerError::InvalidReply),
+                Ok(not_exist_proxy2.clone()),
+                Ok(proxy_addr2.clone()),
+            ];
+            Box::pin(stream::iter(results))
+        });
+        mock_broker
+            .expect_get_host()
+            .withf(move |addr| addr == &proxy_addr)
+            .times(1)
+            .returning(move |_| {
+                let proxy = gen_testing_proxy(Role::Master);
+                Box::pin(async { Ok(Some(proxy)) })
+            });
+        mock_broker
+            .expect_get_host()
+            .withf(move |addr| addr == &not_exist_proxy)
+            .times(1)
+            .returning(move |_| Box::pin(async { Ok(None) }));
+
+        let mock_broker = Arc::new(mock_broker);
+
+        let proxies_retriever = BrokerProxiesRetriever::new(mock_broker.clone());
+        let meta_retriever = BrokerMetaRetriever::new(mock_broker);
+        let client_factory = DummyRedisClientFactory::new(create_client_func);
+        let sender = ProxyMetaRespSender::new(Arc::new(client_factory));
+
+        let sync = ProxyMetaRespSynchronizer::new(proxies_retriever, meta_retriever, sender);
+        let results: Vec<_> = sync.run().collect().await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
     }
 }

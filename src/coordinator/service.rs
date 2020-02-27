@@ -1,8 +1,8 @@
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{
     CoordinateError, FailureDetector, FailureHandler, MigrationStateSynchronizer,
-    ProxyMetaRespSynchronizer, ProxyMetaSynchronizer, SeqFailureDetector, SeqFailureHandler,
-    SeqMigrationStateSynchronizer,
+    ParFailureDetector, ParFailureHandler, ParMigrationStateSynchronizer,
+    ProxyMetaRespSynchronizer, ProxyMetaSynchronizer,
 };
 use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailureDetector};
 use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
@@ -79,7 +79,7 @@ impl<
         let retriever = BrokerProxiesRetriever::new(data_broker.clone());
         let checker = PingFailureDetector::new(client_factory);
         let reporter = BrokerFailureReporter::new(reporter_id, data_broker);
-        SeqFailureDetector::new(retriever, checker, reporter)
+        ParFailureDetector::new(retriever, checker, reporter)
     }
 
     fn gen_host_meta_synchronizer(
@@ -93,9 +93,9 @@ impl<
     }
 
     fn gen_failure_handler(data_broker: Arc<DB>, mani_broker: Arc<MB>) -> impl FailureHandler {
-        let proxy_retriever = BrokerProxyFailureRetriever::new(data_broker.clone());
-        let handler = ReplaceNodeHandler::new(data_broker, mani_broker);
-        SeqFailureHandler::new(proxy_retriever, handler)
+        let proxy_retriever = BrokerProxyFailureRetriever::new(data_broker);
+        let handler = ReplaceNodeHandler::new(mani_broker);
+        ParFailureHandler::new(proxy_retriever, handler)
     }
 
     fn gen_migration_state_synchronizer(
@@ -108,7 +108,7 @@ impl<
         let committer = BrokerMigrationCommitter::new(mani_broker);
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
         let sender = ProxyMetaRespSender::new(client_factory);
-        SeqMigrationStateSynchronizer::new(
+        ParMigrationStateSynchronizer::new(
             proxy_retriever,
             checker,
             committer,

@@ -117,3 +117,170 @@ impl<MB: MetaManipulationBroker> MigrationCommitter for BrokerMigrationCommitter
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::broker::{MockMetaDataBroker, MockMetaManipulationBroker};
+    use super::super::core::{MigrationStateSynchronizer, ParMigrationStateSynchronizer};
+    use super::super::detector::BrokerProxiesRetriever;
+    use super::super::sync::BrokerMetaRetriever;
+    use super::*;
+    use crate::common::cluster::{DBName, MigrationMeta, Proxy, SlotRange, SlotRangeTag};
+    use crate::coordinator::core::MockProxyMetaSender;
+    use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient};
+    use futures::{stream, StreamExt};
+    use std::collections::HashMap;
+    use tokio;
+
+    fn gen_testing_dummy_proxy(addr: &str) -> Proxy {
+        Proxy::new(
+            addr.to_string(),
+            7799,
+            vec![],
+            vec![],
+            vec![],
+            HashMap::new(),
+        )
+    }
+
+    fn create_client_func() -> impl RedisClient {
+        let mut mock_client = MockRedisClient::new();
+
+        let info_mgr_cmd = vec![b"UMCTL".to_vec(), b"INFOMGR".to_vec()];
+        mock_client
+            .expect_execute_single()
+            .withf(move |command: &Vec<BinSafeStr>| {
+                command.eq(&info_mgr_cmd)
+            })
+            .times(1)
+            .returning(|_| {
+                let reply = b"mydb MIGRATING 233-666 7799 127.0.0.1:6000 127.0.0.1:7000 127.0.0.1:6001 127.0.0.1:7001".to_vec();
+                let resp = Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(reply))]));
+                Box::pin(async { Ok(resp) })
+            });
+
+        mock_client
+    }
+
+    #[tokio::test]
+    async fn test_migration_state_checker() {
+        let factory = DummyRedisClientFactory::new(create_client_func);
+        let checker = MigrationStateRespChecker::new(Arc::new(factory));
+        let res: Vec<_> = checker.check("127.0.0.1:6000".to_string()).collect().await;
+        assert_eq!(res.len(), 1);
+        assert!(res[0].is_ok());
+        let meta = res[0].as_ref().unwrap();
+        assert_eq!(meta.cluster_name.to_string(), "mydb");
+        let tag = SlotRangeTag::Migrating(MigrationMeta {
+            epoch: 7799,
+            src_proxy_address: "127.0.0.1:6000".to_string(),
+            src_node_address: "127.0.0.1:7000".to_string(),
+            dst_proxy_address: "127.0.0.1:6001".to_string(),
+            dst_node_address: "127.0.0.1:7001".to_string(),
+        });
+        let slot_range = SlotRange {
+            start: 233,
+            end: 666,
+            tag,
+        };
+        assert_eq!(meta.slot_range, slot_range);
+    }
+
+    fn gen_testing_migration_task_meta() -> MigrationTaskMeta {
+        let tag = SlotRangeTag::Migrating(MigrationMeta {
+            epoch: 7799,
+            src_proxy_address: "127.0.0.1:6000".to_string(),
+            src_node_address: "127.0.0.1:7000".to_string(),
+            dst_proxy_address: "127.0.0.1:6001".to_string(),
+            dst_node_address: "127.0.0.1:7001".to_string(),
+        });
+        let slot_range = SlotRange {
+            start: 233,
+            end: 666,
+            tag,
+        };
+        MigrationTaskMeta {
+            cluster_name: DBName::from("mydb").unwrap(),
+            slot_range,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_migration_committer() {
+        let mut mock_broker = MockMetaManipulationBroker::new();
+
+        let meta = gen_testing_migration_task_meta();
+        let meta2 = meta.clone();
+
+        mock_broker
+            .expect_commit_migration()
+            .withf(move |m| m == &meta2)
+            .returning(move |_| Box::pin(async { Ok(()) }));
+        let mock_broker = Arc::new(mock_broker);
+
+        let committer = BrokerMigrationCommitter::new(mock_broker);
+        let res = committer.commit(meta).await;
+        assert!(res.is_ok());
+    }
+
+    // Integrate together.
+    #[tokio::test]
+    async fn test_migration_state_sync() {
+        let factory = Arc::new(DummyRedisClientFactory::new(create_client_func));
+        let checker = MigrationStateRespChecker::new(factory);
+
+        let mut mock_mani_broker = MockMetaManipulationBroker::new();
+        let meta = gen_testing_migration_task_meta();
+        let meta2 = meta.clone();
+        mock_mani_broker
+            .expect_commit_migration()
+            .withf(move |m| m == &meta2)
+            .returning(move |_| Box::pin(async { Ok(()) }));
+        let mock_mani_broker = Arc::new(mock_mani_broker);
+
+        let mut mock_data_broker = MockMetaDataBroker::new();
+        mock_data_broker
+            .expect_get_host_addresses()
+            .returning(move || {
+                let results = vec![Ok("127.0.0.1:6000".to_string())];
+                Box::pin(stream::iter(results))
+            });
+        mock_data_broker
+            .expect_get_host()
+            .withf(|proxy_addr| proxy_addr == "127.0.0.1:6000")
+            .returning(|_| Box::pin(async { Ok(Some(gen_testing_dummy_proxy("127.0.0.1:6000"))) }));
+        mock_data_broker
+            .expect_get_host()
+            .withf(|proxy_addr| proxy_addr == "127.0.0.1:6001")
+            .returning(|_| Box::pin(async { Ok(Some(gen_testing_dummy_proxy("127.0.0.1:6001"))) }));
+        let mock_data_broker = Arc::new(mock_data_broker);
+
+        let proxies_retriever = BrokerProxiesRetriever::new(mock_data_broker.clone());
+
+        let committer = BrokerMigrationCommitter::new(mock_mani_broker.clone());
+        let meta_retriever = BrokerMetaRetriever::new(mock_data_broker);
+
+        let mut mock_meta_sender = MockProxyMetaSender::new();
+        mock_meta_sender
+            .expect_send_meta()
+            .withf(|proxy| proxy.get_address() == "127.0.0.1:6000")
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_meta_sender
+            .expect_send_meta()
+            .withf(|proxy| proxy.get_address() == "127.0.0.1:6001")
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let sync = ParMigrationStateSynchronizer::new(
+            proxies_retriever,
+            checker,
+            committer,
+            meta_retriever,
+            mock_meta_sender,
+        );
+        let res: Vec<_> = sync.run().collect().await;
+        assert_eq!(res.len(), 1);
+        assert!(res[0].is_ok());
+    }
+}

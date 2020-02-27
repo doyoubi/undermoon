@@ -3,6 +3,7 @@ use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use crate::protocol::RedisClientError;
 use futures::{future, stream, Future, FutureExt, Stream, StreamExt, TryFutureExt};
 use futures_batch::ChunksTimeoutStreamExt;
+use mockall::automock;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -41,7 +42,7 @@ pub trait FailureDetector {
     fn run<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
 }
 
-pub struct SeqFailureDetector<
+pub struct ParFailureDetector<
     Retriever: ProxiesRetriever,
     Checker: FailureChecker,
     Reporter: FailureReporter,
@@ -51,7 +52,7 @@ pub struct SeqFailureDetector<
     reporter: Arc<Reporter>,
 }
 
-impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetector<T, C, P> {
+impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> ParFailureDetector<T, C, P> {
     async fn check_and_report(
         checker: &C,
         reporter: &P,
@@ -108,7 +109,7 @@ impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> SeqFailureDetec
 }
 
 impl<T: ProxiesRetriever, C: FailureChecker, P: FailureReporter> FailureDetector
-    for SeqFailureDetector<T, C, P>
+    for ParFailureDetector<T, C, P>
 {
     type Retriever = T;
     type Checker = C;
@@ -148,12 +149,12 @@ pub trait FailureHandler {
     fn run<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send + 's>>;
 }
 
-pub struct SeqFailureHandler<PFRetriever: ProxyFailureRetriever, Handler: ProxyFailureHandler> {
+pub struct ParFailureHandler<PFRetriever: ProxyFailureRetriever, Handler: ProxyFailureHandler> {
     proxy_failure_retriever: PFRetriever,
     handler: Arc<Handler>,
 }
 
-impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> SeqFailureHandler<P, H> {
+impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> ParFailureHandler<P, H> {
     async fn run_impl(&self) -> Result<(), CoordinateError> {
         let handler = self.handler.clone();
         const BATCH_SIZE: usize = 10;
@@ -199,7 +200,7 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> SeqFailureHandler<P, H> {
     }
 }
 
-impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFailureHandler<P, H> {
+impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for ParFailureHandler<P, H> {
     type PFRetriever = P;
     type Handler = H;
 
@@ -219,6 +220,7 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for SeqFai
     }
 }
 
+#[automock]
 pub trait ProxyMetaSender: Sync + Send + 'static {
     fn send_meta<'s>(
         &'s self,
@@ -373,7 +375,7 @@ pub trait MigrationStateSynchronizer: Sync + Send + 'static {
     fn run<'s>(&'s self) -> Pin<Box<dyn Stream<Item = Result<(), CoordinateError>> + Send + 's>>;
 }
 
-pub struct SeqMigrationStateSynchronizer<
+pub struct ParMigrationStateSynchronizer<
     PR: ProxiesRetriever,
     SC: MigrationStateChecker,
     MC: MigrationCommitter,
@@ -393,7 +395,7 @@ impl<
         MC: MigrationCommitter,
         MR: ProxyMetaRetriever,
         S: ProxyMetaSender,
-    > SeqMigrationStateSynchronizer<PR, SC, MC, MR, S>
+    > ParMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
     async fn set_db_meta(
         address: String,
@@ -508,7 +510,7 @@ impl<
         MC: MigrationCommitter,
         MR: ProxyMetaRetriever,
         S: ProxyMetaSender,
-    > MigrationStateSynchronizer for SeqMigrationStateSynchronizer<PR, SC, MC, MR, S>
+    > MigrationStateSynchronizer for ParMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
     type PRetriever = PR;
     type Checker = SC;
