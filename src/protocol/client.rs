@@ -9,6 +9,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use either::Either;
 use futures::{Future, SinkExt, StreamExt};
+use mockall::automock;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -19,54 +20,62 @@ use tokio::net::TcpStream;
 use tokio::time;
 use tokio_util::codec::{Decoder, Framed};
 
-pub trait RedisClient: Send {
-    fn execute_single<'s>(
-        &'s mut self,
-        command: Vec<BinSafeStr>,
-    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
-        let fut = async move {
-            match self.execute(OptionalMulti::Single(command)).await {
-                Ok(opt_mul_resp) => {
-                    match opt_mul_resp {
+// Suppress warning from automock.
+#[allow(clippy::ptr_arg)]
+mod client_trait {
+    use super::*;
+
+    #[automock]
+    pub trait RedisClient: Send {
+        fn execute_single<'s>(
+            &'s mut self,
+            command: Vec<BinSafeStr>,
+        ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
+            let fut = async move {
+                match self.execute(OptionalMulti::Single(command)).await {
+                    Ok(opt_mul_resp) => match opt_mul_resp {
                         OptionalMulti::Single(t) => Ok(t),
                         OptionalMulti::Multi(v) => {
                             error!("PooledRedisClient::execute expected single result, found multi: {:?}", v);
                             Err(RedisClientError::InvalidState)
                         }
-                    }
+                    },
+                    Err(err) => Err(err),
                 }
-                Err(err) => Err(err),
-            }
-        };
-        Box::pin(fut)
-    }
+            };
+            Box::pin(fut)
+        }
 
-    fn execute_multi<'s>(
-        &'s mut self,
-        commands: Vec<Vec<BinSafeStr>>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>> {
-        let fut = async move {
-            match self.execute(OptionalMulti::Multi(commands)).await {
-                Ok(opt_mul_resp) => {
-                    match opt_mul_resp {
+        fn execute_multi<'s>(
+            &'s mut self,
+            commands: Vec<Vec<BinSafeStr>>,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>>
+        {
+            let fut = async move {
+                match self.execute(OptionalMulti::Multi(commands)).await {
+                    Ok(opt_mul_resp) => match opt_mul_resp {
                         OptionalMulti::Single(t) => {
                             error!("PooledRedisClient::execute expected single result, found multi: {:?}", t);
                             Err(RedisClientError::InvalidState)
                         }
                         OptionalMulti::Multi(v) => Ok(v),
-                    }
+                    },
+                    Err(err) => Err(err),
                 }
-                Err(err) => Err(err),
-            }
-        };
-        Box::pin(fut)
-    }
+            };
+            Box::pin(fut)
+        }
 
-    fn execute<'s>(
-        &'s mut self,
-        command: OptionalMulti<Vec<BinSafeStr>>,
-    ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>;
+        fn execute<'s>(
+            &'s mut self,
+            command: OptionalMulti<Vec<BinSafeStr>>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>,
+        >;
+    }
 }
+
+pub use client_trait::{MockRedisClient, RedisClient};
 
 pub trait RedisClientFactory: ThreadSafe {
     type Client: RedisClient;
@@ -75,6 +84,41 @@ pub trait RedisClientFactory: ThreadSafe {
         &'s self,
         address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>>;
+}
+
+// For unit tests.
+pub struct DummyRedisClientFactory<C, F>
+where
+    C: RedisClient + Sync + 'static,
+    F: Fn() -> C + ThreadSafe,
+{
+    create_func: F,
+}
+
+impl<C, F> DummyRedisClientFactory<C, F>
+where
+    C: RedisClient + Sync + 'static,
+    F: Fn() -> C + ThreadSafe,
+{
+    pub fn new(create_func: F) -> Self {
+        Self { create_func }
+    }
+}
+
+impl<C, F> RedisClientFactory for DummyRedisClientFactory<C, F>
+where
+    C: RedisClient + Sync + 'static,
+    F: Fn() -> C + ThreadSafe,
+{
+    type Client = C;
+
+    fn create_client<'s>(
+        &'s self,
+        _address: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>> {
+        let client = (self.create_func)();
+        Box::pin(async move { Ok(client) })
+    }
 }
 
 #[derive(Debug)]

@@ -97,7 +97,7 @@ impl MetaStore {
                             n.get_role() == Role::Master && n.get_proxy_address() != address
                         })
                         .cloned()
-                        .group_by(|node| node.get_proxy_address().clone())
+                        .group_by(|node| node.get_proxy_address().to_string())
                         .into_iter()
                         .map(|(proxy_address, nodes)| {
                             // Collect all slots from masters.
@@ -337,7 +337,7 @@ impl MetaStore {
             .get_nodes()
             .iter()
             .filter(|node| node.get_proxy_address() == proxy_address)
-            .map(|node| node.get_address().clone())
+            .map(|node| node.get_address().to_string())
             .collect::<Vec<String>>();
         for node_address in node_addresses.iter() {
             cluster
@@ -429,9 +429,10 @@ impl MetaStore {
             .ok_or(MetaStoreError::NodeNotFound)
             .and_then(
                 |node| match (node.get_role(), node.get_slots().is_empty()) {
-                    (Role::Master, false) => {
-                        Ok((node.get_slots().clone(), node.get_proxy_address().clone()))
-                    }
+                    (Role::Master, false) => Ok((
+                        node.get_slots().to_vec(),
+                        node.get_proxy_address().to_string(),
+                    )),
                     (Role::Replica, _) => Err(MetaStoreError::InvalidRole),
                     (_, true) => Err(MetaStoreError::SlotEmpty),
                 },
@@ -441,7 +442,7 @@ impl MetaStore {
             .ok_or(MetaStoreError::NodeNotFound)
             .and_then(|node| {
                 if node.get_role() == Role::Master {
-                    Ok(node.get_proxy_address().clone())
+                    Ok(node.get_proxy_address().to_string())
                 } else {
                     Err(MetaStoreError::InvalidRole)
                 }
@@ -663,7 +664,7 @@ impl MetaStore {
                     Err(MetaStoreError::InvalidRole)
                 }
             })
-            .map(|node| node.get_proxy_address().clone())?;
+            .map(|node| node.get_proxy_address().to_string())?;
 
         let replica_proxy_address = cluster
             .get_node(&replica_node_address)
@@ -678,7 +679,7 @@ impl MetaStore {
                 if !node.get_repl_meta().get_peers().is_empty() {
                     return Err(MetaStoreError::PeerNotEmpty);
                 }
-                Ok(node.get_proxy_address().clone())
+                Ok(node.get_proxy_address().to_string())
             })?;
 
         if master_proxy_address == replica_proxy_address {
@@ -743,7 +744,7 @@ impl MetaStore {
                     return Err(InconsistentError::InvalidProxyAddress {
                         node_address: node_address.clone(),
                         expected_proxy_address: proxy_address.clone(),
-                        unexpected_proxy_address: node.get_proxy_address().clone(),
+                        unexpected_proxy_address: node.get_proxy_address().to_string(),
                     });
                 }
             }
@@ -769,19 +770,19 @@ impl MetaStore {
                     });
                 }
                 let proxy_address = node.get_proxy_address();
-                let node_address = node.get_address();
+                let node_address = node.get_address().to_string();
                 let node_resource = all_nodes.get(proxy_address).ok_or_else(|| {
                     InconsistentError::NodeNotFoundInAllNodes {
-                        proxy_address: proxy_address.clone(),
+                        proxy_address: proxy_address.to_string(),
                         node_address: node_address.clone(),
                     }
                 })?;
                 node_resource
                     .node_addresses
                     .iter()
-                    .find(|node| *node == node_address)
+                    .find(|node| **node == node_address)
                     .ok_or_else(|| InconsistentError::NodeNotFoundInAllNodes {
-                        proxy_address: proxy_address.clone(),
+                        proxy_address: proxy_address.to_string(),
                         node_address: node_address.clone(),
                     })?;
             }
@@ -804,20 +805,20 @@ impl MetaStore {
                         return Err(InconsistentError::InvalidProxyAddress {
                             node_address: peer.node_address.clone(),
                             expected_proxy_address: peer.proxy_address.clone(),
-                            unexpected_proxy_address: peer_node.get_proxy_address().clone(),
+                            unexpected_proxy_address: peer_node.get_proxy_address().to_string(),
                         });
                     }
                     if node.get_role() == peer_node.get_role() {
                         return Err(InconsistentError::SameRole {
-                            node_address: node.get_address().clone(),
-                            node_address_peer: peer_node.get_address().clone(),
+                            node_address: node.get_address().to_string(),
+                            node_address_peer: peer_node.get_address().to_string(),
                         });
                     }
                 }
                 if node.get_role() == Role::Replica && !node.get_slots().is_empty() {
                     return Err(InconsistentError::ReplicaHasSlots {
-                        proxy_address: node.get_proxy_address().clone(),
-                        node_address: node.get_address().clone(),
+                        proxy_address: node.get_proxy_address().to_string(),
+                        node_address: node.get_address().to_string(),
                     });
                 }
             }
@@ -1099,7 +1100,7 @@ impl MetaStore {
         master_node.get_mut_repl().set_role(Role::Replica);
         replica_node.get_mut_repl().set_role(Role::Master);
         let slot_ranges = Self::gen_new_slots(
-            master_node.get_slots().clone(),
+            master_node.get_slots().to_vec(),
             replica_node.get_address(),
             replica_node.get_proxy_address(),
             cluster.get_epoch(),
@@ -1179,12 +1180,12 @@ impl MetaStore {
         new_node: &Node,
     ) -> Result<(), MetaStoreError> {
         let old_peer = ReplPeer {
-            node_address: old_node.get_address().clone(),
-            proxy_address: old_node.get_proxy_address().clone(),
+            node_address: old_node.get_address().to_string(),
+            proxy_address: old_node.get_proxy_address().to_string(),
         };
         let new_peer = ReplPeer {
-            node_address: new_node.get_address().clone(),
-            proxy_address: new_node.get_proxy_address().clone(),
+            node_address: new_node.get_address().to_string(),
+            proxy_address: new_node.get_proxy_address().to_string(),
         };
         for repl in old_node.get_repl_meta().get_peers().iter() {
             if repl.node_address == new_peer.node_address {
@@ -1267,7 +1268,7 @@ impl MetaStore {
             );
 
             let new_slot_ranges = Self::gen_new_slots(
-                node.get_slots().clone(),
+                node.get_slots().to_vec(),
                 &node_address,
                 &proxy_address,
                 cluster.get_epoch(),
@@ -1317,8 +1318,8 @@ impl MetaStore {
         Ok(nodes
             .into_iter()
             .map(|node| NodeSlot {
-                node_address: node.get_address().clone(),
-                proxy_address: node.get_proxy_address().clone(),
+                node_address: node.get_address().to_string(),
+                proxy_address: node.get_proxy_address().to_string(),
             })
             .collect())
     }

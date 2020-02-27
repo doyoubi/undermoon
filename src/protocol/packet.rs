@@ -357,7 +357,7 @@ impl<T: DecodedPacket<Hint = ()>> PacketDecoder for SimplePacketDecoder<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum OptionalMulti<T> {
     Single(T),
     Multi(Vec<T>),
