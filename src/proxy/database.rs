@@ -483,6 +483,11 @@ fn gen_cluster_nodes_helper(
             .map(|range| match range.tag {
                 // In the new migration protocol, after switching at the very beginning,
                 // the importing nodes will take care of all the migrating slots.
+                // From the point of view of other nodes, since they can't
+                // find any migration_states, migrating nodes always does not
+                // own the migrating slots while the importing nodes always own
+                // the migrating slots.
+                // TODO: Add tests on this.
                 SlotRangeTag::Migrating(ref _meta)
                     if migration_states.get(&range.to_range()).cloned()
                         != Some(MigrationState::PreCheck) =>

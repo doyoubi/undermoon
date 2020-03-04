@@ -173,6 +173,10 @@ impl<BS: BlockingCmdTaskSender> BlockingHandleInner<BS> {
             }
         }
     }
+
+    fn send_to_blocking_task_sender(&self, cmd_task: BS::Task) -> Result<(), BackendError> {
+        self.blocking_task_sender.send(cmd_task)
+    }
 }
 
 pub struct TaskBlockingQueue<S, BS>
@@ -206,11 +210,27 @@ where
         }
     }
 
-    fn send(&self, cmd_task: BS::Task) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: BlockingHintTask<BS::Task>) -> Result<(), BackendError> {
+        let cmd_need_blocking = cmd_task.get_blocking();
+        let cmd_task = cmd_task.into_inner();
+
+        // The `waiting for blocking` operation could happen between `is_blocking()` and `running_cmd.fetch_add()`,
+        // which could result in leaking some commands even after blocking has already started.
+        // We need something like RwLock to protect this critical section.
+        // Since CmdTaskSender::send has to be `&self`, we have to implement something similar ourselves.
+        // Add `running_cmd` anyway to hold this "lock".
+        // TODO: this counter increment (reader lock) might starve the waiting side (writer lock).
+        let counter = RefAutoCounter::new(&(*self.running_cmd));
         if !self.is_blocking() {
-            let counter_task = CounterTask::new(cmd_task, self.running_cmd.clone());
-            return self.inner_sender.send(counter_task);
+            if !cmd_need_blocking {
+                let counter_task = CounterTask::new(cmd_task, self.running_cmd.clone());
+                return self.inner_sender.send(counter_task);
+            }
+            return self
+                .blocking_handle_inner
+                .send_to_blocking_task_sender(cmd_task);
         }
+        drop(counter);
 
         if let Err(err) = self.queue_sender.send(cmd_task) {
             let cmd_task = err.into_inner();
@@ -265,7 +285,7 @@ where
     S: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
     BS: BlockingCmdTaskSender,
 {
-    type Task = BS::Task;
+    type Task = BlockingHintTask<BS::Task>;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         self.queue.send(cmd_task)
@@ -327,6 +347,22 @@ impl Drop for AutoCounter {
     }
 }
 
+struct RefAutoCounter<'a>(&'a AtomicI64);
+
+impl<'a> RefAutoCounter<'a> {
+    fn new(counter: &'a AtomicI64) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter)
+    }
+}
+
+impl<'a> Drop for RefAutoCounter<'a> {
+    fn drop(&mut self) {
+        // TODO: This order could be relaxed.
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl<T: CmdTask> CounterTask<T> {
     pub fn new(inner: T, counter: Arc<AtomicI64>) -> Self {
         Self {
@@ -381,5 +417,64 @@ impl<T: CmdTask> CmdTask for CounterTask<T> {
 
     fn log_event(&self, event: TaskEvent) {
         self.inner.log_event(event)
+    }
+}
+
+pub struct BlockingHintTask<T: CmdTask> {
+    inner: T,
+    need_blocking: bool,
+}
+
+impl<T: CmdTask> BlockingHintTask<T> {
+    pub fn new(inner: T, need_blocking: bool) -> Self {
+        Self {
+            inner,
+            need_blocking,
+        }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+
+    pub fn get_blocking(&self) -> bool {
+        self.need_blocking
+    }
+}
+
+impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
+    type Pkt = T::Pkt;
+
+    fn get_key(&self) -> Option<&[u8]> {
+        self.inner.get_key()
+    }
+
+    fn set_result(self, result: CommandResult<Self::Pkt>) {
+        self.into_inner().set_result(result)
+    }
+
+    fn get_packet(&self) -> Self::Pkt {
+        self.inner.get_packet()
+    }
+
+    fn set_resp_result(self, result: Result<RespVec, CommandError>)
+    where
+        Self: Sized,
+    {
+        self.inner.set_resp_result(result)
+    }
+
+    fn log_event(&self, event: TaskEvent) {
+        self.inner.log_event(event)
+    }
+}
+
+impl<T: CmdTask + DBTag> DBTag for BlockingHintTask<T> {
+    fn get_db_name(&self) -> DBName {
+        self.inner.get_db_name()
+    }
+
+    fn set_db_name(&mut self, db: DBName) {
+        self.inner.set_db_name(db)
     }
 }

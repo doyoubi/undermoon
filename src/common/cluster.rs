@@ -253,15 +253,17 @@ impl<'de> Deserialize<'de> for DBName {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationTaskMeta {
-    #[serde(alias = "db_name")]
-    pub cluster_name: DBName,
+    // TODO: need to change with overmoon later.
+    // #[serde(alias = "db_name")]
+    // pub cluster_name: DBName,
+    pub db_name: DBName,
     pub slot_range: SlotRange,
 }
 
 impl MigrationTaskMeta {
     pub fn into_strings(self) -> Vec<String> {
         let MigrationTaskMeta {
-            cluster_name,
+            db_name: cluster_name,
             slot_range,
         } = self;
         let mut strs = vec![cluster_name.to_string()];
@@ -277,7 +279,7 @@ impl MigrationTaskMeta {
         let cluster_name = DBName::from(&db_name_str).ok()?;
         let slot_range = SlotRange::from_strings(it)?;
         Some(Self {
-            cluster_name,
+            db_name: cluster_name,
             slot_range,
         })
     }

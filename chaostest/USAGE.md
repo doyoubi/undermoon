@@ -84,3 +84,7 @@ Stop the docker-compose:
 ```
 docker stack rm chaos
 ```
+
+## Debuging
+
+You can use `monitor_all_redis.py` to debug what commands are running on all the Redis.

@@ -2,12 +2,13 @@ import time
 import signal
 import random
 from datetime import datetime
+from loguru import logger
 
 from redis import StrictRedis
 from rediscluster import StrictRedisCluster
 
 import config
-from utils import OvermoonClient, ServerProxy, OVERMOON_ENDPOINT
+from utils import OvermoonClient, ServerProxy, OVERMOON_ENDPOINT, RedisClusterClient
 
 
 def gen_server_proxy_list():
@@ -57,13 +58,14 @@ class KeyValueTester:
 
     def gen_client(self, proxies):
         conn_timeout = 1
-        return StrictRedisCluster(
-            startup_nodes=proxies,
-            decode_responses=True,
-            skip_full_coverage_check=True,
-            socket_timeout=conn_timeout,
-            socket_connect_timeout=conn_timeout,
-        )
+        return RedisClusterClient(proxies, conn_timeout)
+        # return StrictRedisCluster(
+        #     startup_nodes=proxies,
+        #     decode_responses=True,
+        #     skip_full_coverage_check=True,
+        #     socket_timeout=conn_timeout,
+        #     socket_connect_timeout=conn_timeout,
+        # )
 
     def test_key_value(self):
         proxies = self.get_proxies()
@@ -72,7 +74,7 @@ class KeyValueTester:
 
         try:
             if not self.cluster_ready(proxies):
-                print('cluster {} not ready'.format(self.cluster_name))
+                logger.info('cluster {} not ready', self.cluster_name)
                 return
 
             if random.randint(0, 10) < 5:
@@ -80,8 +82,7 @@ class KeyValueTester:
             else:
                 self.test_get(proxies)
         except Exception as e:
-            print('REDIS_TEST_FAILED:', e)
-            print(self.overmoon_client.get_cluster(self.cluster_name), datetime.utcnow())
+            logger.error('REDIS_TEST_FAILED: {} {} {}', self.overmoon_client.get_cluster(self.cluster_name), datetime.utcnow(), e)
 
     def test_set(self, proxies):
         if len(self.kvs) >= self.MAX_KVS:
@@ -92,12 +93,12 @@ class KeyValueTester:
         for i in range(10):
             k = 'test:{}:{}'.format(t, i)
             try:
-                res = rc.set(k, k)
+                res, proxy = rc.set(k, k)
             except Exception as e:
-                print('failed to set {}: {}', k, e)
+                logger.error('REDIS_TEST: failed to set {}: {}', k, e)
                 raise
             if not res:
-                print('invalid response:', res)
+                logger.info('REDIS_TEST: invalid response: {} proxy: {}', res, proxy)
                 continue
             self.kvs.append(k)
 
@@ -105,12 +106,13 @@ class KeyValueTester:
         rc = self.gen_client(proxies)
         for k in self.kvs:
             try:
-                v = rc.get(k)
+                v, proxy = rc.get(k)
             except Exception as e:
-                print('failed to get {}: {}', k, e)
+                logger.error('REDIS_TEST: failed to get {}: {}', k, e)
                 raise
             if k != v:
-                print('INCONSISTENT: key: {}, expected {}, got {}'.format(k, k, v))
+                logger.error('INCONSISTENT: key: {}, expected {}, got {}, proxy {}', k, k, v, proxy)
+                exit(1)
 
 
 class RandomTester:
@@ -148,7 +150,7 @@ class RandomTester:
                 new_kvs_tester[cluster_name] = KeyValueTester(cluster_name, self.overmoon_client)
         self.kvs_tester = new_kvs_tester
         cluster_name = random.choice(list(self.kvs_tester.keys()))
-        print('test data of:', cluster_name)
+        logger.info('test data of: {}', cluster_name)
         tester = self.kvs_tester[cluster_name]
         tester.test_key_value()
 
@@ -158,7 +160,7 @@ class RandomTester:
 
             names = self.overmoon_client.get_cluster_names()
             if names:
-                print('clusters', names)
+                logger.info('clusters: {}', names)
 
             if not names or random.randint(0, 10) < 2:
                 node_number = random.randint(0, 40)
@@ -190,7 +192,7 @@ class RandomTester:
             try:
                 self.loop_test()
             except Exception as e:
-                print('TEST_FAILED:', e)
+                logger.error('TEST_FAILED: {}', e)
 
 
 RandomTester(OvermoonClient(OVERMOON_ENDPOINT)).keep_testing()

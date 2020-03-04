@@ -2,6 +2,7 @@ certifi==2019.6.16
 chardet==3.0.4
 idna==2.8
 Jinja2==2.10.1
+loguru==0.4.1
 MarkupSafe==1.1.1
 redis==2.10.6
 redis-py-cluster==1.3.6

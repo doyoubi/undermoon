@@ -26,6 +26,11 @@ broker:
 flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy conf/server-proxy.toml
 
+# Debug image and release image use different ways for building image.
+# For faster rebuild, builder image will only build the binaries and move it out
+# to the host by shared volume. The debug undermoon image will not get the image
+# when being built. Instead we need to specify the volume to `insert` the binary
+# to the debug undermoon image.
 docker-build-image:
 	docker image build -f examples/Dockerfile-builder -t undermoon_builder .
 	sh scripts/dkrebuild.sh
@@ -34,6 +39,8 @@ docker-build-image:
 docker-rebuild-bin:
 	sh scripts/dkrebuild.sh
 
+# The release builder will build the binaries and move it out by `docker cp`.
+# When the release undermoon image is built, the binaries will be moved into it.
 docker-build-release:
 	docker image build -f examples/Dockerfile-builder-release -t undermoon_builder_release .
 	mkdir -p ./examples/target_volume/release
@@ -64,5 +71,18 @@ docker-overmoon:
 	# > make build-docker
 	docker-compose -f examples/docker-compose-overmoon.yml up
 
-.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker docker-overmoon
+start-chaos:
+	python chaostest/render_compose.py
+	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+
+stop-chaos:
+	docker stack rm chaos
+
+list-chaos-services:
+	docker stack services chaos
+
+chaos-test:
+	python chaostest/random_test.py
+
+.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker docker-overmoon chaos
 

@@ -512,7 +512,7 @@ impl MetaStore {
     pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
         debug!("MetaStore::commit_migration {:?}", task);
         let MigrationTaskMeta {
-            cluster_name,
+            db_name: cluster_name,
             slot_range,
         } = task;
 

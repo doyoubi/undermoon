@@ -11,7 +11,7 @@ use futures::{Future, FutureExt};
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -59,7 +59,8 @@ impl DeleteKeysTaskMap {
                 None => continue,
             };
             for (address, task) in nodes.iter() {
-                if new_nodes.get(address).is_none() {
+                // Clear finished task at the same time.
+                if new_nodes.get(address).is_none() || task.is_finished() {
                     continue;
                 }
                 let db = new_task_map
@@ -104,6 +105,7 @@ pub struct DeleteKeysTask {
     slot_ranges: SlotRangeArray,
     _handle: FutureAutoStopHandle, // once this task get dropped, the future will stop.
     fut: AtomicOption<Pin<Box<dyn Future<Output = MigrationResult> + Send>>>,
+    finished: Arc<AtomicBool>,
 }
 
 impl DeleteKeysTask {
@@ -120,13 +122,20 @@ impl DeleteKeysTask {
         let slot_ranges = SlotRangeArray {
             ranges: slot_ranges,
         };
-        let (fut, handle) =
-            Self::gen_future(address.clone(), slot_ranges.clone(), client_factory, config);
+        let finished = Arc::new(AtomicBool::new(false));
+        let (fut, handle) = Self::gen_future(
+            address.clone(),
+            slot_ranges.clone(),
+            client_factory,
+            config,
+            finished.clone(),
+        );
         Self {
             address,
             slot_ranges,
             _handle: handle,
             fut: AtomicOption::new(Box::new(fut)),
+            finished,
         }
     }
 
@@ -134,11 +143,16 @@ impl DeleteKeysTask {
         self.fut.take(Ordering::SeqCst).map(|t| *t)
     }
 
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::SeqCst)
+    }
+
     fn gen_future<F: RedisClientFactory>(
         address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
         config: Arc<AtomicMigrationConfig>,
+        finished: Arc<AtomicBool>,
     ) -> (ScanDelFuture, FutureAutoStopHandle) {
         let data = (slot_ranges, 0);
         let scan_count = config.get_delete_count();
@@ -152,9 +166,18 @@ impl DeleteKeysTask {
             move |data, client| Self::scan_and_delete_keys(data, client, scan_count),
         );
         let (send, handle) = new_auto_drop_future(send);
-        let send = send.map(|opt| match opt {
-            Some(_) => Ok(()),
-            None => Err(MigrationError::Canceled),
+        let send = send.map(move |opt| {
+            finished.store(true, Ordering::SeqCst);
+            match opt {
+                Some(_) => {
+                    info!("Deleting key task finished successfully");
+                    Ok(())
+                }
+                None => {
+                    warn!("Deleting key task is canceled");
+                    Err(MigrationError::Canceled)
+                }
+            }
         });
         (Box::pin(send), handle)
     }
@@ -183,6 +206,9 @@ impl DeleteKeysTask {
             .collect();
 
         if keys.is_empty() {
+            if next_index == 0 {
+                return Err(RedisClientError::Done);
+            }
             return Ok((slot_ranges, next_index));
         }
 
@@ -195,6 +221,7 @@ impl DeleteKeysTask {
                 error!("failed to delete keys: {:?}", err);
                 Err(RedisClientError::InvalidReply)
             }
+            _ if next_index == 0 => Err(RedisClientError::Done),
             _ => Ok((slot_ranges, next_index)),
         }
     }
