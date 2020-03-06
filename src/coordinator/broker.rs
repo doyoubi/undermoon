@@ -1,4 +1,4 @@
-use crate::common::cluster::{Cluster, MigrationTaskMeta, Proxy};
+use crate::common::cluster::{Cluster, DBName, MigrationTaskMeta, Proxy};
 use crate::common::utils::ThreadSafe;
 use futures::{Future, Stream};
 use mockall::automock;
@@ -12,11 +12,11 @@ use std::pin::Pin;
 pub trait MetaDataBroker: ThreadSafe {
     fn get_cluster_names<'s>(
         &'s self,
-    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Stream<Item = Result<DBName, MetaDataBrokerError>> + Send + 's>>;
 
     fn get_cluster<'s>(
         &'s self,
-        name: String,
+        name: DBName,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>;
 
     fn get_host_addresses<'s>(

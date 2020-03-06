@@ -226,6 +226,8 @@ where
                 let counter_task = CounterTask::new(cmd_task, self.running_cmd.clone());
                 return self.inner_sender.send(counter_task);
             }
+            // CAUTION: this will trigger a recursive call to the same call path
+            // and relies on the correctness on BlockingHintTask to avoid stack overflow.
             return self
                 .blocking_handle_inner
                 .send_to_blocking_task_sender(cmd_task);

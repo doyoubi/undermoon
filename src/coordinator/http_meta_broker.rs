@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
-use crate::common::cluster::{Cluster, Proxy};
+use crate::common::cluster::{Cluster, DBName, Proxy};
 use crate::common::utils::vec_result_to_stream;
 use futures::{Future, FutureExt, Stream};
 use reqwest;
@@ -22,7 +22,7 @@ impl HttpMetaBroker {
 }
 
 impl HttpMetaBroker {
-    async fn get_cluster_names_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
+    async fn get_cluster_names_impl(&self) -> Result<Vec<DBName>, MetaDataBrokerError> {
         let url = format!("http://{}/api/clusters/names", self.broker_address);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
@@ -35,7 +35,7 @@ impl HttpMetaBroker {
         Ok(names)
     }
 
-    async fn get_cluster_impl(&self, name: String) -> Result<Option<Cluster>, MetaDataBrokerError> {
+    async fn get_cluster_impl(&self, name: DBName) -> Result<Option<Cluster>, MetaDataBrokerError> {
         let url = format!("http://{}/api/clusters/meta/{}", self.broker_address, name);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster {:?}", e);
@@ -125,7 +125,7 @@ impl HttpMetaBroker {
 impl MetaDataBroker for HttpMetaBroker {
     fn get_cluster_names<'s>(
         &'s self,
-    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Stream<Item = Result<DBName, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(
             self.get_cluster_names_impl()
                 .map(vec_result_to_stream)
@@ -135,7 +135,7 @@ impl MetaDataBroker for HttpMetaBroker {
 
     fn get_cluster<'s>(
         &'s self,
-        name: String,
+        name: DBName,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>
     {
         Box::pin(self.get_cluster_impl(name))
@@ -179,7 +179,7 @@ impl MetaDataBroker for HttpMetaBroker {
 
 #[derive(Deserialize, Serialize)]
 pub struct ClusterNamesPayload {
-    pub names: Vec<String>,
+    pub names: Vec<DBName>,
 }
 
 #[derive(Deserialize, Serialize)]

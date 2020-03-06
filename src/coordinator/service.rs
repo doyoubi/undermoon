@@ -4,7 +4,10 @@ use super::core::{
     ParFailureDetector, ParFailureHandler, ParMigrationStateSynchronizer,
     ProxyMetaRespSynchronizer, ProxyMetaSynchronizer,
 };
-use super::detector::{BrokerFailureReporter, BrokerProxiesRetriever, PingFailureDetector};
+use super::detector::{
+    BrokerFailureReporter, BrokerOrderedProxiesRetriever, BrokerProxiesRetriever,
+    PingFailureDetector,
+};
 use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
 use super::recover::{BrokerProxyFailureRetriever, ReplaceNodeHandler};
 use super::sync::{BrokerMetaRetriever, ProxyMetaRespSender};
@@ -86,7 +89,7 @@ impl<
         data_broker: Arc<DB>,
         client_factory: Arc<F>,
     ) -> impl ProxyMetaSynchronizer {
-        let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
+        let proxy_retriever = BrokerOrderedProxiesRetriever::new(data_broker.clone());
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
         let sender = ProxyMetaRespSender::new(client_factory);
         ProxyMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)

@@ -25,6 +25,11 @@ make build-docker
 
 Build `undermoon`:
 ```
+docker-build-image
+```
+
+Or rebuild if the source codes are changed:
+```
 make docker-rebuild-bin
 ```
 
@@ -33,58 +38,66 @@ Start Docker Swarm:
 docker swarm init
 ```
 
-Add the following config in `/etc/hosts`.
+Config the `/etc/hosts`.
 ```
-127.0.0.1 server_proxy7000
-127.0.0.1 server_proxy7001
-127.0.0.1 server_proxy7002
-127.0.0.1 server_proxy7003
-127.0.0.1 server_proxy7004
-127.0.0.1 server_proxy7005
-127.0.0.1 server_proxy7006
-127.0.0.1 server_proxy7007
-127.0.0.1 server_proxy7008
-127.0.0.1 server_proxy7009
-127.0.0.1 server_proxy7010
-127.0.0.1 server_proxy7011
-127.0.0.1 server_proxy7012
-127.0.0.1 server_proxy7013
-127.0.0.1 server_proxy7014
-127.0.0.1 server_proxy7015
-127.0.0.1 server_proxy7016
-127.0.0.1 server_proxy7017
-127.0.0.1 server_proxy7018
-127.0.0.1 server_proxy7019
-127.0.0.1 server_proxy7020
-127.0.0.1 server_proxy7021
-127.0.0.1 server_proxy7022
-127.0.0.1 server_proxy7023
+python chaostest/gen_hosts.py >> /etc/hosts
+
+# You might need sudo
+sudo sh -c 'python chaostest/gen_hosts.py >> /etc/hosts'
 ```
 
 ## Run Test
 
 Deploy our service `chaos`:
 ```
-docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+make start-func-test
 ```
 
 List services:
 ```
-docker stack services chaos
+make list-chaos-services
+```
+
+Run the test script. It will randomly create cluster, remove cluster, and start migration.
+```
+make func-test
+```
+There will not be any fault injection. Any error log indicates there are bugs in the codes!
+Upon error it will stop immediately.
+
+stop-chaos:
+```
+docker stack rm chaos
+```
+
+## Run Test with Fault Injection
+Or Deploy our service `chaos` with fault injection:
+```
+make start-chaos
+```
+In this case, any error should be able to recover.
+
+List services:
+```
+make list-chaos-services
 ```
 
 Run the command above, you can see some services got killed occasionally.
 
 Run the test script. It will randomly create cluster, remove cluster, and start migration.
 ```
-python chaostest/random_test.py
+make chaos-test
 ```
+Upon error it will not stop. But the error should be able to recover soon.
 
-Stop the docker-compose:
+stop-chaos:
 ```
 docker stack rm chaos
 ```
 
-## Debuging
+## Debugging
 
 You can use `monitor_all_redis.py` to debug what commands are running on all the Redis.
+```
+python chaostest/monitor_all_redis.py
+```

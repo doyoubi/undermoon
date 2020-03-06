@@ -1,3 +1,4 @@
+import sys
 import time
 import signal
 import random
@@ -9,6 +10,9 @@ from rediscluster import StrictRedisCluster
 
 import config
 from utils import OvermoonClient, ServerProxy, OVERMOON_ENDPOINT, RedisClusterClient
+
+
+exit_on_error = True
 
 
 def gen_server_proxy_list():
@@ -49,23 +53,27 @@ class KeyValueTester:
         return proxies
 
     def cluster_ready(self, proxies):
+        # Overmoon will cache the data so once it's ready,
+        # you can't say it will be ready in the future.
+        # Maybe the latest metadata are still not synchronized to the proxies.
         for proxy in proxies:
             client = StrictRedis(host=proxy['host'], port=proxy['port'])
-            r = client.execute_command('cluster', 'nodes')
-            if len(list(r.decode('utf-8').split('\n'))) <= 1:
+            try:
+                r = client.execute_command('cluster', 'nodes')
+            except Exception as e:
+                raise Exception('{}:{}: {}'.format(proxy['host'], proxy['port'], e))
+            lines = list(r.decode('utf-8').split('\n'))
+            if len(lines) <= 1:
+                return False
+            TRIMMED_LEN = 20
+            # This should not be the info from the last cluster.
+            if self.cluster_name[0:TRIMMED_LEN] not in lines[0]:
                 return False
         return True
 
     def gen_client(self, proxies):
-        conn_timeout = 1
+        conn_timeout = 2
         return RedisClusterClient(proxies, conn_timeout)
-        # return StrictRedisCluster(
-        #     startup_nodes=proxies,
-        #     decode_responses=True,
-        #     skip_full_coverage_check=True,
-        #     socket_timeout=conn_timeout,
-        #     socket_connect_timeout=conn_timeout,
-        # )
 
     def test_key_value(self):
         proxies = self.get_proxies()
@@ -82,7 +90,9 @@ class KeyValueTester:
             else:
                 self.test_get(proxies)
         except Exception as e:
-            logger.error('REDIS_TEST_FAILED: {} {} {}', self.overmoon_client.get_cluster(self.cluster_name), datetime.utcnow(), e)
+            logger.error('REDIS_TEST_FAILED: {} {}', self.cluster_name, e)
+            logger.error('REDIS_TEST_FAILED: {} ', self.overmoon_client.get_cluster(self.cluster_name))
+            raise
 
     def test_set(self, proxies):
         if len(self.kvs) >= self.MAX_KVS:
@@ -112,7 +122,7 @@ class KeyValueTester:
                 raise
             if k != v:
                 logger.error('INCONSISTENT: key: {}, expected {}, got {}, proxy {}', k, k, v, proxy)
-                exit(1)
+                raise Exception("INCONSISTENT DATA")
 
 
 class RandomTester:
@@ -157,6 +167,8 @@ class RandomTester:
     def loop_test(self):
         while not self.stopped:
             self.overmoon_client.sync_all_server_proxy(self.server_proxy_list)
+            if not self.overmoon_client.get_free_proxies():
+                logger.warning("no free proxy found")
 
             names = self.overmoon_client.get_cluster_names()
             if names:
@@ -173,7 +185,11 @@ class RandomTester:
                     self.overmoon_client.scale_cluster(cluster_name)
 
             if names and random.randint(0, 10) < 6:
-                self.overmoon_client.remove_unused_nodes(random.choice(names))
+                if self.overmoon_client.remove_unused_nodes(random.choice(names)):
+                    logger.info("Removed nodes. Need to wait or the commands will be sent to removed nodes")
+                    # TODO: get proxies not directly by the api to avoid this.
+                    time.sleep(10)
+                    continue
 
             self.test_data()
 
@@ -193,6 +209,15 @@ class RandomTester:
                 self.loop_test()
             except Exception as e:
                 logger.error('TEST_FAILED: {}', e)
+                if exit_on_error:
+                    raise
+                continue
 
 
-RandomTester(OvermoonClient(OVERMOON_ENDPOINT)).keep_testing()
+if __name__ == '__main__':
+    exit_on_error = len(sys.argv) >= 2 and sys.argv[1] == 'exit-on-error'
+    if exit_on_error:
+        print("Will exit on error")
+    else:
+        print("Will not exit on error")
+    RandomTester(OvermoonClient(OVERMOON_ENDPOINT)).keep_testing()

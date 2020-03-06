@@ -71,8 +71,12 @@ docker-overmoon:
 	# > make build-docker
 	docker-compose -f examples/docker-compose-overmoon.yml up
 
-start-chaos:
+start-func-test:
 	python chaostest/render_compose.py
+	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+
+start-chaos:
+	python chaostest/render_compose.py enable_failure
 	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
 
 stop-chaos:
@@ -84,5 +88,9 @@ list-chaos-services:
 chaos-test:
 	python chaostest/random_test.py
 
-.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker docker-overmoon chaos
+func-test:
+	python chaostest/random_test.py exit-on-error
+
+.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker docker-overmoon \
+    start-func-test start-chaos stop-chaos list-chaos-services chaos-test func-test
 

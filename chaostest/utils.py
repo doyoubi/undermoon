@@ -103,7 +103,7 @@ class OvermoonClient:
         }
         r = self.client.post('/api/clusters', payload)
         if r.status_code == 200:
-            logger.info('created cluster: {} {}', cluster_name, node_number)
+            logger.warning('created cluster: {} {}', cluster_name, node_number)
             return
         if r.status_code == 400:
             return
@@ -132,7 +132,7 @@ class OvermoonClient:
     def delete_cluster(self, cluster_name):
         r = self.client.delete('/api/clusters/meta/{}'.format(cluster_name))
         if r.status_code == 200:
-            logger.info('deleted cluster: {}', cluster_name)
+            logger.warning('deleted cluster: {}', cluster_name)
             return
         if r.status_code == 404:
             return
@@ -154,14 +154,15 @@ class OvermoonClient:
         r = self.client.delete('/api/clusters/free_nodes/{}'.format(cluster_name))
         if r.status_code == 200:
             logger.info('OVERMOON removed unused nodes')
-            return
+            return True
         if r.status_code == 404:
-            return
+            return False
         if r.status_code == 400:
             # logger.warning('OVERMOON failed to remove unused nodes: {} {} {}', cluster_name, r.status_code, r.text)
-            return
+            return False
 
         logger.error('OVERMOON_ERROR: failed to remove unused nodes: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))
+        return False
 
     def scale_cluster(self, cluster_name):
         r = self.client.post('/api/clusters/migrations/{}'.format(cluster_name))
@@ -172,6 +173,44 @@ class OvermoonClient:
             return
 
         logger.error('OVERMOON_ERROR: failed to start migration: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))
+
+    def get_proxy_addresses(self):
+        r = self.client.get('/api/proxies/addresses')
+        if r.status_code == 200:
+            return r.json()['addresses']
+        logger.error('OVERMOON_ERROR: failed to get proxy addresses: {} {}', r.status_code, r.text)
+        return []
+
+    def get_proxy(self, address):
+        r = self.client.get('/api/proxies/meta/{}'.format(address))
+        if r.status_code == 200:
+            return r.json()['host']
+        logger.error('OVERMOON_ERROR: failed to get proxy meta: {} {}', r.status_code, r.text)
+        return None
+
+    def get_failures(self):
+        r = self.client.get('/api/failures')
+        if r.status_code == 200:
+            return r.json()['addresses']
+        logger.error('OVERMOON_ERROR: failed to get failed proxy addresses: {} {}', r.status_code, r.text)
+        return []
+
+    def get_free_proxies(self):
+        proxies = self.get_proxy_addresses()
+        failures = self.get_failures()
+        failures = set(failures)
+
+        free_proxies = []
+        for addr in proxies:
+            if addr in failures:
+                continue
+            proxy = self.get_proxy(addr)
+            if not proxy:
+                continue
+            if not proxy['free_nodes']:
+                continue
+            free_proxies.append(addr)
+        return free_proxies
 
 
 class RedisClusterClient:
@@ -206,6 +245,11 @@ class RedisClusterClient:
         proxy = random.choice(self.startup_nodes)
         client = self.get_or_create_client(proxy)
 
+        # Cover this case:
+        # (1) random node
+        # (2) importing node (PreSwitched not done)
+        # (3) migrating node (PreSwitched done this time)
+        # (4) importing node again!
         RETRY_TIMES = 4
         tried_addrs = [self.fmt_addr(proxy)]
         for i in range(0, RETRY_TIMES):
@@ -215,9 +259,9 @@ class RedisClusterClient:
             except Exception as e:
                 if 'MOVED' not in str(e):
                     raise Exception('{}: {}'.format(addr, e))
-                if i == 2:
+                if i == RETRY_TIMES - 1:
                     logger.error("exceed max redirection times: {}", tried_addrs)
-                    raise
+                    raise Exception("{}: {}".format(addr, e))
                 proxy = self.parse_moved(str(e))
                 client = self.get_or_create_client(proxy)
                 tried_addrs.append(self.fmt_addr(proxy))
