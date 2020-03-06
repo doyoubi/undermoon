@@ -744,24 +744,6 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
     }
 }
 
-pub type BackendSenderFactory<F, CF> =
-    CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>>;
-
-pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
-    config: Arc<ServerProxyConfig>,
-    reply_handler_factory: Arc<F>,
-    conn_factory: Arc<CF>,
-) -> BackendSenderFactory<F, CF>
-where
-    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
-    CF::Pkt: Send,
-{
-    CachedSenderFactory::new(RRSenderGroupFactory::new(
-        config.backend_conn_num,
-        RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory, conn_factory),
-    ))
-}
-
 impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
     type Task = S::Task;
 
@@ -811,4 +793,45 @@ impl<T: CmdTask> CmdTaskSenderFactory for RedirectionSenderFactory<T> {
             phantom: PhantomData,
         }
     }
+}
+
+pub type BackendSenderFactory<F, CF> =
+    CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>>;
+
+pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
+    config: Arc<ServerProxyConfig>,
+    reply_handler_factory: Arc<F>,
+    conn_factory: Arc<CF>,
+) -> BackendSenderFactory<F, CF>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    CF::Pkt: Send,
+{
+    CachedSenderFactory::new(RRSenderGroupFactory::new(
+        config.backend_conn_num,
+        RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory, conn_factory),
+    ))
+}
+
+pub type MigrationBackendSenderFactory<F, CF> = CachedSenderFactory<
+    RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>,
+>;
+
+pub fn gen_migration_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
+    config: Arc<ServerProxyConfig>,
+    reply_handler_factory: Arc<F>,
+    conn_factory: Arc<CF>,
+) -> MigrationBackendSenderFactory<F, CF>
+where
+    <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
+    CF::Pkt: Send,
+{
+    CachedSenderFactory::new(RRSenderGroupFactory::new(
+        config.backend_conn_num,
+        ReqAdaptorSenderFactory::new(RecoverableBackendNodeFactory::new(
+            config.clone(),
+            reply_handler_factory,
+            conn_factory,
+        )),
+    ))
 }

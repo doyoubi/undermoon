@@ -1,6 +1,6 @@
 use super::store::{MetaStore, MetaStoreError, MigrationType};
 use crate::broker::store::InconsistentError;
-use crate::common::cluster::{Cluster, MigrationTaskMeta, Node, Proxy};
+use crate::common::cluster::{Cluster, DBName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, ProxyAddressesPayload, ProxyPayload,
@@ -120,7 +120,7 @@ impl MemBrokerService {
             .get_host_by_address(address)
     }
 
-    pub fn get_cluster_names(&self) -> Vec<String> {
+    pub fn get_cluster_names(&self) -> Vec<DBName> {
         self.store
             .read()
             .expect("MemBrokerService::get_cluster_names")

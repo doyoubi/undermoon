@@ -135,8 +135,8 @@ impl MetaStore {
         })
     }
 
-    pub fn get_cluster_names(&self) -> Vec<String> {
-        self.clusters.keys().map(|name| name.to_string()).collect()
+    pub fn get_cluster_names(&self) -> Vec<DBName> {
+        self.clusters.keys().cloned().collect()
     }
 
     pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
@@ -512,7 +512,7 @@ impl MetaStore {
     pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
         debug!("MetaStore::commit_migration {:?}", task);
         let MigrationTaskMeta {
-            cluster_name,
+            db_name: cluster_name,
             slot_range,
         } = task;
 

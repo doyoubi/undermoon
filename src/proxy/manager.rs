@@ -1,5 +1,6 @@
 use super::backend::{
-    gen_sender_factory, BackendError, BackendSenderFactory, CmdTaskSender, CmdTaskSenderFactory,
+    gen_migration_sender_factory, BackendError, CmdTaskSender, CmdTaskSenderFactory,
+    MigrationBackendSenderFactory,
 };
 use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
@@ -13,7 +14,6 @@ use super::slowlog::TaskEvent;
 use crate::common::cluster::{DBName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMeta;
-use crate::common::utils::ThreadSafe;
 use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
@@ -26,24 +26,20 @@ use arc_swap::ArcSwap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub struct MetaMap<S: CmdTaskSender, MF>
+pub struct MetaMap<S: CmdTaskSender, T>
 where
-    MF: CmdTaskSenderFactory + ThreadSafe,
-    <MF as CmdTaskSenderFactory>::Sender: ThreadSafe,
-    <<MF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
     <S as CmdTaskSender>::Task: DBTag,
+    T: CmdTask + DBTag,
 {
     db_map: DatabaseMap<S>,
-    migration_map: MigrationMap<MF>,
+    migration_map: MigrationMap<T>,
     deleting_task_map: DeleteKeysTaskMap,
 }
 
-impl<S: CmdTaskSender, MF> MetaMap<S, MF>
+impl<S: CmdTaskSender, T> MetaMap<S, T>
 where
-    MF: CmdTaskSenderFactory + ThreadSafe,
-    <MF as CmdTaskSenderFactory>::Sender: ThreadSafe,
-    <<MF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
     <S as CmdTaskSender>::Task: DBTag,
+    T: CmdTask + DBTag,
 {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
@@ -72,9 +68,9 @@ type SenderFactory = BlockingBackendSenderFactory<
     BlockingTaskRetrySender,
 >;
 type MigrationSenderFactory =
-    BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
+    MigrationBackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
 pub type SharedMetaMap =
-    Arc<ArcSwap<MetaMap<<SenderFactory as CmdTaskSenderFactory>::Sender, MigrationSenderFactory>>>;
+    Arc<ArcSwap<MetaMap<<SenderFactory as CmdTaskSenderFactory>::Sender, CmdCtx>>>;
 
 pub struct MetaManager<F: RedisClientFactory> {
     config: Arc<ServerProxyConfig>,
@@ -106,7 +102,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         );
         let blocking_map = Arc::new(BlockingMap::new(basic_sender_factory, blocking_task_sender));
         let sender_factory = gen_blocking_sender_factory(blocking_map.clone());
-        let migration_sender_factory = Arc::new(gen_sender_factory(
+        let migration_sender_factory = Arc::new(gen_migration_sender_factory(
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
             conn_factory,

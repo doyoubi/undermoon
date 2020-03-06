@@ -2,6 +2,7 @@ use crate::common::cluster::MigrationTaskMeta;
 use crate::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
 use crate::proxy::backend::CmdTask;
+use crate::proxy::blocking::BlockingHintTask;
 use crate::proxy::database::DBSendError;
 use crate::replication::replicator::ReplicatorError;
 use futures::Future;
@@ -74,7 +75,7 @@ pub trait MigratingTask: ThreadSafe {
     fn start<'s>(&'s self)
         -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
-    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
+    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
 }
 
@@ -84,7 +85,7 @@ pub trait ImportingTask: ThreadSafe {
     fn start<'s>(&'s self)
         -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
-    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>>;
+    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
     fn handle_switch(
         &self,

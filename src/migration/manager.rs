@@ -8,8 +8,10 @@ use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
 use crate::protocol::RedisClientFactory;
 use crate::protocol::Resp;
-use crate::proxy::backend::{CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory};
-use crate::proxy::blocking::TaskBlockingControllerFactory;
+use crate::proxy::backend::{
+    CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, ReqTask,
+};
+use crate::proxy::blocking::{BlockingHintTask, TaskBlockingControllerFactory};
 use crate::proxy::database::{DBSendError, DBTag};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
@@ -21,10 +23,7 @@ use std::sync::Arc;
 type TaskRecord<T> = Either<Arc<dyn MigratingTask<Task = T>>, Arc<dyn ImportingTask<Task = T>>>;
 type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
 type TaskMap<T> = HashMap<DBName, DBTask<T>>;
-type NewMigrationTuple<TSF> = (
-    MigrationMap<TSF>,
-    Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
-);
+type NewMigrationTuple<T> = (MigrationMap<T>, Vec<NewTask<T>>);
 
 pub struct NewTask<T: CmdTask> {
     db_name: DBName,
@@ -36,10 +35,9 @@ pub struct NewTask<T: CmdTask> {
 
 pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
 where
-    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
-        + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: DBTag,
 {
     config: Arc<ServerProxyConfig>,
     mgr_config: Arc<AtomicMigrationConfig>,
@@ -51,10 +49,9 @@ where
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
     MigrationManager<RCF, TSF, CTF>
 where
-    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
-        + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: DBTag,
 {
     pub fn new(
         config: Arc<ServerProxyConfig>,
@@ -75,10 +72,10 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn create_new_migration_map<BCF: TaskBlockingControllerFactory>(
         &self,
-        old_migration_map: &MigrationMap<TSF>,
+        old_migration_map: &MigrationMap<CTF::Task>,
         local_db_map: &ProxyDBMap,
         blocking_ctrl_factory: Arc<BCF>,
-    ) -> NewMigrationTuple<TSF> {
+    ) -> NewMigrationTuple<CTF::Task> {
         old_migration_map.update_from_old_task_map(
             local_db_map,
             self.config.clone(),
@@ -90,10 +87,7 @@ where
         )
     }
 
-    pub fn run_tasks(
-        &self,
-        new_tasks: Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
-    ) {
+    pub fn run_tasks(&self, new_tasks: Vec<NewTask<CTF::Task>>) {
         if new_tasks.is_empty() {
             return;
         }
@@ -181,21 +175,17 @@ where
     }
 }
 
-pub struct MigrationMap<TSF>
+pub struct MigrationMap<T>
 where
-    TSF: CmdTaskSenderFactory + ThreadSafe,
-    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    T: CmdTask + DBTag,
 {
     empty: bool,
-    task_map: TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+    task_map: TaskMap<T>,
 }
 
-impl<TSF> MigrationMap<TSF>
+impl<T> MigrationMap<T>
 where
-    TSF: CmdTaskSenderFactory + ThreadSafe,
-    <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task: DBTag,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    T: CmdTask + DBTag,
 {
     pub fn new() -> Self {
         Self {
@@ -228,33 +218,26 @@ where
             .join("\r\n")
     }
 
-    pub fn send(
-        &self,
-        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
-    {
+    pub fn send(&self, cmd_task: T) -> Result<(), DBSendError<BlockingHintTask<T>>> {
         cmd_task.log_event(TaskEvent::SentToMigrationDB);
         self.send_to_db(cmd_task)
     }
 
-    pub fn send_to_db(
-        &self,
-        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
-    {
+    pub fn send_to_db(&self, cmd_task: T) -> Result<(), DBSendError<BlockingHintTask<T>>> {
         // Optimization for not having any migration.
         if self.empty {
-            return Err(DBSendError::SlotNotFound(cmd_task));
+            return Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                cmd_task, false,
+            )));
         }
 
         Self::send_helper(&self.task_map, cmd_task)
     }
 
     fn send_helper(
-        task_map: &TaskMap<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
-        cmd_task: <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>
-    {
+        task_map: &TaskMap<T>,
+        cmd_task: T,
+    ) -> Result<(), DBSendError<BlockingHintTask<T>>> {
         let db_name = cmd_task.get_db_name();
         match task_map.get(&db_name) {
             Some(tasks) => {
@@ -282,9 +265,13 @@ where
                     }
                 }
 
-                Err(DBSendError::SlotNotFound(cmd_task))
+                Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                    cmd_task, false,
+                )))
             }
-            None => Err(DBSendError::SlotNotFound(cmd_task)),
+            None => Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                cmd_task, false,
+            ))),
         }
     }
 
@@ -331,7 +318,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn update_from_old_task_map<RCF, CTF, BCF>(
+    pub fn update_from_old_task_map<RCF, CTF, BCF, TSF>(
         &self,
         local_db_map: &ProxyDBMap,
         config: Arc<ServerProxyConfig>,
@@ -340,15 +327,13 @@ where
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
         blocking_ctrl_map: Arc<BCF>,
-    ) -> (
-        Self,
-        Vec<NewTask<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>>,
-    )
+    ) -> (Self, Vec<NewTask<T>>)
     where
         RCF: RedisClientFactory,
-        CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
-            + ThreadSafe,
+        CTF: CmdTaskFactory<Task = T> + ThreadSafe,
         BCF: TaskBlockingControllerFactory,
+        TSF: CmdTaskSenderFactory + ThreadSafe,
+        <TSF as CmdTaskSenderFactory>::Sender: CmdTaskSender<Task = ReqTask<T>> + ThreadSafe,
     {
         let old_task_map = &self.task_map;
 
@@ -362,7 +347,7 @@ where
                     match slot_range.tag {
                         SlotRangeTag::Migrating(ref _meta) => {
                             let migration_meta = MigrationTaskMeta {
-                                cluster_name: db_name.clone(),
+                                db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
                             if let Some(Either::Left(migrating_task)) = old_task_map
@@ -377,7 +362,7 @@ where
                         }
                         SlotRangeTag::Importing(ref _meta) => {
                             let migration_meta = MigrationTaskMeta {
-                                cluster_name: db_name.clone(),
+                                db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
                             if let Some(Either::Right(importing_task)) = old_task_map
@@ -407,7 +392,7 @@ where
                         SlotRangeTag::Migrating(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
-                                cluster_name: db_name.clone(),
+                                db_name: db_name.clone(),
                                 slot_range: SlotRange {
                                     start,
                                     end,
@@ -431,7 +416,6 @@ where
                                 (slot_range.start, slot_range.end),
                                 meta.clone(),
                                 client_factory.clone(),
-                                sender_factory.clone(),
                                 ctrl,
                             ));
                             new_tasks.push(NewTask {
@@ -449,7 +433,7 @@ where
                         SlotRangeTag::Importing(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
-                                cluster_name: db_name.clone(),
+                                db_name: db_name.clone(),
                                 slot_range: SlotRange {
                                     start,
                                     end,
@@ -508,15 +492,15 @@ where
         switch_arg: SwitchArg,
         sub_cmd: MgrSubCmd,
     ) -> Result<(), SwitchError> {
-        if let Some(tasks) = self.task_map.get(&switch_arg.meta.cluster_name) {
+        if let Some(tasks) = self.task_map.get(&switch_arg.meta.db_name) {
             debug!(
                 "found tasks for db {} {}",
-                switch_arg.meta.cluster_name,
+                switch_arg.meta.db_name,
                 tasks.len()
             );
 
             if let Some(record) = tasks.get(&switch_arg.meta) {
-                debug!("found record for db {}", switch_arg.meta.cluster_name);
+                debug!("found record for db {}", switch_arg.meta.db_name);
                 match record {
                     Either::Left(_migrating_task) => {
                         error!(

@@ -11,9 +11,9 @@ use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::RespVec;
 use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
 use crate::proxy::backend::{
-    CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, RedirectionSenderFactory,
+    CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, RedirectionSenderFactory, ReqTask,
 };
-use crate::proxy::blocking::{BlockingHandle, TaskBlockingController};
+use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
 use crate::proxy::database::DBSendError;
 use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use crate::proxy::service::ServerProxyConfig;
@@ -26,31 +26,30 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub struct RedisScanMigratingTask<
+pub struct RedisScanMigratingTask<RCF, T, BC>
+where
     RCF: RedisClientFactory,
-    TSF: CmdTaskSenderFactory + ThreadSafe,
+    T: CmdTask,
     BC: TaskBlockingController,
-> {
+{
     mgr_config: Arc<AtomicMigrationConfig>,
     db_name: DBName,
     slot_range: (usize, usize),
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
-    _sender_factory: Arc<TSF>,
-    redirection_sender_factory:
-        RedirectionSenderFactory<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+    redirection_sender_factory: RedirectionSenderFactory<T>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     task: ScanMigrationTask,
     blocking_ctrl: Arc<BC>,
 }
 
-impl<
-        RCF: RedisClientFactory,
-        TSF: CmdTaskSenderFactory + ThreadSafe,
-        BC: TaskBlockingController,
-    > RedisScanMigratingTask<RCF, TSF, BC>
+impl<RCF, T, BC> RedisScanMigratingTask<RCF, T, BC>
+where
+    RCF: RedisClientFactory,
+    T: CmdTask,
+    BC: TaskBlockingController,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -60,7 +59,6 @@ impl<
         slot_range: (usize, usize),
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
-        sender_factory: Arc<TSF>,
         blocking_ctrl: Arc<BC>,
     ) -> Self {
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
@@ -77,7 +75,6 @@ impl<
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
-            _sender_factory: sender_factory,
             redirection_sender_factory,
             db_name,
             slot_range,
@@ -104,7 +101,7 @@ impl<
         let arg = SwitchArg {
             version: UNDERMOON_MIGRATION_VERSION.to_string(),
             meta: MigrationTaskMeta {
-                cluster_name: self.db_name.clone(),
+                db_name: self.db_name.clone(),
                 slot_range: SlotRange {
                     start: self.slot_range.0,
                     end: self.slot_range.1,
@@ -332,13 +329,13 @@ impl<
     }
 }
 
-impl<
-        RCF: RedisClientFactory,
-        TSF: CmdTaskSenderFactory + ThreadSafe,
-        BC: TaskBlockingController,
-    > MigratingTask for RedisScanMigratingTask<RCF, TSF, BC>
+impl<RCF, T, BC> MigratingTask for RedisScanMigratingTask<RCF, T, BC>
+where
+    RCF: RedisClientFactory,
+    T: CmdTask,
+    BC: TaskBlockingController,
 {
-    type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
+    type Task = T;
 
     fn start<'s>(
         &'s self,
@@ -377,16 +374,21 @@ impl<
         Box::pin(async { r })
     }
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>> {
         let state = self.state.get_state();
         match state {
-            MigrationState::PreCheck | MigrationState::PreBlocking | MigrationState::PreSwitch => {
-                return Err(DBSendError::SlotNotFound(cmd_task));
+            MigrationState::PreCheck => {
+                return Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                    cmd_task, false,
+                )))
+            }
+            MigrationState::PreBlocking | MigrationState::PreSwitch => {
+                return Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                    cmd_task, true,
+                )));
             }
             _ => (),
         }
-
-        // TODO: add blocking for PreBlocking
 
         let redirection_sender = self
             .redirection_sender_factory
@@ -401,11 +403,11 @@ impl<
     }
 }
 
-impl<
-        RCF: RedisClientFactory,
-        TSF: CmdTaskSenderFactory + ThreadSafe,
-        BC: TaskBlockingController,
-    > Drop for RedisScanMigratingTask<RCF, TSF, BC>
+impl<RCF, T, BC> Drop for RedisScanMigratingTask<RCF, T, BC>
+where
+    RCF: RedisClientFactory,
+    T: CmdTask,
+    BC: TaskBlockingController,
 {
     fn drop(&mut self) {
         self.send_stop_signal().unwrap_or(())
@@ -416,17 +418,15 @@ pub struct RedisScanImportingTask<RCF, TSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
-        + ThreadSafe,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     _mgr_config: Arc<AtomicMigrationConfig>,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     _client_factory: Arc<RCF>,
     _sender_factory: Arc<TSF>,
-    redirection_sender_factory:
-        RedirectionSenderFactory<<<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>,
+    redirection_sender_factory: RedirectionSenderFactory<CTF::Task>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     cmd_handler: RestoreDataCmdTaskHandler<CTF, <TSF as CmdTaskSenderFactory>::Sender>,
@@ -437,9 +437,8 @@ impl<RCF, TSF, CTF> RedisScanImportingTask<RCF, TSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
-        + ThreadSafe,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     pub fn new(
         _config: Arc<ServerProxyConfig>,
@@ -486,9 +485,8 @@ impl<RCF, TSF, CTF> Drop for RedisScanImportingTask<RCF, TSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
-        + ThreadSafe,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     fn drop(&mut self) {
         self.send_stop_signal().unwrap_or(())
@@ -499,11 +497,10 @@ impl<RCF, TSF, CTF> ImportingTask for RedisScanImportingTask<RCF, TSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
-    CTF: CmdTaskFactory<Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task>
-        + ThreadSafe,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe,
+    CTF: CmdTaskFactory + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
-    type Task = <<TSF as CmdTaskSenderFactory>::Sender as CmdTaskSender>::Task;
+    type Task = CTF::Task;
 
     fn start<'s>(
         &'s self,
@@ -541,7 +538,7 @@ where
         Box::pin(async { r })
     }
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<Self::Task>> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>> {
         if self.state.get_state() == MigrationState::PreCheck {
             let redirection_sender = self
                 .redirection_sender_factory

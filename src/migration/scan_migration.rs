@@ -10,21 +10,46 @@ use crate::protocol::{
     BulkStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
 };
 use atomic_option::AtomicOption;
+use btoi;
 use futures::channel::{mpsc, oneshot};
 use futures::{select, stream, Future, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use futures_batch::ChunksTimeoutStreamExt;
 use futures_timer::Delay;
 use std::cmp::min;
 use std::pin::Pin;
-use std::str;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-const PEXPIRE_NO_EXPIRE: &str = "-1";
-const RESTORE_NO_EXPIRE: &str = "0";
+pub const PTTL_NO_EXPIRE: &[u8] = b"-1";
+pub const PTTL_KEY_NOT_FOUND: &[u8] = b"-2";
+pub const RESTORE_NO_EXPIRE: &[u8] = b"0";
 const BUSYKEY_ERROR: &[u8] = b"BUSYKEY";
 const DATA_QUEUE_SIZE: usize = 4096;
+
+pub fn pttl_to_restore_expire_time(pttl: Vec<u8>) -> Vec<u8> {
+    let mut expire_time = pttl;
+    if pttl_need_to_be_no_expire(&expire_time) {
+        // Reuse this vector
+        expire_time.clear();
+        expire_time.extend_from_slice(RESTORE_NO_EXPIRE)
+    }
+    expire_time
+}
+
+fn pttl_need_to_be_no_expire(buf: &[u8]) -> bool {
+    if buf == PTTL_NO_EXPIRE {
+        return true;
+    }
+
+    let n = match btoi::btoi::<i64>(buf) {
+        Ok(n) => n,
+        Err(_) => return true, // invalid expire number
+    };
+    // -1 no expire
+    // -2 key not found
+    n < 0
+}
 
 #[derive(Clone)]
 struct DataEntry {
@@ -144,11 +169,7 @@ impl ScanMigrationTask {
                         raw_data,
                     } = entry.clone();
 
-                    let expire_time = if pttl == PEXPIRE_NO_EXPIRE.as_bytes() {
-                        RESTORE_NO_EXPIRE.as_bytes().into()
-                    } else {
-                        pttl
-                    };
+                    let expire_time = pttl_to_restore_expire_time(pttl);
 
                     let restore_cmd = vec![
                         "RESTORE".to_string().into_bytes(),
@@ -275,10 +296,6 @@ impl ScanMigrationTask {
         let ScanResponse { next_index, keys } =
             ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
 
-        if next_index == 0 {
-            return Err(RedisClientError::Done);
-        }
-
         let (slot_ranges, entries) = Self::produce_entries(slot_ranges, keys, client).await?;
 
         let entries_num = entries.len() as i64;
@@ -288,7 +305,12 @@ impl ScanMigrationTask {
             .await?;
 
         counter.fetch_add(entries_num, Ordering::SeqCst);
-        Ok((slot_ranges, next_index, sender, counter))
+
+        if next_index == 0 {
+            Err(RedisClientError::Done)
+        } else {
+            Ok((slot_ranges, next_index, sender, counter))
+        }
     }
 
     // TODO: fix this
@@ -351,7 +373,7 @@ impl ScanMigrationTask {
 
             let pttl_opt = match resp {
                 // -2 for key not eixsts
-                Resp::Integer(pttl) if pttl == b"-2" => None,
+                Resp::Integer(pttl) if pttl == PTTL_KEY_NOT_FOUND => None,
                 Resp::Integer(pttl) => Some(pttl),
                 others => {
                     error!("failed to get PTTL: {:?}", others);

@@ -480,23 +480,14 @@ fn gen_cluster_nodes_helper(
         let mut slot_range_str = String::new();
         let slot_range = ranges
             .iter()
-            .map(|range| match range.tag {
-                // In the new migration protocol, after switching at the very beginning,
-                // the importing nodes will take care of all the migrating slots.
-                SlotRangeTag::Migrating(ref _meta)
-                    if migration_states.get(&range.to_range()).cloned()
-                        != Some(MigrationState::PreCheck) =>
-                {
+            .map(|range| {
+                if should_ignore_slots(&range, &migration_states) {
                     None
+                } else if range.start == range.end {
+                    Some(range.start.to_string())
+                } else {
+                    Some(format!("{}-{}", range.start, range.end))
                 }
-                SlotRangeTag::Importing(ref _meta)
-                    if migration_states.get(&range.to_range()).cloned()
-                        == Some(MigrationState::PreCheck) =>
-                {
-                    None
-                }
-                _ if range.start == range.end => Some(range.start.to_string()),
-                _ => Some(format!("{}-{}", range.start, range.end)),
             })
             .filter_map(|s| s)
             .collect::<Vec<String>>()
@@ -516,6 +507,27 @@ fn gen_cluster_nodes_helper(
     cluster_nodes
 }
 
+fn should_ignore_slots(
+    range: &SlotRange,
+    migration_states: &HashMap<Range, MigrationState>,
+) -> bool {
+    // In the new migration protocol, after switching at the very beginning,
+    // the importing nodes will take care of all the migrating slots.
+    // From the point of view of other nodes, since they can't
+    // find any migration_states, migrating nodes always does not
+    // own the migrating slots while the importing nodes always own
+    // the migrating slots.
+    match &range.tag {
+        SlotRangeTag::Migrating(_) => {
+            migration_states.get(&range.to_range()).cloned() != Some(MigrationState::PreCheck)
+        }
+        SlotRangeTag::Importing(_) => {
+            migration_states.get(&range.to_range()).cloned() == Some(MigrationState::PreCheck)
+        }
+        _ => false,
+    }
+}
+
 fn gen_cluster_slots_helper(
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<Range, MigrationState>,
@@ -531,22 +543,8 @@ fn gen_cluster_slots_helper(
             .ok_or_else(|| format!("invalid address {}", addr))?;
 
         for slot_range in ranges {
-            // In the new migration protocol, after switching at the very beginning,
-            // the importing nodes will take care of all the migrating slots.
-            match slot_range.tag {
-                SlotRangeTag::Migrating(ref _meta)
-                    if migration_states.get(&slot_range.to_range()).cloned()
-                        != Some(MigrationState::PreCheck) =>
-                {
-                    continue
-                }
-                SlotRangeTag::Importing(ref _meta)
-                    if migration_states.get(&slot_range.to_range()).cloned()
-                        == Some(MigrationState::PreCheck) =>
-                {
-                    continue
-                }
-                _ => (),
+            if should_ignore_slots(slot_range, migration_states) {
+                continue;
             }
 
             let mut arr = vec![
@@ -639,6 +637,7 @@ mod tests {
 
     #[test]
     fn test_gen_importing_cluster_nodes() {
+        // From the point of view of other nodes.
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
         let output =
@@ -650,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gen_importing_cluster_nodes_without_pre_check() {
+    fn test_gen_importing_cluster_nodes_without_pre_check_done() {
         let mut m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
         for slot_ranges in slot_ranges.values() {
@@ -667,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gen_importing_cluster_nodes_with_pre_check() {
+    fn test_gen_importing_cluster_nodes_with_pre_check_done() {
         let mut m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
         for slot_ranges in slot_ranges.values() {
@@ -685,8 +684,7 @@ mod tests {
 
     #[test]
     fn test_gen_migrating_cluster_nodes() {
-        // Should always be able to find the migration state.
-        // This will never be empty. But should also work.
+        // From the point of view of other nodes.
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         let output =
@@ -698,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gen_migrating_cluster_nodes_without_pre_check() {
+    fn test_gen_migrating_cluster_nodes_without_pre_check_done() {
         let mut m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         for slot_ranges in slot_ranges.values() {
@@ -715,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gen_migrating_cluster_nodes_with_pre_check() {
+    fn test_gen_migrating_cluster_nodes_with_pre_check_done() {
         let mut m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         for slot_ranges in slot_ranges.values() {

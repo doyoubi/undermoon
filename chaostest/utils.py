@@ -1,6 +1,8 @@
+import random
 import redis
 import requests
 import requests_unixsocket
+from loguru import logger
 
 
 DOCKER_ENDPOINT = 'http+unix://%2Fvar%2Frun%2Fdocker.sock'
@@ -66,7 +68,7 @@ class OvermoonClient:
     def sync_server_proxy(self, server_proxy):
         server_proxy_port = int(server_proxy.proxy_address.split(':')[1])
 
-        conn_timeout = 0.2
+        conn_timeout = 1
         redis_client = redis.StrictRedis(
             port=server_proxy_port,
             socket_timeout=conn_timeout,
@@ -75,24 +77,24 @@ class OvermoonClient:
         try:
             redis_client.ping()
         except:
-            print('failed to connect to server proxy: {}'.format(server_proxy.to_dict()))
+            logger.warning('OVERMOON: failed to connect to server proxy: {}', server_proxy.to_dict())
             return
 
         r = self.client.post('/api/proxies/nodes', server_proxy.to_dict())
         if r.status_code == 400:
             return
         if r.status_code == 200:
-            print('recover server proxy: {}'.format(server_proxy.to_dict()))
+            logger.info('OVERMOON: recover server proxy: {}', server_proxy.to_dict())
             return
 
-        print('OVERMOON_ERROR: failed to sync server proxy data: {} {}'.format(r.status_code, r.text))
+        logger.error('OVERMOON_ERROR: failed to sync server proxy data: {} {}', r.status_code, r.text)
 
     def sync_all_server_proxy(self, server_proxy_list):
         for server_proxy in server_proxy_list:
             try:
                 self.sync_server_proxy(server_proxy)
             except Exception as e:
-                print('sync_server_proxy failed: {}'.format(server_proxy.to_dict()), e)
+                logger.error('OVERMOON: sync_server_proxy failed: {} {}', server_proxy.to_dict(), e)
 
     def create_cluster(self, cluster_name, node_number):
         payload = {
@@ -101,20 +103,20 @@ class OvermoonClient:
         }
         r = self.client.post('/api/clusters', payload)
         if r.status_code == 200:
-            print('created cluster: {} {}'.format(cluster_name, node_number))
+            logger.warning('created cluster: {} {}', cluster_name, node_number)
             return
         if r.status_code == 400:
             return
         if r.status_code == 409:
-            print('no resource')
+            logger.warning('no resource')
             return
 
-        print('OVERMOON_ERROR: failed to create cluster: {} {}'.format(r.status_code, r.text))
+        logger.error('OVERMOON_ERROR: failed to create cluster: {} {}', r.status_code, r.text)
 
     def get_cluster_names(self):
         r = self.client.get('/api/clusters/names')
         if r.status_code != 200:
-            print('OVERMOON_ERROR: failed to get cluster names: {} {}'.format(r.status_code, r.text))
+            logger.error('OVERMOON_ERROR: failed to get cluster names: {} {}'.format(r.status_code, r.text))
             return
 
         payload = r.json()
@@ -125,50 +127,154 @@ class OvermoonClient:
         r = self.client.get('/api/clusters/meta/{}'.format(cluster_name))
         if r.status_code == 200:
             return r.json()['cluster']
-        print('OVERMOON_ERROR: failed to get cluster: {} {} {}'.format(cluster_name, r.status_code, r.text))
+        logger.error('OVERMOON_ERROR: failed to get cluster: {} {} {}', cluster_name, r.status_code, r.text)
 
     def delete_cluster(self, cluster_name):
         r = self.client.delete('/api/clusters/meta/{}'.format(cluster_name))
         if r.status_code == 200:
-            print('deleted cluster: {}'.format(cluster_name))
+            logger.warning('deleted cluster: {}', cluster_name)
             return
         if r.status_code == 404:
             return
-        print('OVERMOON_ERROR: failed to delete cluster: {} {} {}'.format(cluster_name, r.status_code, r.text))
+        logger.error('OVERMOON_ERROR: failed to delete cluster: {} {} {}', cluster_name, r.status_code, r.text)
 
     def add_nodes(self, cluster_name):
         r = self.client.put('/api/clusters/nodes/{}'.format(cluster_name))
         if r.status_code == 200:
-            print('added nodes to cluster {}'.format(cluster_name))
+            logger.info('added nodes to cluster {}', cluster_name)
             return
         if r.status_code in (404, 409):
             return
         if r.status_code == 400:
-            print('failed to add nodes:', r.text)
+            logger.warning('failed to add nodes: {}', r.text)
             return
-        print('OVERMOON_ERROR: failed to add nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
+        logger.error('OVERMOON_ERROR: failed to add nodes: {} {} {}', cluster_name, r.status_code, r.text)
 
     def remove_unused_nodes(self, cluster_name):
         r = self.client.delete('/api/clusters/free_nodes/{}'.format(cluster_name))
         if r.status_code == 200:
-            print('removed unused nodes')
-            return
+            logger.info('OVERMOON removed unused nodes')
+            return True
         if r.status_code == 404:
-            return
+            return False
         if r.status_code == 400:
-            # print('failed to remove unused nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
-            return
+            # logger.warning('OVERMOON failed to remove unused nodes: {} {} {}', cluster_name, r.status_code, r.text)
+            return False
 
-        print('OVERMOON_ERROR: failed to remove unused nodes: {} {} {}'.format(cluster_name, r.status_code, r.text))
-        print(self.get_cluster(cluster_name))
+        logger.error('OVERMOON_ERROR: failed to remove unused nodes: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))
+        return False
 
     def scale_cluster(self, cluster_name):
         r = self.client.post('/api/clusters/migrations/{}'.format(cluster_name))
         if r.status_code == 200:
-            print('start migration', cluster_name)
+            logger.warning('start migration: {}', cluster_name)
             return
         if r.status_code in (400, 404):
             return
 
-        print('OVERMOON_ERROR: failed to start migration: {} {} {}'.format(cluster_name, r.status_code, r.text))
-        print(self.get_cluster(cluster_name))
+        logger.error('OVERMOON_ERROR: failed to start migration: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))
+
+    def get_proxy_addresses(self):
+        r = self.client.get('/api/proxies/addresses')
+        if r.status_code == 200:
+            return r.json()['addresses']
+        logger.error('OVERMOON_ERROR: failed to get proxy addresses: {} {}', r.status_code, r.text)
+        return []
+
+    def get_proxy(self, address):
+        r = self.client.get('/api/proxies/meta/{}'.format(address))
+        if r.status_code == 200:
+            return r.json()['host']
+        logger.error('OVERMOON_ERROR: failed to get proxy meta: {} {}', r.status_code, r.text)
+        return None
+
+    def get_failures(self):
+        r = self.client.get('/api/failures')
+        if r.status_code == 200:
+            return r.json()['addresses']
+        logger.error('OVERMOON_ERROR: failed to get failed proxy addresses: {} {}', r.status_code, r.text)
+        return []
+
+    def get_free_proxies(self):
+        proxies = self.get_proxy_addresses()
+        failures = self.get_failures()
+        failures = set(failures)
+
+        free_proxies = []
+        for addr in proxies:
+            if addr in failures:
+                continue
+            proxy = self.get_proxy(addr)
+            if not proxy:
+                continue
+            if not proxy['free_nodes']:
+                continue
+            free_proxies.append(addr)
+        return free_proxies
+
+
+class RedisClusterClient:
+    def __init__(self, startup_nodes, timeout):
+        self.startup_nodes = startup_nodes
+        self.client_map = {}
+        self.timeout = timeout
+        for proxy in startup_nodes:
+            self.get_or_create_client(proxy)
+
+    def get_or_create_client(self, proxy):
+        host = proxy['host']
+        port = proxy['port']
+        address = self.fmt_addr(proxy)
+        if address not in self.client_map:
+            self.client_map[address] = redis.StrictRedis(host, port, socket_timeout=self.timeout, socket_connect_timeout=self.timeout)
+        return self.client_map[address]
+
+    def get(self, key):
+        return self.exec(lambda client: self.get_helper(client, key))
+
+    def get_helper(self, client, key):
+        v = client.get(key)
+        if v:
+            v = v.decode('utf-8')
+        return v
+
+    def set(self, key, value):
+        return self.exec(lambda client: client.set(key, value))
+
+    def exec(self, send_func):
+        proxy = random.choice(self.startup_nodes)
+        client = self.get_or_create_client(proxy)
+
+        # Cover this case:
+        # (1) random node
+        # (2) importing node (PreSwitched not done)
+        # (3) migrating node (PreSwitched done this time)
+        # (4) importing node again!
+        RETRY_TIMES = 4
+        tried_addrs = [self.fmt_addr(proxy)]
+        for i in range(0, RETRY_TIMES):
+            try:
+                addr = self.fmt_addr(proxy)
+                return (send_func(client), addr)
+            except Exception as e:
+                if 'MOVED' not in str(e):
+                    raise Exception('{}: {}'.format(addr, e))
+                if i == RETRY_TIMES - 1:
+                    logger.error("exceed max redirection times: {}", tried_addrs)
+                    raise Exception("{}: {}".format(addr, e))
+                proxy = self.parse_moved(str(e))
+                client = self.get_or_create_client(proxy)
+                tried_addrs.append(self.fmt_addr(proxy))
+
+    def parse_moved(self, response):
+        segs = response.split(' ')
+        if len(segs) != 3:
+            raise Exception("invalid moved response {}".format(response))
+        addr = segs[2]
+        addr_segs = addr.split(':')
+        if len(addr_segs) != 2:
+            raise Exception("invalid moved response {}".format(response))
+        return {'host': addr_segs[0], 'port': addr_segs[1]}
+
+    def fmt_addr(self, proxy):
+        return '{}:{}'.format(proxy['host'],  proxy['port'])

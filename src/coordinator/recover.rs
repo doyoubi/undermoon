@@ -41,15 +41,19 @@ impl<MB: MetaManipulationBroker> ProxyFailureHandler for ReplaceNodeHandler<MB> 
         &'s self,
         proxy_failure: ProxyFailure,
     ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
+        let proxy_failure2 = proxy_failure.clone();
         Box::pin(
             self.mani_broker
-                .replace_proxy(proxy_failure)
-                .map_err(|e| {
-                    error!("failed to replace proxy {:?}", e);
+                .replace_proxy(proxy_failure.clone())
+                .map_err(move |e| {
+                    error!("failed to replace proxy {} {:?}", proxy_failure2, e);
                     CoordinateError::MetaMani(e)
                 })
-                .map_ok(|new_host| {
-                    info!("successfully replace it with new host {:?}", new_host);
+                .map_ok(move |new_host| {
+                    info!(
+                        "successfully replace {} with new host {:?}",
+                        proxy_failure, new_host
+                    );
                 }),
         )
     }
