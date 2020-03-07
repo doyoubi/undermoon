@@ -68,6 +68,7 @@ pub struct ForwardHandler<F: RedisClientFactory> {
     manager: MetaManager<F>,
     slow_request_logger: Arc<SlowRequestLogger>,
     compressor: CmdCompressor,
+    future_registry: Arc<TrackedFutureRegistry>,
 }
 
 impl<F: RedisClientFactory> ForwardHandler<F> {
@@ -80,9 +81,15 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     ) -> Self {
         Self {
             config: config.clone(),
-            manager: MetaManager::new(config, client_factory, meta_map.clone(), future_registry),
+            manager: MetaManager::new(
+                config,
+                client_factory,
+                meta_map.clone(),
+                future_registry.clone(),
+            ),
             slow_request_logger,
             compressor: CmdCompressor::new(meta_map),
+            future_registry,
         }
     }
 }
@@ -191,6 +198,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::FinalSwitch);
         } else if sub_cmd.eq("SLOWLOG") {
             self.handle_umctl_slowlog(cmd_ctx);
+        } else if sub_cmd.eq("DEBUG") {
+            self.handle_umctl_debug(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -325,6 +334,31 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 "invalid slowlog sub-command".to_string().into_bytes(),
+            )))
+        }
+    }
+
+    fn handle_umctl_debug(&self, cmd_ctx: CmdCtx) {
+        let (cmd_ctx, sub_cmd) = match Self::get_sub_command(cmd_ctx, 2) {
+            Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd),
+            None => return,
+        };
+
+        let sub_cmd = sub_cmd.to_uppercase();
+
+        if sub_cmd.eq("FUTURE") {
+            let mut fut_desc_arr = self.future_registry.get_all_futures();
+            fut_desc_arr.sort_unstable_by_key(|desc| desc.get_start_time());
+
+            let elements = fut_desc_arr
+                .into_iter()
+                .map(|desc| Resp::Bulk(BulkStr::Str(format!("{}", desc).into_bytes())))
+                .collect();
+            let reply = Resp::Arr(Array::Arr(elements));
+            cmd_ctx.set_resp_result(Ok(reply));
+        } else {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                "invalid debug sub-command".to_string().into_bytes(),
             )))
         }
     }

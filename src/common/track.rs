@@ -15,6 +15,12 @@ pub struct FutureDescription {
     start_time: DateTime<Local>,
 }
 
+impl FutureDescription {
+    pub fn get_start_time(&self) -> DateTime<Local> {
+        self.start_time
+    }
+}
+
 impl fmt::Display for FutureDescription {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
