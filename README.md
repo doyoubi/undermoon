@@ -296,7 +296,7 @@ Refer to [HTTP API documentation](./docs/broker_http_api.md).
 - ~~Optimize RESP parsing~~ (done)
 - ~~Implement CLUSTER SLOTS~~ (done)
 - ~~Implement commands to get proxy meta~~ (done)
-- Track spawned futures
+- ~~Track spawned futures~~ (done)
 - ~~Simple script to push configuration to proxy for demonstration~~ (done)
 - ~~Batch write operations with interval flushing~~ (done)
 - ~~Add configuration~~ (done)

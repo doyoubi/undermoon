@@ -6,7 +6,7 @@ extern crate log;
 extern crate scopeguard;
 
 pub mod broker;
-mod common;
+pub mod common;
 pub mod coordinator;
 mod migration;
 pub mod protocol;

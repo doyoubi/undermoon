@@ -2,6 +2,7 @@ use super::session::CmdCtxHandler;
 use super::session::{handle_session, Session};
 use super::slowlog::SlowRequestLogger;
 use crate::common::config::ConfigError;
+use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{resolve_first_address, ThreadSafe};
 use futures::{FutureExt, StreamExt};
 use std::error::Error;
@@ -89,6 +90,7 @@ pub struct ServerProxyService<H: CmdCtxHandler + ThreadSafe + Clone> {
     config: Arc<ServerProxyConfig>,
     cmd_ctx_handler: H,
     slow_request_logger: Arc<SlowRequestLogger>,
+    future_registry: Arc<TrackedFutureRegistry>,
 }
 
 impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
@@ -96,11 +98,13 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         config: Arc<ServerProxyConfig>,
         cmd_ctx_handler: H,
         slow_request_logger: Arc<SlowRequestLogger>,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         Self {
             config,
             cmd_ctx_handler,
             slow_request_logger,
+            future_registry,
         }
     }
 
@@ -124,6 +128,8 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
 
         let session_id = AtomicUsize::new(0);
         let config = self.config.clone();
+
+        let future_registry = self.future_registry.clone();
 
         let mut s = listener.incoming();
         while let Some(sock) = s.next().await {
@@ -157,10 +163,13 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                 config.session_batch_buf,
             );
 
-            tokio::spawn(session_handler.map(move |res| match res {
+            let desc = format!("session: session_id={} peer={}", curr_session_id, peer);
+            let fut = session_handler.map(move |res| match res {
                 Ok(()) => info!("session IO closed {}", peer),
                 Err(err) => error!("session IO error {:?} {}", err, peer),
-            }));
+            });
+            let fut = TrackedFutureRegistry::wrap(future_registry.clone(), fut, desc);
+            tokio::spawn(fut);
         }
         Ok(())
     }

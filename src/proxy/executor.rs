@@ -8,6 +8,7 @@ use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::cluster::DBName;
 use crate::common::db::ProxyDBMeta;
+use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{
     str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY,
     TRY_AGAIN_REPLY,
@@ -42,6 +43,7 @@ impl<F: RedisClientFactory> SharedForwardHandler<F> {
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
         meta_map: SharedMetaMap,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         Self {
             handler: sync::Arc::new(ForwardHandler::new(
@@ -49,6 +51,7 @@ impl<F: RedisClientFactory> SharedForwardHandler<F> {
                 client_factory,
                 slow_request_logger,
                 meta_map,
+                future_registry,
             )),
         }
     }
@@ -73,10 +76,11 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
         meta_map: SharedMetaMap,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         Self {
             config: config.clone(),
-            manager: MetaManager::new(config, client_factory, meta_map.clone()),
+            manager: MetaManager::new(config, client_factory, meta_map.clone(), future_registry),
             slow_request_logger,
             compressor: CmdCompressor::new(meta_map),
         }

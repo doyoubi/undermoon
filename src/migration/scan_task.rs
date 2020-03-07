@@ -6,6 +6,7 @@ use super::task::{
 use crate::common::cluster::{DBName, MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
+use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::RespVec;
@@ -43,6 +44,7 @@ where
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     task: ScanMigrationTask,
     blocking_ctrl: Arc<BC>,
+    future_registry: Arc<TrackedFutureRegistry>,
 }
 
 impl<RCF, T, BC> RedisScanMigratingTask<RCF, T, BC>
@@ -60,6 +62,7 @@ where
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         blocking_ctrl: Arc<BC>,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let task = ScanMigrationTask::new(
@@ -82,6 +85,7 @@ where
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             task,
             blocking_ctrl,
+            future_registry,
         }
     }
 
@@ -222,13 +226,19 @@ where
             .start()
             .ok_or_else(|| MigrationError::AlreadyStarted)?;
 
-        tokio::spawn(
-            producer
-                .map_ok(|()| info!("migration producer finished scanning"))
-                .map_err(|err| {
-                    error!("migration producer finished error: {:?}", err);
-                }),
+        let fut = producer
+            .map_ok(|()| info!("migration producer finished scanning"))
+            .map_err(|err| {
+                error!("migration producer finished error: {:?}", err);
+            });
+
+        let desc = format!(
+            "scan_migrating: db_name={} slot_range={}-{} meta={:?}",
+            self.db_name, self.slot_range.0, self.slot_range.1, self.meta
         );
+        let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
+        tokio::spawn(fut);
+
         match consumer.await {
             Ok(()) => {
                 state.set_state(MigrationState::FinalSwitch);

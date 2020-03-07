@@ -237,4 +237,8 @@ impl DeleteKeysTask {
     pub fn get_address(&self) -> String {
         self.address.clone()
     }
+
+    pub fn get_slot_ranges(&self) -> SlotRangeArray {
+        self.slot_ranges.clone()
+    }
 }
