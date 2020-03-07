@@ -1,6 +1,7 @@
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -25,8 +26,8 @@ impl ClusterConfig {
         let field = field.to_lowercase();
         match field.as_str() {
             "compression_strategy" => {
-                let strategy = CompressionStrategy::from_str(&value)
-                    .ok_or_else(|| ConfigError::InvalidValue)?;
+                let strategy =
+                    CompressionStrategy::from_str(&value).map_err(|_| ConfigError::InvalidValue)?;
                 self.compression_strategy = strategy;
             }
             _ => {
@@ -98,17 +99,23 @@ impl Default for CompressionStrategy {
     }
 }
 
-impl CompressionStrategy {
-    pub fn from_str(s: &str) -> Option<Self> {
+pub struct InvalidCompressionStr;
+
+impl FromStr for CompressionStrategy {
+    type Err = InvalidCompressionStr;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let lowercase = s.to_lowercase();
         match lowercase.as_str() {
-            "disabled" => Some(Self::Disabled),
-            "set_get_only" => Some(Self::SetGetOnly),
-            "allow_all" => Some(Self::AllowAll),
-            _ => None,
+            "disabled" => Ok(Self::Disabled),
+            "set_get_only" => Ok(Self::SetGetOnly),
+            "allow_all" => Ok(Self::AllowAll),
+            _ => Err(InvalidCompressionStr),
         }
     }
+}
 
+impl CompressionStrategy {
     pub fn to_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
@@ -134,7 +141,7 @@ impl<'de> Deserialize<'de> for CompressionStrategy {
     {
         let s = String::deserialize(deserializer)?;
         Self::from_str(&s)
-            .ok_or_else(|| D::Error::custom(format!("invalid compression strategy {}", s)))
+            .map_err(|_| D::Error::custom(format!("invalid compression strategy {}", s)))
     }
 }
 

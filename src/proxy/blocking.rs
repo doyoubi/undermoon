@@ -8,6 +8,7 @@ use super::database::DBTag;
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::cluster::DBName;
+use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
 use crossbeam_channel;
@@ -42,6 +43,7 @@ pub fn gen_basic_blocking_sender_factory<F: CmdTaskResultHandlerFactory, CF: Con
     config: Arc<ServerProxyConfig>,
     reply_handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
+    future_registry: Arc<TrackedFutureRegistry>,
 ) -> BasicBlockingSenderFactory<F, CF>
 where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
@@ -49,7 +51,12 @@ where
 {
     RRSenderGroupFactory::new(
         config.backend_conn_num,
-        RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory, conn_factory),
+        RecoverableBackendNodeFactory::new(
+            config.clone(),
+            reply_handler_factory,
+            conn_factory,
+            future_registry,
+        ),
     )
 }
 

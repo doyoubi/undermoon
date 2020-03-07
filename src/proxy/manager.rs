@@ -14,6 +14,7 @@ use super::slowlog::TaskEvent;
 use crate::common::cluster::{DBName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMeta;
+use crate::common::track::TrackedFutureRegistry;
 use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
@@ -91,6 +92,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         meta_map: SharedMetaMap,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
         let conn_factory = Arc::new(DefaultConnFactory::default());
@@ -99,6 +101,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             config.clone(),
             reply_handler_factory,
             conn_factory.clone(),
+            future_registry.clone(),
         );
         let blocking_map = Arc::new(BlockingMap::new(basic_sender_factory, blocking_task_sender));
         let sender_factory = gen_blocking_sender_factory(blocking_map.clone());
@@ -106,6 +109,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
             conn_factory,
+            future_registry.clone(),
         ));
         let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let migration_config = Arc::new(AtomicMigrationConfig::default());
@@ -115,13 +119,17 @@ impl<F: RedisClientFactory> MetaManager<F> {
             meta_map,
             epoch: AtomicU64::new(0),
             lock: Mutex::new(()),
-            replicator_manager: ReplicatorManager::new(client_factory.clone()),
+            replicator_manager: ReplicatorManager::new(
+                client_factory.clone(),
+                future_registry.clone(),
+            ),
             migration_manager: MigrationManager::new(
                 config_clone,
                 migration_config,
                 client_factory,
                 migration_sender_factory,
                 cmd_ctx_factory,
+                future_registry,
             ),
             sender_factory,
             blocking_map,

@@ -2,6 +2,7 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::batch::TryChunksTimeoutStreamExt;
+use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
@@ -198,6 +199,7 @@ where
     config: Arc<ServerProxyConfig>,
     handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
+    future_registry: Arc<TrackedFutureRegistry>,
 }
 
 impl<F: CmdTaskResultHandlerFactory, CF: ConnFactory> RecoverableBackendNodeFactory<F, CF>
@@ -209,11 +211,13 @@ where
         config: Arc<ServerProxyConfig>,
         handler_factory: Arc<F>,
         conn_factory: Arc<CF>,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         Self {
             config,
             handler_factory,
             conn_factory,
+            future_registry,
         }
     }
 }
@@ -233,6 +237,8 @@ where
             self.config.clone(),
             self.conn_factory.clone(),
         );
+        let desc = format!("backend::RecoverableBackendNode: address={}", address);
+        let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
         tokio::spawn(fut);
         Self::Sender { address, node }
     }
@@ -802,6 +808,7 @@ pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
     config: Arc<ServerProxyConfig>,
     reply_handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
+    future_registry: Arc<TrackedFutureRegistry>,
 ) -> BackendSenderFactory<F, CF>
 where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
@@ -809,7 +816,12 @@ where
 {
     CachedSenderFactory::new(RRSenderGroupFactory::new(
         config.backend_conn_num,
-        RecoverableBackendNodeFactory::new(config.clone(), reply_handler_factory, conn_factory),
+        RecoverableBackendNodeFactory::new(
+            config.clone(),
+            reply_handler_factory,
+            conn_factory,
+            future_registry,
+        ),
     ))
 }
 
@@ -821,6 +833,7 @@ pub fn gen_migration_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFact
     config: Arc<ServerProxyConfig>,
     reply_handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
+    future_registry: Arc<TrackedFutureRegistry>,
 ) -> MigrationBackendSenderFactory<F, CF>
 where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
@@ -832,6 +845,7 @@ where
             config.clone(),
             reply_handler_factory,
             conn_factory,
+            future_registry,
         )),
     ))
 }

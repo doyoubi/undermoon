@@ -3,6 +3,7 @@ use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, 
 use crate::common::cluster::{DBName, MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMap;
+use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{get_slot, ThreadSafe};
 use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
@@ -44,6 +45,7 @@ where
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     cmd_task_factory: Arc<CTF>,
+    future_registry: Arc<TrackedFutureRegistry>,
 }
 
 impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
@@ -59,6 +61,7 @@ where
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         Self {
             config,
@@ -66,6 +69,7 @@ where
             client_factory,
             sender_factory,
             cmd_task_factory,
+            future_registry,
         }
     }
 
@@ -84,6 +88,7 @@ where
             self.sender_factory.clone(),
             self.cmd_task_factory.clone(),
             blocking_ctrl_factory,
+            self.future_registry.clone(),
         )
     }
 
@@ -106,6 +111,11 @@ where
                         "spawn slot migrating task {} {} {} {}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
+                    let desc = format!(
+                        "migration: tag=migrating db_name={}, epoch={}, slot_range={}-{}",
+                        db_name, epoch, slot_range_start, slot_range_end
+                    );
+
                     let migrating_task = migrating_task.clone();
                     let fut = async move {
                         if let Err(err) = migrating_task.start().await {
@@ -115,6 +125,8 @@ where
                             );
                         }
                     };
+
+                    let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
                     tokio::spawn(fut);
                 }
                 Either::Right(importing_task) => {
@@ -122,6 +134,11 @@ where
                         "spawn slot importing replica {} {} {}-{}",
                         db_name, epoch, slot_range_start, slot_range_end
                     );
+                    let desc = format!(
+                        "migration: tag=importing db_name={}, epoch={}, slot_range={}-{}",
+                        db_name, epoch, slot_range_start, slot_range_end
+                    );
+
                     let importing_task = importing_task.clone();
                     let fut = async move {
                         if let Err(err) = importing_task.start().await {
@@ -131,6 +148,8 @@ where
                             );
                         }
                     };
+
+                    let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
                     tokio::spawn(fut);
                 }
             }
@@ -160,15 +179,20 @@ where
         for task in new_tasks.into_iter() {
             if let Some(fut) = task.start() {
                 let address = task.get_address();
-                tokio::spawn(
-                    fut.map_ok(move |()| info!("deleting keys for {} stopped", address))
-                        .map_err(move |e| match e {
-                            MigrationError::Canceled => {
-                                info!("task for deleting keys get canceled")
-                            }
-                            _ => error!("task for deleting keys exit with error {:?}", e),
-                        }),
+                let slot_ranges = task.get_slot_ranges();
+                let desc = format!(
+                    "deleting_keys: address={} slot_ranges={}",
+                    address, slot_ranges
                 );
+                let fut = fut
+                    .map_ok(move |()| info!("deleting keys for {} stopped", address))
+                    .map_err(move |e| match e {
+                        MigrationError::Canceled => info!("task for deleting keys get canceled"),
+                        _ => error!("task for deleting keys exit with error {:?}", e),
+                    });
+
+                let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
+                tokio::spawn(fut);
             }
         }
         info!("spawn finished for deleting keys");
@@ -327,6 +351,7 @@ where
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
         blocking_ctrl_map: Arc<BCF>,
+        future_registry: Arc<TrackedFutureRegistry>,
     ) -> (Self, Vec<NewTask<T>>)
     where
         RCF: RedisClientFactory,
@@ -417,6 +442,7 @@ where
                                 meta.clone(),
                                 client_factory.clone(),
                                 ctrl,
+                                future_registry.clone(),
                             ));
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),

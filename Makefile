@@ -7,6 +7,7 @@ test:
 lint:
 	find src -name "*.rs" | xargs rustup run stable rustfmt
 	cargo clippy
+	mylint -s expect
 
 release:
 	cargo build --release

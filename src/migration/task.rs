@@ -165,6 +165,18 @@ pub struct SlotRangeArray {
     pub ranges: Vec<(usize, usize)>,
 }
 
+impl fmt::Display for SlotRangeArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for (i, range) in self.ranges.iter().enumerate() {
+            write!(f, "{}-{}", range.0, range.1)?;
+            if i + 1 != self.ranges.len() {
+                write!(f, ",")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl SlotRangeArray {
     pub fn is_key_inside(&self, key: &[u8]) -> bool {
         let slot = get_slot(key);

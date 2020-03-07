@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
 use string_error::into_err;
+use undermoon::common::track::TrackedFutureRegistry;
 use undermoon::protocol::PooledRedisClientFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::manager::MetaMap;
@@ -103,13 +104,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let slow_request_logger = Arc::new(SlowRequestLogger::new(config.clone()));
     let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::new())));
+    let future_registry = Arc::new(TrackedFutureRegistry::default());
+
     let forward_handler = SharedForwardHandler::new(
         config.clone(),
         Arc::new(client_factory),
         slow_request_logger.clone(),
         meta_map,
+        future_registry.clone(),
     );
-    let server = ServerProxyService::new(config.clone(), forward_handler, slow_request_logger);
+    let server = ServerProxyService::new(
+        config.clone(),
+        forward_handler,
+        slow_request_logger,
+        future_registry,
+    );
 
     let mut runtime = tokio::runtime::Builder::new()
         .threaded_scheduler()

@@ -4,6 +4,7 @@ use super::replicator::{
 };
 use crate::common::cluster::DBName;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
+use crate::common::track::TrackedFutureRegistry;
 use crate::protocol::RedisClientFactory;
 use crate::proxy::database::DBError;
 use itertools::Either;
@@ -18,14 +19,16 @@ pub struct ReplicatorManager<F: RedisClientFactory> {
     updating_epoch: atomic::AtomicU64,
     replicators: RwLock<(u64, ReplicatorMap, Vec<FutureAutoStopHandle>)>,
     client_factory: Arc<F>,
+    future_registry: Arc<TrackedFutureRegistry>,
 }
 
 impl<F: RedisClientFactory> ReplicatorManager<F> {
-    pub fn new(client_factory: Arc<F>) -> Self {
+    pub fn new(client_factory: Arc<F>, future_registry: Arc<TrackedFutureRegistry>) -> Self {
         Self {
             updating_epoch: atomic::AtomicU64::new(0),
             replicators: RwLock::new((0, HashMap::new(), vec![])),
             client_factory,
+            future_registry,
         }
     }
 
@@ -137,7 +140,12 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
             let mut handles = vec![];
             for (key, master) in new_masters.into_iter() {
                 debug!("spawn master {} {}", key.0, key.1);
+                let desc = format!(
+                    "replicator: role=master db_name={} master_node_address={}",
+                    key.0, key.1
+                );
                 let master = master.clone();
+
                 let fut = async move {
                     if let Some(fut) = master.start() {
                         if let Err(err) = fut.await {
@@ -147,11 +155,18 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 };
                 let (fut, handle) = new_auto_drop_future(fut);
                 handles.push(handle);
+
+                let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
                 tokio::spawn(fut);
             }
             for (key, replica) in new_replicas.into_iter() {
                 debug!("spawn replica {} {}", key.0, key.1);
+                let desc = format!(
+                    "replicator: role=replica db_name={} replica_node_address={}",
+                    key.0, key.1
+                );
                 let replica = replica.clone();
+
                 let fut = async move {
                     if let Some(fut) = replica.start() {
                         if let Err(err) = fut.await {
@@ -161,6 +176,8 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 };
                 let (fut, handle) = new_auto_drop_future(fut);
                 handles.push(handle);
+
+                let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
                 tokio::spawn(fut);
             }
             *replicators = (epoch, new_replicators, handles);
