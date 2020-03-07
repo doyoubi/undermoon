@@ -5,79 +5,70 @@ use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, ProxyAddressesPayload, ProxyPayload,
 };
-use actix_web::{
-    error, http, middleware, App, HttpRequest, HttpResponse, Json, Path, Responder, State,
-};
+use actix_http::ResponseBuilder;
+use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
 use chrono;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 
-pub fn gen_app(service: Arc<MemBrokerService>) -> App<Arc<MemBrokerService>> {
-    App::with_state(service)
-        .middleware(middleware::Logger::default())
-        .prefix("/api")
-        .resource("/version", |r| r.method(http::Method::GET).f(get_version))
-        .resource("/metadata", |r| {
-            r.method(http::Method::GET).f(get_all_metadata)
-        })
-        .resource("/validation", |r| {
-            r.method(http::Method::POST).f(validate_meta)
-        })
-        .resource("/proxies/addresses", |r| {
-            r.method(http::Method::GET).f(get_host_addresses)
-        })
-        .resource("/proxies/nodes/{proxy_address}", |r| {
-            r.method(http::Method::DELETE).with(remove_proxy)
-        })
-        .resource("/proxies/nodes", |r| {
-            r.method(http::Method::PUT).with(add_host)
-        })
-        .resource("/proxies/failover/{address}", |r| {
-            r.method(http::Method::POST).with(replace_failed_node)
-        })
-        .resource("/proxies/meta/{address}", |r| {
-            r.method(http::Method::GET).with(get_host_by_address)
-        })
-        .resource("/clusters/migrations", |r| {
-            r.method(http::Method::PUT).with(commit_migration)
-        })
-        .resource("/clusters/meta/{cluster_name}", |r| {
-            r.method(http::Method::GET).with(get_cluster_by_name)
-        })
-        .resource("/clusters/names", |r| {
-            r.method(http::Method::GET).f(get_cluster_names)
-        })
-        .resource("/clusters/{cluster_name}/nodes/{proxy_address}", |r| {
-            r.method(http::Method::DELETE)
-                .with(remove_proxy_from_cluster);
-        })
-        .resource("/clusters/{cluster_name}/nodes", |r| {
-            r.method(http::Method::POST).with(auto_add_nodes)
-        })
-        .resource("/clusters/{cluster_name}", |r| {
-            r.method(http::Method::POST).with(add_cluster);
-            r.method(http::Method::DELETE).with(remove_cluster);
-        })
-        .resource("/failures/{server_proxy_address}/{reporter_id}", |r| {
-            r.method(http::Method::POST).with(add_failure)
-        })
-        .resource("/failures", |r| r.method(http::Method::GET).f(get_failures))
-        .resource(
-            "/clusters/{cluster_name}/migrations/half/{src_node}/{dst_node}",
-            |r| r.method(http::Method::POST).with(migrate_half_slots),
-        )
-        .resource(
-            "/clusters/{cluster_name}/migrations/all/{src_node}/{dst_node}",
-            |r| r.method(http::Method::POST).with(migrate_all_slots),
-        )
-        .resource(
-            "/clusters/{cluster_name}/migrations/{src_node}/{dst_node}",
-            |r| r.method(http::Method::DELETE).with(stop_migrations),
-        )
-        .resource(
-            "/clusters/{cluster_name}/replications/{master_node}/{replica_node}",
-            |r| r.method(http::Method::POST).with(assign_replica),
-        )
+pub fn configure_app(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::scope("/api")
+            .route("/version", web::get().to(get_version))
+            .route("/metadata", web::get().to(get_all_metadata))
+            .route("/validation", web::post().to(validate_meta))
+            .route("/proxies/addresses", web::get().to(get_host_addresses))
+            .route(
+                "/proxies/nodes/{proxy_address}",
+                web::delete().to(remove_proxy),
+            )
+            .route("/proxies/nodes", web::put().to(add_host))
+            .route(
+                "/proxies/failover/{address}",
+                web::post().to(replace_failed_node),
+            )
+            .route(
+                "/proxies/meta/{address}",
+                web::get().to(get_host_by_address),
+            )
+            .route("/clusters/migrations", web::put().to(commit_migration))
+            .route(
+                "/clusters/meta/{cluster_name}",
+                web::get().to(get_cluster_by_name),
+            )
+            .route("/clusters/names", web::get().to(get_cluster_names))
+            .route(
+                "/clusters/{cluster_name}/nodes/{proxy_address}",
+                web::delete().to(remove_proxy_from_cluster),
+            )
+            .route(
+                "/clusters/{cluster_name}/nodes",
+                web::post().to(auto_add_nodes),
+            )
+            .route("/clusters/{cluster_name}", web::post().to(add_cluster))
+            .route("/clusters/{cluster_name}", web::delete().to(remove_cluster))
+            .route(
+                "/failures/{server_proxy_address}/{reporter_id}",
+                web::post().to(add_failure),
+            )
+            .route("/failures", web::get().to(get_failures))
+            .route(
+                "/clusters/{cluster_name}/migrations/half/{src_node}/{dst_node}",
+                web::post().to(migrate_half_slots),
+            )
+            .route(
+                "/clusters/{cluster_name}/migrations/all/{src_node}/{dst_node}",
+                web::post().to(migrate_all_slots),
+            )
+            .route(
+                "/clusters/{cluster_name}/migrations/{src_node}/{dst_node}",
+                web::delete().to(stop_migrations),
+            )
+            .route(
+                "/clusters/{cluster_name}/replications/{master_node}/{replica_node}",
+                web::post().to(assign_replica),
+            ),
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -266,40 +257,46 @@ impl MemBrokerService {
     }
 }
 
-fn get_version(_req: &HttpRequest<Arc<MemBrokerService>>) -> &'static str {
+type ServiceState = web::Data<Arc<MemBrokerService>>;
+
+async fn get_version(_req: HttpRequest) -> &'static str {
     UNDERMOON_VERSION
 }
 
-fn get_all_metadata(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
-    let metadata = request.state().get_all_data();
-    Json(metadata)
+async fn get_all_metadata(state: ServiceState) -> impl Responder {
+    let metadata = state.get_all_data();
+    web::Json(metadata)
 }
 
-fn get_host_addresses(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
-    let addresses = request.state().get_host_addresses();
-    Json(ProxyAddressesPayload { addresses })
+async fn get_host_addresses(state: ServiceState) -> impl Responder {
+    let addresses = state.get_host_addresses();
+    web::Json(ProxyAddressesPayload { addresses })
 }
 
-fn get_host_by_address((path, state): (Path<(String,)>, ServiceState)) -> impl Responder {
+async fn get_host_by_address(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> impl Responder {
     let name = path.into_inner().0;
     let host = state.get_host_by_address(&name);
-    Json(ProxyPayload { host })
+    web::Json(ProxyPayload { host })
 }
 
-fn get_cluster_names(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
-    let names = request.state().get_cluster_names();
-    Json(ClusterNamesPayload { names })
+async fn get_cluster_names(state: ServiceState) -> impl Responder {
+    let names = state.get_cluster_names();
+    web::Json(ClusterNamesPayload { names })
 }
 
-fn get_cluster_by_name((path, state): (Path<(String,)>, ServiceState)) -> impl Responder {
+async fn get_cluster_by_name(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> impl Responder {
     let name = path.into_inner().0;
     let cluster = state.get_cluster_by_name(&name);
-    Json(ClusterPayload { cluster })
+    web::Json(ClusterPayload { cluster })
 }
 
-fn get_failures(request: &HttpRequest<Arc<MemBrokerService>>) -> impl Responder {
-    let addresses = request.state().get_failures();
-    Json(FailuresPayload { addresses })
+async fn get_failures(state: ServiceState) -> impl Responder {
+    let addresses = state.get_failures();
+    web::Json(FailuresPayload { addresses })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -308,37 +305,35 @@ pub struct ProxyResource {
     nodes: Vec<String>,
 }
 
-type ServiceState = State<Arc<MemBrokerService>>;
-
-fn add_host(
-    (host_resource, state): (Json<ProxyResource>, ServiceState),
+async fn add_host(
+    (host_resource, state): (web::Json<ProxyResource>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     state.add_hosts(host_resource.into_inner()).map(|()| "")
 }
 
-fn add_cluster(
-    (path, state): (Path<(String,)>, ServiceState),
+async fn add_cluster(
+    (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     state.add_cluster(cluster_name).map(|()| "")
 }
 
-fn remove_cluster(
-    (path, state): (Path<(String,)>, ServiceState),
+async fn remove_cluster(
+    (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     state.remove_cluster(cluster_name).map(|()| "")
 }
 
-fn auto_add_nodes(
-    (path, state): (Path<(String,)>, ServiceState),
-) -> Result<Json<Vec<Node>>, MetaStoreError> {
+async fn auto_add_nodes(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> Result<web::Json<Vec<Node>>, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    state.auto_add_node(cluster_name).map(Json)
+    state.auto_add_node(cluster_name).map(web::Json)
 }
 
-fn remove_proxy_from_cluster(
-    (path, state): (Path<(String, String)>, ServiceState),
+async fn remove_proxy_from_cluster(
+    (path, state): (web::Path<(String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name, proxy_address) = path.into_inner();
     state
@@ -346,15 +341,15 @@ fn remove_proxy_from_cluster(
         .map(|()| "")
 }
 
-fn remove_proxy(
-    (path, state): (Path<(String,)>, ServiceState),
+async fn remove_proxy(
+    (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
     state.remove_proxy(proxy_address).map(|()| "")
 }
 
-fn migrate_half_slots(
-    (path, state): (Path<(String, String, String)>, ServiceState),
+async fn migrate_half_slots(
+    (path, state): (web::Path<(String, String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name, src_node_address, dst_node_address) = path.into_inner();
     state
@@ -367,8 +362,8 @@ fn migrate_half_slots(
         .map(|()| "")
 }
 
-fn migrate_all_slots(
-    (path, state): (Path<(String, String, String)>, ServiceState),
+async fn migrate_all_slots(
+    (path, state): (web::Path<(String, String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name, src_node_address, dst_node_address) = path.into_inner();
     state
@@ -381,8 +376,8 @@ fn migrate_all_slots(
         .map(|()| "")
 }
 
-fn stop_migrations(
-    (path, state): (Path<(String, String, String)>, ServiceState),
+async fn stop_migrations(
+    (path, state): (web::Path<(String, String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name, src_node_address, dst_node_address) = path.into_inner();
     state
@@ -390,8 +385,8 @@ fn stop_migrations(
         .map(|()| "")
 }
 
-fn assign_replica(
-    (path, state): (Path<(String, String, String)>, ServiceState),
+async fn assign_replica(
+    (path, state): (web::Path<(String, String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name, master_node_address, replica_node_address) = path.into_inner();
     state
@@ -399,45 +394,48 @@ fn assign_replica(
         .map(|()| "")
 }
 
-fn add_failure((path, state): (Path<(String, String)>, ServiceState)) -> &'static str {
+async fn add_failure((path, state): (web::Path<(String, String)>, ServiceState)) -> &'static str {
     let (server_proxy_address, reporter_id) = path.into_inner();
     state.add_failure(server_proxy_address, reporter_id);
     ""
 }
 
-fn commit_migration(
-    (task, state): (Json<MigrationTaskMeta>, ServiceState),
+async fn commit_migration(
+    (task, state): (web::Json<MigrationTaskMeta>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     state.commit_migration(task.into_inner()).map(|()| "")
 }
 
-fn replace_failed_node(
-    (path, state): (Path<(String,)>, ServiceState),
-) -> Result<Json<Proxy>, MetaStoreError> {
+async fn replace_failed_node(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> Result<web::Json<Proxy>, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
-    state.replace_failed_node(proxy_address).map(Json)
+    state.replace_failed_node(proxy_address).map(web::Json)
 }
 
-fn validate_meta(req: &HttpRequest<Arc<MemBrokerService>>) -> Result<String, InconsistentError> {
-    req.state().validate_meta().map(|()| "".to_string())
+async fn validate_meta(state: ServiceState) -> Result<String, InconsistentError> {
+    state.validate_meta().map(|()| "".to_string())
 }
 
 impl error::ResponseError for MetaStoreError {
-    fn error_response(&self) -> HttpResponse {
-        let status_code = match self {
+    fn status_code(&self) -> http::StatusCode {
+        match self {
             MetaStoreError::NoAvailableResource => http::StatusCode::CONFLICT,
             _ => http::StatusCode::BAD_REQUEST,
-        };
-        let mut response = HttpResponse::new(status_code);
-        response.set_body(self.description().to_string());
-        response
+        }
+    }
+
+    fn error_response(&self) -> HttpResponse {
+        ResponseBuilder::new(self.status_code()).body(self.description().to_string())
     }
 }
 
 impl error::ResponseError for InconsistentError {
+    fn status_code(&self) -> http::StatusCode {
+        http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+
     fn error_response(&self) -> HttpResponse {
-        let mut response = HttpResponse::new(http::StatusCode::INTERNAL_SERVER_ERROR);
-        response.set_body(format!("{}", self));
-        response
+        ResponseBuilder::new(self.status_code()).body(format!("{}", self))
     }
 }
