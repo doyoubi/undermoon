@@ -1,7 +1,6 @@
 use super::service::ServerProxyConfig;
 use crate::protocol::{Array, BulkStr, Resp, RespPacket, RespVec};
 use arc_swap::ArcSwapOption;
-use arr_macro::arr;
 use chrono::{naive, DateTime, Utc};
 use std::str;
 use std::sync::atomic;
@@ -30,22 +29,22 @@ const LOG_ELEMENT_NUMBER: usize = 5;
 
 #[derive(Debug)]
 struct RequestEventMap {
-    events: [atomic::AtomicI64; EVENT_NUMBER],
+    events: [i64; EVENT_NUMBER],
 }
 
 impl RequestEventMap {
-    fn set_event_time(&self, event: TaskEvent, timestamp: i64) {
-        self.events
-            .get(event as usize)
-            .expect("RequestEventMap::set_event_time")
-            .store(timestamp, atomic::Ordering::SeqCst)
+    fn set_event_time(&mut self, event: TaskEvent, timestamp: i64) {
+        *self
+            .events
+            .get_mut(event as usize)
+            .expect("RequestEventMap::set_event_time") = timestamp;
     }
 
     fn get_event_time(&self, event: TaskEvent) -> i64 {
-        self.events
+        *self
+            .events
             .get(event as usize)
             .expect("RequestEventMap::get_event_time")
-            .load(atomic::Ordering::SeqCst)
     }
 
     fn get_used_time(&self, event: TaskEvent) -> i64 {
@@ -61,9 +60,7 @@ impl RequestEventMap {
 
 impl Default for RequestEventMap {
     fn default() -> Self {
-        Self {
-            events: arr![atomic::AtomicI64::new(0); 8],
-        }
+        Self { events: [0; 8] }
     }
 }
 
@@ -88,7 +85,7 @@ impl Slowlog {
         }
     }
 
-    pub fn log_event(&self, event: TaskEvent) {
+    pub fn log_event(&mut self, event: TaskEvent) {
         self.event_map
             .set_event_time(event, Utc::now().timestamp_nanos())
     }

@@ -242,7 +242,7 @@ where
             .join("\r\n")
     }
 
-    pub fn send(&self, cmd_task: T) -> Result<(), DBSendError<BlockingHintTask<T>>> {
+    pub fn send(&self, mut cmd_task: T) -> Result<(), DBSendError<BlockingHintTask<T>>> {
         cmd_task.log_event(TaskEvent::SentToMigrationDB);
         self.send_to_db(cmd_task)
     }

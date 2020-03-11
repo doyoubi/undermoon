@@ -274,7 +274,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
 pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
     let meta_map = meta_map.lease();
-    let cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
+    let mut cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
         Ok(()) => return,
         Err(e) => match e {
             DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
