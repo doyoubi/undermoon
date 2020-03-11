@@ -4,6 +4,12 @@ build:
 test:
 	RUST_BACKTRACE=full cargo test -- --nocapture
 
+install-linters:
+	rustup update
+	rustup component add clippy
+	rustup component add rustfmt
+	cargo install --git https://github.com/doyoubi/mylint-rs --tag v1.0
+
 lint:
 	find src -name "*.rs" | xargs rustup run stable rustfmt
 	cargo clippy

@@ -118,7 +118,7 @@ impl CmdTask for CmdCtx {
         self.set_result(result.map(|resp| Box::new(RespPacket::from(resp))))
     }
 
-    fn log_event(&self, event: TaskEvent) {
+    fn log_event(&mut self, event: TaskEvent) {
         self.slowlog.log_event(event);
     }
 }
@@ -192,7 +192,7 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
         let (reply_sender, reply_receiver) = new_command_pair();
-        let cmd_ctx = CmdCtx::new(self.db.clone(), cmd, reply_sender, self.session_id);
+        let mut cmd_ctx = CmdCtx::new(self.db.clone(), cmd, reply_sender, self.session_id);
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
     }
@@ -248,7 +248,7 @@ where
             let res = reply_receiver.await.map_err(SessionError::CmdErr);
             let packet = match res {
                 Ok(task_reply) => {
-                    let (request, packet, slowlog) = (*task_reply).into_inner();
+                    let (request, packet, mut slowlog) = (*task_reply).into_inner();
                     slowlog.log_event(TaskEvent::WaitDone);
                     handler.handle_slowlog(request, slowlog);
                     packet

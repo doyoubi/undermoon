@@ -58,7 +58,7 @@ pub trait CmdTask: ThreadSafe {
     where
         Self: Sized;
 
-    fn log_event(&self, event: TaskEvent);
+    fn log_event(&mut self, event: TaskEvent);
 }
 
 pub trait CmdTaskFactory {
@@ -162,11 +162,11 @@ impl<T: CmdTask> CmdTask for ReqTask<T> {
         self.set_result(result.map(|resp| Box::new(Self::Pkt::from_resp(resp, hint))))
     }
 
-    fn log_event(&self, event: TaskEvent) {
+    fn log_event(&mut self, event: TaskEvent) {
         match self {
             Self::Simple(t) => t.log_event(event),
             Self::Multi(v) => {
-                for t in v.iter() {
+                for t in v.iter_mut() {
                     t.log_event(event);
                 }
             }
@@ -303,7 +303,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
         (Self { tx, conn_failed }, handle_backend_fut)
     }
 
-    pub fn send(&self, cmd_task: H::Task) -> Result<(), BackendSendError<H::Task>> {
+    pub fn send(&self, mut cmd_task: H::Task) -> Result<(), BackendSendError<H::Task>> {
         cmd_task.log_event(TaskEvent::SentToWritingQueue);
         if self.conn_failed.load(Ordering::SeqCst) {
             return Err(BackendSendError(cmd_task));
@@ -492,7 +492,7 @@ where
     let mut packets = Vec::with_capacity(backend_batch_buf.get());
 
     loop {
-        let (retry_times_opt, tasks) = match retry_state_opt.take() {
+        let (retry_times_opt, mut tasks) = match retry_state_opt.take() {
             Some(RetryState { retry_times, tasks }) => (Some(retry_times), tasks),
             None => {
                 let tasks = match task_receiver.next().await {
@@ -503,7 +503,7 @@ where
             }
         };
 
-        for task in &tasks {
+        for task in tasks.iter_mut() {
             task.log_event(TaskEvent::WritingQueueReceived);
             packets.push(task.get_packet());
         }
@@ -511,7 +511,7 @@ where
         let mut batch = stream::iter(packets.drain(..)).map(Ok);
         let res = writer.send_all(&mut batch).await;
 
-        for task in tasks.iter() {
+        for task in tasks.iter_mut() {
             task.log_event(TaskEvent::SentToBackend);
         }
 
@@ -525,7 +525,7 @@ where
         // `while let` will consume ownership.
         #[allow(clippy::while_let_loop)]
         loop {
-            let task = match tasks_iter.next() {
+            let mut task = match tasks_iter.next() {
                 Some(task) => task,
                 None => break,
             };

@@ -424,7 +424,7 @@ impl<T: CmdTask> CmdTask for CounterTask<T> {
         self.inner.set_resp_result(result)
     }
 
-    fn log_event(&self, event: TaskEvent) {
+    fn log_event(&mut self, event: TaskEvent) {
         self.inner.log_event(event)
     }
 }
@@ -473,7 +473,7 @@ impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
         self.inner.set_resp_result(result)
     }
 
-    fn log_event(&self, event: TaskEvent) {
+    fn log_event(&mut self, event: TaskEvent) {
         self.inner.log_event(event)
     }
 }
