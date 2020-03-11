@@ -27,7 +27,7 @@ def add_cluster(cluster_name):
 
 
 def add_node(cluster_name):
-    res = requests.post('http://localhost:7799/api/clusters/{}/nodes'.format(cluster_name))
+    res = requests.post('http://localhost:7799/api/clusters/nodes/{}'.format(cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 

@@ -1,2 +1,3 @@
 address = "127.0.0.1:7799"
 failure_ttl = 60
+failure_quorum = 1

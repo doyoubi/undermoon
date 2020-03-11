@@ -157,8 +157,8 @@ If not:
 HTTP 409
 ```
 
-##### (7) PUT /api/clusters/migrations
-Try to do the migration
+##### (8) PUT /api/clusters/migrations
+Try to commit the migration
 ```
 Request:
 {
