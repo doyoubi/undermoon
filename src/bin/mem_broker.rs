@@ -4,10 +4,10 @@ extern crate undermoon;
 extern crate log;
 extern crate config;
 extern crate env_logger;
-use actix_web::server;
+use actix_web::{middleware, App, HttpServer};
 use std::env;
 use std::sync::Arc;
-use undermoon::broker::service::{gen_app, MemBrokerConfig, MemBrokerService};
+use undermoon::broker::service::{configure_app, MemBrokerConfig, MemBrokerService};
 
 fn gen_conf() -> MemBrokerConfig {
     let conf_file_path = env::args()
@@ -28,19 +28,26 @@ fn gen_conf() -> MemBrokerConfig {
             .get::<String>("address")
             .unwrap_or_else(|_| "127.0.0.1:7799".to_string()),
         failure_ttl: s.get::<u64>("failure_ttl").unwrap_or_else(|_| 60),
+        failure_quorum: s.get::<u64>("failure_quorum").unwrap_or_else(|_| 1),
     }
 }
 
-fn main() {
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     let config = gen_conf();
     let address = config.address.clone();
 
     let service = Arc::new(MemBrokerService::new(config));
-    server::new(move || gen_app(service.clone()))
-        .keep_alive(300)
-        .bind(&address)
-        .expect("port binding failed")
-        .run();
+    HttpServer::new(move || {
+        App::new()
+            .app_data(service.clone())
+            .configure(configure_app)
+            .wrap(middleware::Logger::default())
+    })
+    .bind(&address)?
+    .keep_alive(300)
+    .run()
+    .await
 }

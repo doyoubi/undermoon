@@ -22,6 +22,7 @@ use tokio_util::codec::{Decoder, Framed};
 
 // Suppress warning from automock.
 #[allow(clippy::ptr_arg)]
+#[allow(clippy::indexing_slicing)]
 mod client_trait {
     use super::*;
 

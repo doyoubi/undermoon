@@ -220,13 +220,21 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for ParFai
     }
 }
 
-#[automock]
-pub trait ProxyMetaSender: Sync + Send + 'static {
-    fn send_meta<'s>(
-        &'s self,
-        host: Proxy,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
+// Clippy accidentally thinks [automock] is an index expression.
+#[allow(clippy::indexing_slicing)]
+mod trait_mod {
+    use super::*;
+
+    #[automock]
+    pub trait ProxyMetaSender: Sync + Send + 'static {
+        fn send_meta<'s>(
+            &'s self,
+            host: Proxy,
+        ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
+    }
 }
+
+pub use self::trait_mod::{MockProxyMetaSender, ProxyMetaSender};
 
 pub trait ProxyMetaRetriever: Sync + Send + 'static {
     fn get_host_meta<'s>(

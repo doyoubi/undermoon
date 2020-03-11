@@ -6,8 +6,8 @@ test:
 
 lint:
 	find src -name "*.rs" | xargs rustup run stable rustfmt
-	cargo clippy
-	mylint -s expect
+	cargo clippy -- -W clippy::indexing_slicing
+	mylint -s Expect -s IndexExpression
 
 release:
 	cargo build --release
