@@ -1,6 +1,6 @@
 use crate::common::cluster::{
-    Cluster, MigrationTaskMeta, Node, PeerProxy, Proxy, Range, RangeList, ReplMeta, ReplPeer,
-    SlotRange, SlotRangeTag,
+    Cluster, MigrationMeta, MigrationTaskMeta, Node, PeerProxy, Proxy, Range, RangeList, ReplMeta,
+    ReplPeer, SlotRange, SlotRangeTag,
 };
 use crate::common::cluster::{DBName, Role};
 use crate::common::config::ClusterConfig;
@@ -34,9 +34,70 @@ enum ChunkRolePosition {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+struct MigrationSlotRangeStore {
+    range_list: RangeList,
+    is_migrating: bool, // migrating or importing
+    meta: MigrationMetaStore,
+}
+
+impl MigrationSlotRangeStore {
+    fn to_slot_range(&self, epoch: u64, chunks: &[ChunkStore]) -> SlotRange {
+        let src_chunk = chunks.get(self.meta.src_chunk_index).expect("get_cluster");
+        let src_proxy_address = src_chunk
+            .proxy_addresses
+            .get(self.meta.src_chunk_part)
+            .expect("get_cluster")
+            .clone();
+        let src_node_address = src_chunk
+            .node_addresses
+            .get(self.meta.src_chunk_index * 2 + self.meta.src_chunk_part)
+            .expect("get_cluster")
+            .clone();
+        let dst_chunk = chunks.get(self.meta.dst_chunk_index).expect("get_cluster");
+        let dst_proxy_address = dst_chunk
+            .proxy_addresses
+            .get(self.meta.dst_chunk_part)
+            .expect("get_cluster")
+            .clone();
+        let dst_node_address = dst_chunk
+            .node_addresses
+            .get(self.meta.dst_chunk_index * 2 + self.meta.dst_chunk_part)
+            .expect("get_cluster")
+            .clone();
+        let meta = MigrationMeta {
+            epoch,
+            src_proxy_address,
+            src_node_address,
+            dst_proxy_address,
+            dst_node_address,
+        };
+        if self.is_migrating {
+            SlotRange {
+                range_list: self.range_list.clone(),
+                tag: SlotRangeTag::Migrating(meta),
+            }
+        } else {
+            SlotRange {
+                range_list: self.range_list.clone(),
+                tag: SlotRangeTag::Importing(meta),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct MigrationMetaStore {
+    src_chunk_index: usize,
+    src_chunk_part: usize,
+    dst_chunk_index: usize,
+    dst_chunk_part: usize,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 struct ChunkStore {
     role_position: ChunkRolePosition,
-    slots: [Vec<SlotRange>; CHUNK_PARTS],
+    stable_slots: Option<[SlotRange; CHUNK_PARTS]>,
+    migrating_slots: [Vec<MigrationSlotRangeStore>; CHUNK_PARTS],
     proxy_addresses: [String; CHUNK_PARTS],
     node_addresses: [String; CHUNK_NODE_NUM],
 }
@@ -46,6 +107,11 @@ struct ClusterStore {
     name: DBName,
     chunks: Vec<ChunkStore>,
     config: ClusterConfig,
+}
+
+struct MigrationSlots {
+    ranges: Vec<Range>,
+    meta: MigrationMetaStore,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -156,6 +222,7 @@ impl MetaStore {
     }
 
     fn get_cluster(&self) -> Option<Cluster> {
+        let epoch = self.global_epoch;
         let cluster_store = self.cluster.as_ref()?;
         let cluster_name = cluster_store.name.clone();
 
@@ -184,12 +251,32 @@ impl MetaStore {
                         ChunkRolePosition::SecondChunkMaster => (2, 3),
                     };
                     if i == first_slot_index {
-                        let mut first_slots = chunk.slots[0].clone();
+                        let mut first_slots = vec![];
+                        if let Some(stable_slots) = chunk.stable_slots.clone() {
+                            first_slots.push(stable_slots[0].clone());
+                        }
                         slots.append(&mut first_slots);
+                        let slot_ranges: Vec<_> = chunk.migrating_slots[0]
+                            .iter()
+                            .map(|slot_range_store| {
+                                slot_range_store.to_slot_range(epoch, &cluster_store.chunks)
+                            })
+                            .collect();
+                        slots.extend(slot_ranges);
                     }
                     if i == second_slot_index {
-                        let mut second_slots = chunk.slots[1].clone();
+                        let mut second_slots = vec![];
+                        if let Some(stable_slots) = chunk.stable_slots.clone() {
+                            second_slots.push(stable_slots[1].clone());
+                        }
                         slots.append(&mut second_slots);
+                        let slot_ranges: Vec<_> = chunk.migrating_slots[1]
+                            .iter()
+                            .map(|slot_range_store| {
+                                slot_range_store.to_slot_range(epoch, &cluster_store.chunks)
+                            })
+                            .collect();
+                        slots.extend(slot_ranges);
                     }
 
                     // get repl
@@ -335,7 +422,8 @@ impl MetaStore {
             let second_proxy = chunk[1].clone();
             let chunk_store = ChunkStore {
                 role_position: ChunkRolePosition::Normal,
-                slots: [vec![create_slots(a)], vec![create_slots(b)]],
+                stable_slots: Some([create_slots(a), create_slots(b)]),
+                migrating_slots: [vec![], vec![]],
                 proxy_addresses: [
                     first_proxy.proxy_address.clone(),
                     second_proxy.proxy_address.clone(),
@@ -437,18 +525,146 @@ impl MetaStore {
     pub fn migrate_slots(&mut self, db_name: String) -> Result<(), MetaStoreError> {
         let db_name = DBName::from(&db_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
 
-        let _cluster = match self.cluster.as_mut() {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => {
-                if db_name != cluster.name {
-                    return Err(MetaStoreError::ClusterNotFound);
+        {
+            let cluster = match self.cluster.as_mut() {
+                None => return Err(MetaStoreError::ClusterNotFound),
+                Some(cluster) => {
+                    if db_name != cluster.name {
+                        return Err(MetaStoreError::ClusterNotFound);
+                    }
+                    cluster
                 }
-                cluster
-            }
-        };
+            };
 
-        // TODO: implement it
-        Err(MetaStoreError::NotSupported)
+            let running_migration = cluster
+                .chunks
+                .iter()
+                .any(|chunk| !chunk.migrating_slots.is_empty());
+            if running_migration {
+                return Err(MetaStoreError::MigrationRunning);
+            }
+
+            let migration_slots = Self::remove_slots_from_src(cluster);
+            Self::assign_dst_slots(cluster, migration_slots);
+        }
+
+        self.bump_global_epoch();
+
+        Ok(())
+    }
+
+    fn remove_slots_from_src(cluster: &mut ClusterStore) -> Vec<MigrationSlots> {
+        let dst_chunk_num = cluster
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.stable_slots.is_none())
+            .count();
+        let dst_master_num = dst_chunk_num * 2;
+        let master_num = cluster.chunks.len();
+        let average = (SLOT_NUM + master_num - 1) / master_num;
+        let remainder = SLOT_NUM - average * master_num;
+
+        let mut curr_dst_master_index = 0;
+        let mut migration_slots = vec![];
+        let mut curr_dst_slots = vec![];
+        let mut curr_slots_num = 0;
+
+        for (src_chunk_index, src_chunk) in cluster.chunks.iter_mut().enumerate() {
+            if let Some(stable_slots) = &mut src_chunk.stable_slots {
+                for (src_chunk_part, slot_range) in stable_slots.iter_mut().enumerate() {
+                    let r = if remainder.checked_sub(1).is_some() {
+                        1
+                    } else {
+                        0
+                    };
+
+                    while curr_dst_master_index != dst_master_num || curr_slots_num < average {
+                        if slot_range.get_range_list().get_slots_num() <= average + r {
+                            break;
+                        }
+                        let need_num = average - curr_slots_num;
+                        if let Some(num) = slot_range
+                            .get_range_list()
+                            .get_ranges()
+                            .last()
+                            .map(|r| r.end() - r.start())
+                        {
+                            if need_num >= num {
+                                if let Some(range) =
+                                    slot_range.get_mut_range_list().get_mut_ranges().pop()
+                                {
+                                    curr_dst_slots.push(range);
+                                    curr_slots_num += num;
+                                }
+                            } else if let Some(range) =
+                                slot_range.get_mut_range_list().get_mut_ranges().last_mut()
+                            {
+                                let end = range.end();
+                                let start = end - need_num + 1;
+                                *range.end_mut() -= need_num;
+                                curr_dst_slots.push(Range(start, end));
+                                curr_slots_num += need_num;
+                            }
+                            // reset current state
+                            if curr_slots_num >= average {
+                                curr_dst_master_index += 1;
+                                migration_slots.push(MigrationSlots {
+                                    meta: MigrationMetaStore {
+                                        src_chunk_index,
+                                        src_chunk_part,
+                                        dst_chunk_index: curr_dst_master_index / 2,
+                                        dst_chunk_part: curr_dst_master_index % 2,
+                                    },
+                                    ranges: curr_dst_slots.drain(..).collect(),
+                                });
+                                curr_slots_num = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        migration_slots
+    }
+
+    fn assign_dst_slots(cluster: &mut ClusterStore, migration_slots: Vec<MigrationSlots>) {
+        for migration_slot_range in migration_slots.into_iter() {
+            let MigrationSlots { ranges, meta } = migration_slot_range;
+
+            {
+                let src_chunk = cluster
+                    .chunks
+                    .get_mut(meta.src_chunk_index)
+                    .expect("assign_dst_slots");
+                let migrating_slots = src_chunk
+                    .migrating_slots
+                    .get_mut(meta.src_chunk_part)
+                    .expect("assign_dst_slots");
+                let slot_range = MigrationSlotRangeStore {
+                    range_list: RangeList::new(ranges.clone()),
+                    is_migrating: true,
+                    meta: meta.clone(),
+                };
+                migrating_slots.push(slot_range);
+            }
+            {
+                let dst_chunk = cluster
+                    .chunks
+                    .get_mut(meta.dst_chunk_index)
+                    .expect("assign_dst_slots");
+                let migrating_slots = dst_chunk
+                    .migrating_slots
+                    .get_mut(meta.src_chunk_part)
+                    .expect("assign_dst_slots");
+                let slot_range = MigrationSlotRangeStore {
+                    range_list: RangeList::new(ranges.clone()),
+                    is_migrating: false,
+                    meta,
+                };
+                migrating_slots.push(slot_range);
+            }
+        }
     }
 
     pub fn commit_migration(&mut self, _task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
@@ -774,6 +990,7 @@ pub enum MetaStoreError {
     InvalidNodeNum,
     InvalidClusterName,
     OnlySupportOneCluster,
+    MigrationRunning,
     NotSupported,
 }
 
@@ -784,22 +1001,6 @@ impl fmt::Display for MetaStoreError {
 }
 
 impl Error for MetaStoreError {
-    fn description(&self) -> &str {
-        match self {
-            Self::InUse => "IN_USE",
-            Self::NotInUse => "NOT_IN_USE",
-            Self::NoAvailableResource => "NO_AVAILABLE_RESOURCE",
-            Self::ResourceNotBalance => "RESOURCE_NOT_BALANCE",
-            Self::AlreadyExisted => "ALREADY_EXISTED",
-            Self::ClusterNotFound => "CLUSTER_NOT_FOUND",
-            Self::HostNotFound => "HOST_NOT_FOUND",
-            Self::InvalidNodeNum => "INVALID_NODE_NUM",
-            Self::InvalidClusterName => "INVALID_CLUSTER_NAME",
-            Self::OnlySupportOneCluster => "ONLY_SUPPORT_ONE_CLUSTER",
-            Self::NotSupported => "NOT_SUPPORTED",
-        }
-    }
-
     fn cause(&self) -> Option<&dyn Error> {
         None
     }

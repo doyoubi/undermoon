@@ -95,6 +95,14 @@ impl Range {
     pub fn end(&self) -> usize {
         self.1
     }
+
+    pub fn start_mut(&mut self) -> &mut usize {
+        &mut self.0
+    }
+
+    pub fn end_mut(&mut self) -> &mut usize {
+        &mut self.1
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -113,6 +121,10 @@ impl TryFrom<&str> for RangeList {
 }
 
 impl RangeList {
+    pub fn new(ranges: Vec<Range>) -> Self {
+        Self(ranges)
+    }
+
     pub fn from_single_range(mut range: Range) -> Self {
         if range.start() > range.end() {
             swap(&mut range.0, &mut range.1);
@@ -195,6 +207,17 @@ impl RangeList {
 
     pub fn get_ranges(&self) -> &[Range] {
         &self.0
+    }
+
+    pub fn get_mut_ranges(&mut self) -> &mut Vec<Range> {
+        &mut self.0
+    }
+
+    pub fn get_slots_num(&self) -> usize {
+        self.get_ranges()
+            .iter()
+            .map(|range| range.end() - range.start())
+            .sum()
     }
 }
 
@@ -331,6 +354,10 @@ impl SlotRange {
 
     pub fn get_range_list(&self) -> &RangeList {
         &self.range_list
+    }
+
+    pub fn get_mut_range_list(&mut self) -> &mut RangeList {
+        &mut self.range_list
     }
 
     pub fn to_range_list(&self) -> RangeList {

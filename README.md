@@ -27,24 +27,13 @@ $ redis-server
 ```bash
 # Build and run the server_proxy
 > cargo build
-> target/debug/server_proxy  # runs on port 5299 and will forward commands to 127.0.0.1:6379
+> make server  # runs on port 5299 and will forward commands to 127.0.0.1:6379
 ```
 
-Note that how we use the `AUTH` command to do something like `USE [database]` in Mysql.
 ```bash
 > redis-cli -p 5299
 # Initialize the proxy by `UMCTL` commands.
-127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 0-8000 PEER mydb 127.0.0.1:7000 8001-16383
-
-# Now we still didn't select our database `mydb` we just set.
-# Then we are in the default `admin` database for our connection.
-# Since nothing was set for `admin` so we get a error.
-127.0.0.1:5299> get a
-(error) db not found: admin
-
-# Now choose to use our `mydb`.
-127.0.0.1:5299> AUTH mydb
-OK
+127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 1 0-8000 PEER mydb 127.0.0.1:7000 1 8001-16383
 
 # Done! We can use it like a Redis Cluster!
 127.0.0.1:5299> CLUSTER NODES
@@ -265,9 +254,10 @@ Sets the mapping relationship between the server-side proxy and its correspondin
 Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETDB|SETREPL]` requests which don't have higher epoch.
 - `flags`: Currently it may be NOFLAG or FORCE. When it's `FORCE`, the server-side proxy will ignore the epoch rule above and will always accept the configuration
 - `slot_range` can be like
-    - 0-1000
-    - migrating 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
-    - importing 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
+    - 1 0-1000
+    - 2 0-1000 2000-3000
+    - migrating 1 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
+    - importing 1 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
 - `ip:port` should be the addresses of redis instances or other proxies for `PEER` part.
 
 Note that both these two commands set all the `local` or `peer` meta data of the proxy.
