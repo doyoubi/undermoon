@@ -1,5 +1,5 @@
 use super::task::{ScanResponse, SlotRangeArray};
-use crate::common::cluster::{DBName, SlotRange};
+use crate::common::cluster::{DBName, RangeList, SlotRange};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMap;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
@@ -117,11 +117,10 @@ impl DeleteKeysTask {
     ) -> Self {
         let slot_ranges = slot_ranges
             .into_iter()
-            .map(|range| (range.start, range.end))
+            .map(|range| range.to_range_list())
             .collect();
-        let slot_ranges = SlotRangeArray {
-            ranges: slot_ranges,
-        };
+        let range_list = RangeList::merge(slot_ranges);
+        let slot_ranges = SlotRangeArray::new(range_list);
         let finished = Arc::new(AtomicBool::new(false));
         let (fut, handle) = Self::gen_future(
             address.clone(),

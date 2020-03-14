@@ -264,13 +264,14 @@ mod tests {
     use super::super::core::{FailureDetector, ParFailureDetector};
     use super::*;
     use crate::common::cluster::{
-        DBName, MigrationMeta, Node, ReplMeta, Role, SlotRange, SlotRangeTag,
+        DBName, MigrationMeta, Node, RangeList, ReplMeta, Role, SlotRange, SlotRangeTag,
     };
     use crate::common::config::ClusterConfig;
     use crate::protocol::{
         Array, BinSafeStr, OptionalMulti, RedisClient, RedisClientError, Resp, RespVec,
     };
     use futures::{future, stream, StreamExt};
+    use std::convert::TryFrom;
     use std::pin::Pin;
     use std::sync::Arc;
     use tokio;
@@ -371,8 +372,7 @@ mod tests {
                 "host1:port1".to_string(),
                 DBName::from("dybdb").unwrap(),
                 vec![SlotRange {
-                    start: 0,
-                    end: 233,
+                    range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Migrating(mgr_meta.clone()),
                 }],
                 ReplMeta::new(Role::Master, Vec::new()),
@@ -382,8 +382,7 @@ mod tests {
                 "host2:port2".to_string(),
                 DBName::from("dybdb").unwrap(),
                 vec![SlotRange {
-                    start: 666,
-                    end: 6699,
+                    range_list: RangeList::try_from("1 666-6699").unwrap(),
                     tag: SlotRangeTag::None,
                 }],
                 ReplMeta::new(Role::Master, Vec::new()),
@@ -393,8 +392,7 @@ mod tests {
                 "host3:port3".to_string(),
                 DBName::from("dybdb").unwrap(),
                 vec![SlotRange {
-                    start: 0,
-                    end: 233,
+                    range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Importing(mgr_meta),
                 }],
                 ReplMeta::new(Role::Master, Vec::new()),

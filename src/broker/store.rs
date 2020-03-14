@@ -1,5 +1,6 @@
 use crate::common::cluster::{
-    Cluster, MigrationTaskMeta, Node, PeerProxy, Proxy, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
+    Cluster, MigrationTaskMeta, Node, PeerProxy, Proxy, Range, RangeList, ReplMeta, ReplPeer,
+    SlotRange, SlotRangeTag,
 };
 use crate::common::cluster::{DBName, Role};
 use crate::common::config::ClusterConfig;
@@ -323,8 +324,10 @@ impl MetaStore {
             let b = a + 1;
 
             let create_slots = |index| SlotRange {
-                start: index * range_per_node,
-                end: cmp::min((index + 1) * range_per_node - 1, SLOT_NUM - 1),
+                range_list: RangeList::from_single_range(Range(
+                    index * range_per_node,
+                    cmp::min((index + 1) * range_per_node - 1, SLOT_NUM - 1),
+                )),
                 tag: SlotRangeTag::None,
             };
 

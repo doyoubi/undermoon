@@ -119,7 +119,7 @@ fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Proxy) -> Vec<String> {
     proxy_db_meta.to_args()
 }
 
-// sub_command should be SETDB
+// sub_command should be SETDB, SETREPL
 async fn send_meta<C: RedisClient>(
     client: &mut C,
     sub_command: String,
@@ -224,10 +224,11 @@ mod tests {
     use super::super::core::{ProxyMetaRespSynchronizer, ProxyMetaSynchronizer};
     use super::super::detector::BrokerProxiesRetriever;
     use super::*;
-    use crate::common::cluster::{Node, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
+    use crate::common::cluster::{Node, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
     use crate::common::config::ClusterConfig;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient, Resp};
     use futures::{stream, StreamExt};
+    use std::convert::TryFrom;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio;
@@ -235,8 +236,7 @@ mod tests {
     fn gen_testing_proxy(role: Role) -> Proxy {
         let dbname = DBName::from("mydb").unwrap();
         let slot_range = SlotRange {
-            start: 233,
-            end: 666,
+            range_list: RangeList::try_from("1 233-666").unwrap(),
             tag: SlotRangeTag::None,
         };
         let repl = ReplMeta::new(
@@ -298,7 +298,7 @@ mod tests {
     }
 
     fn gen_set_db_args() -> Vec<String> {
-        vec!["7799", "NOFLAG", "mydb", "127.0.0.1:7001", "233-666"]
+        vec!["7799", "NOFLAG", "mydb", "127.0.0.1:7001", "1", "233-666"]
             .into_iter()
             .map(|s| s.to_string())
             .collect()

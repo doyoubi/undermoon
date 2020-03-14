@@ -1,4 +1,5 @@
 use super::task::{ScanResponse, SlotRangeArray};
+use crate::common::cluster::SlotRange;
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::{
@@ -69,13 +70,12 @@ impl ScanMigrationTask {
     pub fn new<F: RedisClientFactory>(
         src_address: String,
         dst_address: String,
-        slot_range: (usize, usize),
+        slot_range: SlotRange,
         client_factory: Arc<F>,
         config: Arc<AtomicMigrationConfig>,
     ) -> Self {
-        let slot_ranges = SlotRangeArray {
-            ranges: vec![slot_range],
-        };
+        let ranges = slot_range.to_range_list();
+        let slot_ranges = SlotRangeArray::new(ranges);
         let (data_sender, data_receiver) = mpsc::channel(DATA_QUEUE_SIZE);
         let (stop_sender, stop_receiver) = oneshot::channel();
         let counter = Arc::new(AtomicI64::new(0));

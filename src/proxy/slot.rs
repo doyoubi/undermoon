@@ -11,8 +11,10 @@ impl SlotMap {
         let mut map = HashMap::new();
         for (addr, slot_ranges) in slot_map {
             let mut slots = Vec::new();
-            for range in slot_ranges {
-                slots.push((range.start, range.end));
+            for slot_range in slot_ranges {
+                for range in slot_range.get_range_list().get_ranges() {
+                    slots.push((range.start(), range.end()));
+                }
             }
             map.insert(addr, slots);
         }
@@ -72,7 +74,8 @@ impl SlotMapData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::cluster::{SlotRange, SlotRangeTag};
+    use crate::common::cluster::{RangeList, SlotRange, SlotRangeTag};
+    use std::convert::TryFrom;
 
     #[test]
     fn test_slot_map() {
@@ -81,8 +84,7 @@ mod tests {
         range_map.insert(
             backend.clone(),
             vec![SlotRange {
-                start: 0,
-                end: SLOT_NUM - 1,
+                range_list: RangeList::try_from(format!("1 0-{}", SLOT_NUM - 1).as_str()).unwrap(),
                 tag: SlotRangeTag::None,
             }],
         );

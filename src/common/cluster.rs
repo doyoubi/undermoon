@@ -1,10 +1,14 @@
-use super::utils::{IMPORTING_TAG, MIGRATING_TAG};
+use super::utils::{IMPORTING_TAG, MIGRATING_TAG, SLOT_NUM};
 use crate::common::config::ClusterConfig;
 use arrayvec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::cmp::max;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
+use std::iter::Peekable;
+use std::mem::swap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationMeta {
@@ -80,22 +84,185 @@ impl SlotRangeTag {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Range {
-    pub start: usize,
-    pub end: usize,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct Range(pub usize, pub usize);
+
+impl Range {
+    pub fn start(&self) -> usize {
+        self.0
+    }
+
+    pub fn end(&self) -> usize {
+        self.1
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct RangeList(Vec<Range>);
+
+#[derive(Debug)]
+pub struct InvalidRangeListString;
+
+impl TryFrom<&str> for RangeList {
+    type Error = InvalidRangeListString;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let mut it = s.split(' ').map(|s| s.to_string());
+        Self::parse(&mut it).ok_or_else(|| InvalidRangeListString)
+    }
+}
+
+impl RangeList {
+    pub fn from_single_range(mut range: Range) -> Self {
+        if range.start() > range.end() {
+            swap(&mut range.0, &mut range.1);
+        }
+        Self(vec![range])
+    }
+
+    pub fn merge(range_lists: Vec<RangeList>) -> Self {
+        let mut merged_ranges = vec![];
+        for RangeList(mut ranges) in range_lists.into_iter() {
+            merged_ranges.append(&mut ranges);
+        }
+        let mut range_list = Self(merged_ranges);
+        range_list.compact();
+        range_list
+    }
+
+    fn parse<It>(it: &mut It) -> Option<Self>
+    where
+        It: Iterator<Item = String>,
+    {
+        let ranges_num = it.next()?.parse::<usize>().ok()?;
+        let mut ranges = vec![];
+        for _ in 0..ranges_num {
+            ranges.push(Self::parse_slot_range(it.next()?)?);
+        }
+        let mut range_list = Self(ranges);
+        range_list.compact();
+        Some(range_list)
+    }
+
+    fn parse_slot_range(s: String) -> Option<Range> {
+        let mut slot_range = s.split('-');
+        let start_str = slot_range.next()?;
+        let end_str = slot_range.next()?;
+        let start = start_str.parse::<usize>().ok()?;
+        let end = end_str.parse::<usize>().ok()?;
+        Some(Range(start, end))
+    }
+
+    pub fn to_strings(&self) -> Vec<String> {
+        let mut strs = vec![];
+        strs.push(self.0.len().to_string());
+        for range in self.0.iter() {
+            let Range(start, end) = range;
+            strs.push(format!("{}-{}", *start, *end));
+        }
+        strs
+    }
+
+    fn compact(&mut self) {
+        // Goal: for any i < j, i.start <= i.end < j.start <= j.end
+        for range in self.0.iter_mut() {
+            if range.start() > range.end() {
+                swap(&mut range.0, &mut range.1);
+            }
+        }
+        self.0.sort_by_key(|range| range.start());
+        // After sort, for any i < j,
+        // i.start <= i.end
+        // j.start <= j.end
+        // i.start <= j.start
+        let mut a = 0;
+        let mut b = 1;
+        while let Some(e) = self.0.get(b).cloned() {
+            {
+                let s = self.0.get_mut(a).expect("RangeList::compact");
+                if s.end() >= e.start() {
+                    s.1 = max(s.end(), e.end());
+                    b += 1;
+                    continue;
+                }
+            }
+            *self.0.get_mut(a + 1).expect("RangeList::compact") = e;
+            a += 1;
+            b += 1;
+        }
+        self.0.truncate(a + 1);
+    }
+
+    pub fn get_ranges(&self) -> &[Range] {
+        &self.0
+    }
+}
+
+#[derive(Clone)]
+pub struct RangeMap {
+    min_slot: usize,
+    exists_map: Vec<bool>,
+}
+
+impl From<&RangeList> for RangeMap {
+    fn from(range_list: &RangeList) -> Self {
+        let min_slot = range_list.get_ranges().first().and_then(|range| {
+            if range.start() >= SLOT_NUM {
+                None
+            } else {
+                Some(range.start())
+            }
+        });
+        let max_slot = range_list.get_ranges().last().and_then(|range| {
+            if range.end() >= SLOT_NUM {
+                None
+            } else {
+                Some(range.end())
+            }
+        });
+        let (min_slot, map_len) = match (min_slot, max_slot) {
+            (Some(min_slot), Some(max_slot)) => (min_slot, max_slot - min_slot + 1),
+            _ => (0, 0),
+        };
+
+        let mut exists_map = Vec::with_capacity(map_len);
+        for _ in 0..map_len {
+            exists_map.push(false);
+        }
+        for range in range_list.get_ranges().iter() {
+            for slot_num in range.start()..=range.end() {
+                if let Some(slot) = slot_num
+                    .checked_sub(min_slot)
+                    .and_then(|inner_index| exists_map.get_mut(inner_index))
+                {
+                    *slot = true;
+                }
+            }
+        }
+        Self {
+            min_slot,
+            exists_map,
+        }
+    }
+}
+
+impl RangeMap {
+    pub fn contains_slot(&self, slot: usize) -> bool {
+        slot.checked_sub(self.min_slot)
+            .and_then(|inner_index| self.exists_map.get(inner_index).cloned())
+            == Some(true)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SlotRange {
-    pub start: usize,
-    pub end: usize,
+    pub range_list: RangeList,
     pub tag: SlotRangeTag,
 }
 
 impl SlotRange {
     pub fn meta_eq(&self, other: &Self) -> bool {
-        if self.start != other.start || self.end != other.end {
+        if self.range_list != other.range_list {
             return false;
         }
 
@@ -110,73 +277,64 @@ impl SlotRange {
     }
 
     pub fn into_strings(self) -> Vec<String> {
-        let SlotRange { start, end, tag } = self;
+        let SlotRange { range_list, tag } = self;
         let mut strs = vec![];
         match tag {
             SlotRangeTag::Migrating(meta) => {
                 strs.push(MIGRATING_TAG.to_string());
-                strs.push(format!("{}-{}", start, end));
+                strs.extend(range_list.to_strings());
                 strs.extend(meta.into_strings());
             }
             SlotRangeTag::Importing(meta) => {
                 strs.push(IMPORTING_TAG.to_string());
-                strs.push(format!("{}-{}", start, end));
+                strs.extend(range_list.to_strings());
                 strs.extend(meta.into_strings());
             }
             SlotRangeTag::None => {
-                strs.push(format!("{}-{}", start, end));
+                strs.extend(range_list.to_strings());
             }
         }
         strs
     }
 
-    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    pub fn from_strings<It>(it: &mut Peekable<It>) -> Option<Self>
     where
         It: Iterator<Item = String>,
     {
-        let slot_range = it.next()?;
+        let slot_range = it.peek()?;
         let slot_range_tag = slot_range.to_uppercase();
 
         if slot_range_tag == MIGRATING_TAG {
-            let (start, end) = Self::parse_slot_range(it.next()?)?;
+            it.next()?; // Consume the tag
+            let range_list = RangeList::parse(it)?;
             let meta = MigrationMeta::from_strings(it)?;
             Some(SlotRange {
-                start,
-                end,
+                range_list,
                 tag: SlotRangeTag::Migrating(meta),
             })
         } else if slot_range_tag == IMPORTING_TAG {
-            let (start, end) = Self::parse_slot_range(it.next()?)?;
+            it.next()?; // Consume the tag
+            let range_list = RangeList::parse(it)?;
             let meta = MigrationMeta::from_strings(it)?;
             Some(SlotRange {
-                start,
-                end,
+                range_list,
                 tag: SlotRangeTag::Importing(meta),
             })
         } else {
-            let (start, end) = Self::parse_slot_range(slot_range)?;
+            let range_list = RangeList::parse(it)?;
             Some(SlotRange {
-                start,
-                end,
+                range_list,
                 tag: SlotRangeTag::None,
             })
         }
     }
 
-    fn parse_slot_range(s: String) -> Option<(usize, usize)> {
-        let mut slot_range = s.split('-');
-        let start_str = slot_range.next()?;
-        let end_str = slot_range.next()?;
-        let start = start_str.parse::<usize>().ok()?;
-        let end = end_str.parse::<usize>().ok()?;
-        Some((start, end))
+    pub fn get_range_list(&self) -> &RangeList {
+        &self.range_list
     }
 
-    pub fn to_range(&self) -> Range {
-        Range {
-            start: self.start,
-            end: self.end,
-        }
+    pub fn to_range_list(&self) -> RangeList {
+        self.range_list.clone()
     }
 }
 
@@ -271,7 +429,7 @@ impl MigrationTaskMeta {
         strs
     }
 
-    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    pub fn from_strings<It>(it: &mut Peekable<It>) -> Option<Self>
     where
         It: Iterator<Item = String>,
     {
@@ -625,7 +783,7 @@ mod tests {
                             }
                         ]
                     },
-                    "slots": [{"start": 0, "end": 5461, "tag": "None"}]
+                    "slots": [{"range_list": [[0, 5461]], "tag": "None"}]
                 },
                 {
                     "address": "redis4:7004",
@@ -647,7 +805,7 @@ mod tests {
             "peers": [{
                 "proxy_address": "server_proxy2:6002",
                 "cluster_name": "mydb",
-                "slots": [{"start": 5462, "end": 10000, "tag": "None"}]
+                "slots": [{"range_list": [[5462, 10000]], "tag": "None"}]
             }],
             "clusters_config": {
                 "mydb": {
@@ -655,12 +813,7 @@ mod tests {
                 }
             }
         }"#;
-        let host: Proxy = match serde_json::from_str(host_str) {
-            Ok(h) => h,
-            Err(e) => {
-                panic!(e);
-            }
-        };
+        let host: Proxy = serde_json::from_str(host_str).unwrap();
 
         let mut config = ClusterConfig::default();
         config.compression_strategy = CompressionStrategy::SetGetOnly;
@@ -676,8 +829,7 @@ mod tests {
                     "server_proxy1:6001".to_string(),
                     DBName::from("mydb").unwrap(),
                     vec![SlotRange {
-                        start: 0,
-                        end: 5461,
+                        range_list: RangeList::try_from("1 0-5461").unwrap(),
                         tag: SlotRangeTag::None,
                     }],
                     ReplMeta::new(
@@ -707,8 +859,7 @@ mod tests {
                 proxy_address: "server_proxy2:6002".to_string(),
                 cluster_name: DBName::from("mydb").unwrap(),
                 slots: vec![SlotRange {
-                    start: 5462,
-                    end: 10000,
+                    range_list: RangeList::try_from("1 5462-10000").unwrap(),
                     tag: SlotRangeTag::None,
                 }],
             }],
@@ -735,5 +886,146 @@ mod tests {
                 .map(|_| 'a')
                 .collect::<String>()
         )
+    }
+
+    #[test]
+    fn test_range_list_encoding_and_decoding() {
+        let s: Vec<String> = vec!["0", "233-666"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 0);
+        let s = range_list.to_strings().join(" ");
+        assert_eq!(s, "0");
+
+        let s: Vec<String> = vec!["1", "0-233"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 1);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 233);
+        let s = range_list.to_strings().join(" ");
+        assert_eq!(s, "1 0-233");
+
+        let s: Vec<String> = vec!["2", "0-233", "666-999"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 2);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 233);
+        assert_eq!(range_list.get_ranges()[1].start(), 666);
+        assert_eq!(range_list.get_ranges()[1].end(), 999);
+        let s = range_list.to_strings().join(" ");
+        assert_eq!(s, "2 0-233 666-999");
+    }
+
+    #[test]
+    fn test_range_list_compact() {
+        let s: Vec<String> = vec!["2", "666-999", "233-0"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 2);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 233);
+        assert_eq!(range_list.get_ranges()[1].start(), 666);
+        assert_eq!(range_list.get_ranges()[1].end(), 999);
+
+        let s: Vec<String> = vec!["2", "666-999", "999-0"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 1);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 999);
+
+        let s: Vec<String> = vec!["2", "666-7799", "999-0"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 1);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 7799);
+
+        let s: Vec<String> = vec!["2", "0-7799", "999-0"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 1);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 7799);
+    }
+
+    #[test]
+    fn test_range_list_contains_slot() {
+        let range_list = RangeList::try_from("0 233-666").unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(!range_map.contains_slot(0));
+
+        let range_list = RangeList::try_from("1 0-233").unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(range_map.contains_slot(0));
+        assert!(range_map.contains_slot(99));
+        assert!(range_map.contains_slot(233));
+
+        let range_list = RangeList::try_from("1 99-99").unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(!range_map.contains_slot(98));
+        assert!(range_map.contains_slot(99));
+        assert!(!range_map.contains_slot(100));
+
+        let range_list = RangeList::try_from("2 0-233 666-7799").unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(range_map.contains_slot(0));
+        assert!(range_map.contains_slot(99));
+        assert!(range_map.contains_slot(233));
+        assert!(!range_map.contains_slot(234));
+
+        assert!(!range_map.contains_slot(665));
+        assert!(range_map.contains_slot(666));
+        assert!(range_map.contains_slot(6699));
+        assert!(range_map.contains_slot(7799));
+        assert!(!range_map.contains_slot(7800));
+
+        let range_list = RangeList::try_from(format!("1 0-{}", SLOT_NUM - 1).as_str()).unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(range_map.contains_slot(0));
+        assert!(range_map.contains_slot(5299));
+        assert!(range_map.contains_slot(SLOT_NUM - 1));
+        assert!(!range_map.contains_slot(SLOT_NUM));
+
+        let range_list = RangeList::try_from(format!("1 0-20000000").as_str()).unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(!range_map.contains_slot(0));
+        assert!(!range_map.contains_slot(5299));
+        assert!(!range_map.contains_slot(SLOT_NUM - 1));
+        assert!(!range_map.contains_slot(SLOT_NUM));
+        assert!(!range_map.contains_slot(20000000));
+
+        let range_list = RangeList::try_from(format!("1 20000-30000").as_str()).unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(!range_map.contains_slot(0));
+        assert!(!range_map.contains_slot(5299));
+        assert!(!range_map.contains_slot(SLOT_NUM - 1));
+        assert!(!range_map.contains_slot(SLOT_NUM));
+        assert!(!range_map.contains_slot(20000000));
+    }
+
+    #[test]
+    fn test_range_list_deserialize() {
+        let range_list_str = r#"[[0, 233]]"#;
+        let range_list: RangeList = serde_json::from_str(range_list_str).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 1);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 233);
     }
 }

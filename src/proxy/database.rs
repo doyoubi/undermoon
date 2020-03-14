@@ -1,7 +1,7 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
-use crate::common::cluster::{DBName, Range, SlotRange, SlotRangeTag};
+use crate::common::cluster::{DBName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::db::ProxyDBMeta;
 use crate::common::utils::{gen_moved, get_slot};
@@ -152,7 +152,7 @@ where
         &self,
         dbname: DBName,
         service_address: String,
-        migration_states: &HashMap<Range, MigrationState>,
+        migration_states: &HashMap<RangeList, MigrationState>,
     ) -> String {
         let local = self.local_dbs.get(&dbname).map_or("".to_string(), |db| {
             db.gen_local_cluster_nodes(service_address, migration_states)
@@ -170,7 +170,7 @@ where
         &self,
         dbname: DBName,
         service_address: String,
-        migration_states: &HashMap<Range, MigrationState>,
+        migration_states: &HashMap<RangeList, MigrationState>,
     ) -> Result<RespVec, String> {
         let mut local = self.local_dbs.get(&dbname).map_or(Ok(vec![]), |db| {
             db.gen_local_cluster_slots(service_address, migration_states)
@@ -260,10 +260,9 @@ impl<S: CmdTaskSender> Database<S> {
                 .iter()
                 .map(|slot_range| {
                     format!(
-                        "{}-{} {:?}",
-                        slot_range.start,
-                        slot_range.end,
-                        slot_range.tag.get_migration_meta()
+                        "{:?} {}",
+                        slot_range.tag.get_migration_meta(),
+                        slot_range.get_range_list().to_strings().join(" "),
                     )
                 })
                 .collect::<Vec<String>>()
@@ -301,7 +300,7 @@ impl<S: CmdTaskSender> Database<S> {
     pub fn gen_local_cluster_nodes(
         &self,
         service_address: String,
-        migration_states: &HashMap<Range, MigrationState>,
+        migration_states: &HashMap<RangeList, MigrationState>,
     ) -> String {
         let slots: Vec<SlotRange> = self
             .slot_ranges
@@ -317,7 +316,7 @@ impl<S: CmdTaskSender> Database<S> {
     pub fn gen_local_cluster_slots(
         &self,
         service_address: String,
-        migration_states: &HashMap<Range, MigrationState>,
+        migration_states: &HashMap<RangeList, MigrationState>,
     ) -> Result<Vec<RespVec>, String> {
         let slots: Vec<SlotRange> = self
             .slot_ranges
@@ -359,10 +358,9 @@ impl RemoteDB {
                 .iter()
                 .map(|slot_range| {
                     format!(
-                        "{}-{} {:?}",
-                        slot_range.start,
-                        slot_range.end,
-                        slot_range.tag.get_migration_meta()
+                        "{:?} {}",
+                        slot_range.tag.get_migration_meta(),
+                        slot_range.get_range_list().to_strings().join(" "),
                     )
                 })
                 .collect::<Vec<String>>()
@@ -397,14 +395,14 @@ impl RemoteDB {
 
     pub fn gen_remote_cluster_nodes(
         &self,
-        migration_states: &HashMap<Range, MigrationState>,
+        migration_states: &HashMap<RangeList, MigrationState>,
     ) -> String {
         gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges, migration_states)
     }
 
     pub fn gen_remote_cluster_slots(
         &self,
-        migration_states: &HashMap<Range, MigrationState>,
+        migration_states: &HashMap<RangeList, MigrationState>,
     ) -> Result<Vec<RespVec>, String> {
         gen_cluster_slots_helper(&self.slot_ranges, migration_states)
     }
@@ -467,7 +465,7 @@ fn gen_cluster_nodes_helper(
     name: &DBName,
     epoch: u64,
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
-    migration_states: &HashMap<Range, MigrationState>,
+    migration_states: &HashMap<RangeList, MigrationState>,
 ) -> String {
     let mut cluster_nodes = String::from("");
     let mut name_seg = format!("{:_<20}", name.to_string());
@@ -480,16 +478,26 @@ fn gen_cluster_nodes_helper(
         let mut slot_range_str = String::new();
         let slot_range = ranges
             .iter()
-            .map(|range| {
-                if should_ignore_slots(&range, &migration_states) {
-                    None
-                } else if range.start == range.end {
-                    Some(range.start.to_string())
-                } else {
-                    Some(format!("{}-{}", range.start, range.end))
+            .map(|slot_range| {
+                if should_ignore_slots(&slot_range, &migration_states) {
+                    return None;
                 }
+                let ranges: Vec<String> = slot_range
+                    .get_range_list()
+                    .get_ranges()
+                    .iter()
+                    .map(|range| {
+                        if range.start() == range.end() {
+                            range.start().to_string()
+                        } else {
+                            format!("{}-{}", range.start(), range.end())
+                        }
+                    })
+                    .collect();
+                Some(ranges)
             })
             .filter_map(|s| s)
+            .flatten()
             .collect::<Vec<String>>()
             .join(" ");
         if !slot_range.is_empty() {
@@ -509,7 +517,7 @@ fn gen_cluster_nodes_helper(
 
 fn should_ignore_slots(
     range: &SlotRange,
-    migration_states: &HashMap<Range, MigrationState>,
+    migration_states: &HashMap<RangeList, MigrationState>,
 ) -> bool {
     // In the new migration protocol, after switching at the very beginning,
     // the importing nodes will take care of all the migrating slots.
@@ -519,10 +527,10 @@ fn should_ignore_slots(
     // the migrating slots.
     match &range.tag {
         SlotRangeTag::Migrating(_) => {
-            migration_states.get(&range.to_range()).cloned() != Some(MigrationState::PreCheck)
+            migration_states.get(range.get_range_list()).cloned() != Some(MigrationState::PreCheck)
         }
         SlotRangeTag::Importing(_) => {
-            migration_states.get(&range.to_range()).cloned() == Some(MigrationState::PreCheck)
+            migration_states.get(range.get_range_list()).cloned() == Some(MigrationState::PreCheck)
         }
         _ => false,
     }
@@ -530,7 +538,7 @@ fn should_ignore_slots(
 
 fn gen_cluster_slots_helper(
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
-    migration_states: &HashMap<Range, MigrationState>,
+    migration_states: &HashMap<RangeList, MigrationState>,
 ) -> Result<Vec<RespVec>, String> {
     let mut slot_range_element = Vec::new();
     for (addr, ranges) in slot_ranges {
@@ -547,16 +555,19 @@ fn gen_cluster_slots_helper(
                 continue;
             }
 
-            let mut arr = vec![
-                Resp::Integer(slot_range.start.to_string().into_bytes()),
-                Resp::Integer(slot_range.end.to_string().into_bytes()),
-            ];
             let ip_port_array = Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str(host.as_bytes().to_vec())),
                 Resp::Integer(port.as_bytes().to_vec()),
             ]));
-            arr.push(ip_port_array);
-            slot_range_element.push(Resp::Arr(Array::Arr(arr)))
+
+            for range in slot_range.get_range_list().get_ranges().iter() {
+                let mut arr = vec![
+                    Resp::Integer(range.start().to_string().into_bytes()),
+                    Resp::Integer(range.end().to_string().into_bytes()),
+                ];
+                arr.push(ip_port_array.clone());
+                slot_range_element.push(Resp::Arr(Array::Arr(arr)))
+            }
         }
     }
     Ok(slot_range_element)
@@ -565,8 +576,9 @@ fn gen_cluster_slots_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::cluster::MigrationMeta;
+    use crate::common::cluster::{MigrationMeta, RangeList};
     use crate::protocol::{Array, BulkStr};
+    use std::convert::TryFrom;
     use std::iter::repeat;
 
     fn gen_testing_slot_ranges(address: &str) -> HashMap<String, Vec<SlotRange>> {
@@ -575,13 +587,11 @@ mod tests {
             address.to_string(),
             vec![
                 SlotRange {
-                    start: 0,
-                    end: 100,
+                    range_list: RangeList::try_from("1 0-100").unwrap(),
                     tag: SlotRangeTag::None,
                 },
                 SlotRange {
-                    start: 300,
-                    end: 300,
+                    range_list: RangeList::try_from("1 300-300").unwrap(),
                     tag: SlotRangeTag::None,
                 },
             ],
@@ -606,8 +616,7 @@ mod tests {
         slot_ranges.insert(
             "127.0.0.1:5299".to_string(),
             vec![SlotRange {
-                start: 0,
-                end: 1000,
+                range_list: RangeList::try_from("1 0-1000").unwrap(),
                 tag,
             }],
         );
@@ -654,7 +663,7 @@ mod tests {
         let slot_ranges = gen_testing_migration_slot_ranges(false);
         for slot_ranges in slot_ranges.values() {
             for slot_range in slot_ranges {
-                m.insert(slot_range.to_range(), MigrationState::PreCheck);
+                m.insert(slot_range.to_range_list(), MigrationState::PreCheck);
             }
         }
         let output =
@@ -671,7 +680,7 @@ mod tests {
         let slot_ranges = gen_testing_migration_slot_ranges(false);
         for slot_ranges in slot_ranges.values() {
             for slot_range in slot_ranges {
-                m.insert(slot_range.to_range(), MigrationState::PreBlocking);
+                m.insert(slot_range.to_range_list(), MigrationState::PreBlocking);
             }
         }
         let output =
@@ -701,7 +710,7 @@ mod tests {
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         for slot_ranges in slot_ranges.values() {
             for slot_range in slot_ranges {
-                m.insert(slot_range.to_range(), MigrationState::PreCheck);
+                m.insert(slot_range.to_range_list(), MigrationState::PreCheck);
             }
         }
         let output =
@@ -718,7 +727,7 @@ mod tests {
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         for slot_ranges in slot_ranges.values() {
             for slot_range in slot_ranges {
-                m.insert(slot_range.to_range(), MigrationState::PreBlocking);
+                m.insert(slot_range.to_range_list(), MigrationState::PreBlocking);
             }
         }
         let output =
