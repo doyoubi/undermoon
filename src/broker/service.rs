@@ -39,7 +39,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig) {
             .route("/clusters/migrations", web::put().to(commit_migration))
 
             // Additional api
-            .route("/clusters/{cluster_name}", web::post().to(add_cluster))
+            .route("/clusters", web::post().to(add_cluster))
             .route("/clusters/meta/{cluster_name}", web::delete().to(remove_cluster))
             .route(
                 "/clusters/nodes/{cluster_name}",
@@ -90,14 +90,14 @@ impl MemBrokerService {
         self.store
             .read()
             .expect("MemBrokerService::get_host_addresses")
-            .get_hosts()
+            .get_proxies()
     }
 
     pub fn get_host_by_address(&self, address: &str) -> Option<Proxy> {
         self.store
             .read()
             .expect("MemBrokerService::get_host_by_address")
-            .get_host_by_address(address)
+            .get_proxy_by_address(address)
     }
 
     pub fn get_cluster_names(&self) -> Vec<DBName> {
@@ -122,14 +122,14 @@ impl MemBrokerService {
         self.store
             .write()
             .expect("MemBrokerService::add_hosts")
-            .add_hosts(proxy_address, nodes)
+            .add_proxy(proxy_address, nodes)
     }
 
-    pub fn add_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+    pub fn add_cluster(&self, cluster_name: String, node_num: usize) -> Result<(), MetaStoreError> {
         self.store
             .write()
             .expect("MemBrokerService::add_cluster")
-            .add_cluster(cluster_name)
+            .add_cluster(cluster_name, node_num)
     }
 
     pub fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {
@@ -247,11 +247,20 @@ async fn add_host(
     state.add_hosts(host_resource.into_inner()).map(|()| "")
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct CreateClusterPayload {
+    cluster_name: String,
+    node_number: usize,
+}
+
 async fn add_cluster(
-    (path, state): (web::Path<(String,)>, ServiceState),
+    (payload, state): (web::Json<CreateClusterPayload>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    state.add_cluster(cluster_name).map(|()| "")
+    let CreateClusterPayload {
+        cluster_name,
+        node_number,
+    } = payload.into_inner();
+    state.add_cluster(cluster_name, node_number).map(|()| "")
 }
 
 async fn remove_cluster(

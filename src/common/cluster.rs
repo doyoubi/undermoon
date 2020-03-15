@@ -390,6 +390,7 @@ impl DBName {
         Self(DBNameInner::new())
     }
 
+    // TODO: use TryFrom
     pub fn from(s: &str) -> Result<Self, InvalidDBName> {
         Ok(Self(DBNameInner::from(s).map_err(|_| InvalidDBName)?))
     }
