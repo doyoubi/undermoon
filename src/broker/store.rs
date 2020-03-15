@@ -26,7 +26,7 @@ pub struct ProxyResource {
 
 type ProxySlot = String;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 enum ChunkRolePosition {
     Normal,
     FirstChunkMaster,
@@ -41,31 +41,37 @@ struct MigrationSlotRangeStore {
 }
 
 impl MigrationSlotRangeStore {
-    fn to_slot_range(&self, epoch: u64, chunks: &[ChunkStore]) -> SlotRange {
+    fn to_slot_range(&self, chunks: &[ChunkStore]) -> SlotRange {
         let src_chunk = chunks.get(self.meta.src_chunk_index).expect("get_cluster");
         let src_proxy_address = src_chunk
             .proxy_addresses
             .get(self.meta.src_chunk_part)
             .expect("get_cluster")
             .clone();
+        let src_node_index =
+            Self::chunk_part_to_node_index(self.meta.src_chunk_part, src_chunk.role_position);
         let src_node_address = src_chunk
             .node_addresses
-            .get(self.meta.src_chunk_index * 2 + self.meta.src_chunk_part)
+            .get(src_node_index)
             .expect("get_cluster")
             .clone();
+
         let dst_chunk = chunks.get(self.meta.dst_chunk_index).expect("get_cluster");
         let dst_proxy_address = dst_chunk
             .proxy_addresses
             .get(self.meta.dst_chunk_part)
             .expect("get_cluster")
             .clone();
+        let dst_node_index =
+            Self::chunk_part_to_node_index(self.meta.dst_chunk_part, dst_chunk.role_position);
         let dst_node_address = dst_chunk
             .node_addresses
-            .get(self.meta.dst_chunk_index * 2 + self.meta.dst_chunk_part)
+            .get(dst_node_index)
             .expect("get_cluster")
             .clone();
+
         let meta = MigrationMeta {
-            epoch,
+            epoch: self.meta.epoch,
             src_proxy_address,
             src_node_address,
             dst_proxy_address,
@@ -81,6 +87,14 @@ impl MigrationSlotRangeStore {
                 range_list: self.range_list.clone(),
                 tag: SlotRangeTag::Importing(meta),
             }
+        }
+    }
+
+    fn chunk_part_to_node_index(chunk_part: usize, role_position: ChunkRolePosition) -> usize {
+        match (chunk_part, role_position) {
+            (0, ChunkRolePosition::SecondChunkMaster) => 3,
+            (1, ChunkRolePosition::FirstChunkMaster) => 2,
+            (i, _) => 2 * i,
         }
     }
 }
@@ -235,7 +249,6 @@ impl MetaStore {
     }
 
     fn get_cluster(&self) -> Option<Cluster> {
-        let epoch = self.global_epoch;
         let cluster_store = self.cluster.as_ref()?;
         let cluster_name = cluster_store.name.clone();
 
@@ -272,7 +285,7 @@ impl MetaStore {
                         let slot_ranges: Vec<_> = chunk.migrating_slots[0]
                             .iter()
                             .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(epoch, &cluster_store.chunks)
+                                slot_range_store.to_slot_range(&cluster_store.chunks)
                             })
                             .collect();
                         slots.extend(slot_ranges);
@@ -286,7 +299,7 @@ impl MetaStore {
                         let slot_ranges: Vec<_> = chunk.migrating_slots[1]
                             .iter()
                             .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(epoch, &cluster_store.chunks)
+                                slot_range_store.to_slot_range(&cluster_store.chunks)
                             })
                             .collect();
                         slots.extend(slot_ranges);
@@ -593,7 +606,7 @@ impl MetaStore {
         let dst_master_num = dst_chunk_num * 2;
         let master_num = cluster.chunks.len() * 2;
         let src_chunk_num = cluster.chunks.len() - dst_chunk_num;
-        let average = (SLOT_NUM + master_num - 1) / master_num;
+        let average = SLOT_NUM / master_num;
         let remainder = SLOT_NUM - average * master_num;
 
         let mut curr_dst_master_index = 0;
@@ -689,7 +702,7 @@ impl MetaStore {
                     .expect("assign_dst_slots");
                 let migrating_slots = dst_chunk
                     .migrating_slots
-                    .get_mut(meta.src_chunk_part)
+                    .get_mut(meta.dst_chunk_part)
                     .expect("assign_dst_slots");
                 let slot_range = MigrationSlotRangeStore {
                     range_list: RangeList::new(ranges.clone()),
@@ -771,9 +784,9 @@ impl MetaStore {
         for chunk in &mut cluster.chunks {
             for migrating_slots in chunk.migrating_slots.iter_mut() {
                 migrating_slots.retain(|slot_range_store| {
-                    slot_range_store.is_migrating
-                        && !(slot_range_store.range_list == task.slot_range.range_list
-                            && slot_range_store.meta == meta)
+                    !(slot_range_store.is_migrating
+                        && slot_range_store.range_list == task.slot_range.range_list
+                        && slot_range_store.meta == meta)
                 })
             }
         }
@@ -788,7 +801,9 @@ impl MetaStore {
                         migrating_slots
                             .iter()
                             .position(|slot_range_store| {
-                                !slot_range_store.is_migrating && slot_range_store.meta == meta
+                                !slot_range_store.is_migrating
+                                    && slot_range_store.meta == meta
+                                    && slot_range_store.range_list == task.slot_range.range_list
                             })
                             .map(|index| (j, migrating_slots.remove(index).range_list))
                     });
@@ -1455,47 +1470,97 @@ mod tests {
         assert!(epoch6 < epoch7);
     }
 
-    #[test]
-    fn test_migration() {
+    fn test_migration_helper(start_node_num: usize, added_node_num: usize) {
         let mut store = MetaStore::default();
         add_testing_proxies(&mut store);
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES);
 
         let db_name = "test_db".to_string();
-        store.add_cluster(db_name.clone(), 4).unwrap();
+        store.add_cluster(db_name.clone(), start_node_num).unwrap();
         let cluster = store.get_cluster_by_name(&db_name).unwrap();
-        assert_eq!(cluster.get_nodes().len(), 4);
-        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 2);
+        assert_eq!(cluster.get_nodes().len(), start_node_num);
+        assert_eq!(
+            store.get_free_proxies().len(),
+            ALL_PROXIES - start_node_num / 2
+        );
         let epoch1 = store.get_global_epoch();
 
-        let nodes = store.auto_add_nodes(db_name.clone(), None).unwrap();
+        let nodes = store
+            .auto_add_nodes(db_name.clone(), Some(added_node_num))
+            .unwrap();
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
-        assert_eq!(nodes.len(), 4);
+        assert_eq!(nodes.len(), added_node_num);
         let cluster = store.get_cluster_by_name(&db_name).unwrap();
-        assert_eq!(cluster.get_nodes().len(), 8);
-        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 4);
+        assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
+        assert_eq!(
+            store.get_free_proxies().len(),
+            ALL_PROXIES - start_node_num / 2 - added_node_num / 2
+        );
 
         store.migrate_slots(db_name.clone()).unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
 
         let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
         for (i, node) in cluster.get_nodes().iter().enumerate() {
-            if i < 4 {
+            if i < start_node_num {
                 if node.get_role() == Role::Replica {
                     continue;
                 }
-                assert_eq!(node.get_slots().len(), 2);
-                assert!(node.get_slots()[0].tag.is_stable());
-                assert!(node.get_slots()[1].tag.is_migrating());
+                let slots = node.get_slots();
+                assert!(slots.len() >= 2);
+                assert!(slots[0].tag.is_stable());
+                for slot_range in slots.iter().skip(1) {
+                    assert!(slot_range.tag.is_migrating());
+                }
             } else {
                 if node.get_role() == Role::Replica {
                     continue;
                 }
-                assert_eq!(node.get_slots().len(), 1);
-                assert!(node.get_slots()[0].tag.is_importing());
+                let slots = node.get_slots();
+                assert!(slots.len() >= 1);
+                for slot_range in slots.iter() {
+                    assert!(slot_range.tag.is_importing());
+                }
             }
         }
+
+        let slot_range_set: HashSet<_> = cluster
+            .get_nodes()
+            .iter()
+            .filter(|node| node.get_role() == Role::Master)
+            .flat_map(|node| node.get_slots().iter())
+            .filter_map(|slot_range| match slot_range.tag {
+                SlotRangeTag::Migrating(_) => Some(slot_range.clone()),
+                _ => None,
+            })
+            .collect();
+
+        for slot_range in slot_range_set.into_iter() {
+            let task_meta = MigrationTaskMeta {
+                db_name: DBName::from(&db_name).unwrap(),
+                slot_range,
+            };
+            store.commit_migration(task_meta).unwrap();
+        }
+
+        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        for node in cluster.get_nodes() {
+            let slots = node.get_slots();
+            if node.get_role() == Role::Master {
+                assert_eq!(slots.len(), 1);
+                assert_eq!(slots[0].tag, SlotRangeTag::None);
+            } else {
+                assert!(slots.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_migration() {
+        test_migration_helper(4, 4);
+        test_migration_helper(4, 8);
     }
 }
