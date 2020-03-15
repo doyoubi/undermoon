@@ -142,6 +142,11 @@ impl RangeList {
         range_list
     }
 
+    pub fn merge_another(&mut self, range_list: &mut RangeList) {
+        self.0.append(&mut range_list.0);
+        self.compact();
+    }
+
     fn parse<It>(it: &mut It) -> Option<Self>
     where
         It: Iterator<Item = String>,
