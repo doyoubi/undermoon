@@ -162,10 +162,11 @@ impl MemBrokerService {
 
     pub fn get_failures(&self) -> Vec<String> {
         let failure_ttl = chrono::Duration::seconds(self.config.failure_ttl as i64);
+        let failure_quorum = self.config.failure_quorum;
         self.store
             .write()
             .expect("MemBrokerService::get_failures")
-            .get_failures(failure_ttl)
+            .get_failures(failure_ttl, failure_quorum)
     }
 
     pub fn add_failure(&self, address: String, reporter_id: String) {

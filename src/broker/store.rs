@@ -26,14 +26,14 @@ pub struct ProxyResource {
 
 type ProxySlot = String;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 enum ChunkRolePosition {
     Normal,
     FirstChunkMaster,
     SecondChunkMaster,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 struct MigrationSlotRangeStore {
     range_list: RangeList,
     is_migrating: bool, // migrating or importing
@@ -85,7 +85,7 @@ impl MigrationSlotRangeStore {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 struct MigrationMetaStore {
     epoch: u64,
     src_chunk_index: usize,
@@ -94,7 +94,7 @@ struct MigrationMetaStore {
     dst_chunk_part: usize,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct ChunkStore {
     role_position: ChunkRolePosition,
     stable_slots: [Option<SlotRange>; CHUNK_PARTS],
@@ -103,13 +103,14 @@ struct ChunkStore {
     node_addresses: [String; CHUNK_NODE_NUM],
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct ClusterStore {
     name: DBName,
     chunks: Vec<ChunkStore>,
     config: ClusterConfig,
 }
 
+#[derive(Debug)]
 struct MigrationSlots {
     ranges: Vec<Range>,
     meta: MigrationMetaStore,
@@ -350,7 +351,11 @@ impl MetaStore {
             .insert(reporter_id, now.timestamp());
     }
 
-    pub fn get_failures(&mut self, falure_ttl: chrono::Duration) -> Vec<String> {
+    pub fn get_failures(
+        &mut self,
+        falure_ttl: chrono::Duration,
+        failure_quorum: u64,
+    ) -> Vec<String> {
         let now = Utc::now();
         for reporter_map in self.failures.values_mut() {
             reporter_map.retain(|_, report_time| {
@@ -361,7 +366,11 @@ impl MetaStore {
         }
         self.failures
             .retain(|_, proxy_failure_map| !proxy_failure_map.is_empty());
-        self.failures.keys().cloned().collect()
+        self.failures
+            .iter()
+            .filter(|(_, v)| v.len() >= failure_quorum as usize)
+            .map(|(address, _)| address.clone())
+            .collect()
     }
 
     pub fn add_proxy(
@@ -369,13 +378,11 @@ impl MetaStore {
         proxy_address: String,
         nodes: [String; NODES_PER_PROXY],
     ) -> Result<(), MetaStoreError> {
-        self.bump_global_epoch();
+        if proxy_address.split(':').count() != 2 {
+            return Err(MetaStoreError::InvalidProxyAddress);
+        }
 
-        let res = if self.all_proxies.contains_key(&proxy_address) {
-            Err(MetaStoreError::AlreadyExisted)
-        } else {
-            Ok(())
-        };
+        self.bump_global_epoch();
 
         self.all_proxies
             .entry(proxy_address.clone())
@@ -385,8 +392,9 @@ impl MetaStore {
             });
 
         self.failed_proxies.remove(&proxy_address);
+        self.failures.remove(&proxy_address);
 
-        res
+        Ok(())
     }
 
     pub fn add_cluster(&mut self, db_name: String, node_num: usize) -> Result<(), MetaStoreError> {
@@ -402,7 +410,7 @@ impl MetaStore {
             NonZeroUsize::new(node_num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
 
         let proxy_resource_arr = self.consume_proxy(proxy_num)?;
-        let chunk_stores = Self::proxy_resource_to_chunk_store(proxy_resource_arr);
+        let chunk_stores = Self::proxy_resource_to_chunk_store(proxy_resource_arr, true);
 
         let cluster_store = ClusterStore {
             name: db_name,
@@ -417,6 +425,7 @@ impl MetaStore {
 
     fn proxy_resource_to_chunk_store(
         proxy_resource_arr: Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>,
+        with_slots: bool,
     ) -> Vec<ChunkStore> {
         let master_num = proxy_resource_arr.len() * 2;
         let range_per_node = (SLOT_NUM + master_num - 1) / master_num;
@@ -433,11 +442,17 @@ impl MetaStore {
                 tag: SlotRangeTag::None,
             };
 
+            let stable_slots = if with_slots {
+                [Some(create_slots(a)), Some(create_slots(b))]
+            } else {
+                [None, None]
+            };
+
             let first_proxy = chunk[0].clone();
             let second_proxy = chunk[1].clone();
             let chunk_store = ChunkStore {
                 role_position: ChunkRolePosition::Normal,
-                stable_slots: [Some(create_slots(a)), Some(create_slots(b))],
+                stable_slots,
                 migrating_slots: [vec![], vec![]],
                 proxy_addresses: [
                     first_proxy.proxy_address.clone(),
@@ -484,7 +499,7 @@ impl MetaStore {
                 if cluster.name != db_name {
                     return Err(MetaStoreError::ClusterNotFound);
                 }
-                cluster.chunks.len() * 2
+                cluster.chunks.len() * 4
             }
         };
 
@@ -499,7 +514,7 @@ impl MetaStore {
         let proxy_num = NonZeroUsize::new(num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
 
         let proxy_resource_arr = self.consume_proxy(proxy_num)?;
-        let mut chunks = Self::proxy_resource_to_chunk_store(proxy_resource_arr);
+        let mut chunks = Self::proxy_resource_to_chunk_store(proxy_resource_arr, false);
 
         match self.cluster {
             None => return Err(MetaStoreError::ClusterNotFound),
@@ -539,7 +554,6 @@ impl MetaStore {
 
     pub fn migrate_slots(&mut self, db_name: String) -> Result<(), MetaStoreError> {
         let db_name = DBName::from(&db_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
-
         let new_epoch = self.global_epoch + 1;
 
         {
@@ -556,7 +570,7 @@ impl MetaStore {
             let running_migration = cluster
                 .chunks
                 .iter()
-                .any(|chunk| !chunk.migrating_slots.is_empty());
+                .any(|chunk| !chunk.migrating_slots.iter().any(|slots| slots.is_empty()));
             if running_migration {
                 return Err(MetaStoreError::MigrationRunning);
             }
@@ -577,7 +591,8 @@ impl MetaStore {
             .filter(|chunk| chunk.stable_slots[0].is_none() && chunk.stable_slots[1].is_none())
             .count();
         let dst_master_num = dst_chunk_num * 2;
-        let master_num = cluster.chunks.len();
+        let master_num = cluster.chunks.len() * 2;
+        let src_chunk_num = cluster.chunks.len() - dst_chunk_num;
         let average = (SLOT_NUM + master_num - 1) / master_num;
         let remainder = SLOT_NUM - average * master_num;
 
@@ -624,17 +639,18 @@ impl MetaStore {
                             }
                             // reset current state
                             if curr_slots_num >= average {
-                                curr_dst_master_index += 1;
                                 migration_slots.push(MigrationSlots {
                                     meta: MigrationMetaStore {
                                         epoch,
                                         src_chunk_index,
                                         src_chunk_part,
-                                        dst_chunk_index: curr_dst_master_index / 2,
+                                        dst_chunk_index: src_chunk_num
+                                            + (curr_dst_master_index / 2),
                                         dst_chunk_part: curr_dst_master_index % 2,
                                     },
                                     ranges: curr_dst_slots.drain(..).collect(),
                                 });
+                                curr_dst_master_index += 1;
                                 curr_slots_num = 0;
                             }
                         }
@@ -1103,22 +1119,50 @@ impl MetaStore {
         &mut self,
         failed_proxy_address: String,
     ) -> Result<ProxyResource, MetaStoreError> {
-        let free_proxies: HashSet<String> = self.get_free_proxies().into_iter().collect();
+        let free_hosts: HashSet<String> = self
+            .get_free_proxies()
+            .into_iter()
+            .map(|address| {
+                address
+                    .split(':')
+                    .next()
+                    .expect("consume_new_proxy: split address")
+                    .to_string()
+            })
+            .collect();
         let link_table = self.build_link_table();
 
+        let failed_proxy_host = failed_proxy_address
+            .split(':')
+            .next()
+            .ok_or_else(|| MetaStoreError::InvalidProxyAddress)?
+            .to_string();
         let link_count_table = link_table
-            .get(&failed_proxy_address)
+            .get(&failed_proxy_host)
             .expect("consume_new_proxy: cannot find failed proxy");
-        let peer_proxy = link_count_table
+        let peer_host = link_count_table
             .iter()
-            .filter(|(peer_address, _)| free_proxies.contains(*peer_address))
-            .max_by_key(|(_, count)| *count)
+            .filter(|(peer_host, _)| free_hosts.contains(*peer_host))
+            .min_by_key(|(_, count)| *count)
             .map(|(peer_address, _)| peer_address)
             .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
 
+        let peer_proxy = self
+            .get_free_proxies()
+            .iter()
+            .find(|address| {
+                peer_host
+                    == address
+                        .split(':')
+                        .next()
+                        .expect("consume_new_proxy: split address")
+            })
+            .expect("consume_new_proxy: get peer address")
+            .to_string();
+
         let new_proxy = self
             .all_proxies
-            .get(peer_proxy)
+            .get(&peer_proxy)
             .expect("consume_new_proxy: cannot find peer proxy")
             .clone();
         Ok(new_proxy)
@@ -1137,6 +1181,7 @@ pub enum MetaStoreError {
     InvalidNodeNum,
     InvalidClusterName,
     InvalidMigrationTask,
+    InvalidProxyAddress,
     MigrationTaskNotFound,
     OnlySupportOneCluster,
     MigrationRunning,
@@ -1159,9 +1204,13 @@ impl Error for MetaStoreError {
 mod tests {
     use super::*;
 
+    const HOST_NUM: usize = 4;
+    const PROXY_PER_HOST: usize = 3;
+    const ALL_PROXIES: usize = HOST_NUM * PROXY_PER_HOST;
+
     fn add_testing_proxies(store: &mut MetaStore) {
-        for host_index in 1..=4 {
-            for i in 1..=3 {
+        for host_index in 1..=HOST_NUM {
+            for i in 1..=PROXY_PER_HOST {
                 let proxy_address = format!("127.0.0.{}:70{:02}", host_index, i);
                 let node_addresses = [
                     format!("127.0.0.{}:60{:02}", host_index, i * 2),
@@ -1177,6 +1226,11 @@ mod tests {
         let mut store = MetaStore::default();
         let proxy_address = "127.0.0.1:7000";
         let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
+
+        assert!(store
+            .add_proxy("127.0.0.1".to_string(), nodes.clone())
+            .is_err());
+
         store
             .add_proxy(proxy_address.to_string(), nodes.clone())
             .unwrap();
@@ -1212,12 +1266,12 @@ mod tests {
             .map(|proxy| proxy.get_free_nodes().len())
             .sum();
 
-        let last_epoch = store.get_global_epoch();
+        let epoch1 = store.get_global_epoch();
 
         let db_name = "test_db".to_string();
         store.add_cluster(db_name.clone(), 4).unwrap();
-
-        assert!(store.get_global_epoch() > last_epoch);
+        let epoch2 = store.get_global_epoch();
+        assert!(epoch1 < epoch2);
 
         let names: Vec<String> = store
             .get_cluster_names()
@@ -1242,6 +1296,8 @@ mod tests {
 
         let r = store.add_cluster("another_db".to_string(), 4);
         assert!(r.is_err());
+        let epoch3 = store.get_global_epoch();
+        assert_eq!(epoch2, epoch3);
 
         for node in cluster.get_nodes() {
             let proxy = store
@@ -1279,8 +1335,9 @@ mod tests {
             .collect();
         assert_eq!(proy_addresses_set.len() * 2, cluster.get_nodes().len());
 
-        let last_epoch = store.get_global_epoch();
         store.remove_cluster(db_name.clone()).unwrap();
+        let epoch4 = store.get_global_epoch();
+        assert!(epoch3 < epoch4);
 
         let proxies: Vec<_> = store
             .get_proxies()
@@ -1292,7 +1349,153 @@ mod tests {
             .map(|proxy| proxy.get_free_nodes().len())
             .sum();
         assert_eq!(free_node_num, original_free_node_num);
+    }
 
-        assert!(store.get_global_epoch() > last_epoch);
+    #[test]
+    fn test_failures() {
+        let mut store = MetaStore::default();
+        add_testing_proxies(&mut store);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES);
+
+        let original_proxy_num = store.get_proxies().len();
+        let failed_address = "127.0.0.1:7001";
+        assert!(store.get_proxy_by_address(failed_address).is_some());
+        let epoch1 = store.get_global_epoch();
+
+        store.add_failure(failed_address.to_string(), "reporter_id".to_string());
+        let epoch2 = store.get_global_epoch();
+        assert!(epoch1 < epoch2);
+        let proxy_num = store.get_proxies().len();
+        assert_eq!(proxy_num, original_proxy_num);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
+
+        assert_eq!(
+            store.get_failures(chrono::Duration::max_value(), 1),
+            vec![failed_address.to_string()]
+        );
+        assert!(store
+            .get_failures(chrono::Duration::max_value(), 2)
+            .is_empty(),);
+        store.remove_proxy(failed_address.to_string()).unwrap();
+        let epoch3 = store.get_global_epoch();
+        assert!(epoch2 < epoch3);
+
+        let db_name = "test_db".to_string();
+        store.add_cluster(db_name.clone(), 4).unwrap();
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
+        let epoch4 = store.get_global_epoch();
+        assert!(epoch3 < epoch4);
+
+        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        let failed_proxy_address = cluster
+            .get_nodes()
+            .get(0)
+            .unwrap()
+            .get_proxy_address()
+            .to_string();
+        store.add_failure(failed_proxy_address.clone(), "reporter_id".to_string());
+        assert_eq!(store.get_free_proxies().len(), 9);
+        let epoch5 = store.get_global_epoch();
+        assert!(epoch4 < epoch5);
+
+        let proxy_num = store.get_proxies().len();
+        assert_eq!(proxy_num, original_proxy_num - 1);
+        assert_eq!(
+            store.get_failures(chrono::Duration::max_value(), 1),
+            vec![failed_proxy_address.clone()]
+        );
+
+        let new_proxy = store
+            .replace_failed_proxy(failed_proxy_address.clone())
+            .unwrap();
+        assert_ne!(new_proxy.get_address(), failed_proxy_address);
+        let epoch6 = store.get_global_epoch();
+        assert!(epoch5 < epoch6);
+
+        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        assert_eq!(
+            cluster
+                .get_nodes()
+                .iter()
+                .filter(|node| node.get_proxy_address() == &failed_proxy_address)
+                .count(),
+            0
+        );
+        assert_eq!(
+            cluster
+                .get_nodes()
+                .iter()
+                .filter(|node| node.get_proxy_address() == new_proxy.get_address())
+                .count(),
+            2
+        );
+        for node in cluster.get_nodes().iter() {
+            if node.get_proxy_address() != new_proxy.get_address() {
+                assert_eq!(node.get_role(), Role::Master);
+            } else {
+                assert_eq!(node.get_role(), Role::Replica);
+            }
+        }
+
+        // Recover proxy
+        let nodes = store
+            .all_proxies
+            .get(&failed_proxy_address)
+            .unwrap()
+            .node_addresses
+            .clone();
+        store
+            .add_proxy(failed_proxy_address.clone(), nodes)
+            .unwrap();
+        assert_eq!(
+            store.get_failures(chrono::Duration::max_value(), 1).len(),
+            0
+        );
+        let epoch7 = store.get_global_epoch();
+        assert!(epoch6 < epoch7);
+    }
+
+    #[test]
+    fn test_migration() {
+        let mut store = MetaStore::default();
+        add_testing_proxies(&mut store);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES);
+
+        let db_name = "test_db".to_string();
+        store.add_cluster(db_name.clone(), 4).unwrap();
+        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        assert_eq!(cluster.get_nodes().len(), 4);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 2);
+        let epoch1 = store.get_global_epoch();
+
+        let nodes = store.auto_add_nodes(db_name.clone(), None).unwrap();
+        let epoch2 = store.get_global_epoch();
+        assert!(epoch1 < epoch2);
+        assert_eq!(nodes.len(), 4);
+        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        assert_eq!(cluster.get_nodes().len(), 8);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 4);
+
+        store.migrate_slots(db_name.clone()).unwrap();
+        let epoch3 = store.get_global_epoch();
+        assert!(epoch2 < epoch3);
+
+        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        for (i, node) in cluster.get_nodes().iter().enumerate() {
+            if i < 4 {
+                if node.get_role() == Role::Replica {
+                    continue;
+                }
+                assert_eq!(node.get_slots().len(), 2);
+                assert!(node.get_slots()[0].tag.is_stable());
+                assert!(node.get_slots()[1].tag.is_migrating());
+            } else {
+                if node.get_role() == Role::Replica {
+                    continue;
+                }
+                assert_eq!(node.get_slots().len(), 1);
+                assert!(node.get_slots()[0].tag.is_importing());
+            }
+        }
     }
 }

@@ -76,6 +76,20 @@ impl SlotRangeTag {
         }
     }
 
+    pub fn is_stable(&self) -> bool {
+        match self {
+            SlotRangeTag::None => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_migrating(&self) -> bool {
+        match self {
+            SlotRangeTag::Migrating(_) => true,
+            _ => false,
+        }
+    }
+
     pub fn is_importing(&self) -> bool {
         match self {
             SlotRangeTag::Importing(_) => true,
