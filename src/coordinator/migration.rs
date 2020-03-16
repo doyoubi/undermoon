@@ -26,7 +26,8 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
                     .split(' ')
                     .map(ToString::to_string)
                     .collect::<Vec<String>>()
-                    .into_iter();
+                    .into_iter()
+                    .peekable();
                 MigrationTaskMeta::from_strings(&mut it)
             }
             others => {
@@ -125,11 +126,14 @@ mod tests {
     use super::super::detector::BrokerProxiesRetriever;
     use super::super::sync::BrokerMetaRetriever;
     use super::*;
-    use crate::common::cluster::{DBName, MigrationMeta, Proxy, SlotRange, SlotRangeTag};
+    use crate::common::cluster::{
+        DBName, MigrationMeta, Proxy, RangeList, SlotRange, SlotRangeTag,
+    };
     use crate::coordinator::core::MockProxyMetaSender;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient};
     use futures::{stream, StreamExt};
     use std::collections::HashMap;
+    use std::convert::TryFrom;
     use tokio;
 
     fn gen_testing_dummy_proxy(addr: &str) -> Proxy {
@@ -154,7 +158,7 @@ mod tests {
             })
             .times(1)
             .returning(|_| {
-                let reply = b"mydb MIGRATING 233-666 7799 127.0.0.1:6000 127.0.0.1:7000 127.0.0.1:6001 127.0.0.1:7001".to_vec();
+                let reply = b"mydb MIGRATING 1 233-666 7799 127.0.0.1:6000 127.0.0.1:7000 127.0.0.1:6001 127.0.0.1:7001".to_vec();
                 let resp = Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(reply))]));
                 Box::pin(async { Ok(resp) })
             });
@@ -168,7 +172,6 @@ mod tests {
         let checker = MigrationStateRespChecker::new(Arc::new(factory));
         let res: Vec<_> = checker.check("127.0.0.1:6000".to_string()).collect().await;
         assert_eq!(res.len(), 1);
-        assert!(res[0].is_ok());
         let meta = res[0].as_ref().unwrap();
         assert_eq!(meta.db_name.to_string(), "mydb");
         let tag = SlotRangeTag::Migrating(MigrationMeta {
@@ -179,8 +182,7 @@ mod tests {
             dst_node_address: "127.0.0.1:7001".to_string(),
         });
         let slot_range = SlotRange {
-            start: 233,
-            end: 666,
+            range_list: RangeList::try_from("1 233-666").unwrap(),
             tag,
         };
         assert_eq!(meta.slot_range, slot_range);
@@ -195,8 +197,7 @@ mod tests {
             dst_node_address: "127.0.0.1:7001".to_string(),
         });
         let slot_range = SlotRange {
-            start: 233,
-            end: 666,
+            range_list: RangeList::try_from("1 233-666").unwrap(),
             tag,
         };
         MigrationTaskMeta {
@@ -281,6 +282,6 @@ mod tests {
         );
         let res: Vec<_> = sync.run().collect().await;
         assert_eq!(res.len(), 1);
-        assert!(res[0].is_ok());
+        res[0].as_ref().unwrap();
     }
 }

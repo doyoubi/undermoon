@@ -1,4 +1,4 @@
-use crate::common::cluster::MigrationTaskMeta;
+use crate::common::cluster::{MigrationTaskMeta, Range, RangeList, RangeMap};
 use crate::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
 use crate::proxy::backend::CmdTask;
@@ -10,6 +10,7 @@ use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::iter::Peekable;
 use std::pin::Pin;
 use std::str;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -77,6 +78,7 @@ pub trait MigratingTask: ThreadSafe {
     fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
+    fn contains_slot(&self, slot: usize) -> bool;
 }
 
 pub trait ImportingTask: ThreadSafe {
@@ -87,6 +89,7 @@ pub trait ImportingTask: ThreadSafe {
     fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
+    fn contains_slot(&self, slot: usize) -> bool;
     fn handle_switch(
         &self,
         switch_arg: SwitchArg,
@@ -107,7 +110,7 @@ impl SwitchArg {
         strs
     }
 
-    pub fn from_strings<It>(it: &mut It) -> Option<Self>
+    pub fn from_strings<It>(it: &mut Peekable<It>) -> Option<Self>
     where
         It: Iterator<Item = String>,
     {
@@ -119,7 +122,7 @@ impl SwitchArg {
 
 pub fn parse_switch_command(resp: &RespSlice) -> Option<SwitchArg> {
     let command = get_resp_strings(resp)?;
-    let mut it = command.into_iter();
+    let mut it = command.into_iter().peekable();
     // Skip UMCTL TMPSWITCH
     it.next()?;
     it.next()?;
@@ -162,14 +165,15 @@ impl Error for MigrationError {
 
 #[derive(Clone)]
 pub struct SlotRangeArray {
-    pub ranges: Vec<(usize, usize)>,
+    ranges: RangeList,
+    range_map: RangeMap,
 }
 
 impl fmt::Display for SlotRangeArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for (i, range) in self.ranges.iter().enumerate() {
-            write!(f, "{}-{}", range.0, range.1)?;
-            if i + 1 != self.ranges.len() {
+        for (i, range) in self.ranges.get_ranges().iter().enumerate() {
+            write!(f, "{}-{}", range.start(), range.end())?;
+            if i + 1 != self.ranges.get_ranges().len() {
                 write!(f, ",")?;
             }
         }
@@ -178,20 +182,21 @@ impl fmt::Display for SlotRangeArray {
 }
 
 impl SlotRangeArray {
+    pub fn new(ranges: RangeList) -> Self {
+        let range_map = RangeMap::from(&ranges);
+        Self { ranges, range_map }
+    }
+
     pub fn is_key_inside(&self, key: &[u8]) -> bool {
         let slot = get_slot(key);
-        for (start, end) in self.ranges.iter() {
-            if slot >= *start && slot <= *end {
-                return true;
-            }
-        }
-        false
+        self.range_map.contains_slot(slot)
     }
 
     pub fn info(&self) -> String {
         self.ranges
+            .get_ranges()
             .iter()
-            .map(|(start, end)| format!("{}-{}", start, end))
+            .map(|Range(start, end)| format!("{}-{}", *start, *end))
             .join(",")
     }
 }

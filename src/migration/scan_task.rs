@@ -3,7 +3,9 @@ use super::task::{
     AtomicMigrationState, ImportingTask, MgrSubCmd, MigratingTask, MigrationError, MigrationState,
     SwitchArg,
 };
-use crate::common::cluster::{DBName, MigrationMeta, MigrationTaskMeta, SlotRange, SlotRangeTag};
+use crate::common::cluster::{
+    DBName, MigrationMeta, MigrationTaskMeta, RangeMap, SlotRange, SlotRangeTag,
+};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
 use crate::common::track::TrackedFutureRegistry;
@@ -35,7 +37,8 @@ where
 {
     mgr_config: Arc<AtomicMigrationConfig>,
     db_name: DBName,
-    slot_range: (usize, usize),
+    slot_range: SlotRange,
+    range_map: RangeMap,
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
@@ -58,7 +61,7 @@ where
         _config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         db_name: DBName,
-        slot_range: (usize, usize),
+        slot_range: SlotRange,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         blocking_ctrl: Arc<BC>,
@@ -68,19 +71,21 @@ where
         let task = ScanMigrationTask::new(
             meta.src_node_address.clone(),
             meta.dst_node_address.clone(),
-            slot_range,
+            slot_range.clone(),
             client_factory.clone(),
             mgr_config.clone(),
         );
         let redirection_sender_factory = RedirectionSenderFactory::default();
+        let range_map = RangeMap::from(slot_range.get_range_list());
         Self {
             mgr_config,
+            db_name,
+            slot_range,
+            range_map,
             meta,
             state: Arc::new(AtomicMigrationState::new()),
             client_factory,
             redirection_sender_factory,
-            db_name,
-            slot_range,
             stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             task,
@@ -107,8 +112,7 @@ where
             meta: MigrationTaskMeta {
                 db_name: self.db_name.clone(),
                 slot_range: SlotRange {
-                    start: self.slot_range.0,
-                    end: self.slot_range.1,
+                    range_list: self.slot_range.to_range_list(),
                     tag: SlotRangeTag::Migrating(self.meta.clone()),
                 },
             },
@@ -233,8 +237,10 @@ where
             });
 
         let desc = format!(
-            "scan_migrating: db_name={} slot_range={}-{} meta={:?}",
-            self.db_name, self.slot_range.0, self.slot_range.1, self.meta
+            "scan_migrating: db_name={} meta={:?} slot_range={}",
+            self.db_name,
+            self.meta,
+            self.slot_range.get_range_list().to_strings().join(" "),
         );
         let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
         tokio::spawn(fut);
@@ -411,6 +417,10 @@ where
     fn get_state(&self) -> MigrationState {
         self.state.get_state()
     }
+
+    fn contains_slot(&self, slot: usize) -> bool {
+        self.range_map.contains_slot(slot)
+    }
 }
 
 impl<RCF, T, BC> Drop for RedisScanMigratingTask<RCF, T, BC>
@@ -433,6 +443,7 @@ where
 {
     _mgr_config: Arc<AtomicMigrationConfig>,
     meta: MigrationMeta,
+    range_map: RangeMap,
     state: Arc<AtomicMigrationState>,
     _client_factory: Arc<RCF>,
     _sender_factory: Arc<TSF>,
@@ -451,10 +462,9 @@ where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     pub fn new(
-        _config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
-        _db_name: DBName,
         meta: MigrationMeta,
+        slot_range: SlotRange,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
@@ -465,9 +475,11 @@ where
             RestoreDataCmdTaskHandler::new(src_sender, dst_sender, cmd_task_factory.clone());
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let redirection_sender_factory = RedirectionSenderFactory::default();
+        let range_map = RangeMap::from(slot_range.get_range_list());
         Self {
             _mgr_config: mgr_config,
             meta,
+            range_map,
             state: Arc::new(AtomicMigrationState::new()),
             _client_factory: client_factory,
             _sender_factory: sender_factory,
@@ -564,6 +576,10 @@ where
 
     fn get_state(&self) -> MigrationState {
         self.state.get_state()
+    }
+
+    fn contains_slot(&self, slot: usize) -> bool {
+        self.range_map.contains_slot(slot)
     }
 
     fn handle_switch(

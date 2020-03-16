@@ -1,4 +1,4 @@
-use super::cluster::{SlotRange, SlotRangeTag};
+use super::cluster::SlotRange;
 use super::utils::{has_flags, CmdParseError};
 use crate::common::cluster::DBName;
 use crate::common::config::ClusterConfig;
@@ -199,29 +199,7 @@ impl ProxyDBMap {
                 for slot_range in slot_ranges {
                     args.push(db_name.to_string());
                     args.push(node.clone());
-                    match &slot_range.tag {
-                        SlotRangeTag::Migrating(ref meta) => {
-                            args.push("migrating".to_string());
-                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
-                            args.push(meta.epoch.to_string());
-                            args.push(meta.src_proxy_address.clone());
-                            args.push(meta.src_node_address.clone());
-                            args.push(meta.dst_proxy_address.clone());
-                            args.push(meta.dst_node_address.clone());
-                        }
-                        SlotRangeTag::Importing(ref meta) => {
-                            args.push("importing".to_string());
-                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
-                            args.push(meta.epoch.to_string());
-                            args.push(meta.src_proxy_address.clone());
-                            args.push(meta.src_node_address.clone());
-                            args.push(meta.dst_proxy_address.clone());
-                            args.push(meta.dst_node_address.clone());
-                        }
-                        SlotRangeTag::None => {
-                            args.push(format!("{}-{}", slot_range.start, slot_range.end));
-                        }
-                    };
+                    args.extend(slot_range.clone().into_strings());
                 }
             }
         }
@@ -256,7 +234,7 @@ impl ProxyDBMap {
         Ok(Self { db_map })
     }
 
-    fn parse_db<It>(it: &mut It) -> Result<(DBName, String, SlotRange), CmdParseError>
+    fn parse_db<It>(it: &mut Peekable<It>) -> Result<(DBName, String, SlotRange), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
@@ -267,7 +245,7 @@ impl ProxyDBMap {
         Ok((dbname, addr, slot_range))
     }
 
-    fn parse_tagged_slot_range<It>(it: &mut It) -> Result<SlotRange, CmdParseError>
+    fn parse_tagged_slot_range<It>(it: &mut Peekable<It>) -> Result<SlotRange, CmdParseError>
     where
         It: Iterator<Item = String>,
     {
@@ -370,29 +348,29 @@ mod tests {
 
     #[test]
     fn test_single_db() {
-        let mut arguments = vec!["dbname", "127.0.0.1:6379", "0-1000"]
-            .into_iter()
-            .map(|s| s.to_string())
-            .peekable();
+        let args = vec!["dbname", "127.0.0.1:6379", "1", "0-1000"];
+        let mut arguments = args.iter().map(|s| s.to_string()).peekable();
         let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_single_db");
         assert_eq!(host_db_map.db_map.len(), 1);
+
+        assert_eq!(host_db_map.db_map_to_args(), args);
     }
 
     #[test]
     fn test_multiple_slots() {
-        let mut arguments = vec![
+        let args = vec![
             "dbname",
             "127.0.0.1:6379",
+            "1",
             "0-1000",
             "dbname",
             "127.0.0.1:6379",
+            "1",
             "1001-2000",
-        ]
-        .into_iter()
-        .map(|s| s.to_string())
-        .peekable();
+        ];
+        let mut arguments = args.iter().map(|s| s.to_string()).peekable();
 
         let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
@@ -417,24 +395,24 @@ mod tests {
                 .len(),
             2
         );
+
+        assert_eq!(host_db_map.db_map_to_args(), args);
     }
 
     #[test]
     fn test_multiple_nodes() {
-        let mut arguments = vec![
+        let args = vec![
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "dbname",
             "127.0.0.1:7001",
+            "1",
             "1001-2000",
-        ]
-        .into_iter()
-        .map(|s| s.to_string())
-        .peekable();
-        let r = ProxyDBMap::parse(&mut arguments);
-        assert!(r.is_ok());
-        let host_db_map = r.expect("test_multiple_nodes");
+        ];
+        let mut arguments = args.iter().map(|s| s.to_string()).peekable();
+        let host_db_map = ProxyDBMap::parse(&mut arguments).expect("test_multiple_nodes");
         assert_eq!(host_db_map.db_map.len(), 1);
         let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
@@ -465,24 +443,31 @@ mod tests {
                 .len(),
             1
         );
+
+        let mut expected_args = args.clone();
+        let mut actual_args = host_db_map.db_map_to_args();
+        expected_args.sort();
+        actual_args.sort();
+        assert_eq!(actual_args, expected_args);
     }
 
     #[test]
     fn test_multiple_db() {
-        let mut arguments = vec![
+        let args = vec![
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "dbname",
             "127.0.0.1:7001",
+            "1",
             "1001-2000",
             "another_db",
             "127.0.0.1:7002",
+            "1",
             "0-2000",
-        ]
-        .into_iter()
-        .map(|s| s.to_string())
-        .peekable();
+        ];
+        let mut arguments = args.iter().map(|s| s.to_string()).peekable();
         let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
         let host_db_map = r.expect("test_multiple_db");
@@ -535,6 +520,12 @@ mod tests {
                 .len(),
             1
         );
+
+        let mut expected_args = args.clone();
+        let mut actual_args = host_db_map.db_map_to_args();
+        expected_args.sort();
+        actual_args.sort();
+        assert_eq!(actual_args, expected_args);
     }
 
     #[test]
@@ -637,10 +628,12 @@ mod tests {
         let arguments = vec![
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "dbname",
             "127.0.0.1:7001",
-            "importing",
+            "IMPORTING",
+            "1",
             "1001-2000",
             "233",
             "127.0.0.2:7001",
@@ -649,7 +642,8 @@ mod tests {
             "127.0.0.1:6002",
             "another_db",
             "127.0.0.1:7002",
-            "migrating",
+            "MIGRATING",
+            "1",
             "0-2000",
             "666",
             "127.0.0.2:7001",
@@ -680,16 +674,20 @@ mod tests {
             "FORCE",
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "dbname",
             "127.0.0.1:7001",
+            "1",
             "1001-2000",
             "PEER",
             "dbname",
             "127.0.0.2:7001",
+            "1",
             "2001-3000",
             "dbname",
             "127.0.0.2:7002",
+            "1",
             "3001-4000",
             "CONFIG",
             "dbname",
@@ -721,10 +719,10 @@ mod tests {
                 .get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.1:7000")
-                .expect("test_parse_proxy_db_meta")
-                .get(0)
-                .expect("test_parse_proxy_db_meta")
-                .start,
+                .expect("test_parse_proxy_db_meta")[0]
+                .get_range_list()
+                .get_ranges()[0]
+                .start(),
             0
         );
         assert_eq!(
@@ -732,10 +730,10 @@ mod tests {
                 .get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.1:7001")
-                .expect("test_parse_proxy_db_meta")
-                .get(0)
-                .expect("test_parse_proxy_db_meta")
-                .start,
+                .expect("test_parse_proxy_db_meta")[0]
+                .get_range_list()
+                .get_ranges()[0]
+                .start(),
             1001
         );
         assert_eq!(peer.len(), 1);
@@ -747,20 +745,20 @@ mod tests {
             peer.get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.2:7001")
-                .expect("test_parse_proxy_db_meta")
-                .get(0)
-                .expect("test_parse_proxy_db_meta")
-                .start,
+                .expect("test_parse_proxy_db_meta")[0]
+                .get_range_list()
+                .get_ranges()[0]
+                .start(),
             2001
         );
         assert_eq!(
             peer.get(&db_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.2:7002")
-                .expect("test_parse_proxy_db_meta")
-                .get(0)
-                .expect("test_parse_proxy_db_meta")
-                .start,
+                .expect("test_parse_proxy_db_meta")[0]
+                .get_range_list()
+                .get_ranges()[0]
+                .start(),
             3001
         );
         assert_eq!(config.len(), 1);
@@ -809,6 +807,7 @@ mod tests {
             "FORCE",
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "CONFIG",
             "dbname",
@@ -842,10 +841,12 @@ mod tests {
             "FORCE",
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "PEER",
             "dbname",
             "127.0.0.2:7001",
+            "1",
             "2001-3000",
             "CONFIG",
             // "dbname", missing dbname
@@ -871,10 +872,12 @@ mod tests {
             "FORCE",
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "PEER",
             "dbname",
             "127.0.0.2:7001",
+            "1",
             "2001-3000",
             "CONFIG",
             "dbname",
@@ -901,6 +904,7 @@ mod tests {
             "FORCE",
             "dbname",
             "127.0.0.1:7000",
+            "1",
             "0-1000",
             "CONFIG",
             "dbname",

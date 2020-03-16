@@ -18,4 +18,4 @@ until wait_redis server_proxy 5299; do
     sleep 1
 done
 
-redis-cli -h server_proxy -p 5299 UMCTL SETDB 1 FORCE mydb redis1:6379 0-5461 mydb redis2:6379 5462-10922 mydb redis3:6379 10923-16383
+redis-cli -h server_proxy -p 5299 UMCTL SETDB 1 FORCE mydb redis1:6379 1 0-5461 mydb redis2:6379 1 5462-10922 mydb redis3:6379 1 10923-16383

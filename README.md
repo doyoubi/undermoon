@@ -27,24 +27,13 @@ $ redis-server
 ```bash
 # Build and run the server_proxy
 > cargo build
-> target/debug/server_proxy  # runs on port 5299 and will forward commands to 127.0.0.1:6379
+> make server  # runs on port 5299 and will forward commands to 127.0.0.1:6379
 ```
 
-Note that how we use the `AUTH` command to do something like `USE [database]` in Mysql.
 ```bash
 > redis-cli -p 5299
 # Initialize the proxy by `UMCTL` commands.
-127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 0-8000 PEER mydb 127.0.0.1:7000 8001-16383
-
-# Now we still didn't select our database `mydb` we just set.
-# Then we are in the default `admin` database for our connection.
-# Since nothing was set for `admin` so we get a error.
-127.0.0.1:5299> get a
-(error) db not found: admin
-
-# Now choose to use our `mydb`.
-127.0.0.1:5299> AUTH mydb
-OK
+127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 1 0-8000 PEER mydb 127.0.0.1:7000 1 8001-16383
 
 # Done! We can use it like a Redis Cluster!
 127.0.0.1:5299> CLUSTER NODES
@@ -71,8 +60,7 @@ makes easier maintenance of both small and large, just a few and a great amount 
 
 ##### Why server-side proxy?
 A server-side proxy is able to migrate the data and scale in a super fast way
-by using the `Redis Replication Protocol`
-and make it possible to have a better control of full sync in replication.
+by using some customized migration protocols.
 
 ## Quick Tour Examples
 Requirements:
@@ -201,7 +189,7 @@ This is where the `Coordinator` comes in.
 Undermoon also provides a `Coordinator` to do something similar to the `checker.py` above in example (3).
 It will keep checking the server-side proxies and do failover.
 However, `Coordinator` itself does not store any data. It is a stateless service backed by a HTTP broker maintaining the meta data.
-You can implement this HTTP broker yourself and there's a [Golang implementation](https://github.com/doyoubi/overmoon).
+You can implement this HTTP broker yourself and there's a [Golang implementation](https://github.com/doyoubi/overmoon) working in progress.
 
 ![architecture](docs/architecture.svg)
 
@@ -265,9 +253,10 @@ Sets the mapping relationship between the server-side proxy and its correspondin
 Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETDB|SETREPL]` requests which don't have higher epoch.
 - `flags`: Currently it may be NOFLAG or FORCE. When it's `FORCE`, the server-side proxy will ignore the epoch rule above and will always accept the configuration
 - `slot_range` can be like
-    - 0-1000
-    - migrating 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
-    - importing 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
+    - 1 0-1000
+    - 2 0-1000 2000-3000
+    - migrating 1 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
+    - importing 1 0-1000 epoch src_proxy_address src_node_address dst_proxy_address dst_node_address
 - `ip:port` should be the addresses of redis instances or other proxies for `PEER` part.
 
 Note that both these two commands set all the `local` or `peer` meta data of the proxy.
@@ -286,26 +275,6 @@ Sets the replication metadata to server-side proxies. This API supports multiple
 Refer to [HTTP API documentation](./docs/broker_http_api.md).
 
 ## TODO
-- ~~Basic proxy implementation~~ (done)
-- ~~Multiple backend connections~~ (done)
-- ~~Slot map and cluster map~~ (done)
-- ~~Implement AUTH command to select database~~ (done)
-- ~~Implement meta data manipulation api~~ (done)
-- ~~Basic coordinator implementation~~ (done)
-- ~~Support slot migration via replication~~ (done)
-- ~~Optimize RESP parsing~~ (done)
-- ~~Implement CLUSTER SLOTS~~ (done)
-- ~~Implement commands to get proxy meta~~ (done)
-- ~~Track spawned futures~~ (done)
-- ~~Simple script to push configuration to proxy for demonstration~~ (done)
-- ~~Batch write operations with interval flushing~~ (done)
-- ~~Add configuration~~ (done)
 - Limit running commands, connections
-- ~~Slow log~~ (done)
 - Statistics
-- ~~Support multi-key commands~~ (done)
-- ~~Support dynamic configuration by CONFIG command~~ (done)
-- ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
 - Recover peer meta after reboot to support redirection.
-- ~~Syscall batching~~ (done)
-- ~~String Compression~~ (done)

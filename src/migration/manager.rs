@@ -1,6 +1,6 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
-use crate::common::cluster::{DBName, MigrationTaskMeta, Range, SlotRange, SlotRangeTag};
+use crate::common::cluster::{DBName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::db::ProxyDBMap;
 use crate::common::track::TrackedFutureRegistry;
@@ -29,8 +29,7 @@ type NewMigrationTuple<T> = (MigrationMap<T>, Vec<NewTask<T>>);
 pub struct NewTask<T: CmdTask> {
     db_name: DBName,
     epoch: u64,
-    slot_range_start: usize,
-    slot_range_end: usize,
+    range_list: RangeList,
     task: TaskRecord<T>,
 }
 
@@ -100,28 +99,34 @@ where
         for NewTask {
             db_name,
             epoch,
-            slot_range_start,
-            slot_range_end,
+            range_list,
             task,
         } in new_tasks.into_iter()
         {
             match task {
                 Either::Left(migrating_task) => {
                     info!(
-                        "spawn slot migrating task {} {} {} {}",
-                        db_name, epoch, slot_range_start, slot_range_end
+                        "spawn slot migrating task {} {} {}",
+                        db_name,
+                        epoch,
+                        range_list.to_strings().join(" "),
                     );
                     let desc = format!(
-                        "migration: tag=migrating db_name={}, epoch={}, slot_range={}-{}",
-                        db_name, epoch, slot_range_start, slot_range_end
+                        "migration: tag=migrating db_name={}, epoch={}, slot_range={}",
+                        db_name,
+                        epoch,
+                        range_list.to_strings().join(" "),
                     );
 
                     let migrating_task = migrating_task.clone();
                     let fut = async move {
                         if let Err(err) = migrating_task.start().await {
                             error!(
-                                "master slot task {} {} {} {} exit {:?}",
-                                db_name, epoch, slot_range_start, slot_range_end, err
+                                "master slot task {} {} exit {:?} slot_range {}",
+                                db_name,
+                                epoch,
+                                err,
+                                range_list.to_strings().join(" "),
                             );
                         }
                     };
@@ -131,20 +136,27 @@ where
                 }
                 Either::Right(importing_task) => {
                     info!(
-                        "spawn slot importing replica {} {} {}-{}",
-                        db_name, epoch, slot_range_start, slot_range_end
+                        "spawn slot importing replica {} {} {}",
+                        db_name,
+                        epoch,
+                        range_list.to_strings().join(" "),
                     );
                     let desc = format!(
-                        "migration: tag=importing db_name={}, epoch={}, slot_range={}-{}",
-                        db_name, epoch, slot_range_start, slot_range_end
+                        "migration: tag=importing db_name={}, epoch={}, slot_range={}",
+                        db_name,
+                        epoch,
+                        range_list.to_strings().join(" "),
                     );
 
                     let importing_task = importing_task.clone();
                     let fut = async move {
                         if let Err(err) = importing_task.start().await {
                             error!(
-                                "replica slot task {} {} {}-{} exit {:?}",
-                                db_name, epoch, slot_range_start, slot_range_end, err
+                                "replica slot task {} {} exit {:?} slot_range {}",
+                                db_name,
+                                epoch,
+                                err,
+                                range_list.to_strings().join(" "),
                             );
                         }
                     };
@@ -226,9 +238,13 @@ where
                 for task_meta in tasks.keys() {
                     if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
                         lines.push(format!(
-                            "{}-{} {} -> {}",
-                            task_meta.slot_range.start,
-                            task_meta.slot_range.end,
+                            "{} -> {} {}",
+                            task_meta
+                                .slot_range
+                                .range_list
+                                .clone()
+                                .to_strings()
+                                .join(" "),
                             migration_meta.src_node_address,
                             migration_meta.dst_node_address
                         ));
@@ -276,16 +292,15 @@ where
 
                 let slot = get_slot(key);
 
-                for (meta, record) in tasks.iter() {
-                    let slot_range_start = meta.slot_range.start;
-                    let slot_range_end = meta.slot_range.end;
-                    if slot < slot_range_start || slot > slot_range_end {
-                        continue;
-                    }
-
-                    match record {
-                        Either::Left(migrating_task) => return migrating_task.send(cmd_task),
-                        Either::Right(importing_task) => return importing_task.send(cmd_task),
+                for record in tasks.values() {
+                    match &record {
+                        Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
+                            return migrating_task.send(cmd_task)
+                        }
+                        Either::Right(importing_task) if importing_task.contains_slot(slot) => {
+                            return importing_task.send(cmd_task)
+                        }
+                        _ => continue,
                     }
                 }
 
@@ -411,18 +426,12 @@ where
         for (db_name, node_map) in new_db_map.iter() {
             for (_node, slot_ranges) in node_map.iter() {
                 for slot_range in slot_ranges {
-                    let start = slot_range.start;
-                    let end = slot_range.end;
                     match slot_range.tag {
                         SlotRangeTag::Migrating(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
                                 db_name: db_name.clone(),
-                                slot_range: SlotRange {
-                                    start,
-                                    end,
-                                    tag: SlotRangeTag::Migrating(meta.clone()),
-                                },
+                                slot_range: slot_range.clone(),
                             };
 
                             if Some(true)
@@ -438,7 +447,7 @@ where
                                 config.clone(),
                                 mgr_config.clone(),
                                 db_name.clone(),
-                                (slot_range.start, slot_range.end),
+                                slot_range.clone(),
                                 meta.clone(),
                                 client_factory.clone(),
                                 ctrl,
@@ -447,8 +456,7 @@ where
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),
                                 epoch,
-                                slot_range_start: slot_range.start,
-                                slot_range_end: slot_range.end,
+                                range_list: slot_range.to_range_list(),
                                 task: Either::Left(task.clone()),
                             });
                             let tasks = migration_dbs
@@ -460,11 +468,7 @@ where
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
                                 db_name: db_name.clone(),
-                                slot_range: SlotRange {
-                                    start,
-                                    end,
-                                    tag: SlotRangeTag::Importing(meta.clone()),
-                                },
+                                slot_range: slot_range.clone(),
                             };
 
                             if Some(true)
@@ -476,10 +480,9 @@ where
                             }
 
                             let task = Arc::new(RedisScanImportingTask::new(
-                                config.clone(),
                                 mgr_config.clone(),
-                                db_name.clone(),
                                 meta.clone(),
+                                slot_range.clone(),
                                 client_factory.clone(),
                                 sender_factory.clone(),
                                 cmd_task_factory.clone(),
@@ -487,8 +490,7 @@ where
                             new_tasks.push(NewTask {
                                 db_name: db_name.clone(),
                                 epoch,
-                                slot_range_start: slot_range.start,
-                                slot_range_end: slot_range.end,
+                                range_list: slot_range.to_range_list(),
                                 task: Either::Right(task.clone()),
                             });
                             let tasks = migration_dbs
@@ -568,7 +570,7 @@ where
         metadata
     }
 
-    pub fn get_states(&self, db_name: &DBName) -> HashMap<Range, MigrationState> {
+    pub fn get_states(&self, db_name: &DBName) -> HashMap<RangeList, MigrationState> {
         let mut m = HashMap::new();
         if let Some(tasks) = self.task_map.get(db_name) {
             for (meta, task) in tasks.iter() {
@@ -576,7 +578,7 @@ where
                     Either::Left(migrating_task) => migrating_task.get_state(),
                     Either::Right(importing_task) => importing_task.get_state(),
                 };
-                m.insert(meta.slot_range.to_range(), state);
+                m.insert(meta.slot_range.to_range_list(), state);
             }
         }
         m
