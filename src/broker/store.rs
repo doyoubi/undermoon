@@ -7,7 +7,7 @@ use crate::common::config::ClusterConfig;
 use crate::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
-use std::cmp;
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -441,18 +441,23 @@ impl MetaStore {
         with_slots: bool,
     ) -> Vec<ChunkStore> {
         let master_num = proxy_resource_arr.len() * 2;
-        let range_per_node = (SLOT_NUM + master_num - 1) / master_num;
+        let average = SLOT_NUM / master_num;
+        let remainder = SLOT_NUM - average * master_num;
         let mut chunk_stores = vec![];
+        let mut curr_slot = 0;
         for (i, chunk) in proxy_resource_arr.into_iter().enumerate() {
             let a = 2 * i;
             let b = a + 1;
 
-            let create_slots = |index| SlotRange {
-                range_list: RangeList::from_single_range(Range(
-                    index * range_per_node,
-                    cmp::min((index + 1) * range_per_node - 1, SLOT_NUM - 1),
-                )),
-                tag: SlotRangeTag::None,
+            let mut create_slots = |index| {
+                let r = (index < remainder) as usize;
+                let start = curr_slot;
+                let end = curr_slot + average + r;
+                curr_slot = end;
+                SlotRange {
+                    range_list: RangeList::from_single_range(Range(start, end - 1)),
+                    tag: SlotRangeTag::None,
+                }
             };
 
             let stable_slots = if with_slots {
@@ -606,6 +611,7 @@ impl MetaStore {
         let dst_master_num = dst_chunk_num * 2;
         let master_num = cluster.chunks.len() * 2;
         let src_chunk_num = cluster.chunks.len() - dst_chunk_num;
+        let src_master_num = src_chunk_num * 2;
         let average = SLOT_NUM / master_num;
         let remainder = SLOT_NUM - average * master_num;
 
@@ -617,54 +623,71 @@ impl MetaStore {
         for (src_chunk_index, src_chunk) in cluster.chunks.iter_mut().enumerate() {
             for (src_chunk_part, slot_range) in src_chunk.stable_slots.iter_mut().enumerate() {
                 if let Some(slot_range) = slot_range {
-                    let r = if remainder.checked_sub(1).is_some() {
-                        1
-                    } else {
-                        0
-                    };
+                    while curr_dst_master_index != dst_master_num {
+                        let src_master_index = src_chunk_index * 2 + src_chunk_part;
+                        let src_r = (src_master_index < remainder) as usize; // true will be 1, false will be 0
+                        let dst_master_index = src_master_num + curr_dst_master_index;
+                        let dst_r = (dst_master_index < remainder) as usize; // true will be 1, false will be 0
+                        let src_final_num = average + src_r;
+                        let dst_final_num = average + dst_r;
 
-                    while curr_dst_master_index != dst_master_num || curr_slots_num < average {
-                        if slot_range.get_range_list().get_slots_num() <= average + r {
+                        if slot_range.get_range_list().get_slots_num() <= src_final_num {
                             break;
                         }
-                        let need_num = average - curr_slots_num;
-                        if let Some(num) = slot_range
+
+                        let need_num = dst_final_num - curr_slots_num;
+                        let available_num =
+                            slot_range.get_range_list().get_slots_num() - src_final_num;
+                        let remove_num = min(need_num, available_num);
+                        let num = slot_range
                             .get_range_list()
                             .get_ranges()
                             .last()
-                            .map(|r| r.end() - r.start())
+                            .map(|r| r.end() - r.start() + 1)
+                            .expect("remove_slots_from_src: slots > average + src_r >= 0");
+
+                        if remove_num >= num {
+                            let range = slot_range
+                                .get_mut_range_list()
+                                .get_mut_ranges()
+                                .pop()
+                                .expect("remove_slots_from_src: need_num >= num");
+                            curr_dst_slots.push(range);
+                            curr_slots_num += num;
+                        } else {
+                            let range = slot_range
+                                .get_mut_range_list()
+                                .get_mut_ranges()
+                                .last_mut()
+                                .expect("remove_slots_from_src");
+                            let end = range.end();
+                            let start = end - remove_num + 1;
+                            *range.end_mut() -= remove_num;
+                            curr_dst_slots.push(Range(start, end));
+                            curr_slots_num += remove_num;
+                        }
+
+                        // reset current state
+                        if curr_slots_num >= dst_final_num
+                            || slot_range.get_range_list().get_slots_num() <= src_final_num
                         {
-                            if need_num >= num {
-                                if let Some(range) =
-                                    slot_range.get_mut_range_list().get_mut_ranges().pop()
-                                {
-                                    curr_dst_slots.push(range);
-                                    curr_slots_num += num;
-                                }
-                            } else if let Some(range) =
-                                slot_range.get_mut_range_list().get_mut_ranges().last_mut()
-                            {
-                                let end = range.end();
-                                let start = end - need_num + 1;
-                                *range.end_mut() -= need_num;
-                                curr_dst_slots.push(Range(start, end));
-                                curr_slots_num += need_num;
-                            }
-                            // reset current state
-                            if curr_slots_num >= average {
-                                migration_slots.push(MigrationSlots {
-                                    meta: MigrationMetaStore {
-                                        epoch,
-                                        src_chunk_index,
-                                        src_chunk_part,
-                                        dst_chunk_index: src_chunk_num
-                                            + (curr_dst_master_index / 2),
-                                        dst_chunk_part: curr_dst_master_index % 2,
-                                    },
-                                    ranges: curr_dst_slots.drain(..).collect(),
-                                });
+                            // assert curr_dst_slots.is_not_empty()
+                            migration_slots.push(MigrationSlots {
+                                meta: MigrationMetaStore {
+                                    epoch,
+                                    src_chunk_index,
+                                    src_chunk_part,
+                                    dst_chunk_index: src_chunk_num + (curr_dst_master_index / 2),
+                                    dst_chunk_part: curr_dst_master_index % 2,
+                                },
+                                ranges: curr_dst_slots.drain(..).collect(),
+                            });
+                            if curr_slots_num >= dst_final_num {
                                 curr_dst_master_index += 1;
                                 curr_slots_num = 0;
+                            }
+                            if slot_range.get_range_list().get_slots_num() <= src_final_num {
+                                break;
                             }
                         }
                     }
@@ -885,7 +908,12 @@ impl MetaStore {
                 link_table
                     .entry(first_host.clone())
                     .or_insert_with(HashMap::new)
-                    .entry(second_host)
+                    .entry(second_host.clone())
+                    .or_insert(0);
+                link_table
+                    .entry(second_host.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(first_host.clone())
                     .or_insert(0);
             }
         }
@@ -905,9 +933,15 @@ impl MetaStore {
                     .expect("build_link_table")
                     .to_string();
                 let linked_num = link_table
-                    .entry(first_host)
+                    .entry(first_host.clone())
                     .or_insert_with(HashMap::new)
+                    .entry(second_host.clone())
+                    .or_insert(0);
+                *linked_num += 1;
+                let linked_num = link_table
                     .entry(second_host)
+                    .or_insert_with(HashMap::new)
+                    .entry(first_host)
                     .or_insert(0);
                 *linked_num += 1;
             }
@@ -961,19 +995,21 @@ impl MetaStore {
         expected_num: NonZeroUsize,
     ) -> Result<HashMap<String, Vec<ProxySlot>>, MetaStoreError> {
         let mut free_proxy_num: usize = host_proxies.values().map(|proxies| proxies.len()).sum();
+        let mut max_proxy_num = host_proxies
+            .values()
+            .map(|proxies| proxies.len())
+            .max()
+            .unwrap_or(0);
 
-        while free_proxy_num > expected_num.get() {
-            let max_proxy_num = host_proxies
-                .values()
-                .map(|proxies| proxies.len())
-                .max()
-                .unwrap_or(0);
-            for proxies in host_proxies.values_mut() {
-                if proxies.len() == max_proxy_num {
+        for proxies in host_proxies.values_mut() {
+            if proxies.len() == max_proxy_num {
+                // Only remove proxies in the host which as too many proxies.
+                while max_proxy_num * 2 > free_proxy_num {
                     proxies.pop();
                     free_proxy_num -= 1;
-                    break;
+                    max_proxy_num -= 1;
                 }
+                break;
             }
         }
 
@@ -1003,8 +1039,8 @@ impl MetaStore {
             return Err(MetaStoreError::ResourceNotBalance);
         }
 
-        let mut new_proxies = vec![];
-        while new_proxies.len() * 2 < expected_num.get() {
+        let mut new_proxy_pairs = vec![];
+        while new_proxy_pairs.len() * 2 < expected_num.get() {
             let (first_host, first_address) = {
                 let (max_host, max_proxy_host) = host_proxies
                     .iter_mut()
@@ -1052,10 +1088,10 @@ impl MetaStore {
                 .get_mut(&first_host)
                 .expect("allocate_chunk: link table") += 1;
 
-            new_proxies.push([first_address, second_address]);
+            new_proxy_pairs.push([first_address, second_address]);
         }
 
-        Ok(new_proxies)
+        Ok(new_proxy_pairs)
     }
 
     pub fn replace_failed_proxy(
@@ -1219,13 +1255,9 @@ impl Error for MetaStoreError {
 mod tests {
     use super::*;
 
-    const HOST_NUM: usize = 4;
-    const PROXY_PER_HOST: usize = 3;
-    const ALL_PROXIES: usize = HOST_NUM * PROXY_PER_HOST;
-
-    fn add_testing_proxies(store: &mut MetaStore) {
-        for host_index in 1..=HOST_NUM {
-            for i in 1..=PROXY_PER_HOST {
+    fn add_testing_proxies(store: &mut MetaStore, host_num: usize, proxy_per_host: usize) {
+        for host_index in 1..=host_num {
+            for i in 1..=proxy_per_host {
                 let proxy_address = format!("127.0.0.{}:70{:02}", host_index, i);
                 let node_addresses = [
                     format!("127.0.0.{}:60{:02}", host_index, i * 2),
@@ -1270,7 +1302,7 @@ mod tests {
     #[test]
     fn test_add_and_remove_cluster() {
         let mut store = MetaStore::default();
-        add_testing_proxies(&mut store);
+        add_testing_proxies(&mut store, 4, 3);
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
@@ -1297,6 +1329,8 @@ mod tests {
 
         let cluster = store.get_cluster_by_name(&db_name).unwrap();
         assert_eq!(cluster.get_nodes().len(), 4);
+
+        check_cluster_slots(cluster.clone(), 4);
 
         let proxies: Vec<_> = store
             .get_proxies()
@@ -1369,7 +1403,8 @@ mod tests {
     #[test]
     fn test_failures() {
         let mut store = MetaStore::default();
-        add_testing_proxies(&mut store);
+        const ALL_PROXIES: usize = 4 * 3;
+        add_testing_proxies(&mut store, 4, 3);
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES);
 
         let original_proxy_num = store.get_proxies().len();
@@ -1402,6 +1437,8 @@ mod tests {
         assert!(epoch3 < epoch4);
 
         let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        check_cluster_slots(cluster.clone(), 4);
+
         let failed_proxy_address = cluster
             .get_nodes()
             .get(0)
@@ -1470,21 +1507,49 @@ mod tests {
         assert!(epoch6 < epoch7);
     }
 
-    fn test_migration_helper(start_node_num: usize, added_node_num: usize) {
-        let mut store = MetaStore::default();
-        add_testing_proxies(&mut store);
-        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES);
+    const DB_NAME: &'static str = "test_db";
 
-        let db_name = "test_db".to_string();
+    fn test_migration_helper(
+        host_num: usize,
+        proxy_per_host: usize,
+        start_node_num: usize,
+        added_node_num: usize,
+    ) {
+        let mut store = init_migration_test_store(host_num, proxy_per_host, start_node_num);
+        test_scaling(&mut store, host_num * proxy_per_host, added_node_num);
+    }
+
+    fn init_migration_test_store(
+        host_num: usize,
+        proxy_per_host: usize,
+        start_node_num: usize,
+    ) -> MetaStore {
+        let mut store = MetaStore::default();
+        let all_proxy_num = host_num * proxy_per_host;
+        add_testing_proxies(&mut store, host_num, proxy_per_host);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let db_name = DB_NAME.to_string();
         store.add_cluster(db_name.clone(), start_node_num).unwrap();
         let cluster = store.get_cluster_by_name(&db_name).unwrap();
         assert_eq!(cluster.get_nodes().len(), start_node_num);
         assert_eq!(
             store.get_free_proxies().len(),
-            ALL_PROXIES - start_node_num / 2
+            all_proxy_num - start_node_num / 2
         );
-        let epoch1 = store.get_global_epoch();
 
+        store
+    }
+
+    fn test_scaling(store: &mut MetaStore, all_proxy_num: usize, added_node_num: usize) {
+        let db_name = DB_NAME.to_string();
+        let start_node_num = store
+            .get_cluster_by_name(&db_name)
+            .unwrap()
+            .get_nodes()
+            .len();
+
+        let epoch1 = store.get_global_epoch();
         let nodes = store
             .auto_add_nodes(db_name.clone(), Some(added_node_num))
             .unwrap();
@@ -1495,7 +1560,7 @@ mod tests {
         assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
         assert_eq!(
             store.get_free_proxies().len(),
-            ALL_PROXIES - start_node_num / 2 - added_node_num / 2
+            all_proxy_num - start_node_num / 2 - added_node_num / 2
         );
 
         store.migrate_slots(db_name.clone()).unwrap();
@@ -1510,7 +1575,8 @@ mod tests {
                     continue;
                 }
                 let slots = node.get_slots();
-                assert!(slots.len() >= 2);
+                // Some src slots might not need to transfer.
+                assert!(slots.len() >= 1);
                 assert!(slots[0].tag.is_stable());
                 for slot_range in slots.iter().skip(1) {
                     assert!(slot_range.tag.is_migrating());
@@ -1547,20 +1613,92 @@ mod tests {
         }
 
         let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        check_cluster_slots(cluster, start_node_num + added_node_num);
+    }
+
+    fn check_cluster_slots(cluster: Cluster, node_num: usize) {
+        assert_eq!(cluster.get_nodes().len(), node_num);
+        let master_num = cluster.get_nodes().len() / 2;
+        let average_slots_num = SLOT_NUM / master_num;
+
+        let mut visited = Vec::with_capacity(SLOT_NUM);
+        for _ in 0..SLOT_NUM {
+            visited.push(false);
+        }
+
         for node in cluster.get_nodes() {
             let slots = node.get_slots();
             if node.get_role() == Role::Master {
                 assert_eq!(slots.len(), 1);
                 assert_eq!(slots[0].tag, SlotRangeTag::None);
+                let slots_num = slots[0].get_range_list().get_slots_num();
+                let delta = slots_num.checked_sub(average_slots_num).unwrap();
+                assert!(delta <= 1);
+
+                for range in slots[0].get_range_list().get_ranges().iter() {
+                    for i in range.start()..=range.end() {
+                        assert!(!visited.get(i).unwrap());
+                        *visited.get_mut(i).unwrap() = true;
+                    }
+                }
             } else {
                 assert!(slots.is_empty());
             }
+        }
+        for v in visited.iter() {
+            assert!(*v);
+        }
+
+        let mut last_node_slot_num = usize::max_value();
+        for node in cluster.get_nodes() {
+            if node.get_role() == Role::Replica {
+                continue;
+            }
+            let curr_num = node
+                .get_slots()
+                .iter()
+                .map(|slots| slots.get_range_list().get_slots_num())
+                .sum();
+            assert!(last_node_slot_num >= curr_num);
+            last_node_slot_num = curr_num;
         }
     }
 
     #[test]
     fn test_migration() {
-        test_migration_helper(4, 4);
-        test_migration_helper(4, 8);
+        // Can increase them to cover more cases.
+        const MAX_HOST_NUM: usize = 6;
+        const MAX_PROXY_PER_HOST: usize = 6;
+
+        for host_num in 2..=MAX_HOST_NUM {
+            for proxy_per_host in 1..=MAX_PROXY_PER_HOST {
+                let chunk_num = host_num * proxy_per_host / 2;
+                for i in 1..chunk_num {
+                    let added_chunk_num = chunk_num - i;
+                    if added_chunk_num == 0 {
+                        continue;
+                    }
+                    for j in 1..=added_chunk_num {
+                        assert!(i + j <= chunk_num);
+                        // println!("{} {} {} {}", host_num, proxy_per_host, 4*i, 4*j);
+                        test_migration_helper(host_num, proxy_per_host, 4 * i, 4 * j);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_multiple_migration() {
+        let host_num = 4;
+        let proxy_per_host = 3;
+        let start_node_num = 4;
+        let added_node_num = 4;
+        let mut store = init_migration_test_store(host_num, proxy_per_host, start_node_num);
+        test_scaling(&mut store, host_num * proxy_per_host, added_node_num);
+        test_scaling(&mut store, host_num * proxy_per_host, added_node_num);
+        test_scaling(&mut store, host_num * proxy_per_host, added_node_num);
+        test_scaling(&mut store, host_num * proxy_per_host, added_node_num);
+        test_scaling(&mut store, host_num * proxy_per_host, added_node_num);
     }
 }

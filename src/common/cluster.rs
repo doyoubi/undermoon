@@ -235,7 +235,7 @@ impl RangeList {
     pub fn get_slots_num(&self) -> usize {
         self.get_ranges()
             .iter()
-            .map(|range| range.end() - range.start())
+            .map(|range| range.end() - range.start() + 1)
             .sum()
     }
 }
