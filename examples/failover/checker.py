@@ -78,14 +78,14 @@ def send_config(address, slots_config, nodes_config):
 
     setdb = ['UMCTL', 'SETDB', '1', 'FORCE']
     for start, end in slots_config[address]:
-        setdb.extend([DB_NAME, nodes_config[address], '{}-{}'.format(start, end)])
+        setdb.extend([DB_NAME, nodes_config[address], '1', '{}-{}'.format(start, end)])
 
     setdb.append('PEER')
     for node, slots in slots_config.items():
         if node == address:
             continue
         for start, end in slots:
-            setdb.extend([DB_NAME, node, '{}-{}'.format(start, end)])
+            setdb.extend([DB_NAME, node, '1', '{}-{}'.format(start, end)])
 
     logger.info('sending setdb: %s', setdb)
     client.execute_command(*setdb)

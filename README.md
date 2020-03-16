@@ -60,8 +60,7 @@ makes easier maintenance of both small and large, just a few and a great amount 
 
 ##### Why server-side proxy?
 A server-side proxy is able to migrate the data and scale in a super fast way
-by using the `Redis Replication Protocol`
-and make it possible to have a better control of full sync in replication.
+by using some customized migration protocols.
 
 ## Quick Tour Examples
 Requirements:
@@ -190,7 +189,7 @@ This is where the `Coordinator` comes in.
 Undermoon also provides a `Coordinator` to do something similar to the `checker.py` above in example (3).
 It will keep checking the server-side proxies and do failover.
 However, `Coordinator` itself does not store any data. It is a stateless service backed by a HTTP broker maintaining the meta data.
-You can implement this HTTP broker yourself and there's a [Golang implementation](https://github.com/doyoubi/overmoon).
+You can implement this HTTP broker yourself and there's a [Golang implementation](https://github.com/doyoubi/overmoon) working in progress.
 
 ![architecture](docs/architecture.svg)
 
@@ -276,26 +275,6 @@ Sets the replication metadata to server-side proxies. This API supports multiple
 Refer to [HTTP API documentation](./docs/broker_http_api.md).
 
 ## TODO
-- ~~Basic proxy implementation~~ (done)
-- ~~Multiple backend connections~~ (done)
-- ~~Slot map and cluster map~~ (done)
-- ~~Implement AUTH command to select database~~ (done)
-- ~~Implement meta data manipulation api~~ (done)
-- ~~Basic coordinator implementation~~ (done)
-- ~~Support slot migration via replication~~ (done)
-- ~~Optimize RESP parsing~~ (done)
-- ~~Implement CLUSTER SLOTS~~ (done)
-- ~~Implement commands to get proxy meta~~ (done)
-- ~~Track spawned futures~~ (done)
-- ~~Simple script to push configuration to proxy for demonstration~~ (done)
-- ~~Batch write operations with interval flushing~~ (done)
-- ~~Add configuration~~ (done)
 - Limit running commands, connections
-- ~~Slow log~~ (done)
 - Statistics
-- ~~Support multi-key commands~~ (done)
-- ~~Support dynamic configuration by CONFIG command~~ (done)
-- ~~Implement a simple rust HTTP broker before we have the Golang broker based on etcd.~~ (done)
 - Recover peer meta after reboot to support redirection.
-- ~~Syscall batching~~ (done)
-- ~~String Compression~~ (done)
