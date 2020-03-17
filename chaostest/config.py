@@ -14,8 +14,8 @@ DOCKER_COMPOSE_CONFIG = {
     'redis_ports': list(range(REDIS_PORT_RANGE_START, REDIS_PORT_RANGE_END)),
     'server_proxy_ports': list(range(SERVER_PROXY_RANGE_START, SERVER_PROXY_RANGE_END)),
     'coordinator_num': COORDINATOR_NUM,
-    'overmoon_port': 7799,
-    'overmoon_address': 'overmoon:7799',
+    'broker_port': 7799,
+    'broker_address': 'broker:7799',
     'etcd_port': 2379,
     'pumba_commands': {
         'kill': "--random --interval 60s kill 're2:(server_proxy|coordinator|overmoon).*'",

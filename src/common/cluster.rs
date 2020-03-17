@@ -679,6 +679,10 @@ impl Cluster {
             .iter_mut()
             .find(|node| node.get_address() == node_address)
     }
+
+    pub fn get_config(&self) -> ClusterConfig {
+        self.config.clone()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

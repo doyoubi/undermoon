@@ -10,18 +10,16 @@ use std::sync::Arc;
 use undermoon::broker::service::{configure_app, MemBrokerConfig, MemBrokerService};
 
 fn gen_conf() -> MemBrokerConfig {
-    let conf_file_path = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "mem-broker.toml".to_string());
-
     let mut s = config::Config::new();
-    s.merge(config::File::with_name(&conf_file_path))
-        .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
-    // e.g. UNDERMOON_ADDRESS='127.0.0.1:5299'
+    if let Some(conf_file_path) = env::args().nth(1) {
+        s.merge(config::File::with_name(&conf_file_path))
+            .map(|_| ())
+            .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
+    }
+    // e.g. UNDERMOON_ADDRESS='127.0.0.1:7799'
     s.merge(config::Environment::with_prefix("undermoon"))
         .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read address from env vars {:?}", e));
+        .unwrap_or_else(|e| warn!("failed to read config from env vars {:?}", e));
 
     MemBrokerConfig {
         address: s
@@ -41,10 +39,10 @@ async fn main() -> std::io::Result<()> {
 
     let service = Arc::new(MemBrokerService::new(config));
     HttpServer::new(move || {
+        let service = service.clone();
         App::new()
-            .app_data(service.clone())
-            .configure(configure_app)
             .wrap(middleware::Logger::default())
+            .configure(|cfg| configure_app(cfg, service.clone()))
     })
     .bind(&address)?
     .keep_alive(300)

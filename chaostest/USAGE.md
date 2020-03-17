@@ -12,12 +12,12 @@ pip install -r chaostest/requirements.txt
 
 #### (2) Generate docker-compose.yaml
 ```
-python chaostest/render_compose.py
+python chaostest/render_compose.py [mem_broker|overmoon] [enable_failure]
 ```
 
 #### (3) Build Docker Images
 
-Build `overmoon`:
+Build `overmoon` the if chosen broker is `overmoon` in step (2):
 ```
 git clone https://github.com/doyoubi/overmoon
 make build-docker

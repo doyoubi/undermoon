@@ -28,7 +28,7 @@ coord:
 	RUST_LOG=undermoon=debug,coordinator=debug target/debug/coordinator conf/coordinator.toml
 
 broker:
-	RUST_LOG=undermoon=debug,mem_broker=debug target/debug/mem_broker conf/mem-broker.toml
+	RUST_LOG=actix_web=debug,undermoon=debug,mem_broker=debug target/debug/mem_broker conf/mem-broker.toml
 
 flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy conf/server-proxy.toml
@@ -79,11 +79,11 @@ docker-overmoon:
 	docker-compose -f examples/docker-compose-overmoon.yml up
 
 start-func-test:
-	python chaostest/render_compose.py
+	python chaostest/render_compose.py mem_broker
 	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
 
 start-chaos:
-	python chaostest/render_compose.py enable_failure
+	python chaostest/render_compose.py mem_broker enable_failure
 	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
 
 stop-chaos:

@@ -29,6 +29,9 @@ class HttpClient:
     def delete(self, path):
         return self.session.delete('{}{}'.format(self.endpoint, path))
 
+    def patch(self, path):
+        return self.session.patch('{}{}'.format(self.endpoint, path))
+
 
 class DockerHttpClient:
     def __init__(self, http_client, api_version):
@@ -139,7 +142,7 @@ class OvermoonClient:
         logger.error('OVERMOON_ERROR: failed to delete cluster: {} {} {}', cluster_name, r.status_code, r.text)
 
     def add_nodes(self, cluster_name):
-        r = self.client.put('/api/clusters/nodes/{}'.format(cluster_name))
+        r = self.client.patch('/api/clusters/nodes/{}'.format(cluster_name))
         if r.status_code == 200:
             logger.info('added nodes to cluster {}', cluster_name)
             return

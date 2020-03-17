@@ -6,7 +6,6 @@ from datetime import datetime
 from loguru import logger
 
 from redis import StrictRedis
-from rediscluster import StrictRedisCluster
 
 import config
 from utils import OvermoonClient, ServerProxy, OVERMOON_ENDPOINT, RedisClusterClient

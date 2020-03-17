@@ -7,11 +7,11 @@ use crate::coordinator::http_meta_broker::{
 use actix_http::ResponseBuilder;
 use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
 use chrono;
-use std::error::Error;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-pub fn configure_app(cfg: &mut web::ServiceConfig) {
-    cfg.service(
+pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
+    cfg.data(service).service(
         web::scope("/api")
             .route("/version", web::get().to(get_version))
             .route("/metadata", web::get().to(get_all_metadata))
@@ -27,11 +27,11 @@ pub fn configure_app(cfg: &mut web::ServiceConfig) {
                 "/proxies/meta/{address}",
                 web::get().to(get_host_by_address),
             )
+            .route("/failures", web::get().to(get_failures))
             .route(
                 "/failures/{server_proxy_address}/{reporter_id}",
                 web::post().to(add_failure),
             )
-            .route("/failures", web::get().to(get_failures))
             .route(
                 "/proxies/failover/{address}",
                 web::post().to(replace_failed_node),
@@ -43,15 +43,16 @@ pub fn configure_app(cfg: &mut web::ServiceConfig) {
             .route("/clusters/meta/{cluster_name}", web::delete().to(remove_cluster))
             .route(
                 "/clusters/nodes/{cluster_name}",
-                web::post().to(auto_add_nodes),
+                web::patch().to(auto_add_nodes),
             )
-            // /clusters/migrations/:clusterName
+            .route("/clusters/free_nodes/{cluster_name}", web::delete().to(audo_delete_free_nodes))
             .route(
                 "/clusters/migrations/{cluster_name}",
                 web::post().to(migrate_slots),
             )
+            .route("clusters/config/{cluster_name}", web::patch().to(change_config))
 
-            .route("/proxies/nodes", web::put().to(add_host))
+            .route("/proxies/nodes", web::post().to(add_host))
             .route(
                 "/proxies/nodes/{proxy_address}",
                 web::delete().to(remove_proxy),
@@ -73,6 +74,7 @@ pub struct MemBrokerService {
 
 impl MemBrokerService {
     pub fn new(config: MemBrokerConfig) -> Self {
+        info!("config: {:?}", config);
         Self {
             config,
             store: Arc::new(RwLock::new(MetaStore::default())),
@@ -144,6 +146,24 @@ impl MemBrokerService {
             .write()
             .expect("MemBrokerService::auto_add_node")
             .auto_add_nodes(cluster_name, None)
+    }
+
+    pub fn audo_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::audo_delete_free_nodes")
+            .audo_delete_free_nodes(cluster_name)
+    }
+
+    pub fn change_config(
+        &self,
+        cluster_name: String,
+        config: HashMap<String, String>,
+    ) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::change_config")
+            .change_config(cluster_name, config)
     }
 
     pub fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
@@ -278,6 +298,26 @@ async fn auto_add_nodes(
     state.auto_add_node(cluster_name).map(web::Json)
 }
 
+async fn audo_delete_free_nodes(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    let cluster_name = path.into_inner().0;
+    state.audo_delete_free_nodes(cluster_name).map(|()| "")
+}
+
+async fn change_config(
+    (path, config, state): (
+        web::Path<(String,)>,
+        web::Json<HashMap<String, String>>,
+        ServiceState,
+    ),
+) -> Result<&'static str, MetaStoreError> {
+    let cluster_name = path.into_inner().0;
+    state
+        .change_config(cluster_name, config.into_inner())
+        .map(|()| "")
+}
+
 async fn remove_proxy(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
@@ -314,12 +354,28 @@ async fn replace_failed_node(
 impl error::ResponseError for MetaStoreError {
     fn status_code(&self) -> http::StatusCode {
         match self {
+            MetaStoreError::InUse => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::NotInUse => http::StatusCode::BAD_REQUEST,
             MetaStoreError::NoAvailableResource => http::StatusCode::CONFLICT,
-            _ => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::ResourceNotBalance => http::StatusCode::CONFLICT,
+            MetaStoreError::AlreadyExisted => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::ClusterNotFound => http::StatusCode::NOT_FOUND,
+            MetaStoreError::FreeNodeNotFound => http::StatusCode::NOT_FOUND,
+            MetaStoreError::HostNotFound => http::StatusCode::NOT_FOUND,
+            MetaStoreError::InvalidNodeNum => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::InvalidClusterName => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::InvalidMigrationTask => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::InvalidProxyAddress => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::MigrationTaskNotFound => http::StatusCode::NOT_FOUND,
+            MetaStoreError::OnlySupportOneCluster => http::StatusCode::CONFLICT,
+            MetaStoreError::MigrationRunning => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::NotSupported => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
         }
     }
 
     fn error_response(&self) -> HttpResponse {
-        ResponseBuilder::new(self.status_code()).body(self.description().to_string())
+        ResponseBuilder::new(self.status_code()).body(format!("{:?}", self))
     }
 }
