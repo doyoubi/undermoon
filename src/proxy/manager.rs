@@ -177,6 +177,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
             db_meta.get_local(),
             self.blocking_map.clone(),
         );
+
         let left_slots_after_change = old_meta_map
             .migration_map
             .get_left_slots_after_change(&migration_map, db_meta.get_local());
@@ -186,6 +187,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
                 db_meta.get_local(),
                 left_slots_after_change,
             );
+
         self.meta_map.store(Arc::new(MetaMap {
             db_map,
             migration_map,

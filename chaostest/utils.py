@@ -29,8 +29,8 @@ class HttpClient:
     def delete(self, path):
         return self.session.delete('{}{}'.format(self.endpoint, path))
 
-    def patch(self, path):
-        return self.session.patch('{}{}'.format(self.endpoint, path))
+    def patch(self, path, payload=None):
+        return self.session.patch('{}{}'.format(self.endpoint, path), json=payload)
 
 
 class DockerHttpClient:
@@ -101,10 +101,9 @@ class OvermoonClient:
 
     def create_cluster(self, cluster_name, node_number):
         payload = {
-            'cluster_name': cluster_name,
             'node_number': node_number,
         }
-        r = self.client.post('/api/clusters', payload)
+        r = self.client.post('/api/clusters/meta/{}'.format(cluster_name), payload)
         if r.status_code == 200:
             logger.warning('created cluster: {} {}', cluster_name, node_number)
             return
@@ -141,8 +140,11 @@ class OvermoonClient:
             return
         logger.error('OVERMOON_ERROR: failed to delete cluster: {} {} {}', cluster_name, r.status_code, r.text)
 
-    def add_nodes(self, cluster_name):
-        r = self.client.patch('/api/clusters/nodes/{}'.format(cluster_name))
+    def add_nodes(self, cluster_name, node_number):
+        payload = {
+            'node_number': node_number,
+        }
+        r = self.client.patch('/api/clusters/nodes/{}'.format(cluster_name), payload)
         if r.status_code == 200:
             logger.info('added nodes to cluster {}', cluster_name)
             return

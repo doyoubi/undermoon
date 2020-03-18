@@ -39,7 +39,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             .route("/clusters/migrations", web::put().to(commit_migration))
 
             // Additional api
-            .route("/clusters", web::post().to(add_cluster))
+            .route("/clusters/meta/{cluster_name}", web::post().to(add_cluster))
             .route("/clusters/meta/{cluster_name}", web::delete().to(remove_cluster))
             .route(
                 "/clusters/nodes/{cluster_name}",
@@ -141,11 +141,15 @@ impl MemBrokerService {
             .remove_cluster(cluster_name)
     }
 
-    pub fn auto_add_node(&self, cluster_name: String) -> Result<Vec<Node>, MetaStoreError> {
+    pub fn auto_add_node(
+        &self,
+        cluster_name: String,
+        node_num: usize,
+    ) -> Result<Vec<Node>, MetaStoreError> {
         self.store
             .write()
             .expect("MemBrokerService::auto_add_node")
-            .auto_add_nodes(cluster_name, None)
+            .auto_add_nodes(cluster_name, node_num)
     }
 
     pub fn audo_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
@@ -270,17 +274,18 @@ async fn add_host(
 
 #[derive(Deserialize, Serialize)]
 pub struct CreateClusterPayload {
-    cluster_name: String,
     node_number: usize,
 }
 
 async fn add_cluster(
-    (payload, state): (web::Json<CreateClusterPayload>, ServiceState),
+    (path, payload, state): (
+        web::Path<(String,)>,
+        web::Json<CreateClusterPayload>,
+        ServiceState,
+    ),
 ) -> Result<&'static str, MetaStoreError> {
-    let CreateClusterPayload {
-        cluster_name,
-        node_number,
-    } = payload.into_inner();
+    let cluster_name = path.into_inner().0;
+    let CreateClusterPayload { node_number } = payload.into_inner();
     state.add_cluster(cluster_name, node_number).map(|()| "")
 }
 
@@ -291,11 +296,21 @@ async fn remove_cluster(
     state.remove_cluster(cluster_name).map(|()| "")
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct AutoAddNodesPayload {
+    node_number: usize,
+}
+
 async fn auto_add_nodes(
-    (path, state): (web::Path<(String,)>, ServiceState),
+    (path, payload, state): (
+        web::Path<(String,)>,
+        web::Json<AutoAddNodesPayload>,
+        ServiceState,
+    ),
 ) -> Result<web::Json<Vec<Node>>, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    state.auto_add_node(cluster_name).map(web::Json)
+    let node_num = payload.into_inner().node_number;
+    state.auto_add_node(cluster_name, node_num).map(web::Json)
 }
 
 async fn audo_delete_free_nodes(
@@ -361,13 +376,12 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::AlreadyExisted => http::StatusCode::BAD_REQUEST,
             MetaStoreError::ClusterNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::FreeNodeNotFound => http::StatusCode::NOT_FOUND,
-            MetaStoreError::HostNotFound => http::StatusCode::NOT_FOUND,
+            MetaStoreError::ProxyNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::InvalidNodeNum => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidClusterName => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidMigrationTask => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidProxyAddress => http::StatusCode::BAD_REQUEST,
             MetaStoreError::MigrationTaskNotFound => http::StatusCode::NOT_FOUND,
-            MetaStoreError::OnlySupportOneCluster => http::StatusCode::CONFLICT,
             MetaStoreError::MigrationRunning => http::StatusCode::BAD_REQUEST,
             MetaStoreError::NotSupported => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,

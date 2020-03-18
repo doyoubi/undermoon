@@ -34,7 +34,13 @@ impl DeleteKeysTaskMap {
                 nodes
                     .iter()
                     .map(|(address, task)| {
-                        format!("{}-{}-({})", db, address, task.slot_ranges.info())
+                        format!(
+                            "{}-{}-({})-({})",
+                            db,
+                            address,
+                            task.slot_ranges.info(),
+                            task.is_finished()
+                        )
                     })
                     .join(",")
             })

@@ -45,7 +45,7 @@ where
     redirection_sender_factory: RedirectionSenderFactory<T>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
-    task: ScanMigrationTask,
+    task: Arc<ScanMigrationTask>,
     blocking_ctrl: Arc<BC>,
     future_registry: Arc<TrackedFutureRegistry>,
 }
@@ -88,20 +88,9 @@ where
             redirection_sender_factory,
             stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
-            task,
+            task: Arc::new(task),
             blocking_ctrl,
             future_registry,
-        }
-    }
-
-    fn send_stop_signal(&self) -> Result<(), MigrationError> {
-        if let Some(sender) = self.stop_signal_sender.take(Ordering::SeqCst) {
-            sender.send(()).map_err(|()| {
-                error!("failed to send stop signal");
-                MigrationError::Canceled
-            })
-        } else {
-            Err(MigrationError::AlreadyEnded)
         }
     }
 
@@ -237,7 +226,7 @@ where
             });
 
         let desc = format!(
-            "scan_migrating: db_name={} meta={:?} slot_range={}",
+            "scan_migrating: db_name={} meta={:?} slot_range=({})",
             self.db_name,
             self.meta,
             self.slot_range.get_range_list().to_strings().join(" "),
@@ -384,12 +373,6 @@ where
         Box::pin(fut)
     }
 
-    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
-        self.task.stop();
-        let r = self.send_stop_signal();
-        Box::pin(async { r })
-    }
-
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>> {
         let state = self.state.get_state();
         match state {
@@ -421,16 +404,38 @@ where
     fn contains_slot(&self, slot: usize) -> bool {
         self.range_map.contains_slot(slot)
     }
+
+    fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>> {
+        let handle = MigratingTaskHandle {
+            task: self.task.clone(),
+            meta: self.meta.clone(),
+            stop_signal_sender: Some(*self.stop_signal_sender.take(Ordering::SeqCst)?),
+        };
+        Some(Box::new(handle))
+    }
 }
 
-impl<RCF, T, BC> Drop for RedisScanMigratingTask<RCF, T, BC>
-where
-    RCF: RedisClientFactory,
-    T: CmdTask,
-    BC: TaskBlockingController,
-{
+pub struct MigratingTaskHandle {
+    task: Arc<ScanMigrationTask>,
+    meta: MigrationMeta,
+    stop_signal_sender: Option<oneshot::Sender<()>>,
+}
+
+impl MigratingTaskHandle {
+    fn send_stop_signal(&mut self) {
+        info!("stop migrating task: {:?}", self.meta);
+        self.task.stop();
+        if let Some(sender) = self.stop_signal_sender.take() {
+            if sender.send(()).is_err() {
+                warn!("failed to send stop signal");
+            }
+        }
+    }
+}
+
+impl Drop for MigratingTaskHandle {
     fn drop(&mut self) {
-        self.send_stop_signal().unwrap_or(())
+        self.send_stop_signal()
     }
 }
 
@@ -490,29 +495,6 @@ where
             _cmd_task_factory: cmd_task_factory,
         }
     }
-
-    fn send_stop_signal(&self) -> Result<(), MigrationError> {
-        if let Some(sender) = self.stop_signal_sender.take(Ordering::SeqCst) {
-            sender.send(()).map_err(|()| {
-                error!("failed to send stop signal");
-                MigrationError::Canceled
-            })
-        } else {
-            Err(MigrationError::AlreadyEnded)
-        }
-    }
-}
-
-impl<RCF, TSF, CTF> Drop for RedisScanImportingTask<RCF, TSF, CTF>
-where
-    RCF: RedisClientFactory,
-    TSF: CmdTaskSenderFactory + ThreadSafe,
-    CTF: CmdTaskFactory + ThreadSafe,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
-{
-    fn drop(&mut self) {
-        self.send_stop_signal().unwrap_or(())
-    }
 }
 
 impl<RCF, TSF, CTF> ImportingTask for RedisScanImportingTask<RCF, TSF, CTF>
@@ -555,11 +537,6 @@ where
         Box::pin(fut)
     }
 
-    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
-        let r = self.send_stop_signal();
-        Box::pin(async { r })
-    }
-
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>> {
         if self.state.get_state() == MigrationState::PreCheck {
             let redirection_sender = self
@@ -582,6 +559,14 @@ where
         self.range_map.contains_slot(slot)
     }
 
+    fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>> {
+        let handle = ImportingTaskHandle {
+            meta: self.meta.clone(),
+            stop_signal_sender: Some(*self.stop_signal_sender.take(Ordering::SeqCst)?),
+        };
+        Some(Box::new(handle))
+    }
+
     fn handle_switch(
         &self,
         switch_arg: SwitchArg,
@@ -597,5 +582,27 @@ where
             MgrSubCmd::FinalSwitch => self.state.set_state(MigrationState::SwitchCommitted),
         }
         Ok(())
+    }
+}
+
+pub struct ImportingTaskHandle {
+    meta: MigrationMeta,
+    stop_signal_sender: Option<oneshot::Sender<()>>,
+}
+
+impl ImportingTaskHandle {
+    fn send_stop_signal(&mut self) {
+        info!("stop importing task: {:?}", self.meta);
+        if let Some(sender) = self.stop_signal_sender.take() {
+            if sender.send(()).is_err() {
+                warn!("failed to send stop signal");
+            }
+        }
+    }
+}
+
+impl Drop for ImportingTaskHandle {
+    fn drop(&mut self) {
+        self.send_stop_signal()
     }
 }

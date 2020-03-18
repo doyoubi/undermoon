@@ -406,3 +406,9 @@ impl ScanMigrationTask {
         Ok((slot_ranges, entries))
     }
 }
+
+impl Drop for ScanMigrationTask {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}

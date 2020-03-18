@@ -22,7 +22,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 type TaskRecord<T> = Either<Arc<dyn MigratingTask<Task = T>>, Arc<dyn ImportingTask<Task = T>>>;
-type DBTask<T> = HashMap<MigrationTaskMeta, TaskRecord<T>>;
+struct MgrTask<T: CmdTask> {
+    task: TaskRecord<T>,
+    _stop_handle: Option<Box<dyn Drop + Send + Sync + 'static>>,
+}
+type DBTask<T> = HashMap<MigrationTaskMeta, Arc<MgrTask<T>>>;
 type TaskMap<T> = HashMap<DBName, DBTask<T>>;
 type NewMigrationTuple<T> = (MigrationMap<T>, Vec<NewTask<T>>);
 
@@ -112,13 +116,12 @@ where
                         range_list.to_strings().join(" "),
                     );
                     let desc = format!(
-                        "migration: tag=migrating db_name={}, epoch={}, slot_range={}",
+                        "migration: tag=migrating db_name={}, epoch={}, slot_range=({})",
                         db_name,
                         epoch,
                         range_list.to_strings().join(" "),
                     );
 
-                    let migrating_task = migrating_task.clone();
                     let fut = async move {
                         if let Err(err) = migrating_task.start().await {
                             error!(
@@ -136,19 +139,18 @@ where
                 }
                 Either::Right(importing_task) => {
                     info!(
-                        "spawn slot importing replica {} {} {}",
+                        "spawn slot importing task {} {} {}",
                         db_name,
                         epoch,
                         range_list.to_strings().join(" "),
                     );
                     let desc = format!(
-                        "migration: tag=importing db_name={}, epoch={}, slot_range={}",
+                        "migration: tag=importing db_name={}, epoch={}, slot_range=({})",
                         db_name,
                         epoch,
                         range_list.to_strings().join(" "),
                     );
 
-                    let importing_task = importing_task.clone();
                     let fut = async move {
                         if let Err(err) = importing_task.start().await {
                             error!(
@@ -292,8 +294,8 @@ where
 
                 let slot = get_slot(key);
 
-                for record in tasks.values() {
-                    match &record {
+                for mgr_task in tasks.values() {
+                    match &mgr_task.task {
                         Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
                             return migrating_task.send(cmd_task)
                         }
@@ -390,14 +392,14 @@ where
                                 db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(Either::Left(migrating_task)) = old_task_map
+                            if let Some(migrating_task) = old_task_map
                                 .get(db_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
                                 let tasks = migration_dbs
                                     .entry(db_name.clone())
                                     .or_insert_with(HashMap::new);
-                                tasks.insert(migration_meta, Either::Left(migrating_task.clone()));
+                                tasks.insert(migration_meta, migrating_task.clone());
                             }
                         }
                         SlotRangeTag::Importing(ref _meta) => {
@@ -405,14 +407,14 @@ where
                                 db_name: db_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(Either::Right(importing_task)) = old_task_map
+                            if let Some(importing_task) = old_task_map
                                 .get(db_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
                                 let tasks = migration_dbs
                                     .entry(db_name.clone())
                                     .or_insert_with(HashMap::new);
-                                tasks.insert(migration_meta, Either::Right(importing_task.clone()));
+                                tasks.insert(migration_meta, importing_task.clone());
                             }
                         }
                         SlotRangeTag::None => continue,
@@ -462,7 +464,12 @@ where
                             let tasks = migration_dbs
                                 .entry(db_name.clone())
                                 .or_insert_with(HashMap::new);
-                            tasks.insert(migration_meta, Either::Left(task));
+                            let stop_handle = task.get_stop_handle();
+                            let mgr_task = MgrTask {
+                                task: Either::Left(task),
+                                _stop_handle: stop_handle,
+                            };
+                            tasks.insert(migration_meta, Arc::new(mgr_task));
                         }
                         SlotRangeTag::Importing(ref meta) => {
                             let epoch = meta.epoch;
@@ -496,7 +503,12 @@ where
                             let tasks = migration_dbs
                                 .entry(db_name.clone())
                                 .or_insert_with(HashMap::new);
-                            tasks.insert(migration_meta, Either::Right(task));
+                            let stop_handle = task.get_stop_handle();
+                            let mgr_task = MgrTask {
+                                task: Either::Right(task),
+                                _stop_handle: stop_handle,
+                            };
+                            tasks.insert(migration_meta, Arc::new(mgr_task));
                         }
                         SlotRangeTag::None => continue,
                     }
@@ -527,9 +539,9 @@ where
                 tasks.len()
             );
 
-            if let Some(record) = tasks.get(&switch_arg.meta) {
+            if let Some(mgr_task) = tasks.get(&switch_arg.meta) {
                 debug!("found record for db {}", switch_arg.meta.db_name);
-                match record {
+                match &mgr_task.task {
                     Either::Left(_migrating_task) => {
                         error!(
                             "Received switch request when migrating {:?}",
@@ -556,8 +568,8 @@ where
         let mut metadata = vec![];
         {
             for (_db_name, tasks) in self.task_map.iter() {
-                for (meta, task) in tasks.iter() {
-                    let state = match task {
+                for (meta, mgr_task) in tasks.iter() {
+                    let state = match &mgr_task.task {
                         Either::Left(migrating_task) => migrating_task.get_state(),
                         Either::Right(importing_task) => importing_task.get_state(),
                     };
@@ -573,8 +585,8 @@ where
     pub fn get_states(&self, db_name: &DBName) -> HashMap<RangeList, MigrationState> {
         let mut m = HashMap::new();
         if let Some(tasks) = self.task_map.get(db_name) {
-            for (meta, task) in tasks.iter() {
-                let state = match task {
+            for (meta, mgr_task) in tasks.iter() {
+                let state = match &mgr_task.task {
                     Either::Left(migrating_task) => migrating_task.get_state(),
                     Either::Right(importing_task) => importing_task.get_state(),
                 };
