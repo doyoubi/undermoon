@@ -153,7 +153,7 @@ where
 
                     let fut = async move {
                         if let Err(err) = importing_task.start().await {
-                            error!(
+                            warn!(
                                 "replica slot task {} {} exit {:?} slot_range {}",
                                 db_name,
                                 epoch,

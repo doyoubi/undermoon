@@ -148,10 +148,7 @@ class OvermoonClient:
         if r.status_code == 200:
             logger.info('added nodes to cluster {}', cluster_name)
             return
-        if r.status_code in (404, 409):
-            return
-        if r.status_code == 400:
-            logger.warning('failed to add nodes: {}', r.text)
+        if r.status_code in (400, 404, 409):
             return
         logger.error('OVERMOON_ERROR: failed to add nodes: {} {} {}', cluster_name, r.status_code, r.text)
 
@@ -160,7 +157,7 @@ class OvermoonClient:
         if r.status_code == 200:
             logger.info('OVERMOON removed unused nodes')
             return True
-        if r.status_code == 404:
+        if r.status_code in (404, 409):
             return False
         if r.status_code == 400:
             # logger.warning('OVERMOON failed to remove unused nodes: {} {} {}', cluster_name, r.status_code, r.text)
@@ -174,7 +171,7 @@ class OvermoonClient:
         if r.status_code == 200:
             logger.warning('start migration: {}', cluster_name)
             return
-        if r.status_code in (400, 404):
+        if r.status_code in (400, 404, 409):
             return
 
         logger.error('OVERMOON_ERROR: failed to start migration: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))

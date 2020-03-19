@@ -130,6 +130,94 @@ impl ClusterStore {
     fn set_epoch(&mut self, new_epoch: u64) {
         self.epoch = new_epoch;
     }
+
+    // LimitMigration reduces the concurrent running migration.
+    // This implementation is a bit tricky. The stored data do not allow some of shards
+    // are migrating while others not. They are all set with the migration metadata.
+    // We only reduce the migration in the query API.
+    // (1) Only the former shards finish the migration, will the later ones get started.
+    // (2) And once started, since the former one will not restart migration again,
+    // the later ones will not stop until they are done.
+    // (3) The later migration flags will be updated to server proxies with new epoch
+    // bumped by the committing of former ones.
+    fn limit_migration(&self, migration_limit: u64) -> ClusterStore {
+        if migration_limit == 0 {
+            return self.clone();
+        }
+
+        let mut chunks = vec![];
+        for chunk in self.chunks.iter() {
+            let new_chunk = ChunkStore {
+                role_position: chunk.role_position,
+                stable_slots: chunk.stable_slots.clone(),
+                migrating_slots: [vec![], vec![]],
+                proxy_addresses: chunk.proxy_addresses.clone(),
+                node_addresses: chunk.node_addresses.clone(),
+            };
+            chunks.push(new_chunk);
+        }
+        let mut migration_num = 0;
+
+        const MAX_MIGRATING_OUT: usize = 1;
+        // When migrating out, the server proxy will have very high CPU usage.
+        let mut migrating_out: HashMap<(usize, usize), usize> = HashMap::new();
+
+        for chunk in self.chunks.iter() {
+            for migrating_slots in chunk.migrating_slots.iter() {
+                for slot_range_store in migrating_slots.iter() {
+                    // The importing part will also be set by the migrating part.
+                    if !slot_range_store.is_migrating {
+                        continue;
+                    }
+
+                    let mut range_list = slot_range_store.range_list.clone();
+                    let meta = &slot_range_store.meta;
+                    let migrating_out_count = migrating_out
+                        .entry((meta.src_chunk_index, meta.src_chunk_part))
+                        .or_insert(0);
+
+                    if migration_num >= migration_limit || *migrating_out_count >= MAX_MIGRATING_OUT
+                    {
+                        let stable_slots = chunks
+                            .get_mut(meta.src_chunk_index)
+                            .and_then(|chunk| chunk.stable_slots.get_mut(meta.src_chunk_part))
+                            .expect("limit_migration")
+                            .get_or_insert_with(|| SlotRange {
+                                range_list: RangeList::new(vec![]),
+                                tag: SlotRangeTag::None,
+                            });
+                        stable_slots
+                            .get_mut_range_list()
+                            .merge_another(&mut range_list);
+                    } else {
+                        chunks
+                            .get_mut(meta.src_chunk_index)
+                            .and_then(|chunk| chunk.migrating_slots.get_mut(meta.src_chunk_part))
+                            .expect("limit_migration")
+                            .push(slot_range_store.clone());
+
+                        let mut importing_slot_range_store = slot_range_store.clone();
+                        importing_slot_range_store.is_migrating = false;
+                        chunks
+                            .get_mut(meta.dst_chunk_index)
+                            .and_then(|chunk| chunk.migrating_slots.get_mut(meta.dst_chunk_part))
+                            .expect("limit_migration")
+                            .push(importing_slot_range_store);
+
+                        migration_num += 1;
+                        *migrating_out_count += 1;
+                    }
+                }
+            }
+        }
+
+        ClusterStore {
+            epoch: self.epoch,
+            name: self.name.clone(),
+            chunks,
+            config: self.config.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -176,7 +264,17 @@ impl MetaStore {
         self.all_proxies.keys().cloned().collect()
     }
 
-    pub fn get_proxy_by_address(&self, address: &str) -> Option<Proxy> {
+    fn get_cluster_store(
+        clusters: &HashMap<DBName, ClusterStore>,
+        db_name: &DBName,
+        migration_limit: u64,
+    ) -> Option<ClusterStore> {
+        clusters
+            .get(db_name)
+            .map(|c| c.limit_migration(migration_limit))
+    }
+
+    pub fn get_proxy_by_address(&self, address: &str, migration_limit: u64) -> Option<Proxy> {
         let all_proxies = &self.all_proxies;
         let clusters = &self.clusters;
 
@@ -184,10 +282,10 @@ impl MetaStore {
         let cluster_opt = proxy_resource
             .cluster
             .as_ref()
-            .and_then(|name| clusters.get(&name));
+            .and_then(|name| Self::get_cluster_store(clusters, name, migration_limit));
 
         let cluster = match cluster_opt {
-            Some(cluster_store) => Self::cluster_store_to_cluster(cluster_store),
+            Some(cluster_store) => Self::cluster_store_to_cluster(&cluster_store),
             None => {
                 return Some(Proxy::new(
                     address.to_string(),
@@ -250,10 +348,10 @@ impl MetaStore {
         self.clusters.keys().cloned().collect()
     }
 
-    pub fn get_cluster_by_name(&self, db_name: &str) -> Option<Cluster> {
+    pub fn get_cluster_by_name(&self, db_name: &str, migration_limit: u64) -> Option<Cluster> {
         let db_name = DBName::from(&db_name).ok()?;
 
-        let cluster_store = self.clusters.get(&db_name)?;
+        let cluster_store = Self::get_cluster_store(&self.clusters, &db_name, migration_limit)?;
         Some(Self::cluster_store_to_cluster(&cluster_store))
     }
 
@@ -1216,6 +1314,7 @@ impl MetaStore {
     pub fn replace_failed_proxy(
         &mut self,
         failed_proxy_address: String,
+        migration_limit: u64,
     ) -> Result<Proxy, MetaStoreError> {
         let db_name = match self.all_proxies.get(&failed_proxy_address) {
             None => return Err(MetaStoreError::ProxyNotFound),
@@ -1266,7 +1365,7 @@ impl MetaStore {
         }
 
         Ok(self
-            .get_proxy_by_address(&proxy_resource.proxy_address)
+            .get_proxy_by_address(&proxy_resource.proxy_address, migration_limit)
             .expect("replace_failed_proxy"))
     }
 
@@ -1435,6 +1534,8 @@ mod tests {
 
     #[test]
     fn test_add_and_remove_proxy() {
+        let migration_limit = 0;
+
         let mut store = MetaStore::default();
         let proxy_address = "127.0.0.1:7000";
         let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
@@ -1454,7 +1555,9 @@ mod tests {
 
         assert_eq!(store.get_proxies(), vec![proxy_address.to_string()]);
 
-        let proxy = store.get_proxy_by_address(proxy_address).unwrap();
+        let proxy = store
+            .get_proxy_by_address(proxy_address, migration_limit)
+            .unwrap();
         assert_eq!(proxy.get_address(), proxy_address);
         assert_eq!(proxy.get_epoch(), 1);
         assert_eq!(proxy.get_nodes().len(), 0);
@@ -1488,12 +1591,14 @@ mod tests {
 
     #[test]
     fn test_add_and_remove_cluster() {
+        let migration_limit = 0;
+
         let mut store = MetaStore::default();
         add_testing_proxies(&mut store, 4, 3);
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address))
+            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
             .collect();
         let original_free_node_num: usize = proxies
             .iter()
@@ -1516,7 +1621,9 @@ mod tests {
             .collect();
         assert_eq!(names, vec![db_name.clone()]);
 
-        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap();
         assert_eq!(cluster.get_nodes().len(), 4);
 
         check_cluster_slots(cluster.clone(), 4);
@@ -1524,7 +1631,7 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address))
+            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -1540,7 +1647,7 @@ mod tests {
 
         for node in cluster.get_nodes() {
             let proxy = store
-                .get_proxy_by_address(&node.get_proxy_address())
+                .get_proxy_by_address(&node.get_proxy_address(), migration_limit)
                 .unwrap();
             assert_eq!(proxy.get_free_nodes().len(), 0);
             assert_eq!(proxy.get_nodes().len(), 2);
@@ -1582,7 +1689,7 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address))
+            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -1595,7 +1702,7 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address))
+            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -1606,6 +1713,8 @@ mod tests {
 
     #[test]
     fn test_allocation_distribution() {
+        let migration_limit = 0;
+
         let mut store = MetaStore::default();
         let host_num = 11;
         assert_eq!(host_num % 2, 1);
@@ -1626,7 +1735,7 @@ mod tests {
                 .unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
-                let proxy = store.get_proxy_by_address(&addr).unwrap();
+                let proxy = store.get_proxy_by_address(&addr, migration_limit).unwrap();
                 if !proxy.get_free_nodes().is_empty() {
                     continue;
                 }
@@ -1644,7 +1753,7 @@ mod tests {
             store.add_cluster("test_db2".to_string(), 4).unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
-                let proxy = store.get_proxy_by_address(&addr).unwrap();
+                let proxy = store.get_proxy_by_address(&addr, migration_limit).unwrap();
                 if !proxy.get_free_nodes().is_empty() {
                     continue;
                 }
@@ -1663,6 +1772,8 @@ mod tests {
 
     #[test]
     fn test_failures() {
+        let migration_limit = 0;
+
         let mut store = MetaStore::default();
         const ALL_PROXIES: usize = 4 * 3;
         add_testing_proxies(&mut store, 4, 3);
@@ -1670,7 +1781,9 @@ mod tests {
 
         let original_proxy_num = store.get_proxies().len();
         let failed_address = "127.0.0.1:7001";
-        assert!(store.get_proxy_by_address(failed_address).is_some());
+        assert!(store
+            .get_proxy_by_address(failed_address, migration_limit)
+            .is_some());
         let epoch1 = store.get_global_epoch();
 
         store.add_failure(failed_address.to_string(), "reporter_id".to_string());
@@ -1697,7 +1810,9 @@ mod tests {
         let epoch4 = store.get_global_epoch();
         assert!(epoch3 < epoch4);
 
-        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap();
         check_cluster_slots(cluster.clone(), 4);
 
         let (failed_proxy_address, peer_proxy_address) = cluster
@@ -1723,13 +1838,15 @@ mod tests {
         );
 
         let new_proxy = store
-            .replace_failed_proxy(failed_proxy_address.clone())
+            .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
             .unwrap();
         assert_ne!(new_proxy.get_address(), failed_proxy_address);
         let epoch6 = store.get_global_epoch();
         assert!(epoch5 < epoch6);
 
-        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap();
         assert_eq!(
             cluster
                 .get_nodes()
@@ -1777,6 +1894,8 @@ mod tests {
 
     #[test]
     fn test_add_and_delete_free_nodes() {
+        let migration_limit = 0;
+
         let mut store = MetaStore::default();
         let host_num = 4;
         let proxy_per_host = 3;
@@ -1791,7 +1910,7 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
         assert_eq!(
             store
-                .get_cluster_by_name(&db_name)
+                .get_cluster_by_name(&db_name, migration_limit)
                 .unwrap()
                 .get_nodes()
                 .len(),
@@ -1804,7 +1923,7 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), all_proxy_num - 4);
         assert_eq!(
             store
-                .get_cluster_by_name(&db_name)
+                .get_cluster_by_name(&db_name, migration_limit)
                 .unwrap()
                 .get_nodes()
                 .len(),
@@ -1817,7 +1936,7 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
         assert_eq!(
             store
-                .get_cluster_by_name(&db_name)
+                .get_cluster_by_name(&db_name, migration_limit)
                 .unwrap()
                 .get_nodes()
                 .len(),
@@ -1830,15 +1949,23 @@ mod tests {
         proxy_per_host: usize,
         start_node_num: usize,
         added_node_num: usize,
+        migration_limit: u64,
     ) {
-        let mut store = init_migration_test_store(host_num, proxy_per_host, start_node_num);
-        test_scaling(&mut store, host_num * proxy_per_host, added_node_num);
+        let mut store =
+            init_migration_test_store(host_num, proxy_per_host, start_node_num, migration_limit);
+        test_scaling(
+            &mut store,
+            host_num * proxy_per_host,
+            added_node_num,
+            migration_limit,
+        );
     }
 
     fn init_migration_test_store(
         host_num: usize,
         proxy_per_host: usize,
         start_node_num: usize,
+        migration_limit: u64,
     ) -> MetaStore {
         let mut store = MetaStore::default();
         let all_proxy_num = host_num * proxy_per_host;
@@ -1847,7 +1974,9 @@ mod tests {
 
         let db_name = DB_NAME.to_string();
         store.add_cluster(db_name.clone(), start_node_num).unwrap();
-        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap();
         assert_eq!(cluster.get_nodes().len(), start_node_num);
         assert_eq!(
             store.get_free_proxies().len(),
@@ -1857,23 +1986,29 @@ mod tests {
         store
     }
 
-    fn no_op(_: &mut MetaStore) {}
+    fn no_op(_: &mut MetaStore, _: u64) {}
 
-    fn test_scaling(store: &mut MetaStore, all_proxy_num: usize, added_node_num: usize) {
-        test_scaling_helper(store, all_proxy_num, added_node_num, no_op);
+    fn test_scaling(
+        store: &mut MetaStore,
+        all_proxy_num: usize,
+        added_node_num: usize,
+        migration_limit: u64,
+    ) {
+        test_scaling_helper(store, all_proxy_num, added_node_num, migration_limit, no_op);
     }
 
     fn test_scaling_helper<F>(
         store: &mut MetaStore,
         all_proxy_num: usize,
         added_node_num: usize,
+        migration_limit: u64,
         injection: F,
     ) where
-        F: Fn(&mut MetaStore),
+        F: Fn(&mut MetaStore, u64),
     {
         let db_name = DB_NAME.to_string();
         let start_node_num = store
-            .get_cluster_by_name(&db_name)
+            .get_cluster_by_name(&db_name, migration_limit)
             .unwrap()
             .get_nodes()
             .len();
@@ -1885,7 +2020,9 @@ mod tests {
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
         assert_eq!(nodes.len(), added_node_num);
-        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap();
         assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
         assert_eq!(
             store.get_free_proxies().len()
@@ -1897,57 +2034,75 @@ mod tests {
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
 
-        injection(store);
+        injection(store, migration_limit);
 
-        let cluster = store.get_cluster_by_name(&db_name).unwrap();
-        assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
-        for (i, node) in cluster.get_nodes().iter().enumerate() {
-            if i < start_node_num {
-                if node.get_role() == Role::Replica {
-                    continue;
-                }
-                let slots = node.get_slots();
-                // Some src slots might not need to transfer.
-                assert!(slots.len() >= 1);
-                assert!(slots[0].tag.is_stable());
-                for slot_range in slots.iter().skip(1) {
-                    assert!(slot_range.tag.is_migrating());
-                }
-            } else {
-                if node.get_role() == Role::Replica {
-                    continue;
-                }
-                let slots = node.get_slots();
-                assert!(slots.len() >= 1);
-                for slot_range in slots.iter() {
-                    assert!(slot_range.tag.is_importing());
+        for limit in [0, migration_limit].iter() {
+            let cluster = store.get_cluster_by_name(&db_name, *limit).unwrap();
+            assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
+            for (i, node) in cluster.get_nodes().iter().enumerate() {
+                if i < start_node_num {
+                    if node.get_role() == Role::Replica {
+                        continue;
+                    }
+                    let slots = node.get_slots();
+                    // Some src slots might not need to transfer.
+                    assert!(slots.len() >= 1);
+                    assert!(slots[0].tag.is_stable());
+                    for slot_range in slots.iter().skip(1) {
+                        assert!(slot_range.tag.is_migrating());
+                    }
+                } else {
+                    if node.get_role() == Role::Replica {
+                        continue;
+                    }
+                    let slots = node.get_slots();
+                    // no limit
+                    if *limit != 0 {
+                        continue;
+                    }
+                    assert!(slots.len() >= 1);
+                    for slot_range in slots.iter() {
+                        assert!(slot_range.tag.is_importing());
+                    }
                 }
             }
         }
 
-        let slot_range_set: HashSet<_> = cluster
-            .get_nodes()
-            .iter()
-            .filter(|node| node.get_role() == Role::Master)
-            .flat_map(|node| node.get_slots().iter())
-            .filter_map(|slot_range| match slot_range.tag {
-                SlotRangeTag::Migrating(_) => Some(slot_range.clone()),
-                _ => None,
-            })
-            .collect();
+        // Due to migration limit, we might need to commit migration and get remaining ones multiple times
+        loop {
+            let cluster = store
+                .get_cluster_by_name(&db_name, migration_limit)
+                .unwrap();
+            let slot_range_set: HashSet<_> = cluster
+                .get_nodes()
+                .iter()
+                .filter(|node| node.get_role() == Role::Master)
+                .flat_map(|node| node.get_slots().iter())
+                .filter_map(|slot_range| match slot_range.tag {
+                    SlotRangeTag::Migrating(_) => Some(slot_range.clone()),
+                    _ => None,
+                })
+                .collect();
 
-        injection(store);
+            if slot_range_set.is_empty() {
+                break;
+            }
 
-        for slot_range in slot_range_set.into_iter() {
-            let task_meta = MigrationTaskMeta {
-                db_name: DBName::from(&db_name).unwrap(),
-                slot_range,
-            };
-            injection(store);
-            store.commit_migration(task_meta).unwrap();
+            injection(store, migration_limit);
+
+            for slot_range in slot_range_set.into_iter() {
+                let task_meta = MigrationTaskMeta {
+                    db_name: DBName::from(&db_name).unwrap(),
+                    slot_range,
+                };
+                injection(store, migration_limit);
+                store.commit_migration(task_meta).unwrap();
+            }
         }
 
-        let cluster = store.get_cluster_by_name(&db_name).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap();
         check_cluster_slots(cluster, start_node_num + added_node_num);
     }
 
@@ -2004,18 +2159,27 @@ mod tests {
         // Can increase them to cover more cases.
         const MAX_HOST_NUM: usize = 6;
         const MAX_PROXY_PER_HOST: usize = 6;
+        const MAX_MIGRATION_LIMIT: u64 = 1;
 
         for host_num in 2..=MAX_HOST_NUM {
             for proxy_per_host in 1..=MAX_PROXY_PER_HOST {
-                let chunk_num = host_num * proxy_per_host / 2;
-                for i in 1..chunk_num {
-                    let added_chunk_num = chunk_num - i;
-                    if added_chunk_num == 0 {
-                        continue;
-                    }
-                    for j in 1..=added_chunk_num {
-                        assert!(i + j <= chunk_num);
-                        test_migration_helper(host_num, proxy_per_host, 4 * i, 4 * j);
+                for migration_limit in 0..=MAX_MIGRATION_LIMIT {
+                    let chunk_num = host_num * proxy_per_host / 2;
+                    for i in 1..chunk_num {
+                        let added_chunk_num = chunk_num - i;
+                        if added_chunk_num == 0 {
+                            continue;
+                        }
+                        for j in 1..=added_chunk_num {
+                            assert!(i + j <= chunk_num);
+                            test_migration_helper(
+                                host_num,
+                                proxy_per_host,
+                                4 * i,
+                                4 * j,
+                                migration_limit,
+                            );
+                        }
                     }
                 }
             }
@@ -2027,27 +2191,31 @@ mod tests {
         const MAX_HOST_NUM: usize = 6;
         const MAX_PROXY_PER_HOST: usize = 6;
         assert_eq!(MAX_HOST_NUM * MAX_PROXY_PER_HOST % 2, 0);
+        const MAX_MIGRATION_LIMIT: u64 = 1;
 
         for host_num in 2..=MAX_HOST_NUM {
             for proxy_per_host in 1..=MAX_PROXY_PER_HOST {
-                let sum_node_num = host_num * proxy_per_host * 2;
-                let mut store = init_migration_test_store(host_num, proxy_per_host, 4);
-                let mut remnant = sum_node_num - 4;
-                while remnant > 4 {
-                    test_scaling(&mut store, host_num * proxy_per_host, 4);
-                    remnant -= 4;
+                for migration_limit in 0..=MAX_MIGRATION_LIMIT {
+                    let sum_node_num = host_num * proxy_per_host * 2;
+                    let mut store =
+                        init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+                    let mut remnant = sum_node_num - 4;
+                    while remnant > 4 {
+                        test_scaling(&mut store, host_num * proxy_per_host, 4, migration_limit);
+                        remnant -= 4;
+                    }
                 }
             }
         }
     }
 
-    fn add_failure_and_replace_proxy(store: &mut MetaStore) {
+    fn add_failure_and_replace_proxy(store: &mut MetaStore, migration_limit: u64) {
         if store.get_free_proxies().is_empty() {
             return;
         }
 
         let db_name = DB_NAME;
-        let cluster = store.get_cluster_by_name(db_name).unwrap();
+        let cluster = store.get_cluster_by_name(db_name, migration_limit).unwrap();
         let (failed_proxy_address, peer_proxy_address) = cluster
             .get_nodes()
             .iter()
@@ -2073,11 +2241,11 @@ mod tests {
         assert!(store.get_free_proxies().len() > 0);
 
         let new_proxy = store
-            .replace_failed_proxy(failed_proxy_address.clone())
+            .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
             .unwrap();
         assert_ne!(new_proxy.get_address(), failed_proxy_address);
 
-        let cluster = store.get_cluster_by_name(db_name).unwrap();
+        let cluster = store.get_cluster_by_name(db_name, migration_limit).unwrap();
         assert_eq!(
             cluster
                 .get_nodes()
@@ -2112,8 +2280,9 @@ mod tests {
         let host_num = 6;
         let proxy_per_host = 6;
         assert_eq!(MAX_HOST_NUM * MAX_PROXY_PER_HOST % 2, 0);
+        let migration_limit = 0;
 
-        let mut store = init_migration_test_store(host_num, proxy_per_host, 4);
+        let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
         let added_node_num = 4;
         assert!(store.get_free_proxies().len() >= host_num * proxy_per_host / 2);
         while store.get_free_proxies().len() >= host_num * proxy_per_host / 2 {
@@ -2121,6 +2290,7 @@ mod tests {
                 &mut store,
                 host_num * proxy_per_host,
                 added_node_num,
+                migration_limit,
                 add_failure_and_replace_proxy,
             );
         }
@@ -2128,12 +2298,17 @@ mod tests {
 
     #[test]
     fn test_config() {
+        let migration_limit = 0;
+
         let mut store = MetaStore::default();
         add_testing_proxies(&mut store, 4, 3);
 
         let db_name = DB_NAME.to_string();
         store.add_cluster(db_name.clone(), 4).unwrap();
-        let cluster_config = store.get_cluster_by_name(&db_name).unwrap().get_config();
+        let cluster_config = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap()
+            .get_config();
         assert_eq!(
             cluster_config.compression_strategy,
             CompressionStrategy::Disabled
@@ -2146,10 +2321,63 @@ mod tests {
         );
         store.change_config(db_name.clone(), config).unwrap();
 
-        let cluster_config = store.get_cluster_by_name(&db_name).unwrap().get_config();
+        let cluster_config = store
+            .get_cluster_by_name(&db_name, migration_limit)
+            .unwrap()
+            .get_config();
         assert_eq!(
             cluster_config.compression_strategy,
             CompressionStrategy::SetGetOnly
         );
+    }
+
+    #[test]
+    fn test_limited_migration() {
+        let mut store = MetaStore::default();
+        add_testing_proxies(&mut store, 4, 3);
+
+        let migration_limit = 1;
+        let db_name = DB_NAME.to_string();
+        store.add_cluster(db_name.clone(), 4).unwrap();
+        store.auto_add_nodes(db_name.clone(), 4).unwrap();
+        store.migrate_slots(db_name.clone()).unwrap();
+        let cluster = store.get_cluster_by_name(DB_NAME, migration_limit).unwrap();
+        let migrating_masters = cluster
+            .get_nodes()
+            .iter()
+            .filter(|node| {
+                node.get_role() == Role::Master
+                    && node
+                        .get_slots()
+                        .iter()
+                        .any(|slots| slots.tag != SlotRangeTag::None)
+            })
+            .count();
+        assert_eq!(migrating_masters, 2);
+    }
+
+    #[test]
+    fn test_unlimited_migration() {
+        let mut store = MetaStore::default();
+        add_testing_proxies(&mut store, 4, 3);
+
+        let migration_limit = 0;
+        let db_name = DB_NAME.to_string();
+        store.add_cluster(db_name.clone(), 4).unwrap();
+        store.auto_add_nodes(db_name.clone(), 4).unwrap();
+        store.migrate_slots(db_name.clone()).unwrap();
+        let cluster = store.get_cluster_by_name(DB_NAME, migration_limit).unwrap();
+        let migrating_masters = cluster
+            .get_nodes()
+            .iter()
+            .filter(|node| {
+                node.get_role() == Role::Master
+                    && node
+                        .get_slots()
+                        .iter()
+                        .any(|slots| slots.tag != SlotRangeTag::None)
+            })
+            .count();
+        assert_eq!(migrating_masters, 4);
     }
 }

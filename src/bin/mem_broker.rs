@@ -27,6 +27,7 @@ fn gen_conf() -> MemBrokerConfig {
             .unwrap_or_else(|_| "127.0.0.1:7799".to_string()),
         failure_ttl: s.get::<u64>("failure_ttl").unwrap_or_else(|_| 60),
         failure_quorum: s.get::<u64>("failure_quorum").unwrap_or_else(|_| 1),
+        migration_limit: s.get::<u64>("migration_limit").unwrap_or_else(|_| 1),
     }
 }
 

@@ -5,6 +5,7 @@ use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, ProxyAddressesPayload, ProxyPayload,
 };
 use actix_http::ResponseBuilder;
+use actix_web::dev::Service;
 use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
 use chrono;
 use std::collections::HashMap;
@@ -13,9 +14,28 @@ use std::sync::{Arc, RwLock};
 pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
     cfg.data(service).service(
         web::scope("/api")
+            .wrap_fn(|req, srv| {
+                let method = req.method().clone();
+                let peer_addr = match req.peer_addr() {
+                    None => "".to_string(),
+                    Some(address) => format!("{:?}", address),
+                };
+                let req_str = format!("{} {} {} {:?} {}", req.method(), req.path(), req.query_string(), req.version(), peer_addr);
+                let fut = srv.call(req);
+                async move {
+                    let res = fut.await;
+                    // The GET APIs are accessed too frequently so we don't log them.
+                    if method != http::Method::GET {
+                        match &res {
+                            Ok(response) => info!("{} status {}", req_str, response.status()),
+                            Err(err) => info!("{} err {}", req_str, err)
+                        }
+                    }
+                    res
+                }
+            })
             .route("/version", web::get().to(get_version))
             .route("/metadata", web::get().to(get_all_metadata))
-
             // Broker api
             .route("/clusters/names", web::get().to(get_cluster_names))
             .route(
@@ -65,6 +85,7 @@ pub struct MemBrokerConfig {
     pub address: String,
     pub failure_ttl: u64, // in seconds
     pub failure_quorum: u64,
+    pub migration_limit: u64,
 }
 
 pub struct MemBrokerService {
@@ -96,10 +117,11 @@ impl MemBrokerService {
     }
 
     pub fn get_host_by_address(&self, address: &str) -> Option<Proxy> {
+        let migration_limit = self.config.migration_limit;
         self.store
             .read()
             .expect("MemBrokerService::get_host_by_address")
-            .get_proxy_by_address(address)
+            .get_proxy_by_address(address, migration_limit)
     }
 
     pub fn get_cluster_names(&self) -> Vec<DBName> {
@@ -110,10 +132,11 @@ impl MemBrokerService {
     }
 
     pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
+        let migration_limit = self.config.migration_limit;
         self.store
             .read()
             .expect("MemBrokerService::get_cluster_by_name")
-            .get_cluster_by_name(name)
+            .get_cluster_by_name(name, migration_limit)
     }
 
     pub fn add_hosts(&self, host_resource: ProxyResource) -> Result<(), MetaStoreError> {
@@ -211,10 +234,11 @@ impl MemBrokerService {
         &self,
         failed_proxy_address: String,
     ) -> Result<Proxy, MetaStoreError> {
+        let migration_limit = self.config.migration_limit;
         self.store
             .write()
             .expect("MemBrokerService::replace_failed_node")
-            .replace_failed_proxy(failed_proxy_address)
+            .replace_failed_proxy(failed_proxy_address, migration_limit)
     }
 }
 
@@ -382,7 +406,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::InvalidMigrationTask => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidProxyAddress => http::StatusCode::BAD_REQUEST,
             MetaStoreError::MigrationTaskNotFound => http::StatusCode::NOT_FOUND,
-            MetaStoreError::MigrationRunning => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::MigrationRunning => http::StatusCode::CONFLICT,
             MetaStoreError::NotSupported => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,

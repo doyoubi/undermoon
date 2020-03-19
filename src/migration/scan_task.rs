@@ -523,7 +523,7 @@ where
                 _ = receiver.fuse() => Err(MigrationError::Canceled),
             };
             match r {
-                Ok(()) => {
+                Ok(()) | Err(MigrationError::Canceled) => {
                     warn!("Importing tasks stopped {:?}", meta);
                     Ok(())
                 }

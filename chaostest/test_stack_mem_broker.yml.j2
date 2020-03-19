@@ -12,7 +12,7 @@ services:
     ports:
     - "{{ broker_port }}:{{ broker_port }}"
     environment:
-      - RUST_LOG=actix_web=debug,undermoon=debug,mem_broker=debug
+      - RUST_LOG=undermoon=debug,mem_broker=debug
       - RUST_BACKTRACE=full
       - UNDERMOON_ADDRESS=0.0.0.0:{{ broker_port }}
 
