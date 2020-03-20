@@ -465,7 +465,7 @@ where
         .await;
         match res {
             Ok(()) => {
-                error!("task receiver is closed");
+                warn!("task receiver is closed");
                 return Err(BackendError::Canceled);
             }
             Err((err, state)) => {
@@ -825,6 +825,10 @@ where
     ))
 }
 
+// Can't just remove CachedSenderFactory to avoid
+// leaving the futures running after committing the migration
+// as there might be some commands still running.
+// TODO: build a customized sender to evict and recover inner senders.
 pub type MigrationBackendSenderFactory<F, CF> = CachedSenderFactory<
     RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>,
 >;

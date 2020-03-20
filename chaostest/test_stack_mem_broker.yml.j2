@@ -1,27 +1,20 @@
 version: '3'
 services:
-  etcd:
-    image: "bitnami/etcd:latest"
-    deploy:
-      restart_policy:
-        condition: any
-        delay: 30s
-    environment:
-      - ALLOW_NONE_AUTHENTICATION=yes
-    ports:
-      - "{{ etcd_port }}:{{ etcd_port }}"
-
   broker:
-    image: "overmoon"
+    image: "undermoon"
     deploy:
       restart_policy:
         condition: any
         delay: 30s
     volumes:
-      - ${PWD}/examples/overmoon/config.yaml:/overmoon/config.yaml
-    command: overmoon
+    - ${PWD}/examples/target_volume:/undermoon/target
+    command: /undermoon/target/debug/mem_broker
     ports:
     - "{{ broker_port }}:{{ broker_port }}"
+    environment:
+      - RUST_LOG=undermoon=debug,mem_broker=debug
+      - RUST_BACKTRACE=full
+      - UNDERMOON_ADDRESS=0.0.0.0:{{ broker_port }}
 
 {% filter indent(width=2) %}
 {% for coordinator_id in range(coordinator_num) %}

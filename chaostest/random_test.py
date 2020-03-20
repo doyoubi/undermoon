@@ -6,7 +6,6 @@ from datetime import datetime
 from loguru import logger
 
 from redis import StrictRedis
-from rediscluster import StrictRedisCluster
 
 import config
 from utils import OvermoonClient, ServerProxy, OVERMOON_ENDPOINT, RedisClusterClient
@@ -180,7 +179,11 @@ class RandomTester:
 
             if names and random.randint(0, 10) < 4:
                 cluster_name = random.choice(names)
-                self.overmoon_client.add_nodes(cluster_name)
+                cluster = self.overmoon_client.get_cluster(cluster_name)
+                existing_node_num = len(cluster['nodes'])
+                max_chunk_num = (config.REDIS_NUM - existing_node_num) / 4
+                node_number = random.randint(0, max_chunk_num + 1) * 4
+                self.overmoon_client.add_nodes(cluster_name, node_number)
                 if random.randint(0, 10) < 7:
                     self.overmoon_client.scale_cluster(cluster_name)
 

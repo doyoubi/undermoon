@@ -273,6 +273,16 @@ pub enum ConfigError {
     InvalidValue,
 }
 
+impl ToString for ConfigError {
+    fn to_string(&self) -> String {
+        match self {
+            Self::ReadonlyField => "READONLY_FIELD".to_string(),
+            Self::FieldNotFound => "FIELD_NOT_FOUND".to_string(),
+            Self::InvalidValue => "INVALID_VALUE".to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

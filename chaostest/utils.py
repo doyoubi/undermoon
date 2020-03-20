@@ -29,6 +29,9 @@ class HttpClient:
     def delete(self, path):
         return self.session.delete('{}{}'.format(self.endpoint, path))
 
+    def patch(self, path, payload=None):
+        return self.session.patch('{}{}'.format(self.endpoint, path), json=payload)
+
 
 class DockerHttpClient:
     def __init__(self, http_client, api_version):
@@ -98,10 +101,9 @@ class OvermoonClient:
 
     def create_cluster(self, cluster_name, node_number):
         payload = {
-            'cluster_name': cluster_name,
             'node_number': node_number,
         }
-        r = self.client.post('/api/clusters', payload)
+        r = self.client.post('/api/clusters/meta/{}'.format(cluster_name), payload)
         if r.status_code == 200:
             logger.warning('created cluster: {} {}', cluster_name, node_number)
             return
@@ -138,15 +140,15 @@ class OvermoonClient:
             return
         logger.error('OVERMOON_ERROR: failed to delete cluster: {} {} {}', cluster_name, r.status_code, r.text)
 
-    def add_nodes(self, cluster_name):
-        r = self.client.put('/api/clusters/nodes/{}'.format(cluster_name))
+    def add_nodes(self, cluster_name, node_number):
+        payload = {
+            'node_number': node_number,
+        }
+        r = self.client.patch('/api/clusters/nodes/{}'.format(cluster_name), payload)
         if r.status_code == 200:
             logger.info('added nodes to cluster {}', cluster_name)
             return
-        if r.status_code in (404, 409):
-            return
-        if r.status_code == 400:
-            logger.warning('failed to add nodes: {}', r.text)
+        if r.status_code in (400, 404, 409):
             return
         logger.error('OVERMOON_ERROR: failed to add nodes: {} {} {}', cluster_name, r.status_code, r.text)
 
@@ -155,7 +157,7 @@ class OvermoonClient:
         if r.status_code == 200:
             logger.info('OVERMOON removed unused nodes')
             return True
-        if r.status_code == 404:
+        if r.status_code in (404, 409):
             return False
         if r.status_code == 400:
             # logger.warning('OVERMOON failed to remove unused nodes: {} {} {}', cluster_name, r.status_code, r.text)
@@ -169,7 +171,7 @@ class OvermoonClient:
         if r.status_code == 200:
             logger.warning('start migration: {}', cluster_name)
             return
-        if r.status_code in (400, 404):
+        if r.status_code in (400, 404, 409):
             return
 
         logger.error('OVERMOON_ERROR: failed to start migration: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))

@@ -75,10 +75,10 @@ pub trait MigratingTask: ThreadSafe {
 
     fn start<'s>(&'s self)
         -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
-    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
     fn contains_slot(&self, slot: usize) -> bool;
+    fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>>;
 }
 
 pub trait ImportingTask: ThreadSafe {
@@ -86,10 +86,10 @@ pub trait ImportingTask: ThreadSafe {
 
     fn start<'s>(&'s self)
         -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
-    fn stop<'s>(&'s self) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>>;
     fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
     fn contains_slot(&self, slot: usize) -> bool;
+    fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>>;
     fn handle_switch(
         &self,
         switch_arg: SwitchArg,
