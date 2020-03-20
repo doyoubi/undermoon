@@ -48,7 +48,7 @@ class KeyValueTester:
         for node in nodes:
             proxy_address = node['proxy_address']
             host, port = proxy_address.split(':')
-            proxies.append({'host': host, 'port': port})
+            proxies.append({'host': host, 'port': port, 'epoch': cluster['epoch']})
         return proxies
 
     def cluster_ready(self, proxies):
@@ -67,6 +67,9 @@ class KeyValueTester:
             TRIMMED_LEN = 20
             # This should not be the info from the last cluster.
             if self.cluster_name[0:TRIMMED_LEN] not in lines[0]:
+                return False
+            found_epoch = int(lines[0].split(' ')[6])
+            if found_epoch != int(proxy['epoch']):
                 return False
         return True
 

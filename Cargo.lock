@@ -2190,6 +2190,7 @@ dependencies = [
  "arrayvec 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "atoi 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "atomic-option 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "backtrace 0.3.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "btoi 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.5.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "caseless 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",

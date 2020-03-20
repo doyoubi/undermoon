@@ -228,6 +228,12 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         }
     }
 
+    pub fn get_stop_handle(&self) -> StopHandle<F> {
+        StopHandle {
+            exists_task_sender: self.exists_task_sender.clone(),
+        }
+    }
+
     pub async fn run_task_handler(&self) {
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
         let src_sender = self.src_sender.clone();
@@ -262,11 +268,30 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
 
         let restore_task_handler = Self::handle_restore(restore_task_receiver);
 
+        let mut exists_task_handler = Box::pin(exists_task_handler.fuse());
+        let mut dump_pttl_task_handler = Box::pin(dump_pttl_task_handler.fuse());
+        let mut restore_task_handler = Box::pin(restore_task_handler.fuse());
+
         select! {
-            () = exists_task_handler.fuse() => (),
-            () = dump_pttl_task_handler.fuse() => (),
-            () = restore_task_handler.fuse() => (),
+            () = exists_task_handler => (),
+            () = dump_pttl_task_handler => (),
+            () = restore_task_handler => (),
         }
+
+        // Need to finish the remaining commands before exiting.
+        info!("wait for dump and pttl task");
+        self.dump_pttl_task_sender.close_channel();
+
+        select! {
+            () = dump_pttl_task_handler => (),
+            () = restore_task_handler => (),
+        }
+
+        self.restore_task_sender.close_channel();
+        info!("wait for restore task");
+
+        restore_task_handler.await;
+        info!("All remaining tasks in migration backend are finished");
     }
 
     async fn handle_exists_task(
@@ -402,6 +427,22 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
                 String::from("Migration backend canceled").into_bytes(),
             )));
         }
+    }
+}
+
+pub struct StopHandle<F: CmdTaskFactory> {
+    exists_task_sender: ExistsTaskSender<F>,
+}
+
+impl<F: CmdTaskFactory> StopHandle<F> {
+    // Let drop function do the work.
+    pub fn stop(self) {}
+}
+
+impl<F: CmdTaskFactory> Drop for StopHandle<F> {
+    fn drop(&mut self) {
+        info!("RestoreDataCmdTaskHandler start to stop");
+        self.exists_task_sender.close_channel();
     }
 }
 

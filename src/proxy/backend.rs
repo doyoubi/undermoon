@@ -825,13 +825,8 @@ where
     ))
 }
 
-// Can't just remove CachedSenderFactory to avoid
-// leaving the futures running after committing the migration
-// as there might be some commands still running.
-// TODO: build a customized sender to evict and recover inner senders.
-pub type MigrationBackendSenderFactory<F, CF> = CachedSenderFactory<
-    RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>,
->;
+pub type MigrationBackendSenderFactory<F, CF> =
+    RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>;
 
 pub fn gen_migration_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
     config: Arc<ServerProxyConfig>,
@@ -843,7 +838,7 @@ where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
     CF::Pkt: Send,
 {
-    CachedSenderFactory::new(RRSenderGroupFactory::new(
+    RRSenderGroupFactory::new(
         config.backend_conn_num,
         ReqAdaptorSenderFactory::new(RecoverableBackendNodeFactory::new(
             config.clone(),
@@ -851,5 +846,5 @@ where
             conn_factory,
             future_registry,
         )),
-    ))
+    )
 }
