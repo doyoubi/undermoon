@@ -516,22 +516,22 @@ where
 
         let meta = self.meta.clone();
         let fut = self.cmd_handler.run_task_handler();
+        let stop_handle = self.cmd_handler.get_stop_handle();
 
         let fut = async move {
-            let r = select! {
-                () = fut.fuse() => Ok(()),
-                _ = receiver.fuse() => Err(MigrationError::Canceled),
+            let res = future::select(Box::pin(fut.fuse()), Box::pin(receiver.fuse())).await;
+            match res {
+                future::Either::Left(_) => {
+                    error!("handler exited unexpectedly");
+                }
+                future::Either::Right((_, handler_task)) => {
+                    info!("Received stop signal. Wait for the handler to finish all the remaining commnands.");
+                    stop_handle.stop();
+                    handler_task.await;
+                }
             };
-            match r {
-                Ok(()) | Err(MigrationError::Canceled) => {
-                    warn!("Importing tasks stopped {:?}", meta);
-                    Ok(())
-                }
-                Err(err) => {
-                    error!("importing exit with error: {:?}", err);
-                    Err(err)
-                }
-            }
+            warn!("Importing tasks stopped {:?}", meta);
+            Ok(())
         };
 
         Box::pin(fut)

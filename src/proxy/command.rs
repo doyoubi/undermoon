@@ -2,6 +2,7 @@ use super::slowlog::Slowlog;
 use crate::common::utils::byte_to_uppercase;
 use crate::protocol::{RespPacket, RespSlice, RespVec};
 use arrayvec::ArrayVec;
+use backtrace::Backtrace;
 use futures::channel::oneshot;
 use futures::task::{Context, Poll};
 use futures::Future;
@@ -285,7 +286,12 @@ impl CmdReplySender {
     fn try_send(&mut self, res: TaskResult) -> Option<Result<(), CommandError>> {
         // Must not send twice.
         match self.reply_sender.take() {
-            Some(reply_sender) => Some(reply_sender.send(res).map_err(|_| CommandError::Canceled)),
+            Some(reply_sender) => {
+                if let Err(CommandError::Dropped) = &res {
+                    error!("command is dropped {:?}", Backtrace::new());
+                }
+                Some(reply_sender.send(res).map_err(|_| CommandError::Canceled))
+            }
             None => None,
         }
     }
