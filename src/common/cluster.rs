@@ -816,8 +816,8 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_host() {
-        let host_str = r#"{
+    fn test_deserialize_proxy() {
+        let proxy_str = r#"{
             "address": "server_proxy1:6001",
             "epoch": 1,
             "nodes": [
@@ -864,14 +864,14 @@ mod tests {
                 }
             }
         }"#;
-        let host: Proxy = serde_json::from_str(host_str).unwrap();
+        let proxy: Proxy = serde_json::from_str(proxy_str).unwrap();
 
         let mut config = ClusterConfig::default();
         config.compression_strategy = CompressionStrategy::SetGetOnly;
         let mut clusters_config = HashMap::new();
         clusters_config.insert(DBName::from("mydb").unwrap(), config);
 
-        let expected_host = Proxy::new(
+        let expected_proxy = Proxy::new(
             "server_proxy1:6001".to_string(),
             1,
             vec![
@@ -916,7 +916,7 @@ mod tests {
             }],
             clusters_config,
         );
-        assert_eq!(expected_host, host);
+        assert_eq!(expected_proxy, proxy);
     }
 
     #[test]

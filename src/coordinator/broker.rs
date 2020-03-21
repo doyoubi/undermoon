@@ -24,11 +24,11 @@ mod trait_mod {
             name: DBName,
         ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>;
 
-        fn get_host_addresses<'s>(
+        fn get_proxy_addresses<'s>(
             &'s self,
         ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
 
-        fn get_host<'s>(
+        fn get_proxy<'s>(
             &'s self,
             address: String,
         ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaDataBrokerError>> + Send + 's>>;

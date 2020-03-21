@@ -26,13 +26,13 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
     ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send + 's>> {
         Box::pin(
             self.meta_data_broker
-                .get_host_addresses()
+                .get_proxy_addresses()
                 .map_err(CoordinateError::MetaData),
         )
     }
 }
 
-// Sometimes we can't just call MetaDataBroker::get_host_addresses() to
+// Sometimes we can't just call MetaDataBroker::get_proxy_addresses() to
 // get the addresses. There's a corner case we need to solve.
 // When the cluster is added some new proxies, the client may be redirected
 // to the new nodes especially when the migration starts.
@@ -42,9 +42,9 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
 // new nodes first.
 //
 // NOTICE: The clients should not directly use the address list from
-// the MetaDataBroker::get_host_addresses(). They should check whether
+// the MetaDataBroker::get_proxy_addresses(). They should check whether
 // the server proxies are ready. Only after all the proxies get synchronized,
-// can the clients use the addresses from MetaDataBroker::get_host_addresses().
+// can the clients use the addresses from MetaDataBroker::get_proxy_addresses().
 pub struct BrokerOrderedProxiesRetriever<B: MetaDataBroker> {
     meta_data_broker: Arc<B>,
 }
@@ -66,7 +66,7 @@ impl<B: MetaDataBroker> BrokerOrderedProxiesRetriever<B> {
         added_tag: HashSet<String>,
     ) -> Vec<Result<String, CoordinateError>> {
         self.meta_data_broker
-            .get_host_addresses()
+            .get_proxy_addresses()
             .filter(move |res| {
                 let filter = match res {
                     Ok(addr) => !added_tag.contains(addr),
@@ -324,7 +324,7 @@ mod tests {
             .collect();
         let addresses_clone = addresses.clone();
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
         let broker = Arc::new(mock_broker);
         let retriever = BrokerProxiesRetriever::new(broker);
@@ -420,7 +420,7 @@ mod tests {
                 Box::pin(future::ok(cluster))
             });
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses.clone().into_iter().map(Ok))));
 
         let broker = Arc::new(mock_broker);
@@ -454,7 +454,7 @@ mod tests {
             .collect();
         let addresses_clone = addresses.clone();
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
 
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
@@ -493,7 +493,7 @@ mod tests {
             .collect();
         let addresses_clone = addresses.clone();
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
         mock_broker
             .expect_add_failure()
@@ -515,7 +515,7 @@ mod tests {
     async fn test_detector_partial_error() {
         let mut mock_broker = MockMetaDataBroker::new();
 
-        mock_broker.expect_get_host_addresses().returning(move || {
+        mock_broker.expect_get_proxy_addresses().returning(move || {
             let results = vec![
                 Err(MetaDataBrokerError::InvalidReply),
                 Ok(NODE1.to_string()),

@@ -49,10 +49,10 @@ impl<MB: MetaManipulationBroker> ProxyFailureHandler for ReplaceNodeHandler<MB> 
                     error!("failed to replace proxy {} {:?}", proxy_failure2, e);
                     CoordinateError::MetaMani(e)
                 })
-                .map_ok(move |new_host| {
+                .map_ok(move |new_proxy| {
                     info!(
-                        "successfully replace {} with new host {:?}",
-                        proxy_failure, new_host
+                        "successfully replace {} with new proxy {:?}",
+                        proxy_failure, new_proxy
                     );
                 }),
         )

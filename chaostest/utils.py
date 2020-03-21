@@ -188,7 +188,7 @@ class OvermoonClient:
     def get_proxy(self, address):
         r = self.client.get('/api/{}/proxies/meta/{}'.format(BROKER_API_VERSION, address))
         if r.status_code == 200:
-            return r.json()['host']
+            return r.json()['proxy']
         logger.error('OVERMOON_ERROR: failed to get proxy meta: {} {}', r.status_code, r.text)
         return None
 

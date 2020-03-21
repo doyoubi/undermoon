@@ -63,9 +63,9 @@ Response:
 Get the meta data of <server_proxy_address>
 ```
 Response:
-If the host(or proxy) exists:
+If the proxy exists:
 {
-    "host": {
+    "proxy": {
         "address": "server_proxy_address1",
         "epoch": 1,
         "nodes": [{
@@ -103,7 +103,7 @@ If the host(or proxy) exists:
     }
 }
 If not:
-{ "host": null }
+{ "proxy": null }
 ```
 
 ##### (5) POST /api/v2/failures/<server_proxy_address>/<reporter_id>
@@ -131,7 +131,7 @@ empty payload
 Response:
 If success:
 {
-    "host": {
+    "proxy": {
         "address": "server_proxy_address1",
         "epoch": 1,
         "nodes": [{

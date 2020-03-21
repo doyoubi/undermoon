@@ -21,23 +21,23 @@ impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
 }
 
 impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
-    async fn send_meta_impl(&self, host: Proxy) -> Result<(), CoordinateError> {
+    async fn send_meta_impl(&self, proxy: Proxy) -> Result<(), CoordinateError> {
         let mut client = self
             .client_factory
-            .create_client(host.get_address().to_string())
+            .create_client(proxy.get_address().to_string())
             .await
             .map_err(CoordinateError::Redis)?;
-        let host_with_only_masters = filter_host_masters(host.clone());
+        let proxy_with_only_masters = filter_proxy_masters(proxy.clone());
         send_meta(
             &mut client,
             "SETREPL".to_string(),
-            generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
+            generate_repl_meta_cmd_args(proxy, DBMapFlags { force: false }),
         )
         .await?;
         send_meta(
             &mut client,
             "SETDB".to_string(),
-            generate_host_meta_cmd_args(DBMapFlags { force: false }, host_with_only_masters),
+            generate_proxy_meta_cmd_args(DBMapFlags { force: false }, proxy_with_only_masters),
         )
         .await?;
         Ok(())
@@ -47,13 +47,13 @@ impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
 impl<F: RedisClientFactory> ProxyMetaSender for ProxyMetaRespSender<F> {
     fn send_meta<'s>(
         &'s self,
-        host: Proxy,
+        proxy: Proxy,
     ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
-        Box::pin(self.send_meta_impl(host))
+        Box::pin(self.send_meta_impl(proxy))
     }
 }
 
-fn filter_host_masters(proxy: Proxy) -> Proxy {
+fn filter_proxy_masters(proxy: Proxy) -> Proxy {
     let address = proxy.get_address().to_string();
     let epoch = proxy.get_epoch();
     let free_nodes = proxy.get_free_nodes().to_vec();
@@ -79,19 +79,19 @@ impl<B: MetaDataBroker> BrokerMetaRetriever<B> {
 }
 
 impl<B: MetaDataBroker> ProxyMetaRetriever for BrokerMetaRetriever<B> {
-    fn get_host_meta<'s>(
+    fn get_proxy_meta<'s>(
         &'s self,
         address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, CoordinateError>> + Send + 's>> {
         Box::pin(
             self.broker
-                .get_host(address)
+                .get_proxy(address)
                 .map_err(CoordinateError::MetaData),
         )
     }
 }
 
-fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Proxy) -> Vec<String> {
+fn generate_proxy_meta_cmd_args(flags: DBMapFlags, proxy: Proxy) -> Vec<String> {
     let epoch = proxy.get_epoch();
     let clusters_config = ClusterConfigMap::new(proxy.get_clusters_config().clone());
 
@@ -132,7 +132,7 @@ async fn send_meta<C: RedisClient>(
         .execute_single(cmd.into_iter().map(String::into_bytes).collect())
         .await
         .map_err(|e| {
-            error!("failed to send meta data of host {:?}", e);
+            error!("failed to send meta data of proxy {:?}", e);
             CoordinateError::Redis(e)
         })?;
     match resp {
@@ -390,7 +390,7 @@ mod tests {
         let mut mock_broker = MockMetaDataBroker::new();
 
         mock_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(move |addr| addr == proxy_addr)
             .returning(move |_| {
                 let proxy = gen_testing_proxy(Role::Master);
@@ -398,7 +398,7 @@ mod tests {
             });
 
         let retriever = BrokerMetaRetriever::new(Arc::new(mock_broker));
-        let res = retriever.get_host_meta(proxy_addr.to_string()).await;
+        let res = retriever.get_proxy_meta(proxy_addr.to_string()).await;
         assert!(res.is_ok());
         let opt = res.unwrap();
         assert!(opt.is_some());
@@ -415,7 +415,7 @@ mod tests {
         let not_exist_proxy = "127.0.0.1:99999".to_string();
         let not_exist_proxy2 = not_exist_proxy.clone();
 
-        mock_broker.expect_get_host_addresses().returning(move || {
+        mock_broker.expect_get_proxy_addresses().returning(move || {
             let results = vec![
                 Err(MetaDataBrokerError::InvalidReply),
                 Ok(not_exist_proxy2.clone()),
@@ -424,7 +424,7 @@ mod tests {
             Box::pin(stream::iter(results))
         });
         mock_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(move |addr| addr == &proxy_addr)
             .times(1)
             .returning(move |_| {
@@ -432,7 +432,7 @@ mod tests {
                 Box::pin(async { Ok(Some(proxy)) })
             });
         mock_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(move |addr| addr == &not_exist_proxy)
             .times(1)
             .returning(move |_| Box::pin(async { Ok(None) }));

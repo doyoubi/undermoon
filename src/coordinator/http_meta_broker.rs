@@ -1,7 +1,7 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
+use crate::broker::MEM_BROKER_API_VERSION;
 use crate::common::cluster::{Cluster, DBName, Proxy};
 use crate::common::utils::vec_result_to_stream;
-use crate::broker::MEM_BROKER_API_VERSION;
 use futures::{Future, FutureExt, Stream};
 use reqwest;
 use serde_derive::Deserialize;
@@ -24,7 +24,10 @@ impl HttpMetaBroker {
 
 impl HttpMetaBroker {
     fn gen_url(&self, path: &str) -> String {
-        format!("http://{}/{}{}", self.broker_address, MEM_BROKER_API_VERSION, path)
+        format!(
+            "http://{}/{}{}",
+            self.broker_address, MEM_BROKER_API_VERSION, path
+        )
     }
 
     async fn get_cluster_names_impl(&self) -> Result<Vec<DBName>, MetaDataBrokerError> {
@@ -53,30 +56,30 @@ impl HttpMetaBroker {
         Ok(cluster)
     }
 
-    async fn get_host_addresses_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
+    async fn get_proxy_addresses_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = self.gen_url("/proxies/addresses");
         let response = self.client.get(&url).send().await.map_err(|e| {
-            error!("failed to get host addresses {:?}", e);
+            error!("failed to get proxy addresses {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
         let ProxyAddressesPayload { addresses } = response.json().await.map_err(|e| {
-            error!("failed to get host adddresses from json {:?}", e);
+            error!("failed to get proxy adddresses from json {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
         Ok(addresses)
     }
 
-    async fn get_host_impl(&self, address: String) -> Result<Option<Proxy>, MetaDataBrokerError> {
+    async fn get_proxy_impl(&self, address: String) -> Result<Option<Proxy>, MetaDataBrokerError> {
         let url = self.gen_url(&format!("/proxies/meta/{}", address));
         let response = self.client.get(&url).send().await.map_err(|e| {
-            error!("failed to get host {:?}", e);
+            error!("failed to get proxy {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
-        let ProxyPayload { host } = response.json().await.map_err(move |e| {
-            error!("failed to get host {} from json {:?}", address, e);
+        let ProxyPayload { proxy } = response.json().await.map_err(move |e| {
+            error!("failed to get proxy {} from json {:?}", address, e);
             MetaDataBrokerError::InvalidReply
         })?;
-        Ok(host)
+        Ok(proxy)
     }
 
     async fn add_failure_impl(
@@ -140,21 +143,21 @@ impl MetaDataBroker for HttpMetaBroker {
         Box::pin(self.get_cluster_impl(name))
     }
 
-    fn get_host_addresses<'s>(
+    fn get_proxy_addresses<'s>(
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(
-            self.get_host_addresses_impl()
+            self.get_proxy_addresses_impl()
                 .map(vec_result_to_stream)
                 .flatten_stream(),
         )
     }
 
-    fn get_host<'s>(
+    fn get_proxy<'s>(
         &'s self,
         address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaDataBrokerError>> + Send + 's>> {
-        Box::pin(self.get_host_impl(address))
+        Box::pin(self.get_proxy_impl(address))
     }
 
     fn add_failure<'s>(
@@ -193,7 +196,7 @@ pub struct ProxyAddressesPayload {
 
 #[derive(Deserialize, Serialize)]
 pub struct ProxyPayload {
-    pub host: Option<Proxy>,
+    pub proxy: Option<Proxy>,
 }
 
 #[derive(Deserialize, Serialize)]

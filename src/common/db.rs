@@ -352,10 +352,10 @@ mod tests {
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
         let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let host_db_map = r.expect("test_single_db");
-        assert_eq!(host_db_map.db_map.len(), 1);
+        let proxy_db_map = r.expect("test_single_db");
+        assert_eq!(proxy_db_map.db_map.len(), 1);
 
-        assert_eq!(host_db_map.db_map_to_args(), args);
+        assert_eq!(proxy_db_map.db_map_to_args(), args);
     }
 
     #[test]
@@ -374,11 +374,11 @@ mod tests {
 
         let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let host_db_map = r.expect("test_multiple_slots");
-        assert_eq!(host_db_map.db_map.len(), 1);
+        let proxy_db_map = r.expect("test_multiple_slots");
+        assert_eq!(proxy_db_map.db_map.len(), 1);
         let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_slots")
@@ -386,7 +386,7 @@ mod tests {
             1
         );
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_slots")
@@ -396,7 +396,7 @@ mod tests {
             2
         );
 
-        assert_eq!(host_db_map.db_map_to_args(), args);
+        assert_eq!(proxy_db_map.db_map_to_args(), args);
     }
 
     #[test]
@@ -412,11 +412,11 @@ mod tests {
             "1001-2000",
         ];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
-        let host_db_map = ProxyDBMap::parse(&mut arguments).expect("test_multiple_nodes");
-        assert_eq!(host_db_map.db_map.len(), 1);
+        let proxy_db_map = ProxyDBMap::parse(&mut arguments).expect("test_multiple_nodes");
+        assert_eq!(proxy_db_map.db_map.len(), 1);
         let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_nodes")
@@ -424,7 +424,7 @@ mod tests {
             2
         );
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_nodes")
@@ -434,7 +434,7 @@ mod tests {
             1
         );
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_nodes")
@@ -445,7 +445,7 @@ mod tests {
         );
 
         let mut expected_args = args.clone();
-        let mut actual_args = host_db_map.db_map_to_args();
+        let mut actual_args = proxy_db_map.db_map_to_args();
         expected_args.sort();
         actual_args.sort();
         assert_eq!(actual_args, expected_args);
@@ -470,11 +470,11 @@ mod tests {
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
         let r = ProxyDBMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let host_db_map = r.expect("test_multiple_db");
-        assert_eq!(host_db_map.db_map.len(), 2);
+        let proxy_db_map = r.expect("test_multiple_db");
+        assert_eq!(proxy_db_map.db_map.len(), 2);
         let db_name = DBName::from("dbname").unwrap();
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_db")
@@ -482,7 +482,7 @@ mod tests {
             2
         );
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_db")
@@ -492,7 +492,7 @@ mod tests {
             1
         );
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&db_name)
                 .expect("test_multiple_db")
@@ -503,7 +503,7 @@ mod tests {
         );
         let another_db = DBName::from("another_db").unwrap();
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&another_db)
                 .expect("test_multiple_nodes")
@@ -511,7 +511,7 @@ mod tests {
             1
         );
         assert_eq!(
-            host_db_map
+            proxy_db_map
                 .db_map
                 .get(&another_db)
                 .expect("test_multiple_db")
@@ -522,7 +522,7 @@ mod tests {
         );
 
         let mut expected_args = args.clone();
-        let mut actual_args = host_db_map.db_map_to_args();
+        let mut actual_args = proxy_db_map.db_map_to_args();
         expected_args.sort();
         actual_args.sort();
         assert_eq!(actual_args, expected_args);
@@ -657,9 +657,9 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
         let r = ProxyDBMap::parse(&mut it);
-        let host_db_map = r.expect("test_to_map");
+        let proxy_db_map = r.expect("test_to_map");
 
-        let db_map = ProxyDBMap::new(host_db_map.db_map);
+        let db_map = ProxyDBMap::new(proxy_db_map.db_map);
         let mut args = db_map.db_map_to_args();
         let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         args.sort();

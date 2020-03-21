@@ -1,6 +1,6 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
-use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use crate::broker::MEM_BROKER_API_VERSION;
+use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use futures::Future;
 use reqwest;
 use std::pin::Pin;
@@ -22,7 +22,10 @@ impl HttpMetaManipulationBroker {
 
 impl HttpMetaManipulationBroker {
     fn gen_url(&self, path: &str) -> String {
-        format!("http://{}/{}{}", self.broker_address, MEM_BROKER_API_VERSION, path)
+        format!(
+            "http://{}/{}{}",
+            self.broker_address, MEM_BROKER_API_VERSION, path
+        )
     }
 
     async fn replace_proxy_impl(

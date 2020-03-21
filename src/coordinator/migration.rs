@@ -241,17 +241,17 @@ mod tests {
 
         let mut mock_data_broker = MockMetaDataBroker::new();
         mock_data_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || {
                 let results = vec![Ok("127.0.0.1:6000".to_string())];
                 Box::pin(stream::iter(results))
             });
         mock_data_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(|proxy_addr| proxy_addr == "127.0.0.1:6000")
             .returning(|_| Box::pin(async { Ok(Some(gen_testing_dummy_proxy("127.0.0.1:6000"))) }));
         mock_data_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(|proxy_addr| proxy_addr == "127.0.0.1:6001")
             .returning(|_| Box::pin(async { Ok(Some(gen_testing_dummy_proxy("127.0.0.1:6001"))) }));
         let mock_data_broker = Arc::new(mock_data_broker);
