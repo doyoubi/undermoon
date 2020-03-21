@@ -13,6 +13,7 @@ use crate::protocol::{
 use futures::{future, stream, Future, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use std::boxed::Box;
+use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -182,7 +183,7 @@ impl<H: CmdCtxHandler> Session<H> {
         cmd_ctx_handler: H,
         slow_request_logger: sync::Arc<SlowRequestLogger>,
     ) -> Self {
-        let cluster_name = ClusterName::from(DEFAULT_CLUSTER).expect("Session::new");
+        let cluster_name = ClusterName::try_from(DEFAULT_CLUSTER).expect("Session::new");
         Session {
             session_id,
             cluster_name: sync::Arc::new(sync::RwLock::new(cluster_name)),
@@ -320,6 +321,7 @@ mod tests {
     use super::*;
     use crate::protocol::{Array, BulkStr, Resp};
     use matches::assert_matches;
+    use std::convert::TryFrom;
     use std::sync::{Arc, RwLock};
     use tokio;
 
@@ -328,7 +330,7 @@ mod tests {
         let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(
             b"PING".to_vec(),
         ))])));
-        let cluster_name = Arc::new(RwLock::new(ClusterName::from("mycluster").unwrap()));
+        let cluster_name = Arc::new(RwLock::new(ClusterName::try_from("mycluster").unwrap()));
         let cmd = Command::new(Box::new(request));
         let (sender, receiver) = new_command_pair();
         let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799);

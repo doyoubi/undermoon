@@ -3,6 +3,7 @@ use crate::common::proto::ClusterMapFlags;
 use crate::common::utils::{CmdParseError, ThreadSafe};
 use crate::protocol::{Array, BulkStr, RedisClientError, Resp};
 use futures::Future;
+use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -82,7 +83,8 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
 
         let role = it.next().ok_or(CmdParseError {})?;
         let cluster_name = it.next().ok_or(CmdParseError {})?;
-        let cluster_name = ClusterName::from(&cluster_name).map_err(|_| CmdParseError {})?;
+        let cluster_name =
+            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
         let node_address = it.next().ok_or(CmdParseError {})?;
         let peer_num = it
             .next()

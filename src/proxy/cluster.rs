@@ -637,7 +637,7 @@ mod tests {
         let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -653,7 +653,7 @@ mod tests {
         let long_address: String = repeat('x').take(50).collect();
         let slot_ranges = gen_testing_slot_ranges(&long_address);
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -667,7 +667,7 @@ mod tests {
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -688,7 +688,7 @@ mod tests {
             }
         }
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -709,7 +709,7 @@ mod tests {
             }
         }
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -726,7 +726,7 @@ mod tests {
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -747,7 +747,7 @@ mod tests {
             }
         }
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -768,7 +768,7 @@ mod tests {
             }
         }
         let output = gen_cluster_nodes_helper(
-            &ClusterName::from("testcluster").unwrap(),
+            &ClusterName::try_from("testcluster").unwrap(),
             233,
             &slot_ranges,
             &m,
@@ -823,6 +823,6 @@ mod tests {
 
     #[test]
     fn test_default_cluster_length() {
-        ClusterName::from(DEFAULT_CLUSTER).unwrap();
+        ClusterName::try_from(DEFAULT_CLUSTER).unwrap();
     }
 }

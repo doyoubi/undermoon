@@ -234,7 +234,7 @@ mod tests {
     use tokio;
 
     fn gen_testing_proxy(role: Role) -> Proxy {
-        let cluste_name = ClusterName::from("mycluster").unwrap();
+        let cluste_name = ClusterName::try_from("mycluster").unwrap();
         let slot_range = SlotRange {
             range_list: RangeList::try_from("1 233-666").unwrap(),
             tag: SlotRangeTag::None,

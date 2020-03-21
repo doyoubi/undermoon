@@ -22,6 +22,7 @@ use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use btoi::btou;
 use futures::future;
+use std::convert::TryFrom;
 use std::str;
 use std::sync::{self, Arc};
 
@@ -112,7 +113,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 }
             },
         };
-        let cluster_name = match ClusterName::from(&cluster) {
+        let cluster_name = match ClusterName::try_from(cluster.as_str()) {
             Ok(cluster_name) => cluster_name,
             _err => {
                 return cmd_ctx.set_resp_result(Ok(Resp::Error(
