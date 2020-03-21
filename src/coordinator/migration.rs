@@ -158,7 +158,7 @@ mod tests {
             })
             .times(1)
             .returning(|_| {
-                let reply = b"mydb MIGRATING 1 233-666 7799 127.0.0.1:6000 127.0.0.1:7000 127.0.0.1:6001 127.0.0.1:7001".to_vec();
+                let reply = b"mycluster MIGRATING 1 233-666 7799 127.0.0.1:6000 127.0.0.1:7000 127.0.0.1:6001 127.0.0.1:7001".to_vec();
                 let resp = Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(reply))]));
                 Box::pin(async { Ok(resp) })
             });
@@ -173,7 +173,7 @@ mod tests {
         let res: Vec<_> = checker.check("127.0.0.1:6000".to_string()).collect().await;
         assert_eq!(res.len(), 1);
         let meta = res[0].as_ref().unwrap();
-        assert_eq!(meta.cluster_name.to_string(), "mydb");
+        assert_eq!(meta.cluster_name.to_string(), "mycluster");
         let tag = SlotRangeTag::Migrating(MigrationMeta {
             epoch: 7799,
             src_proxy_address: "127.0.0.1:6000".to_string(),
@@ -201,7 +201,7 @@ mod tests {
             tag,
         };
         MigrationTaskMeta {
-            cluster_name: ClusterName::from("mydb").unwrap(),
+            cluster_name: ClusterName::from("mycluster").unwrap(),
             slot_range,
         }
     }

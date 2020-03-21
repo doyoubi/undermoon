@@ -67,7 +67,7 @@ server_proxy{{ proxy_port }}:
   - RUST_BACKTRACE=full
   - UNDERMOON_ADDRESS=0.0.0.0:{{ proxy_port }}
   - UNDERMOON_ANNOUNCE_ADDRESS=server_proxy{{ proxy_port }}:{{ proxy_port }}
-  - UNDERMOON_AUTO_SELECT_DB=true
+  - UNDERMOON_AUTO_SELECT_CLUSTER=true
   - UNDERMOON_SLOWLOG_LEN=1024
   - UNDERMOON_SLOWLOG_LOG_SLOWER_THAN=50000
   - UNDERMOON_THREAD_NUMBER=1

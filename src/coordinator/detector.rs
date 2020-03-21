@@ -37,7 +37,7 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
 // When the cluster is added some new proxies, the client may be redirected
 // to the new nodes especially when the migration starts.
 // But this time the metadata might have not synchronized to the new nodes
-// yet. This will cause a `db not found` error since the new nodes is still
+// yet. This will cause a `cluster not found` error since the new nodes is still
 // uninitialized. Thus we should always synchronize the metadata to the
 // new nodes first.
 //
@@ -351,7 +351,7 @@ mod tests {
         mock_broker.expect_get_cluster_names().returning(move || {
             Box::pin(stream::iter(
                 vec![
-                    ClusterName::from("dybdb").unwrap(),
+                    ClusterName::from("dybcluster").unwrap(),
                     ClusterName::from("notfound").unwrap(),
                 ]
                 .into_iter()
@@ -370,7 +370,7 @@ mod tests {
             Node::new(
                 "redis1:port1".to_string(),
                 "host1:port1".to_string(),
-                ClusterName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Migrating(mgr_meta.clone()),
@@ -380,7 +380,7 @@ mod tests {
             Node::new(
                 "redis2:port2".to_string(),
                 "host2:port2".to_string(),
-                ClusterName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 666-6699").unwrap(),
                     tag: SlotRangeTag::None,
@@ -390,7 +390,7 @@ mod tests {
             Node::new(
                 "redis3:port3".to_string(),
                 "host3:port3".to_string(),
-                ClusterName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Importing(mgr_meta),
@@ -400,7 +400,7 @@ mod tests {
             Node::new(
                 "redis4:port4".to_string(),
                 "host4:port4".to_string(),
-                ClusterName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![],
                 ReplMeta::new(Role::Master, Vec::new()),
             ),
@@ -409,7 +409,7 @@ mod tests {
             .expect_get_cluster()
             .returning(move |cluster_name| {
                 let cluster = match cluster_name.to_string().as_str() {
-                    "dybdb" => Some(Cluster::new(
+                    "dybcluster" => Some(Cluster::new(
                         cluster_name,
                         5299,
                         nodes.clone(),

@@ -262,10 +262,10 @@ where
 
     pub fn send(&self, mut cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         cmd_task.log_event(TaskEvent::SentToMigrationBackend);
-        self.send_to_db(cmd_task)
+        self.send_to_task(cmd_task)
     }
 
-    pub fn send_to_db(&self, cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
+    pub fn send_to_task(&self, cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         // Optimization for not having any migration.
         if self.empty {
             return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
@@ -319,20 +319,20 @@ where
     pub fn get_left_slots_after_change(
         &self,
         new_migration_map: &Self,
-        new_db_map: &ProxyClusterMap,
+        new_cluster_map: &ProxyClusterMap,
     ) -> HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> {
         let mut left_slots = HashMap::new();
-        for (cluster_name, db) in self.task_map.iter() {
-            let nodes = match new_db_map.get_map().get(cluster_name) {
+        for (cluster_name, cluster_task) in self.task_map.iter() {
+            let nodes = match new_cluster_map.get_map().get(cluster_name) {
                 Some(nodes) => nodes,
                 None => continue,
             };
 
-            for task_meta in db.keys() {
+            for task_meta in cluster_task.keys() {
                 if new_migration_map
                     .task_map
                     .get(cluster_name)
-                    .and_then(|db_task_map| db_task_map.get(task_meta))
+                    .and_then(|cluster_task_map| cluster_task_map.get(task_meta))
                     .is_some()
                 {
                     // task is still running, ignore it.

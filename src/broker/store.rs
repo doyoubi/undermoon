@@ -1619,7 +1619,7 @@ mod tests {
         let epoch1 = store.get_global_epoch();
 
         check_cluster_and_proxy(&store);
-        let cluster_name = "test_db".to_string();
+        let cluster_name = "testcluster".to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
@@ -1650,8 +1650,8 @@ mod tests {
             .sum();
         assert_eq!(free_node_num, original_free_node_num - 4);
 
-        let another_db = "another_db".to_string();
-        store.add_cluster(another_db.clone(), 4).unwrap();
+        let another_cluster = "another_cluster".to_string();
+        store.add_cluster(another_cluster.clone(), 4).unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 <= epoch3);
         check_cluster_and_proxy(&store);
@@ -1708,7 +1708,7 @@ mod tests {
             .sum();
         assert_eq!(free_node_num, original_free_node_num - 4);
 
-        store.remove_cluster(another_db.clone()).unwrap();
+        store.remove_cluster(another_cluster.clone()).unwrap();
         check_cluster_and_proxy(&store);
         let proxies: Vec<_> = store
             .get_proxies()
@@ -1742,7 +1742,7 @@ mod tests {
 
         {
             store
-                .add_cluster("test_db".to_string(), (host_num - 1) * 2)
+                .add_cluster("testcluster".to_string(), (host_num - 1) * 2)
                 .unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
@@ -1761,7 +1761,7 @@ mod tests {
         }
 
         {
-            store.add_cluster("test_db2".to_string(), 4).unwrap();
+            store.add_cluster("testcluster2".to_string(), 4).unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
                 let proxy = store.get_proxy_by_address(&addr, migration_limit).unwrap();
@@ -1815,7 +1815,7 @@ mod tests {
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
 
-        let cluster_name = "test_db".to_string();
+        let cluster_name = "testcluster".to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
         let epoch4 = store.get_global_epoch();
@@ -1901,7 +1901,7 @@ mod tests {
         assert!(epoch6 < epoch7);
     }
 
-    const CLUSTER_NAME: &'static str = "test_db";
+    const CLUSTER_NAME: &'static str = "testcluster";
 
     #[test]
     fn test_add_and_delete_free_nodes() {

@@ -823,7 +823,7 @@ mod tests {
                 {
                     "address": "redis1:7001",
                     "proxy_address": "server_proxy1:6001",
-                    "cluster_name": "mydb",
+                    "cluster_name": "mycluster",
                     "repl": {
                         "role": "master",
                         "peers": [
@@ -838,7 +838,7 @@ mod tests {
                 {
                     "address": "redis4:7004",
                     "proxy_address": "server_proxy1:6001",
-                    "cluster_name": "mydb",
+                    "cluster_name": "mycluster",
                     "repl": {
                         "role": "replica",
                         "peers": [
@@ -854,11 +854,11 @@ mod tests {
             "free_nodes": [],
             "peers": [{
                 "proxy_address": "server_proxy2:6002",
-                "cluster_name": "mydb",
+                "cluster_name": "mycluster",
                 "slots": [{"range_list": [[5462, 10000]], "tag": "None"}]
             }],
             "clusters_config": {
-                "mydb": {
+                "mycluster": {
                     "compression_strategy": "set_get_only"
                 }
             }
@@ -868,7 +868,7 @@ mod tests {
         let mut config = ClusterConfig::default();
         config.compression_strategy = CompressionStrategy::SetGetOnly;
         let mut clusters_config = HashMap::new();
-        clusters_config.insert(ClusterName::from("mydb").unwrap(), config);
+        clusters_config.insert(ClusterName::from("mycluster").unwrap(), config);
 
         let expected_proxy = Proxy::new(
             "server_proxy1:6001".to_string(),
@@ -877,7 +877,7 @@ mod tests {
                 Node::new(
                     "redis1:7001".to_string(),
                     "server_proxy1:6001".to_string(),
-                    ClusterName::from("mydb").unwrap(),
+                    ClusterName::from("mycluster").unwrap(),
                     vec![SlotRange {
                         range_list: RangeList::try_from("1 0-5461").unwrap(),
                         tag: SlotRangeTag::None,
@@ -893,7 +893,7 @@ mod tests {
                 Node::new(
                     "redis4:7004".to_string(),
                     "server_proxy1:6001".to_string(),
-                    ClusterName::from("mydb").unwrap(),
+                    ClusterName::from("mycluster").unwrap(),
                     vec![],
                     ReplMeta::new(
                         Role::Replica,
@@ -907,7 +907,7 @@ mod tests {
             Vec::new(),
             vec![PeerProxy {
                 proxy_address: "server_proxy2:6002".to_string(),
-                cluster_name: ClusterName::from("mydb").unwrap(),
+                cluster_name: ClusterName::from("mycluster").unwrap(),
                 slots: vec![SlotRange {
                     range_list: RangeList::try_from("1 5462-10000").unwrap(),
                     tag: SlotRangeTag::None,

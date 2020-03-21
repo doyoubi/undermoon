@@ -208,7 +208,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     fn handle_umctl_set_cluster(&self, cmd_ctx: CmdCtx) {
-        let (db_meta, extended_res) =
+        let (cluster_meta, extended_res) =
             match ProxyClusterMeta::from_resp(&cmd_ctx.get_cmd().get_resp_slice()) {
                 Ok(r) => r,
                 Err(_) => {
@@ -219,7 +219,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 }
             };
 
-        match self.manager.set_meta(db_meta) {
+        match self.manager.set_meta(cluster_meta) {
             Ok(()) => match extended_res {
                 Ok(()) => {
                     debug!("Successfully update local meta data");
@@ -625,8 +625,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         let mut cmd_ctx = cmd_ctx;
-        if self.config.auto_select_db {
-            cmd_ctx = self.manager.try_select_db(cmd_ctx);
+        if self.config.auto_select_cluster {
+            cmd_ctx = self.manager.try_select_cluster(cmd_ctx);
         }
 
         let cmd_type = cmd_ctx.get_cmd().get_type();

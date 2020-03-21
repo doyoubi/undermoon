@@ -397,8 +397,8 @@ impl<T: CmdTask + ClusterTag> ClusterTag for CounterTask<T> {
         self.inner.get_cluster_name()
     }
 
-    fn set_cluster_name(&mut self, db: ClusterName) {
-        self.inner.set_cluster_name(db)
+    fn set_cluster_name(&mut self, cluster_name: ClusterName) {
+        self.inner.set_cluster_name(cluster_name)
     }
 }
 
@@ -483,7 +483,7 @@ impl<T: CmdTask + ClusterTag> ClusterTag for BlockingHintTask<T> {
         self.inner.get_cluster_name()
     }
 
-    fn set_cluster_name(&mut self, db: ClusterName) {
-        self.inner.set_cluster_name(db)
+    fn set_cluster_name(&mut self, cluster_name: ClusterName) {
+        self.inner.set_cluster_name(cluster_name)
     }
 }

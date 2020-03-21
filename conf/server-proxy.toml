@@ -5,7 +5,7 @@ announce_address = "127.0.0.1:5299"
 # server proxy will automatically set the cluster to default without
 # needing to send AUTH command.
 # This is for those clients or proxies like corvus which do not support AUTH.
-auto_select_db = true
+auto_select_cluster = true
 
 slowlog_len = 1024
 

@@ -232,12 +232,12 @@ fn slowlog_to_report(log: &SlowlogRecord) -> RespVec {
         format!("session_id: {}", log.session_id),
         format!("created: {}", start_date),
         format!(
-            "sent_to_migration_db: {}",
+            "sent_to_migration_backend: {}",
             log.event_map
                 .get_used_time(TaskEvent::SentToMigrationBackend)
         ),
         format!(
-            "sent_to_db: {}",
+            "sent_to_cluster: {}",
             log.event_map.get_used_time(TaskEvent::SentToCluster)
         ),
         format!(

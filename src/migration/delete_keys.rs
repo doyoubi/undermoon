@@ -30,13 +30,13 @@ impl DeleteKeysTaskMap {
         let tasks: Vec<String> = self
             .task_map
             .iter()
-            .map(|(db, nodes)| {
+            .map(|(cluster, nodes)| {
                 nodes
                     .iter()
                     .map(|(address, task)| {
                         format!(
                             "{}-{}-({})-({})",
-                            db,
+                            cluster,
                             address,
                             task.slot_ranges.info(),
                             task.is_finished()
@@ -50,7 +50,7 @@ impl DeleteKeysTaskMap {
 
     pub fn update_from_old_task_map<F: RedisClientFactory>(
         &self,
-        local_db_map: &ProxyClusterMap,
+        local_cluster_map: &ProxyClusterMap,
         left_slots_after_change: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>,
         config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<F>,
@@ -60,7 +60,7 @@ impl DeleteKeysTaskMap {
 
         // Copy old tasks
         for (cluster_name, nodes) in self.task_map.iter() {
-            let new_nodes = match local_db_map.get_map().get(cluster_name) {
+            let new_nodes = match local_cluster_map.get_map().get(cluster_name) {
                 Some(nodes) => nodes,
                 None => continue,
             };
@@ -69,17 +69,17 @@ impl DeleteKeysTaskMap {
                 if new_nodes.get(address).is_none() || task.is_finished() {
                     continue;
                 }
-                let db = new_task_map
+                let cluster = new_task_map
                     .entry(cluster_name.clone())
                     .or_insert_with(HashMap::new);
-                db.insert(address.clone(), task.clone());
+                cluster.insert(address.clone(), task.clone());
             }
         }
 
         // Add new tasks
         for (cluster_name, nodes) in left_slots_after_change.into_iter() {
             for (address, slots) in nodes.into_iter() {
-                let db = new_task_map
+                let cluster = new_task_map
                     .entry(cluster_name.clone())
                     .or_insert_with(HashMap::new);
                 let task = Arc::new(DeleteKeysTask::new(
@@ -88,7 +88,7 @@ impl DeleteKeysTaskMap {
                     client_factory.clone(),
                     config.clone(),
                 ));
-                db.insert(address, task.clone());
+                cluster.insert(address, task.clone());
                 new_tasks.push(task);
             }
         }

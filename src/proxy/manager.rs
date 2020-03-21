@@ -46,17 +46,17 @@ where
 {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let db_map = ClusterBackendMap::default();
+        let cluster_map = ClusterBackendMap::default();
         let migration_map = MigrationMap::new();
         let deleting_task_map = DeleteKeysTaskMap::new();
         Self {
-            cluster_map: db_map,
+            cluster_map,
             migration_map,
             deleting_task_map,
         }
     }
 
-    pub fn get_db_map(&self) -> &ClusterBackendMap<S> {
+    pub fn get_cluster_map(&self) -> &ClusterBackendMap<S> {
         &self.cluster_map
     }
 }
@@ -82,7 +82,7 @@ pub struct MetaManager<F: RedisClientFactory> {
     // inside meta_map.
     meta_map: SharedMetaMap,
     epoch: AtomicU64,
-    lock: Mutex<()>, // This is the write lock for `epoch`, `db`, and `task`.
+    lock: Mutex<()>, // This is the write lock for `epoch`, `cluster`, and `task`.
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, MigrationSenderFactory, CmdCtxFactory>,
     sender_factory: SenderFactory,
@@ -217,12 +217,12 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
     pub fn info(&self) -> String {
         let meta_map = self.meta_map.load();
-        let db_info = meta_map.cluster_map.info();
+        let cluster_info = meta_map.cluster_map.info();
         let mgr_info = meta_map.migration_map.info();
         let del_info = meta_map.deleting_task_map.info();
         format!(
             "# Cluster\r\n{}\r\n# Migration\r\n{}\r\n{}\r\n",
-            db_info, mgr_info, del_info
+            cluster_info, mgr_info, del_info
         )
     }
 
@@ -266,7 +266,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         send_cmd_ctx(&self.meta_map, cmd_ctx);
     }
 
-    pub fn try_select_db(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
+    pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
         if cmd_ctx.get_cluster_name().as_str() != DEFAULT_CLUSTER {
             return cmd_ctx;
         }

@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn test_parse_and_encode_single_replicator() {
         let arguments =
-            "UMCTL SETREPL 233 force master testdb localhost:6000 1 localhost:6001 localhost:5299"
+            "UMCTL SETREPL 233 force master testcluster localhost:6000 1 localhost:6001 localhost:5299"
                 .split(' ')
                 .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
                 .collect();
@@ -214,13 +214,13 @@ mod tests {
         let args = encode_repl_meta(meta.clone()).join(" ");
         assert_eq!(
             args,
-            "233 FORCE master testdb localhost:6000 1 localhost:6001 localhost:5299"
+            "233 FORCE master testcluster localhost:6000 1 localhost:6001 localhost:5299"
         );
     }
 
     #[test]
     fn test_parse_and_encode_multi_replicators() {
-        let arguments = "UMCTL SETREPL 233 noflag master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299"
+        let arguments = "UMCTL SETREPL 233 noflag master testcluster localhost:6000 1 localhost:6001 localhost:5299 replica testcluster localhost:6001 1 localhost:6000 localhost:5299"
             .split(' ')
             .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
             .collect();
@@ -234,20 +234,20 @@ mod tests {
         assert_eq!(meta.replicas.len(), 1);
 
         let master = &meta.masters[0];
-        assert_eq!(master.cluster_name.as_str(), "testdb");
+        assert_eq!(master.cluster_name.as_str(), "testcluster");
         assert_eq!(master.master_node_address, "localhost:6000");
         assert_eq!(master.replicas.len(), 1);
         assert_eq!(master.replicas[0].node_address, "localhost:6001");
         assert_eq!(master.replicas[0].proxy_address, "localhost:5299");
 
         let replica = &meta.replicas[0];
-        assert_eq!(replica.cluster_name.as_str(), "testdb");
+        assert_eq!(replica.cluster_name.as_str(), "testcluster");
         assert_eq!(replica.replica_node_address, "localhost:6001");
         assert_eq!(replica.masters.len(), 1);
         assert_eq!(replica.masters[0].node_address, "localhost:6000");
         assert_eq!(replica.masters[0].proxy_address, "localhost:5299");
 
         let args = encode_repl_meta(meta.clone()).join(" ");
-        assert_eq!(args, "233 NOFLAG master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299")
+        assert_eq!(args, "233 NOFLAG master testcluster localhost:6000 1 localhost:6001 localhost:5299 replica testcluster localhost:6001 1 localhost:6000 localhost:5299")
     }
 }

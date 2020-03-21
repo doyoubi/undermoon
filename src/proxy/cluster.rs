@@ -636,9 +636,13 @@ mod tests {
     fn test_gen_cluster_nodes() {
         let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
-        assert_eq!(output, "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
+        assert_eq!(output, "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
     }
 
     #[test]
@@ -648,9 +652,13 @@ mod tests {
         let m = HashMap::new();
         let long_address: String = repeat('x').take(50).collect();
         let slot_ranges = gen_testing_slot_ranges(&long_address);
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
-        assert_eq!(output, format!("testdb______________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
+        assert_eq!(output, format!("testcluster_________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
     #[test]
@@ -658,11 +666,15 @@ mod tests {
         // From the point of view of other nodes.
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
         assert_eq!(
             output,
-            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -675,11 +687,15 @@ mod tests {
                 m.insert(slot_range.to_range_list(), MigrationState::PreCheck);
             }
         }
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
         assert_eq!(
             output,
-            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
         );
     }
 
@@ -692,11 +708,15 @@ mod tests {
                 m.insert(slot_range.to_range_list(), MigrationState::PreBlocking);
             }
         }
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
         assert_eq!(
             output,
-            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -705,11 +725,15 @@ mod tests {
         // From the point of view of other nodes.
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
         assert_eq!(
             output,
-            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
         );
     }
 
@@ -722,11 +746,15 @@ mod tests {
                 m.insert(slot_range.to_range_list(), MigrationState::PreCheck);
             }
         }
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
         assert_eq!(
             output,
-            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -739,11 +767,15 @@ mod tests {
                 m.insert(slot_range.to_range_list(), MigrationState::PreBlocking);
             }
         }
-        let output =
-            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+        let output = gen_cluster_nodes_helper(
+            &ClusterName::from("testcluster").unwrap(),
+            233,
+            &slot_ranges,
+            &m,
+        );
         assert_eq!(
             output,
-            "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
         );
     }
 

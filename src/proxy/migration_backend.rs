@@ -598,11 +598,11 @@ mod tests {
             Resp::Bulk(BulkStr::Str("GET".to_string().into())),
             Resp::Bulk(BulkStr::Str("somekey".to_string().into())),
         ]));
-        let db = Arc::new(RwLock::new(ClusterName::from("mydb").unwrap()));
+        let cluster = Arc::new(RwLock::new(ClusterName::from("mycluster").unwrap()));
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair();
-        let cmd_ctx = CmdCtx::new(db, cmd, reply_sender, 0);
+        let cmd_ctx = CmdCtx::new(cluster, cmd, reply_sender, 0);
         (cmd_ctx, reply_receiver)
     }
 

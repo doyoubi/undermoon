@@ -122,7 +122,7 @@ impl CmdReplyDecompressor {
 
 fn get_strategy(cluster_name: &ClusterName, meta_map: &SharedMetaMap) -> CompressionStrategy {
     let meta_map = meta_map.lease();
-    match meta_map.get_db_map().get_config(&cluster_name) {
+    match meta_map.get_cluster_map().get_config(&cluster_name) {
         Some(config) => config.compression_strategy,
         None => ClusterConfig::default().compression_strategy,
     }
