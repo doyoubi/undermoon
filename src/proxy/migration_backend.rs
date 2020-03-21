@@ -457,6 +457,7 @@ mod tests {
     use crate::protocol::{BulkStr, Resp};
     use dashmap::DashMap;
     use std::collections::HashMap;
+    use std::convert::TryFrom;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::RwLock;
     use tokio;

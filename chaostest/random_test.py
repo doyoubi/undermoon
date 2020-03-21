@@ -2,7 +2,6 @@ import sys
 import time
 import signal
 import random
-from datetime import datetime
 from loguru import logger
 
 from redis import StrictRedis
@@ -46,6 +45,8 @@ class KeyValueTester:
         proxies = []
         nodes = cluster['nodes']
         for node in nodes:
+            if node['repl']['role'] == 'replica':
+                continue
             proxy_address = node['proxy_address']
             host, port = proxy_address.split(':')
             proxies.append({'host': host, 'port': port, 'epoch': cluster['epoch']})
