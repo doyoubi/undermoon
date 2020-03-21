@@ -317,7 +317,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
-        gen_cluster_nodes_helper(&self.name, self.epoch, &slot_ranges, migration_states)
+        gen_cluster_nodes_helper(&self.name, self.epoch, &slot_ranges, migration_states, true)
     }
 
     pub fn gen_local_cluster_slots(
@@ -404,7 +404,13 @@ impl RemoteCluster {
         &self,
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> String {
-        gen_cluster_nodes_helper(&self.name, self.epoch, &self.slot_ranges, migration_states)
+        gen_cluster_nodes_helper(
+            &self.name,
+            self.epoch,
+            &self.slot_ranges,
+            migration_states,
+            false,
+        )
     }
 
     pub fn gen_remote_cluster_slots(
@@ -475,6 +481,7 @@ fn gen_cluster_nodes_helper(
     epoch: u64,
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<RangeList, MigrationState>,
+    local: bool,
 ) -> String {
     let mut cluster_nodes = String::from("");
     let mut name_seg = format!("{:_<20}", name.to_string());
@@ -514,9 +521,11 @@ fn gen_cluster_nodes_helper(
             slot_range_str.push_str(&slot_range);
         }
 
+        let flags = if local { "myself,master" } else { "master" };
+
         let line = format!(
             "{id} {addr} {flags} {master} {ping_sent} {pong_recv} {epoch} {link_state}{slot_range}\n",
-            id=id, addr=addr, flags="master", master="-", ping_sent=0, pong_recv=0, epoch=epoch,
+            id=id, addr=addr, flags=flags, master="-", ping_sent=0, pong_recv=0, epoch=epoch,
             link_state="connected", slot_range=slot_range_str,
         );
         cluster_nodes.push_str(&line);
@@ -641,8 +650,9 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            true,
         );
-        assert_eq!(output, "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
+        assert_eq!(output, "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected 0-100 300\n");
     }
 
     #[test]
@@ -657,6 +667,7 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            false,
         );
         assert_eq!(output, format!("testcluster_________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
     }
@@ -671,6 +682,7 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            false,
         );
         assert_eq!(
             output,
@@ -692,10 +704,11 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            true,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected\n"
         );
     }
 
@@ -713,10 +726,11 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            true,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -730,6 +744,7 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            false,
         );
         assert_eq!(
             output,
@@ -751,10 +766,11 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            true,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -772,10 +788,11 @@ mod tests {
             233,
             &slot_ranges,
             &m,
+            true,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected\n"
         );
     }
 
