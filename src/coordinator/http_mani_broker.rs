@@ -23,7 +23,7 @@ impl HttpMetaManipulationBroker {
 impl HttpMetaManipulationBroker {
     fn gen_url(&self, path: &str) -> String {
         format!(
-            "http://{}/{}{}",
+            "http://{}{}{}",
             self.broker_address, MEM_BROKER_API_VERSION, path
         )
     }

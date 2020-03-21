@@ -562,7 +562,7 @@ impl ReplMeta {
 
 // (1) In proxy, all Node instances are masters.
 // Replica Node will only be used for replication.
-// (2) Coordinator will send the master Node metadata to proxies' cluster_map module
+// (2) Coordinator will send the master Node metadata to proxies' cluster module
 // and the replica Node metadata to proxies' replication module.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Node {

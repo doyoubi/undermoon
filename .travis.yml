@@ -5,12 +5,14 @@ sudo: required
 rust:
   - 1.41.1
   - stable
-  - nightly
 
 matrix:
-  allow_failures:
-    - rust: nightly
   fast_finish: true
+
+# Using cache will block the task:
+#   https://travis-ci.community/t/builds-timeout-during-or-shortly-after-creating-directory-home-travis-cache-sccache/5001
+# cache:
+#   cargo: true
 
 install:
   - echo 'Installing mylint'
