@@ -779,8 +779,7 @@ mod tests {
                 "dst_proxy_address": "127.0.0.1:7001",
                 "dst_node_address": "127.0.0.1:6380"
             }}"#;
-        let slot_range: SlotRangeTag =
-            serde_json::from_str(importing_str).expect("unexpected string");
+        let slot_range: SlotRangeTag = serde_json::from_str(importing_str).unwrap();
         let meta = MigrationMeta {
             epoch: 233,
             src_proxy_address: "127.0.0.1:7000".to_string(),
@@ -797,23 +796,22 @@ mod tests {
                 "dst_proxy_address": "127.0.0.1:7001",
                 "dst_node_address": "127.0.0.1:6380"
             }}"#;
-        let slot_range: SlotRangeTag =
-            serde_json::from_str(migrating_str).expect("unexpected string");
+        let slot_range: SlotRangeTag = serde_json::from_str(migrating_str).unwrap();
         assert_eq!(SlotRangeTag::Migrating(meta), slot_range);
 
         let none_str = "\"None\"";
-        let slot_range: SlotRangeTag = serde_json::from_str(none_str).expect("unexpected string");
+        let slot_range: SlotRangeTag = serde_json::from_str(none_str).unwrap();
         assert_eq!(SlotRangeTag::None, slot_range);
     }
 
     #[test]
     fn test_deserialize_role() {
         let master_str = "\"master\"";
-        let role: Role = serde_json::from_str(master_str).expect("unexpected string");
+        let role: Role = serde_json::from_str(master_str).unwrap();
         assert_eq!(Role::Master, role);
 
         let replica_str = "\"replica\"";
-        let role: Role = serde_json::from_str(replica_str).expect("unexpected string");
+        let role: Role = serde_json::from_str(replica_str).unwrap();
         assert_eq!(Role::Replica, role);
     }
 

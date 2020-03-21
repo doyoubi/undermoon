@@ -610,15 +610,13 @@ mod tests {
         let cmd = OptionalMulti::Single(vec![b"PING1".to_vec()]);
         encoder
             .encode(cmd, |data| buf.extend_from_slice(data))
-            .expect("test_single_packet encode");
+            .unwrap();
         assert_eq!(buf.as_ref(), b"*1\r\n$5\r\nPING1\r\n");
         let res = decoder.decode(&mut buf);
         assert!(decoder.curr_hint.is_none());
         assert!(decoder.buf.is_empty());
         assert!(decoder.state.consume().is_none());
-        let pkt = res
-            .expect("test_single_packet result")
-            .expect("test_single_packet option");
+        let pkt = res.unwrap().unwrap();
         let response = match pkt {
             OptionalMulti::Multi(_) => panic!("test_single_packet"),
             OptionalMulti::Single(response) => response,
@@ -634,15 +632,13 @@ mod tests {
         let cmd = OptionalMulti::Multi(vec![vec![b"PING1".to_vec()], vec![b"PING2".to_vec()]]);
         encoder
             .encode(cmd, |data| buf.extend_from_slice(data))
-            .expect("test_multi_packet encode");
+            .unwrap();
         assert_eq!(buf.as_ref(), b"*1\r\n$5\r\nPING1\r\n*1\r\n$5\r\nPING2\r\n");
         let res = decoder.decode(&mut buf);
         assert!(decoder.curr_hint.is_none());
         assert!(decoder.buf.is_empty());
         assert!(decoder.state.consume().is_none());
-        let pkt = res
-            .expect("test_multi_packet result")
-            .expect("test_multi_packet option");
+        let pkt = res.unwrap().unwrap();
         let response = match pkt {
             OptionalMulti::Single(_) => panic!("test_multi_packet"),
             OptionalMulti::Multi(response) => response,
@@ -658,15 +654,13 @@ mod tests {
         let cmd = OptionalMulti::Multi(vec![]);
         encoder
             .encode(cmd, |data| buf.extend_from_slice(data))
-            .expect("test_empty_multi_packet encode");
+            .unwrap();
         assert_eq!(buf.as_ref(), b"");
         let res = decoder.decode(&mut buf);
         assert!(decoder.curr_hint.is_none());
         assert!(decoder.buf.is_empty());
         assert!(decoder.state.consume().is_none());
-        let pkt = res
-            .expect("test_empty_multi_packet result")
-            .expect("test_empty_multi_packet option");
+        let pkt = res.unwrap().unwrap();
         let response = match pkt {
             OptionalMulti::Single(_) => panic!("test_empty_multi_packet"),
             OptionalMulti::Multi(response) => response,

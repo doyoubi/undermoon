@@ -207,7 +207,7 @@ mod tests {
         let resp = Resp::Arr(Array::Arr(arguments));
         let r = parse_repl_meta(&resp);
         assert!(r.is_ok());
-        let meta = r.expect("not success");
+        let meta = r.unwrap();
         assert_eq!(meta.epoch, 233);
         assert_eq!(meta.flags, ClusterMapFlags { force: true });
         assert_eq!(meta.masters.len(), 1);
@@ -229,7 +229,7 @@ mod tests {
         let resp = Resp::Arr(Array::Arr(arguments));
         let r = parse_repl_meta(&resp);
         assert!(r.is_ok());
-        let meta = r.expect("not success");
+        let meta = r.unwrap();
         assert_eq!(meta.epoch, 233);
         assert_eq!(meta.flags, ClusterMapFlags { force: false });
         assert_eq!(meta.masters.len(), 1);

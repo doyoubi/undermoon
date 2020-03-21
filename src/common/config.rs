@@ -290,15 +290,13 @@ mod tests {
     #[test]
     fn test_config_set_field() {
         let mut migration_config = MigrationConfig::default();
-        migration_config
-            .set_field("delete_count", "233")
-            .expect("test_config_set_field");
+        migration_config.set_field("delete_count", "233").unwrap();
         assert_eq!(migration_config.delete_count, 233);
 
         let mut cluster_config = ClusterConfig::default();
         cluster_config
             .set_field("migration_delete_count", "666")
-            .expect("test_config_set_field");
+            .unwrap();
         assert_eq!(cluster_config.migration_config.delete_count, 666);
     }
 }

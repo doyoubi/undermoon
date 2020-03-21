@@ -783,7 +783,7 @@ mod tests {
     fn test_gen_cluster_slots() {
         let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
-        let output = gen_cluster_slots_helper(&slot_ranges, &m).expect("test_gen_cluster_slots");
+        let output = gen_cluster_slots_helper(&slot_ranges, &m).unwrap();
         let slot_range1 = Resp::Arr(Array::Arr(vec![
             Resp::Integer(0.to_string().into_bytes()),
             Resp::Integer(100.to_string().into_bytes()),
@@ -809,7 +809,7 @@ mod tests {
     fn test_gen_importing_cluster_slots() {
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
-        let output = gen_cluster_slots_helper(&slot_ranges, &m).expect("test_gen_cluster_slots");
+        let output = gen_cluster_slots_helper(&slot_ranges, &m).unwrap();
         assert_eq!(output.len(), 1);
     }
 
@@ -817,7 +817,7 @@ mod tests {
     fn test_gen_migrating_cluster_slots() {
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
-        let output = gen_cluster_slots_helper(&slot_ranges, &m).expect("test_gen_cluster_slots");
+        let output = gen_cluster_slots_helper(&slot_ranges, &m).unwrap();
         assert_eq!(output.len(), 0);
     }
 

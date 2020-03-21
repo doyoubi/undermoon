@@ -144,13 +144,13 @@ mod tests {
     fn test_parse_len_bytes() {
         let r = parse_len(b"233\r\n");
         assert!(r.is_ok());
-        let (len, s) = r.expect("test_parse_len");
+        let (len, s) = r.unwrap();
         assert_eq!(s, 5);
         assert_eq!(len, 233);
 
         let r = parse_len(b"-233\r\n");
         assert!(r.is_ok());
-        let (len, s) = r.expect("test_parse_len");
+        let (len, s) = r.unwrap();
         assert_eq!(s, 6);
         assert_eq!(len, -233);
 
@@ -163,14 +163,14 @@ mod tests {
         let data = b"233\r\n";
         let r = parse_line(data);
         assert!(r.is_ok());
-        let (b, l) = r.expect("test_parse_line");
+        let (b, l) = r.unwrap();
         assert_eq!(l, 5);
         assert_eq!(&data[b.to_range()], b"233");
 
         let data = b"\r\n";
         let r = parse_line(data);
         assert!(r.is_ok());
-        let (b, l) = r.expect("test_parse_line");
+        let (b, l) = r.unwrap();
         assert_eq!(l, 2);
         assert_eq!(&data[b.to_range()], b"".as_ref());
     }
@@ -180,7 +180,7 @@ mod tests {
         let data = b"2\r\nab\r\n";
         let r = parse_bulk_str(data);
         assert!(r.is_ok());
-        let (content, s) = r.expect("test_parse_bulk_str");
+        let (content, s) = r.unwrap();
         assert_eq!(s, 7);
         assert_eq!(
             Some(b"ab".as_ref()),
@@ -189,7 +189,7 @@ mod tests {
 
         let r = parse_bulk_str(b"-1\r\n");
         assert!(r.is_ok());
-        let (content, s) = r.expect("test_parse_bulk_str");
+        let (content, s) = r.unwrap();
         assert_eq!(s, 4);
         assert_eq!(BulkStrIndex::Nil, content);
 
@@ -198,13 +198,13 @@ mod tests {
 
         let r = parse_bulk_str(b"0\r\n\r\n");
         assert!(r.is_ok());
-        let (content, s) = r.expect("test_parse_bulk_str");
+        let (content, s) = r.unwrap();
         assert_eq!(s, 5);
         assert_eq!(Some(b"".as_ref()), content.try_to_range().map(|r| &data[r]));
 
         let r = parse_bulk_str(b"1\r\na\r\n");
         assert!(r.is_ok());
-        let (content, s) = r.expect("test_parse_bulk_str");
+        let (content, s) = r.unwrap();
         assert_eq!(s, 6);
         assert_eq!(
             Some(b"a".as_ref()),
@@ -224,7 +224,7 @@ mod tests {
         let data = b"2\r\n$1\r\na\r\n$2\r\nbc\r\n";
         let r = parse_array(data);
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_array");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 18);
         let arr = a.map_to_slice(data);
         assert_eq!(
@@ -237,13 +237,13 @@ mod tests {
 
         let r = parse_array(b"-1\r\n");
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_array");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 4);
         assert_eq!(ArrayIndex::Nil, a);
 
         let r = parse_array(b"0\r\n");
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_array");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 3);
         assert_eq!(ArrayIndex::Arr(vec![]), a);
 
@@ -259,41 +259,41 @@ mod tests {
     fn test_parse_resp_bytes() {
         let r = parse_resp(b"*-1\r\n");
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_resp");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 5);
         assert_eq!(RespIndex::Arr(ArrayIndex::Nil), a);
 
         let r = parse_resp(b"*0\r\n");
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_resp");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 4);
         assert_eq!(RespIndex::Arr(ArrayIndex::Arr(vec![])), a);
 
         let data = b"-abc\r\n";
         let r = parse_resp(data);
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_resp");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 6);
         assert_eq!(RespSlice::Error(b"abc"), a.map_to_slice(data));
 
         let data = b":233\r\n";
         let r = parse_resp(data);
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_resp");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 6);
         assert_eq!(RespSlice::Integer(b"233"), a.map_to_slice(data));
 
         let data = b"+233\r\n";
         let r = parse_resp(data);
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_resp");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 6);
         assert_eq!(RespSlice::Simple(b"233"), a.map_to_slice(data));
 
         let data = b"$3\r\nfoo\r\n";
         let r = parse_resp(data);
         assert!(r.is_ok());
-        let (a, s) = r.expect("test_parse_resp");
+        let (a, s) = r.unwrap();
         assert_eq!(s, 9);
         assert_eq!(
             RespSlice::Bulk(BulkStrSlice::Str(b"foo")),
