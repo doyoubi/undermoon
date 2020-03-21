@@ -1341,6 +1341,7 @@ impl MetaStore {
         };
 
         self.takeover_master(&cluster_name, failed_proxy_address.clone())?;
+        self.bump_global_epoch();
 
         let proxy_resource = self.generate_new_free_proxy(failed_proxy_address.clone())?;
         let new_epoch = self.bump_global_epoch();
