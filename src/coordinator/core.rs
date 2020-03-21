@@ -405,7 +405,7 @@ impl<
         S: ProxyMetaSender,
     > ParMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
-    async fn set_db_meta(
+    async fn set_cluster_meta(
         address: String,
         meta_retriever: &MR,
         sender: &S,
@@ -448,8 +448,8 @@ impl<
         }
 
         // Send to dst first to make sure the slots will always have owner.
-        Self::set_db_meta(dst_address, meta_retriever, sender).await?;
-        Self::set_db_meta(src_address, meta_retriever, sender).await?;
+        Self::set_cluster_meta(dst_address, meta_retriever, sender).await?;
+        Self::set_cluster_meta(src_address, meta_retriever, sender).await?;
 
         Ok(())
     }

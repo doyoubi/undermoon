@@ -63,9 +63,9 @@ If node B fails, the coordinators should create a new one and tell node A to cha
 - ping
 - cluster nodes
 - cluster slots
-### nmctl setdb
+### nmctl setcluster
 
-- nmctl setdb epoch flags [dbname1 ip:port slot_range] [PEER [dbname1 ip:port slot_range]] ...
+- nmctl setcluster epoch flags [dbname1 ip:port slot_range] [PEER [dbname1 ip:port slot_range]] ...
 - `epoch` is the epoch of proxy
 - `flags` is reserved. Currently it may be NOFLAG or FORCE. In the future if we add more flags, separate them by ','.
 - `slot_range` can be

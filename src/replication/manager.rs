@@ -2,18 +2,18 @@ use super::redis_replicator::{RedisMasterReplicator, RedisReplicaReplicator};
 use super::replicator::{
     MasterMeta, MasterReplicator, ReplicaMeta, ReplicaReplicator, ReplicatorMeta,
 };
-use crate::common::cluster::DBName;
+use crate::common::cluster::ClusterName;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::track::TrackedFutureRegistry;
 use crate::protocol::RedisClientFactory;
-use crate::proxy::database::DBError;
+use crate::proxy::cluster::ClusterMetaError;
 use itertools::Either;
 use std::collections::HashMap;
 use std::sync::{atomic, Arc, RwLock};
 use tokio;
 
 type ReplicatorRecord = Either<Arc<dyn MasterReplicator>, Arc<dyn ReplicaReplicator>>;
-type ReplicatorMap = HashMap<(DBName, String), ReplicatorRecord>;
+type ReplicatorMap = HashMap<(ClusterName, String), ReplicatorRecord>;
 
 pub struct ReplicatorManager<F: RedisClientFactory> {
     updating_epoch: atomic::AtomicU64,
@@ -32,7 +32,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         }
     }
 
-    pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), DBError> {
+    pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), ClusterMetaError> {
         let ReplicatorMeta {
             epoch,
             flags,
@@ -42,7 +42,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
 
         let force = flags.force;
         if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) >= epoch {
-            return Err(DBError::OldEpoch);
+            return Err(ClusterMetaError::OldEpoch);
         }
 
         // The computation below might take a long time.
@@ -57,13 +57,13 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         let mut replica_key_set = HashMap::new();
         for meta in masters.iter() {
             master_key_set.insert(
-                (meta.db_name.clone(), meta.master_node_address.clone()),
+                (meta.cluster_name.clone(), meta.master_node_address.clone()),
                 meta.clone(),
             );
         }
         for meta in replicas.iter() {
             replica_key_set.insert(
-                (meta.db_name.clone(), meta.replica_node_address.clone()),
+                (meta.cluster_name.clone(), meta.replica_node_address.clone()),
                 meta.clone(),
             );
         }
@@ -100,7 +100,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
 
         // Add new masters
         for meta in masters.into_iter() {
-            let key = (meta.db_name.clone(), meta.master_node_address.clone());
+            let key = (meta.cluster_name.clone(), meta.master_node_address.clone());
             if new_replicators.contains_key(&key) {
                 continue;
             }
@@ -113,7 +113,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         }
         // Add new replicas
         for meta in replicas.into_iter() {
-            let key = (meta.db_name.clone(), meta.replica_node_address.clone());
+            let key = (meta.cluster_name.clone(), meta.replica_node_address.clone());
             if new_replicators.contains_key(&key) {
                 continue;
             }
@@ -134,14 +134,14 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 // We're fooled by the `updating_epoch`, update it.
                 self.updating_epoch
                     .store(replicators.0, atomic::Ordering::SeqCst);
-                return Err(DBError::OldEpoch);
+                return Err(ClusterMetaError::OldEpoch);
             }
 
             let mut handles = vec![];
             for (key, master) in new_masters.into_iter() {
                 debug!("spawn master {} {}", key.0, key.1);
                 let desc = format!(
-                    "replicator: role=master db_name={} master_node_address={}",
+                    "replicator: role=master cluster_name={} master_node_address={}",
                     key.0, key.1
                 );
                 let master = master.clone();
@@ -162,7 +162,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
             for (key, replica) in new_replicas.into_iter() {
                 debug!("spawn replica {} {}", key.0, key.1);
                 let desc = format!(
-                    "replicator: role=replica db_name={} replica_node_address={}",
+                    "replicator: role=replica cluster_name={} replica_node_address={}",
                     key.0, key.1
                 );
                 let replica = replica.clone();
@@ -216,11 +216,11 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
 
         for meta in master_metadata.into_iter() {
             let MasterMeta {
-                db_name,
+                cluster_name,
                 master_node_address,
                 replicas,
             } = meta;
-            report.push_str(&format!("db:{}\n", db_name));
+            report.push_str(&format!("cluster:{}\n", cluster_name));
             report.push_str("role:master\n");
             report.push_str(&format!("node_address:{}\n", master_node_address));
             for replica in replicas.into_iter() {
@@ -233,11 +233,11 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         }
         for meta in replica_metadata.into_iter() {
             let ReplicaMeta {
-                db_name,
+                cluster_name,
                 replica_node_address,
                 masters,
             } = meta;
-            report.push_str(&format!("db:{}\n", db_name));
+            report.push_str(&format!("cluster:{}\n", cluster_name));
             report.push_str("role:replica\n");
             report.push_str(&format!("node_address:{}\n", replica_node_address));
             for master in masters.into_iter() {

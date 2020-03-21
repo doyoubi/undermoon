@@ -264,7 +264,7 @@ mod tests {
     use super::super::core::{FailureDetector, ParFailureDetector};
     use super::*;
     use crate::common::cluster::{
-        DBName, MigrationMeta, Node, RangeList, ReplMeta, Role, SlotRange, SlotRangeTag,
+        ClusterName, MigrationMeta, Node, RangeList, ReplMeta, Role, SlotRange, SlotRangeTag,
     };
     use crate::common::config::ClusterConfig;
     use crate::protocol::{
@@ -351,8 +351,8 @@ mod tests {
         mock_broker.expect_get_cluster_names().returning(move || {
             Box::pin(stream::iter(
                 vec![
-                    DBName::from("dybdb").unwrap(),
-                    DBName::from("notfound").unwrap(),
+                    ClusterName::from("dybdb").unwrap(),
+                    ClusterName::from("notfound").unwrap(),
                 ]
                 .into_iter()
                 .map(Ok),
@@ -370,7 +370,7 @@ mod tests {
             Node::new(
                 "redis1:port1".to_string(),
                 "host1:port1".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybdb").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Migrating(mgr_meta.clone()),
@@ -380,7 +380,7 @@ mod tests {
             Node::new(
                 "redis2:port2".to_string(),
                 "host2:port2".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybdb").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 666-6699").unwrap(),
                     tag: SlotRangeTag::None,
@@ -390,7 +390,7 @@ mod tests {
             Node::new(
                 "redis3:port3".to_string(),
                 "host3:port3".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybdb").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Importing(mgr_meta),
@@ -400,7 +400,7 @@ mod tests {
             Node::new(
                 "redis4:port4".to_string(),
                 "host4:port4".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybdb").unwrap(),
                 vec![],
                 ReplMeta::new(Role::Master, Vec::new()),
             ),

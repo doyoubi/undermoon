@@ -1,6 +1,6 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
 use crate::broker::MEM_BROKER_API_VERSION;
-use crate::common::cluster::{Cluster, DBName, Proxy};
+use crate::common::cluster::{Cluster, ClusterName, Proxy};
 use crate::common::utils::vec_result_to_stream;
 use futures::{Future, FutureExt, Stream};
 use reqwest;
@@ -30,7 +30,7 @@ impl HttpMetaBroker {
         )
     }
 
-    async fn get_cluster_names_impl(&self) -> Result<Vec<DBName>, MetaDataBrokerError> {
+    async fn get_cluster_names_impl(&self) -> Result<Vec<ClusterName>, MetaDataBrokerError> {
         let url = self.gen_url("/clusters/names");
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
@@ -43,7 +43,10 @@ impl HttpMetaBroker {
         Ok(names)
     }
 
-    async fn get_cluster_impl(&self, name: DBName) -> Result<Option<Cluster>, MetaDataBrokerError> {
+    async fn get_cluster_impl(
+        &self,
+        name: ClusterName,
+    ) -> Result<Option<Cluster>, MetaDataBrokerError> {
         let url = self.gen_url(&format!("/clusters/meta/{}", name));
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster {:?}", e);
@@ -127,7 +130,7 @@ impl HttpMetaBroker {
 impl MetaDataBroker for HttpMetaBroker {
     fn get_cluster_names<'s>(
         &'s self,
-    ) -> Pin<Box<dyn Stream<Item = Result<DBName, MetaDataBrokerError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Stream<Item = Result<ClusterName, MetaDataBrokerError>> + Send + 's>> {
         Box::pin(
             self.get_cluster_names_impl()
                 .map(vec_result_to_stream)
@@ -137,7 +140,7 @@ impl MetaDataBroker for HttpMetaBroker {
 
     fn get_cluster<'s>(
         &'s self,
-        name: DBName,
+        name: ClusterName,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>
     {
         Box::pin(self.get_cluster_impl(name))
@@ -181,7 +184,7 @@ impl MetaDataBroker for HttpMetaBroker {
 
 #[derive(Deserialize, Serialize)]
 pub struct ClusterNamesPayload {
-    pub names: Vec<DBName>,
+    pub names: Vec<ClusterName>,
 }
 
 #[derive(Deserialize, Serialize)]

@@ -1,4 +1,4 @@
-use crate::common::cluster::{Cluster, DBName, MigrationTaskMeta, Proxy};
+use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Proxy};
 use crate::common::utils::ThreadSafe;
 use futures::{Future, Stream};
 use mockall::automock;
@@ -17,11 +17,11 @@ mod trait_mod {
     pub trait MetaDataBroker: ThreadSafe {
         fn get_cluster_names<'s>(
             &'s self,
-        ) -> Pin<Box<dyn Stream<Item = Result<DBName, MetaDataBrokerError>> + Send + 's>>;
+        ) -> Pin<Box<dyn Stream<Item = Result<ClusterName, MetaDataBrokerError>> + Send + 's>>;
 
         fn get_cluster<'s>(
             &'s self,
-            name: DBName,
+            name: ClusterName,
         ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaDataBrokerError>> + Send + 's>>;
 
         fn get_proxy_addresses<'s>(

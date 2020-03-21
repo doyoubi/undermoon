@@ -1,13 +1,13 @@
 use super::backend::{CmdTask, CmdTaskFactory};
+use super::cluster::{ClusterMetaError, ClusterTag};
 use super::command::{CmdReplyReceiver, CmdType, DataCmdType, TaskResult};
 use super::compress::{CmdCompressor, CompressionError};
-use super::database::{DBError, DBTag};
 use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
-use crate::common::cluster::DBName;
-use crate::common::db::ProxyDBMeta;
+use crate::common::cluster::ClusterName;
+use crate::common::proto::ProxyClusterMeta;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{
     str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY,
@@ -97,30 +97,30 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 impl<F: RedisClientFactory> ForwardHandler<F> {
     fn handle_auth(&self, mut cmd_ctx: CmdCtx) {
         let key = cmd_ctx.get_key();
-        let db = match key {
+        let cluster = match key {
             None => {
                 return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Missing database name").into_bytes(),
+                    String::from("Missing cluster name").into_bytes(),
                 )))
             }
-            Some(db_name) => match str::from_utf8(&db_name) {
-                Ok(db) => db.to_string(),
+            Some(cluster_name) => match str::from_utf8(&cluster_name) {
+                Ok(cluster) => cluster.to_string(),
                 Err(_) => {
                     return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                        String::from("Invalid database name").into_bytes(),
+                        String::from("Invalid cluster name").into_bytes(),
                     )))
                 }
             },
         };
-        let dbname = match DBName::from(&db) {
-            Ok(dbname) => dbname,
+        let cluster_name = match ClusterName::from(&cluster) {
+            Ok(cluster_name) => cluster_name,
             _err => {
                 return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Database name is too long").into_bytes(),
+                    String::from("Cluster name is too long").into_bytes(),
                 )))
             }
         };
-        cmd_ctx.set_db_name(dbname);
+        cmd_ctx.set_cluster_name(cluster_name);
         cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
     }
 
@@ -131,10 +131,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         };
 
         if str_ascii_case_insensitive_eq(&sub_cmd, "nodes") {
-            let cluster_nodes = self.manager.gen_cluster_nodes(cmd_ctx.get_db_name());
+            let cluster_nodes = self.manager.gen_cluster_nodes(cmd_ctx.get_cluster_name());
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else if str_ascii_case_insensitive_eq(&sub_cmd, "slots") {
-            let cluster_slots = self.manager.gen_cluster_slots(cmd_ctx.get_db_name());
+            let cluster_slots = self.manager.gen_cluster_slots(cmd_ctx.get_cluster_name());
             match cluster_slots {
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
                 Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),
@@ -175,15 +175,15 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
         let sub_cmd = sub_cmd.to_uppercase();
 
-        if sub_cmd.eq("LISTDB") {
-            let dbs = self.manager.get_dbs();
-            let resps = dbs
+        if sub_cmd.eq("LISTCLUSTER") {
+            let clusters = self.manager.get_clusters();
+            let resps = clusters
                 .into_iter()
-                .map(|db| Resp::Bulk(BulkStr::Str(db.to_string().into_bytes())))
+                .map(|cluster_name| Resp::Bulk(BulkStr::Str(cluster_name.to_string().into_bytes())))
                 .collect();
             cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
-        } else if sub_cmd.eq("SETDB") {
-            self.handle_umctl_setdb(cmd_ctx);
+        } else if sub_cmd.eq("SETCLUSTER") {
+            self.handle_umctl_set_cluster(cmd_ctx);
         } else if sub_cmd.eq("SETREPL") {
             self.handle_umctl_setrepl(cmd_ctx);
         } else if sub_cmd.eq("INFOREPL") {
@@ -207,9 +207,9 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         }
     }
 
-    fn handle_umctl_setdb(&self, cmd_ctx: CmdCtx) {
+    fn handle_umctl_set_cluster(&self, cmd_ctx: CmdCtx) {
         let (db_meta, extended_res) =
-            match ProxyDBMeta::from_resp(&cmd_ctx.get_cmd().get_resp_slice()) {
+            match ProxyClusterMeta::from_resp(&cmd_ctx.get_cmd().get_resp_slice()) {
                 Ok(r) => r,
                 Err(_) => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(
@@ -232,9 +232,9 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 }
             },
             Err(err) => match err {
-                DBError::OldEpoch => cmd_ctx
+                ClusterMetaError::OldEpoch => cmd_ctx
                     .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
-                DBError::TryAgain => cmd_ctx
+                ClusterMetaError::TryAgain => cmd_ctx
                     .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
             },
         }
@@ -259,9 +259,9 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             Err(e) => {
                 //                debug!("Failed to update replicator meta data {:?}", e);
                 match e {
-                    DBError::OldEpoch => cmd_ctx
+                    ClusterMetaError::OldEpoch => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
-                    DBError::TryAgain => cmd_ctx
+                    ClusterMetaError::TryAgain => cmd_ctx
                         .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
                 }
             }

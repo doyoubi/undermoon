@@ -1,9 +1,9 @@
 use super::backend::CmdTask;
 use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
-use crate::common::cluster::{DBName, RangeList, SlotRange, SlotRangeTag};
+use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
-use crate::common::db::ProxyDBMeta;
+use crate::common::proto::ProxyClusterMeta;
 use crate::common::utils::{gen_moved, get_slot};
 use crate::migration::task::MigrationState;
 use crate::protocol::{Array, BulkStr, Resp, RespVec};
@@ -13,100 +13,97 @@ use std::error::Error;
 use std::fmt;
 use std::iter::Iterator;
 
-pub const DEFAULT_DB: &str = "admin";
+pub const DEFAULT_CLUSTER: &str = "admin";
 
 #[derive(Debug)]
-pub enum DBError {
+pub enum ClusterMetaError {
     OldEpoch,
     TryAgain,
 }
 
-impl fmt::Display for DBError {
+impl fmt::Display for ClusterMetaError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl Error for DBError {
-    fn description(&self) -> &str {
-        "db error"
-    }
-
+impl Error for ClusterMetaError {
     fn cause(&self) -> Option<&dyn Error> {
         None
     }
 }
 
-pub trait DBTag {
-    fn get_db_name(&self) -> DBName;
-    fn set_db_name(&mut self, db: DBName);
+pub trait ClusterTag {
+    fn get_cluster_name(&self) -> ClusterName;
+    fn set_cluster_name(&mut self, cluster_name: ClusterName);
 }
 
-pub struct DatabaseMap<S: CmdTaskSender>
+pub struct ClusterBackendMap<S: CmdTaskSender>
 where
-    <S as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: ClusterTag,
 {
-    local_dbs: HashMap<DBName, Database<S>>,
-    remote_dbs: HashMap<DBName, RemoteDB>,
+    local_clusters: HashMap<ClusterName, LocalCluster<S>>,
+    remote_clusters: HashMap<ClusterName, RemoteCluster>,
 }
 
-impl<S: CmdTaskSender> Default for DatabaseMap<S>
+impl<S: CmdTaskSender> Default for ClusterBackendMap<S>
 where
-    <S as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: ClusterTag,
 {
     fn default() -> Self {
         Self {
-            local_dbs: HashMap::new(),
-            remote_dbs: HashMap::new(),
+            local_clusters: HashMap::new(),
+            remote_clusters: HashMap::new(),
         }
     }
 }
 
-impl<S: CmdTaskSender> DatabaseMap<S>
+impl<S: CmdTaskSender> ClusterBackendMap<S>
 where
-    <S as CmdTaskSender>::Task: DBTag,
+    <S as CmdTaskSender>::Task: ClusterTag,
 {
-    pub fn from_db_map<F: CmdTaskSenderFactory<Sender = S>>(
-        db_meta: &ProxyDBMeta,
+    pub fn from_cluster_map<F: CmdTaskSenderFactory<Sender = S>>(
+        cluster_meta: &ProxyClusterMeta,
         sender_factory: &F,
     ) -> Self {
-        let epoch = db_meta.get_epoch();
+        let epoch = cluster_meta.get_epoch();
 
-        let mut local_dbs = HashMap::new();
-        for (db_name, slot_ranges) in db_meta.get_local().get_map().iter() {
-            let config = db_meta.get_configs().get(db_name);
-            let db = Database::from_slot_map(
+        let mut local_clusters = HashMap::new();
+        for (cluster_name, slot_ranges) in cluster_meta.get_local().get_map().iter() {
+            let config = cluster_meta.get_configs().get(cluster_name);
+            let local_cluster = LocalCluster::from_slot_map(
                 sender_factory,
-                db_name.clone(),
+                cluster_name.clone(),
                 epoch,
                 slot_ranges.clone(),
                 config,
             );
-            local_dbs.insert(db_name.clone(), db);
+            local_clusters.insert(cluster_name.clone(), local_cluster);
         }
 
-        let mut remote_dbs = HashMap::new();
-        for (db_name, slot_ranges) in db_meta.get_peer().get_map().iter() {
-            let remote_db = RemoteDB::from_slot_map(db_name.clone(), epoch, slot_ranges.clone());
-            remote_dbs.insert(db_name.clone(), remote_db);
+        let mut remote_clusters = HashMap::new();
+        for (cluster_name, slot_ranges) in cluster_meta.get_peer().get_map().iter() {
+            let remote_cluster =
+                RemoteCluster::from_slot_map(cluster_name.clone(), epoch, slot_ranges.clone());
+            remote_clusters.insert(cluster_name.clone(), remote_cluster);
         }
         Self {
-            local_dbs,
-            remote_dbs,
+            local_clusters,
+            remote_clusters,
         }
     }
 
     pub fn info(&self) -> String {
         let local = self
-            .local_dbs
+            .local_clusters
             .iter()
-            .map(|(_, db)| db.info())
+            .map(|(_, local_cluster)| local_cluster.info())
             .collect::<Vec<String>>()
             .join("\r\n");
         let peer = self
-            .remote_dbs
+            .remote_clusters
             .iter()
-            .map(|(_, db)| db.info())
+            .map(|(_, remote_cluster)| remote_cluster.info())
             .collect::<Vec<String>>()
             .join("\r\n");
         format!("{}\r\n{}", local, peer)
@@ -115,79 +112,87 @@ where
     pub fn send(
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
-        let (cmd_task, db_exists) = match self.local_dbs.get(&cmd_task.get_db_name()) {
-            Some(db) => match db.send(cmd_task) {
-                Err(DBSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
+    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
+        let (cmd_task, cluster_exists) = match self.local_clusters.get(&cmd_task.get_cluster_name())
+        {
+            Some(local_cluster) => match local_cluster.send(cmd_task) {
+                Err(ClusterSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
                 others => return others,
             },
             None => (cmd_task, false),
         };
 
-        match self.remote_dbs.get(&cmd_task.get_db_name()) {
-            Some(remote_db) => remote_db.send_remote(cmd_task),
+        match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
+            Some(remote_cluster) => remote_cluster.send_remote(cmd_task),
             None => {
-                if db_exists {
+                if cluster_exists {
                     let resp = Resp::Error(
-                        format!("slot not found: {}", cmd_task.get_db_name()).into_bytes(),
+                        format!("slot not found: {}", cmd_task.get_cluster_name()).into_bytes(),
                     );
                     cmd_task.set_resp_result(Ok(resp));
-                    Err(DBSendError::SlotNotCovered)
+                    Err(ClusterSendError::SlotNotCovered)
                 } else {
-                    let db_name = cmd_task.get_db_name().to_string();
-                    debug!("db not found: {}", db_name);
-                    let resp = Resp::Error(format!("db not found: {}", db_name).into_bytes());
+                    let cluster_name = cmd_task.get_cluster_name().to_string();
+                    debug!("cluster not found: {}", cluster_name);
+                    let resp =
+                        Resp::Error(format!("cluster not found: {}", cluster_name).into_bytes());
                     cmd_task.set_resp_result(Ok(resp));
-                    Err(DBSendError::DBNotFound(db_name))
+                    Err(ClusterSendError::ClusterNotFound(cluster_name))
                 }
             }
         }
     }
 
-    pub fn get_dbs(&self) -> Vec<DBName> {
-        self.local_dbs.keys().cloned().collect()
+    pub fn get_clusters(&self) -> Vec<ClusterName> {
+        self.local_clusters.keys().cloned().collect()
     }
 
     pub fn gen_cluster_nodes(
         &self,
-        dbname: DBName,
+        cluster_name: ClusterName,
         service_address: String,
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> String {
-        let local = self.local_dbs.get(&dbname).map_or("".to_string(), |db| {
-            db.gen_local_cluster_nodes(service_address, migration_states)
-        });
+        let local =
+            self.local_clusters
+                .get(&cluster_name)
+                .map_or("".to_string(), |local_cluster| {
+                    local_cluster.gen_local_cluster_nodes(service_address, migration_states)
+                });
         let remote = self
-            .remote_dbs
-            .get(&dbname)
-            .map_or("".to_string(), |remote_db| {
-                remote_db.gen_remote_cluster_nodes(migration_states)
+            .remote_clusters
+            .get(&cluster_name)
+            .map_or("".to_string(), |remote_cluster| {
+                remote_cluster.gen_remote_cluster_nodes(migration_states)
             });
         format!("{}{}", local, remote)
     }
 
     pub fn gen_cluster_slots(
         &self,
-        dbname: DBName,
+        cluster_name: ClusterName,
         service_address: String,
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> Result<RespVec, String> {
-        let mut local = self.local_dbs.get(&dbname).map_or(Ok(vec![]), |db| {
-            db.gen_local_cluster_slots(service_address, migration_states)
-        })?;
+        let mut local =
+            self.local_clusters
+                .get(&cluster_name)
+                .map_or(Ok(vec![]), |local_cluster| {
+                    local_cluster.gen_local_cluster_slots(service_address, migration_states)
+                })?;
         let mut remote = self
-            .remote_dbs
-            .get(&dbname)
-            .map_or(Ok(vec![]), |remote_db| {
-                remote_db.gen_remote_cluster_slots(migration_states)
+            .remote_clusters
+            .get(&cluster_name)
+            .map_or(Ok(vec![]), |remote_cluster| {
+                remote_cluster.gen_remote_cluster_slots(migration_states)
             })?;
         local.append(&mut remote);
         Ok(Resp::Arr(Array::Arr(local)))
     }
 
-    pub fn auto_select_db(&self) -> Option<DBName> {
+    pub fn auto_select_cluster(&self) -> Option<ClusterName> {
         {
-            let local = &self.local_dbs;
+            let local = &self.local_clusters;
             match local.len() {
                 0 => (),
                 1 => return local.keys().next().cloned(),
@@ -195,7 +200,7 @@ where
             }
         }
         {
-            let remote = &self.remote_dbs;
+            let remote = &self.remote_clusters;
             if remote.len() == 1 {
                 return remote.keys().next().cloned();
             }
@@ -203,31 +208,33 @@ where
         None
     }
 
-    pub fn get_config(&self, dbname: &DBName) -> Option<&ClusterConfig> {
-        self.local_dbs.get(dbname).map(|db| &db.config)
+    pub fn get_config(&self, cluster_name: &ClusterName) -> Option<&ClusterConfig> {
+        self.local_clusters
+            .get(cluster_name)
+            .map(|local_cluster| &local_cluster.config)
     }
 }
 
 // We combine the nodes and slot_map to let them fit into
 // the same lock with a smaller critical section
 // compared to the one we need if splitting them.
-struct LocalDB<S: CmdTaskSender> {
+struct LocalBackend<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
 }
 
-pub struct Database<S: CmdTaskSender> {
-    name: DBName,
+pub struct LocalCluster<S: CmdTaskSender> {
+    name: ClusterName,
     epoch: u64,
-    local_db: LocalDB<S>,
+    local_backend: LocalBackend<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     config: ClusterConfig,
 }
 
-impl<S: CmdTaskSender> Database<S> {
+impl<S: CmdTaskSender> LocalCluster<S> {
     pub fn from_slot_map<F: CmdTaskSenderFactory<Sender = S>>(
         sender_factory: &F,
-        name: DBName,
+        name: ClusterName,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
         config: ClusterConfig,
@@ -236,14 +243,14 @@ impl<S: CmdTaskSender> Database<S> {
         for addr in slot_map.keys() {
             nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
         }
-        let local_db = LocalDB {
+        let local_backend = LocalBackend {
             nodes,
             slot_map: SlotMap::from_ranges(slot_map.clone()),
         };
-        Database {
+        LocalCluster {
             name,
             epoch,
-            local_db,
+            local_backend,
             slot_ranges: slot_map,
             config,
         }
@@ -275,25 +282,25 @@ impl<S: CmdTaskSender> Database<S> {
     pub fn send(
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
-    ) -> Result<(), DBSendError<<S as CmdTaskSender>::Task>> {
+    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
-                return Err(DBSendError::MissingKey);
+                return Err(ClusterSendError::MissingKey);
             }
         };
 
-        match self.local_db.slot_map.get_by_key(key) {
-            Some(addr) => match self.local_db.nodes.get(addr) {
-                Some(sender) => sender.send(cmd_task).map_err(DBSendError::Backend),
+        match self.local_backend.slot_map.get_by_key(key) {
+            Some(addr) => match self.local_backend.nodes.get(addr) {
+                Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::Backend),
                 None => {
                     warn!("failed to get node");
-                    Err(DBSendError::SlotNotFound(cmd_task))
+                    Err(ClusterSendError::SlotNotFound(cmd_task))
                 }
             },
-            None => Err(DBSendError::SlotNotFound(cmd_task)),
+            None => Err(ClusterSendError::SlotNotFound(cmd_task)),
         }
     }
 
@@ -330,20 +337,20 @@ impl<S: CmdTaskSender> Database<S> {
     }
 }
 
-pub struct RemoteDB {
-    name: DBName,
+pub struct RemoteCluster {
+    name: ClusterName,
     epoch: u64,
     slot_map: SlotMap,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
 }
 
-impl RemoteDB {
+impl RemoteCluster {
     pub fn from_slot_map(
-        name: DBName,
+        name: ClusterName,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
-    ) -> RemoteDB {
-        RemoteDB {
+    ) -> RemoteCluster {
+        RemoteCluster {
             name,
             epoch,
             slot_map: SlotMap::from_ranges(slot_map.clone()),
@@ -370,13 +377,13 @@ impl RemoteDB {
         lines.join("\r\n")
     }
 
-    pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), DBSendError<T>> {
+    pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), ClusterSendError<T>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
-                return Err(DBSendError::MissingKey);
+                return Err(ClusterSendError::MissingKey);
             }
         };
         match self.slot_map.get_by_key(key) {
@@ -388,7 +395,7 @@ impl RemoteDB {
             None => {
                 let resp = Resp::Error(format!("slot not covered {:?}", key).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
-                Err(DBSendError::SlotNotCovered)
+                Err(ClusterSendError::SlotNotCovered)
             }
         }
     }
@@ -408,61 +415,63 @@ impl RemoteDB {
     }
 }
 
-pub enum DBSendError<T: CmdTask> {
+pub enum ClusterSendError<T: CmdTask> {
     MissingKey,
-    DBNotFound(String),
+    ClusterNotFound(String),
     SlotNotFound(T),
     SlotNotCovered,
     Backend(BackendError),
     MigrationError,
 }
 
-impl<T: CmdTask> fmt::Display for DBSendError<T> {
+impl<T: CmdTask> fmt::Display for ClusterSendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl<T: CmdTask> fmt::Debug for DBSendError<T> {
+impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            Self::MissingKey => "DBSendError::MissingKey".to_string(),
-            Self::DBNotFound(db) => format!("DBSendError::DBNotFound({})", db),
-            Self::SlotNotFound(_) => "DBSendError::SlotNotFound".to_string(),
-            Self::SlotNotCovered => "DBSendError::SlotNotCovered".to_string(),
-            Self::Backend(err) => format!("DBSendError::Backend({})", err),
-            Self::MigrationError => "DBSendError::MigrationError".to_string(),
+            Self::MissingKey => "ClusterSendError::MissingKey".to_string(),
+            Self::ClusterNotFound(cluster_name) => {
+                format!("ClusterSendError::ClusterNotFound({})", cluster_name)
+            }
+            Self::SlotNotFound(_) => "ClusterSendError::SlotNotFound".to_string(),
+            Self::SlotNotCovered => "ClusterSendError::SlotNotCovered".to_string(),
+            Self::Backend(err) => format!("ClusterSendError::Backend({})", err),
+            Self::MigrationError => "ClusterSendError::MigrationError".to_string(),
         };
         write!(f, "{}", s)
     }
 }
 
-impl<T: CmdTask> Error for DBSendError<T> {
+impl<T: CmdTask> Error for ClusterSendError<T> {
     fn description(&self) -> &str {
         match self {
-            DBSendError::MissingKey => "missing key",
-            DBSendError::DBNotFound(_) => "db not found",
-            DBSendError::SlotNotFound(_) => "slot not found",
-            DBSendError::Backend(_) => "backend error",
-            DBSendError::SlotNotCovered => "slot not covered",
-            DBSendError::MigrationError => "migration queue error",
+            ClusterSendError::MissingKey => "missing key",
+            ClusterSendError::ClusterNotFound(_) => "cluster not found",
+            ClusterSendError::SlotNotFound(_) => "slot not found",
+            ClusterSendError::Backend(_) => "backend error",
+            ClusterSendError::SlotNotCovered => "slot not covered",
+            ClusterSendError::MigrationError => "migration queue error",
         }
     }
 
     fn cause(&self) -> Option<&dyn Error> {
         match self {
-            DBSendError::MissingKey => None,
-            DBSendError::DBNotFound(_) => None,
-            DBSendError::SlotNotFound(_) => None,
-            DBSendError::Backend(err) => Some(err),
-            DBSendError::SlotNotCovered => None,
-            DBSendError::MigrationError => None,
+            ClusterSendError::MissingKey => None,
+            ClusterSendError::ClusterNotFound(_) => None,
+            ClusterSendError::SlotNotFound(_) => None,
+            ClusterSendError::Backend(err) => Some(err),
+            ClusterSendError::SlotNotCovered => None,
+            ClusterSendError::MigrationError => None,
         }
     }
 }
 
 fn gen_cluster_nodes_helper(
-    name: &DBName,
+    name: &ClusterName,
     epoch: u64,
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<RangeList, MigrationState>,
@@ -628,7 +637,7 @@ mod tests {
         let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(output, "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-100 300\n");
     }
 
@@ -640,7 +649,7 @@ mod tests {
         let long_address: String = repeat('x').take(50).collect();
         let slot_ranges = gen_testing_slot_ranges(&long_address);
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(output, format!("testdb______________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
@@ -650,7 +659,7 @@ mod tests {
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
@@ -667,7 +676,7 @@ mod tests {
             }
         }
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
@@ -684,7 +693,7 @@ mod tests {
             }
         }
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
@@ -697,7 +706,7 @@ mod tests {
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
@@ -714,7 +723,7 @@ mod tests {
             }
         }
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
@@ -731,7 +740,7 @@ mod tests {
             }
         }
         let output =
-            gen_cluster_nodes_helper(&DBName::from("testdb").unwrap(), 233, &slot_ranges, &m);
+            gen_cluster_nodes_helper(&ClusterName::from("testdb").unwrap(), 233, &slot_ranges, &m);
         assert_eq!(
             output,
             "testdb______________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
@@ -781,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn test_default_db_length() {
-        DBName::from(DEFAULT_DB).unwrap();
+    fn test_default_cluster_length() {
+        ClusterName::from(DEFAULT_CLUSTER).unwrap();
     }
 }

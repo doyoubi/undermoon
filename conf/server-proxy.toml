@@ -1,8 +1,8 @@
 address = "127.0.0.1:5299"
 announce_address = "127.0.0.1:5299"
 
-# If this server proxy has one and only one cluster(database) set,
-# server proxy will automatically set the cluster(database) to default without
+# If this server proxy has one and only one cluster set,
+# server proxy will automatically set the cluster to default without
 # needing to send AUTH command.
 # This is for those clients or proxies like corvus which do not support AUTH.
 auto_select_db = true

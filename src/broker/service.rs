@@ -1,5 +1,5 @@
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
-use crate::common::cluster::{Cluster, DBName, MigrationTaskMeta, Node, Proxy};
+use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, ProxyAddressesPayload, ProxyPayload,
@@ -126,7 +126,7 @@ impl MemBrokerService {
             .get_proxy_by_address(address, migration_limit)
     }
 
-    pub fn get_cluster_names(&self) -> Vec<DBName> {
+    pub fn get_cluster_names(&self) -> Vec<ClusterName> {
         self.store
             .read()
             .expect("MemBrokerService::get_cluster_names")

@@ -1,8 +1,8 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
-use crate::common::cluster::{DBName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag};
+use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
-use crate::common::db::ProxyDBMap;
+use crate::common::proto::ProxyClusterMap;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{get_slot, ThreadSafe};
 use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
@@ -13,7 +13,7 @@ use crate::proxy::backend::{
     CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, ReqTask,
 };
 use crate::proxy::blocking::{BlockingHintTask, TaskBlockingControllerFactory};
-use crate::proxy::database::{DBSendError, DBTag};
+use crate::proxy::cluster::{ClusterSendError, ClusterTag};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
 use futures::TryFutureExt;
@@ -26,12 +26,12 @@ struct MgrTask<T: CmdTask> {
     task: TaskRecord<T>,
     _stop_handle: Option<Box<dyn Drop + Send + Sync + 'static>>,
 }
-type DBTask<T> = HashMap<MigrationTaskMeta, Arc<MgrTask<T>>>;
-type TaskMap<T> = HashMap<DBName, DBTask<T>>;
+type ClusterTask<T> = HashMap<MigrationTaskMeta, Arc<MgrTask<T>>>;
+type TaskMap<T> = HashMap<ClusterName, ClusterTask<T>>;
 type NewMigrationTuple<T> = (MigrationMap<T>, Vec<NewTask<T>>);
 
 pub struct NewTask<T: CmdTask> {
-    db_name: DBName,
+    cluster_name: ClusterName,
     epoch: u64,
     range_list: RangeList,
     task: TaskRecord<T>,
@@ -41,7 +41,7 @@ pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory +
 where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
-    CTF::Task: DBTag,
+    CTF::Task: ClusterTag,
 {
     config: Arc<ServerProxyConfig>,
     mgr_config: Arc<AtomicMigrationConfig>,
@@ -56,7 +56,7 @@ impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
 where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
-    CTF::Task: DBTag,
+    CTF::Task: ClusterTag,
 {
     pub fn new(
         config: Arc<ServerProxyConfig>,
@@ -80,11 +80,11 @@ where
     pub fn create_new_migration_map<BCF: TaskBlockingControllerFactory>(
         &self,
         old_migration_map: &MigrationMap<CTF::Task>,
-        local_db_map: &ProxyDBMap,
+        local_cluster_map: &ProxyClusterMap,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<CTF::Task> {
         old_migration_map.update_from_old_task_map(
-            local_db_map,
+            local_cluster_map,
             self.config.clone(),
             self.mgr_config.clone(),
             self.client_factory.clone(),
@@ -101,7 +101,7 @@ where
         }
 
         for NewTask {
-            db_name,
+            cluster_name,
             epoch,
             range_list,
             task,
@@ -111,13 +111,13 @@ where
                 Either::Left(migrating_task) => {
                     info!(
                         "spawn slot migrating task {} {} {}",
-                        db_name,
+                        cluster_name,
                         epoch,
                         range_list.to_strings().join(" "),
                     );
                     let desc = format!(
-                        "migration: tag=migrating db_name={}, epoch={}, slot_range=({})",
-                        db_name,
+                        "migration: tag=migrating cluster_name={}, epoch={}, slot_range=({})",
+                        cluster_name,
                         epoch,
                         range_list.to_strings().join(" "),
                     );
@@ -126,7 +126,7 @@ where
                         if let Err(err) = migrating_task.start().await {
                             error!(
                                 "master slot task {} {} exit {:?} slot_range {}",
-                                db_name,
+                                cluster_name,
                                 epoch,
                                 err,
                                 range_list.to_strings().join(" "),
@@ -140,13 +140,13 @@ where
                 Either::Right(importing_task) => {
                     info!(
                         "spawn slot importing task {} {} {}",
-                        db_name,
+                        cluster_name,
                         epoch,
                         range_list.to_strings().join(" "),
                     );
                     let desc = format!(
-                        "migration: tag=importing db_name={}, epoch={}, slot_range=({})",
-                        db_name,
+                        "migration: tag=importing cluster_name={}, epoch={}, slot_range=({})",
+                        cluster_name,
                         epoch,
                         range_list.to_strings().join(" "),
                     );
@@ -155,7 +155,7 @@ where
                         if let Err(err) = importing_task.start().await {
                             warn!(
                                 "replica slot task {} {} exit {:?} slot_range {}",
-                                db_name,
+                                cluster_name,
                                 epoch,
                                 err,
                                 range_list.to_strings().join(" "),
@@ -174,11 +174,11 @@ where
     pub fn create_new_deleting_task_map(
         &self,
         old_deleting_task_map: &DeleteKeysTaskMap,
-        local_db_map: &ProxyDBMap,
-        left_slots_after_change: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
+        local_cluster_map: &ProxyClusterMap,
+        left_slots_after_change: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>,
     ) -> (DeleteKeysTaskMap, Vec<Arc<DeleteKeysTask>>) {
         old_deleting_task_map.update_from_old_task_map(
-            local_db_map,
+            local_cluster_map,
             left_slots_after_change,
             self.mgr_config.clone(),
             self.client_factory.clone(),
@@ -215,7 +215,7 @@ where
 
 pub struct MigrationMap<T>
 where
-    T: CmdTask + DBTag,
+    T: CmdTask + ClusterTag,
 {
     empty: bool,
     task_map: TaskMap<T>,
@@ -223,7 +223,7 @@ where
 
 impl<T> MigrationMap<T>
 where
-    T: CmdTask + DBTag,
+    T: CmdTask + ClusterTag,
 {
     pub fn new() -> Self {
         Self {
@@ -235,8 +235,8 @@ where
     pub fn info(&self) -> String {
         self.task_map
             .iter()
-            .map(|(db_name, tasks)| {
-                let mut lines = vec![format!("name: {}", db_name)];
+            .map(|(cluster_name, tasks)| {
+                let mut lines = vec![format!("name: {}", cluster_name)];
                 for task_meta in tasks.keys() {
                     if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
                         lines.push(format!(
@@ -260,15 +260,15 @@ where
             .join("\r\n")
     }
 
-    pub fn send(&self, mut cmd_task: T) -> Result<(), DBSendError<BlockingHintTask<T>>> {
-        cmd_task.log_event(TaskEvent::SentToMigrationDB);
+    pub fn send(&self, mut cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
+        cmd_task.log_event(TaskEvent::SentToMigrationBackend);
         self.send_to_db(cmd_task)
     }
 
-    pub fn send_to_db(&self, cmd_task: T) -> Result<(), DBSendError<BlockingHintTask<T>>> {
+    pub fn send_to_db(&self, cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         // Optimization for not having any migration.
         if self.empty {
-            return Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+            return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
                 cmd_task, false,
             )));
         }
@@ -279,16 +279,16 @@ where
     fn send_helper(
         task_map: &TaskMap<T>,
         cmd_task: T,
-    ) -> Result<(), DBSendError<BlockingHintTask<T>>> {
-        let db_name = cmd_task.get_db_name();
-        match task_map.get(&db_name) {
+    ) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
+        let cluster_name = cmd_task.get_cluster_name();
+        match task_map.get(&cluster_name) {
             Some(tasks) => {
                 let key = match cmd_task.get_key() {
                     Some(key) => key,
                     None => {
                         let resp = Resp::Error("missing key".to_string().into_bytes());
                         cmd_task.set_resp_result(Ok(resp));
-                        return Err(DBSendError::MissingKey);
+                        return Err(ClusterSendError::MissingKey);
                     }
                 };
 
@@ -306,11 +306,11 @@ where
                     }
                 }
 
-                Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
                     cmd_task, false,
                 )))
             }
-            None => Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+            None => Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
                 cmd_task, false,
             ))),
         }
@@ -319,11 +319,11 @@ where
     pub fn get_left_slots_after_change(
         &self,
         new_migration_map: &Self,
-        new_db_map: &ProxyDBMap,
-    ) -> HashMap<DBName, HashMap<String, Vec<SlotRange>>> {
+        new_db_map: &ProxyClusterMap,
+    ) -> HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> {
         let mut left_slots = HashMap::new();
-        for (dbname, db) in self.task_map.iter() {
-            let nodes = match new_db_map.get_map().get(dbname) {
+        for (cluster_name, db) in self.task_map.iter() {
+            let nodes = match new_db_map.get_map().get(cluster_name) {
                 Some(nodes) => nodes,
                 None => continue,
             };
@@ -331,7 +331,7 @@ where
             for task_meta in db.keys() {
                 if new_migration_map
                     .task_map
-                    .get(dbname)
+                    .get(cluster_name)
                     .and_then(|db_task_map| db_task_map.get(task_meta))
                     .is_some()
                 {
@@ -350,7 +350,7 @@ where
                     None => continue,
                 };
                 left_slots
-                    .entry(dbname.clone())
+                    .entry(cluster_name.clone())
                     .or_insert_with(HashMap::new)
                     .insert(address.clone(), slots.clone());
             }
@@ -361,7 +361,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn update_from_old_task_map<RCF, CTF, BCF, TSF>(
         &self,
-        local_db_map: &ProxyDBMap,
+        local_cluster_map: &ProxyClusterMap,
         config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
@@ -379,40 +379,40 @@ where
     {
         let old_task_map = &self.task_map;
 
-        let new_db_map = local_db_map.get_map();
+        let new_cluster_map = local_cluster_map.get_map();
 
-        let mut migration_dbs = HashMap::new();
+        let mut migration_clusters = HashMap::new();
 
-        for (db_name, node_map) in new_db_map.iter() {
+        for (cluster_name, node_map) in new_cluster_map.iter() {
             for (_node, slot_ranges) in node_map.iter() {
                 for slot_range in slot_ranges.iter() {
                     match slot_range.tag {
                         SlotRangeTag::Migrating(ref _meta) => {
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: cluster_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
                             if let Some(migrating_task) = old_task_map
-                                .get(db_name)
+                                .get(cluster_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
-                                let tasks = migration_dbs
-                                    .entry(db_name.clone())
+                                let tasks = migration_clusters
+                                    .entry(cluster_name.clone())
                                     .or_insert_with(HashMap::new);
                                 tasks.insert(migration_meta, migrating_task.clone());
                             }
                         }
                         SlotRangeTag::Importing(ref _meta) => {
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: cluster_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
                             if let Some(importing_task) = old_task_map
-                                .get(db_name)
+                                .get(cluster_name)
                                 .and_then(|tasks| tasks.get(&migration_meta))
                             {
-                                let tasks = migration_dbs
-                                    .entry(db_name.clone())
+                                let tasks = migration_clusters
+                                    .entry(cluster_name.clone())
                                     .or_insert_with(HashMap::new);
                                 tasks.insert(migration_meta, importing_task.clone());
                             }
@@ -425,20 +425,20 @@ where
 
         let mut new_tasks = Vec::new();
 
-        for (db_name, node_map) in new_db_map.iter() {
+        for (cluster_name, node_map) in new_cluster_map.iter() {
             for (_node, slot_ranges) in node_map.iter() {
                 for slot_range in slot_ranges {
                     match slot_range.tag {
                         SlotRangeTag::Migrating(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: cluster_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
 
                             if Some(true)
-                                == migration_dbs
-                                    .get(db_name)
+                                == migration_clusters
+                                    .get(cluster_name)
                                     .map(|tasks| tasks.contains_key(&migration_meta))
                             {
                                 continue;
@@ -448,7 +448,7 @@ where
                             let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
                                 mgr_config.clone(),
-                                db_name.clone(),
+                                cluster_name.clone(),
                                 slot_range.clone(),
                                 meta.clone(),
                                 client_factory.clone(),
@@ -456,13 +456,13 @@ where
                                 future_registry.clone(),
                             ));
                             new_tasks.push(NewTask {
-                                db_name: db_name.clone(),
+                                cluster_name: cluster_name.clone(),
                                 epoch,
                                 range_list: slot_range.to_range_list(),
                                 task: Either::Left(task.clone()),
                             });
-                            let tasks = migration_dbs
-                                .entry(db_name.clone())
+                            let tasks = migration_clusters
+                                .entry(cluster_name.clone())
                                 .or_insert_with(HashMap::new);
                             let stop_handle = task.get_stop_handle();
                             let mgr_task = MgrTask {
@@ -474,13 +474,13 @@ where
                         SlotRangeTag::Importing(ref meta) => {
                             let epoch = meta.epoch;
                             let migration_meta = MigrationTaskMeta {
-                                db_name: db_name.clone(),
+                                cluster_name: cluster_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
 
                             if Some(true)
-                                == migration_dbs
-                                    .get(db_name)
+                                == migration_clusters
+                                    .get(cluster_name)
                                     .map(|tasks| tasks.contains_key(&migration_meta))
                             {
                                 continue;
@@ -495,13 +495,13 @@ where
                                 cmd_task_factory.clone(),
                             ));
                             new_tasks.push(NewTask {
-                                db_name: db_name.clone(),
+                                cluster_name: cluster_name.clone(),
                                 epoch,
                                 range_list: slot_range.to_range_list(),
                                 task: Either::Right(task.clone()),
                             });
-                            let tasks = migration_dbs
-                                .entry(db_name.clone())
+                            let tasks = migration_clusters
+                                .entry(cluster_name.clone())
                                 .or_insert_with(HashMap::new);
                             let stop_handle = task.get_stop_handle();
                             let mgr_task = MgrTask {
@@ -516,12 +516,12 @@ where
             }
         }
 
-        let empty = migration_dbs.is_empty();
+        let empty = migration_clusters.is_empty();
 
         (
             Self {
                 empty,
-                task_map: migration_dbs,
+                task_map: migration_clusters,
             },
             new_tasks,
         )
@@ -532,15 +532,15 @@ where
         switch_arg: SwitchArg,
         sub_cmd: MgrSubCmd,
     ) -> Result<(), SwitchError> {
-        if let Some(tasks) = self.task_map.get(&switch_arg.meta.db_name) {
+        if let Some(tasks) = self.task_map.get(&switch_arg.meta.cluster_name) {
             debug!(
-                "found tasks for db {} {}",
-                switch_arg.meta.db_name,
+                "found tasks for cluster {} {}",
+                switch_arg.meta.cluster_name,
                 tasks.len()
             );
 
             if let Some(mgr_task) = tasks.get(&switch_arg.meta) {
-                debug!("found record for db {}", switch_arg.meta.db_name);
+                debug!("found record for cluster {}", switch_arg.meta.cluster_name);
                 match &mgr_task.task {
                     Either::Left(_migrating_task) => {
                         error!(
@@ -567,7 +567,7 @@ where
     pub fn get_finished_tasks(&self) -> Vec<MigrationTaskMeta> {
         let mut metadata = vec![];
         {
-            for (_db_name, tasks) in self.task_map.iter() {
+            for (_cluster_name, tasks) in self.task_map.iter() {
                 for (meta, mgr_task) in tasks.iter() {
                     let state = match &mgr_task.task {
                         Either::Left(migrating_task) => migrating_task.get_state(),
@@ -582,9 +582,9 @@ where
         metadata
     }
 
-    pub fn get_states(&self, db_name: &DBName) -> HashMap<RangeList, MigrationState> {
+    pub fn get_states(&self, cluster_name: &ClusterName) -> HashMap<RangeList, MigrationState> {
         let mut m = HashMap::new();
-        if let Some(tasks) = self.task_map.get(db_name) {
+        if let Some(tasks) = self.task_map.get(cluster_name) {
             for (meta, mgr_task) in tasks.iter() {
                 let state = match &mgr_task.task {
                     Either::Left(migrating_task) => migrating_task.get_state(),

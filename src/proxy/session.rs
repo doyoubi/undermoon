@@ -1,12 +1,12 @@
 use super::backend::{CmdTask, CmdTaskFactory, CmdTaskResult};
+use super::cluster::{ClusterTag, DEFAULT_CLUSTER};
 use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
     CommandResult, DataCmdType, TaskReply, TaskResult,
 };
-use super::database::{DBTag, DEFAULT_DB};
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::batch::TryChunksTimeoutStreamExt;
-use crate::common::cluster::DBName;
+use crate::common::cluster::ClusterName;
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
 };
@@ -38,7 +38,7 @@ pub trait CmdCtxHandler {
 
 #[derive(Debug)]
 pub struct CmdCtx {
-    db: sync::Arc<sync::RwLock<DBName>>,
+    cluster: sync::Arc<sync::RwLock<ClusterName>>,
     cmd: Command,
     reply_sender: CmdReplySender,
     slowlog: Slowlog,
@@ -46,14 +46,14 @@ pub struct CmdCtx {
 
 impl CmdCtx {
     pub fn new(
-        db: sync::Arc<sync::RwLock<DBName>>,
+        cluster: sync::Arc<sync::RwLock<ClusterName>>,
         cmd: Command,
         reply_sender: CmdReplySender,
         session_id: usize,
     ) -> CmdCtx {
         let slowlog = Slowlog::new(session_id);
         CmdCtx {
-            db,
+            cluster,
             cmd,
             reply_sender,
             slowlog,
@@ -64,8 +64,8 @@ impl CmdCtx {
         &self.cmd
     }
 
-    pub fn get_db(&self) -> sync::Arc<sync::RwLock<DBName>> {
-        self.db.clone()
+    pub fn get_cluster(&self) -> sync::Arc<sync::RwLock<ClusterName>> {
+        self.cluster.clone()
     }
 
     pub fn get_session_id(&self) -> usize {
@@ -123,13 +123,16 @@ impl CmdTask for CmdCtx {
     }
 }
 
-impl DBTag for CmdCtx {
-    fn get_db_name(&self) -> DBName {
-        self.db.read().expect("CmdCtx::new").clone()
+impl ClusterTag for CmdCtx {
+    fn get_cluster_name(&self) -> ClusterName {
+        self.cluster
+            .read()
+            .expect("CmdCtx::get_cluster_name")
+            .clone()
     }
 
-    fn set_db_name(&mut self, db: DBName) {
-        *self.db.write().expect("CmdCtx::set_db_name") = db
+    fn set_cluster_name(&mut self, cluster_name: ClusterName) {
+        *self.cluster.write().expect("CmdCtx::set_cluster_name") = cluster_name
     }
 }
 
@@ -156,7 +159,7 @@ impl CmdTaskFactory for CmdCtxFactory {
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair();
         let cmd_ctx = CmdCtx::new(
-            another_task.get_db(),
+            another_task.get_cluster(),
             cmd,
             reply_sender,
             another_task.get_session_id(),
@@ -168,7 +171,7 @@ impl CmdTaskFactory for CmdCtxFactory {
 
 pub struct Session<H: CmdCtxHandler> {
     session_id: usize,
-    db: sync::Arc<sync::RwLock<DBName>>,
+    cluster_name: sync::Arc<sync::RwLock<ClusterName>>,
     cmd_ctx_handler: H,
     slow_request_logger: sync::Arc<SlowRequestLogger>,
 }
@@ -179,10 +182,10 @@ impl<H: CmdCtxHandler> Session<H> {
         cmd_ctx_handler: H,
         slow_request_logger: sync::Arc<SlowRequestLogger>,
     ) -> Self {
-        let dbname = DBName::from(DEFAULT_DB).expect("Session::new");
+        let cluster_name = ClusterName::from(DEFAULT_CLUSTER).expect("Session::new");
         Session {
             session_id,
-            db: sync::Arc::new(sync::RwLock::new(dbname)),
+            cluster_name: sync::Arc::new(sync::RwLock::new(cluster_name)),
             cmd_ctx_handler,
             slow_request_logger,
         }
@@ -192,7 +195,12 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
         let (reply_sender, reply_receiver) = new_command_pair();
-        let mut cmd_ctx = CmdCtx::new(self.db.clone(), cmd, reply_sender, self.session_id);
+        let mut cmd_ctx = CmdCtx::new(
+            self.cluster_name.clone(),
+            cmd,
+            reply_sender,
+            self.session_id,
+        );
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
     }
@@ -320,10 +328,10 @@ mod tests {
         let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(
             b"PING".to_vec(),
         ))])));
-        let db = Arc::new(RwLock::new(DBName::from("mydb").unwrap()));
+        let cluster_name = Arc::new(RwLock::new(ClusterName::from("mycluster").unwrap()));
         let cmd = Command::new(Box::new(request));
         let (sender, receiver) = new_command_pair();
-        let cmd_ctx = CmdCtx::new(db, cmd, sender, 7799);
+        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799);
         drop(cmd_ctx);
         let err = match receiver.await {
             Ok(_) => panic!(),

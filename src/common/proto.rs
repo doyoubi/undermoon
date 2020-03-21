@@ -1,6 +1,6 @@
 use super::cluster::SlotRange;
 use super::utils::{has_flags, CmdParseError};
-use crate::common::cluster::DBName;
+use crate::common::cluster::ClusterName;
 use crate::common::config::ClusterConfig;
 use crate::protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
@@ -26,11 +26,11 @@ macro_rules! try_get {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DBMapFlags {
+pub struct ClusterMapFlags {
     pub force: bool,
 }
 
-impl DBMapFlags {
+impl ClusterMapFlags {
     pub fn to_arg(&self) -> String {
         if self.force {
             "FORCE".to_string()
@@ -41,7 +41,7 @@ impl DBMapFlags {
 
     pub fn from_arg(flags_str: &str) -> Self {
         let force = has_flags(flags_str, ',', "FORCE");
-        DBMapFlags { force }
+        ClusterMapFlags { force }
     }
 }
 
@@ -49,20 +49,20 @@ const PEER_PREFIX: &str = "PEER";
 const CONFIG_PREFIX: &str = "CONFIG";
 
 #[derive(Debug, Clone)]
-pub struct ProxyDBMeta {
+pub struct ProxyClusterMeta {
     epoch: u64,
-    flags: DBMapFlags,
-    local: ProxyDBMap,
-    peer: ProxyDBMap,
+    flags: ClusterMapFlags,
+    local: ProxyClusterMap,
+    peer: ProxyClusterMap,
     clusters_config: ClusterConfigMap,
 }
 
-impl ProxyDBMeta {
+impl ProxyClusterMeta {
     pub fn new(
         epoch: u64,
-        flags: DBMapFlags,
-        local: ProxyDBMap,
-        peer: ProxyDBMap,
+        flags: ClusterMapFlags,
+        local: ProxyClusterMap,
+        peer: ProxyClusterMap,
         clusters_config: ClusterConfigMap,
     ) -> Self {
         Self {
@@ -78,14 +78,14 @@ impl ProxyDBMeta {
         self.epoch
     }
 
-    pub fn get_flags(&self) -> DBMapFlags {
+    pub fn get_flags(&self) -> ClusterMapFlags {
         self.flags.clone()
     }
 
-    pub fn get_local(&self) -> &ProxyDBMap {
+    pub fn get_local(&self) -> &ProxyClusterMap {
         &self.local
     }
-    pub fn get_peer(&self) -> &ProxyDBMap {
+    pub fn get_peer(&self) -> &ProxyClusterMap {
         &self.peer
     }
 
@@ -101,7 +101,7 @@ impl ProxyDBMeta {
             _ => return Err(CmdParseError {}),
         };
 
-        // Skip the "UMCTL SETDB"
+        // Skip the "UMCTL SETCLUSTER"
         let it = arr.iter().skip(2).flat_map(|resp| match resp {
             Resp::Bulk(BulkStr::Str(safe_str)) => match str::from_utf8(safe_str.as_ref()) {
                 Ok(s) => Some(s.to_string()),
@@ -123,23 +123,23 @@ impl ProxyDBMeta {
         let epoch_str = try_get!(it.next());
         let epoch = try_parse!(epoch_str.parse::<u64>());
 
-        let flags = DBMapFlags::from_arg(&try_get!(it.next()));
+        let flags = ClusterMapFlags::from_arg(&try_get!(it.next()));
 
-        let local = ProxyDBMap::parse(it)?;
-        let mut peer = ProxyDBMap::new(HashMap::new());
+        let local = ProxyClusterMap::parse(it)?;
+        let mut peer = ProxyClusterMap::new(HashMap::new());
         let mut clusters_config = ClusterConfigMap::default();
         let mut extended_meta_result = Ok(());
 
         while let Some(token) = it.next() {
             match token.to_uppercase().as_str() {
-                PEER_PREFIX => peer = ProxyDBMap::parse(it)?,
+                PEER_PREFIX => peer = ProxyClusterMap::parse(it)?,
                 CONFIG_PREFIX => match ClusterConfigMap::parse(it) {
                     Ok(c) => clusters_config = c,
                     Err(_) => {
                         if local.get_map().is_empty() || peer.get_map().is_empty() {
                             return Err(CmdParseError {});
                         } else {
-                            error!("invalid cluster config from UMCTL SETDB but the local and peer metadata are complete. Ignore this error to protect the core functionality.");
+                            error!("invalid cluster config from UMCTL SETCLUSTER but the local and peer metadata are complete. Ignore this error to protect the core functionality.");
                             extended_meta_result = Err(ParseExtendedMetaError {})
                         }
                     }
@@ -162,8 +162,8 @@ impl ProxyDBMeta {
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![self.epoch.to_string(), self.flags.to_arg()];
-        let local = self.local.db_map_to_args();
-        let peer = self.peer.db_map_to_args();
+        let local = self.local.cluster_map_to_args();
+        let peer = self.peer.cluster_map_to_args();
         let config = self.clusters_config.to_args();
         args.extend_from_slice(&local);
         if !peer.is_empty() {
@@ -179,25 +179,25 @@ impl ProxyDBMeta {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProxyDBMap {
-    db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>>,
+pub struct ProxyClusterMap {
+    cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>,
 }
 
-impl ProxyDBMap {
-    pub fn new(db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>>) -> Self {
-        Self { db_map }
+impl ProxyClusterMap {
+    pub fn new(cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>) -> Self {
+        Self { cluster_map }
     }
 
-    pub fn get_map(&self) -> &HashMap<DBName, HashMap<String, Vec<SlotRange>>> {
-        &self.db_map
+    pub fn get_map(&self) -> &HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> {
+        &self.cluster_map
     }
 
-    pub fn db_map_to_args(&self) -> Vec<String> {
+    pub fn cluster_map_to_args(&self) -> Vec<String> {
         let mut args = vec![];
-        for (db_name, node_map) in &self.db_map {
+        for (cluster_name, node_map) in &self.cluster_map {
             for (node, slot_ranges) in node_map {
                 for slot_range in slot_ranges {
-                    args.push(db_name.to_string());
+                    args.push(cluster_name.to_string());
                     args.push(node.clone());
                     args.extend(slot_range.clone().into_strings());
                 }
@@ -210,7 +210,7 @@ impl ProxyDBMap {
     where
         It: Iterator<Item = String>,
     {
-        let mut db_map = HashMap::new();
+        let mut cluster_map = HashMap::new();
 
         // To workaround lifetime problem.
         #[allow(clippy::while_let_loop)]
@@ -225,24 +225,26 @@ impl ProxyDBMap {
                 None => break,
             }
 
-            let (dbname, address, slot_range) = try_parse!(Self::parse_db(it));
-            let db = db_map.entry(dbname).or_insert_with(HashMap::new);
-            let slots = db.entry(address).or_insert_with(Vec::new);
+            let (cluster_name, address, slot_range) = try_parse!(Self::parse_cluster(it));
+            let cluster = cluster_map.entry(cluster_name).or_insert_with(HashMap::new);
+            let slots = cluster.entry(address).or_insert_with(Vec::new);
             slots.push(slot_range);
         }
 
-        Ok(Self { db_map })
+        Ok(Self { cluster_map })
     }
 
-    fn parse_db<It>(it: &mut Peekable<It>) -> Result<(DBName, String, SlotRange), CmdParseError>
+    fn parse_cluster<It>(
+        it: &mut Peekable<It>,
+    ) -> Result<(ClusterName, String, SlotRange), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
-        let dbname = try_get!(it.next());
-        let dbname = DBName::from(&dbname).map_err(|_| CmdParseError {})?;
+        let cluster_name = try_get!(it.next());
+        let cluster_name = ClusterName::from(&cluster_name).map_err(|_| CmdParseError {})?;
         let addr = try_get!(it.next());
         let slot_range = try_parse!(Self::parse_tagged_slot_range(it));
-        Ok((dbname, addr, slot_range))
+        Ok((cluster_name, addr, slot_range))
     }
 
     fn parse_tagged_slot_range<It>(it: &mut Peekable<It>) -> Result<SlotRange, CmdParseError>
@@ -255,7 +257,7 @@ impl ProxyDBMap {
 
 #[derive(Debug, Clone)]
 pub struct ClusterConfigMap {
-    config_map: HashMap<DBName, ClusterConfig>,
+    config_map: HashMap<ClusterName, ClusterConfig>,
 }
 
 impl Default for ClusterConfigMap {
@@ -267,18 +269,18 @@ impl Default for ClusterConfigMap {
 }
 
 impl ClusterConfigMap {
-    pub fn new(config_map: HashMap<DBName, ClusterConfig>) -> Self {
+    pub fn new(config_map: HashMap<ClusterName, ClusterConfig>) -> Self {
         Self { config_map }
     }
 
-    pub fn get(&self, dbname: &DBName) -> ClusterConfig {
+    pub fn get(&self, cluster_name: &ClusterName) -> ClusterConfig {
         self.config_map
-            .get(dbname)
+            .get(cluster_name)
             .cloned()
             .unwrap_or_else(ClusterConfig::default)
     }
 
-    pub fn get_map(&self) -> &HashMap<DBName, ClusterConfig> {
+    pub fn get_map(&self) -> &HashMap<ClusterName, ClusterConfig> {
         &self.config_map
     }
 
@@ -301,9 +303,9 @@ impl ClusterConfigMap {
                 None => break,
             }
 
-            let (dbname, field, value) = try_parse!(Self::parse_config(it));
+            let (cluster_name, field, value) = try_parse!(Self::parse_config(it));
             let cluster_config = config_map
-                .entry(dbname)
+                .entry(cluster_name)
                 .or_insert_with(ClusterConfig::default);
             if let Err(err) = cluster_config.set_field(&field, &value) {
                 warn!("failed to set config field {:?}", err);
@@ -314,22 +316,22 @@ impl ClusterConfigMap {
         Ok(Self { config_map })
     }
 
-    fn parse_config<It>(it: &mut It) -> Result<(DBName, String, String), CmdParseError>
+    fn parse_config<It>(it: &mut It) -> Result<(ClusterName, String, String), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
-        let dbname = try_get!(it.next());
-        let dbname = DBName::from(&dbname).map_err(|_| CmdParseError {})?;
+        let cluster_name = try_get!(it.next());
+        let cluster_name = ClusterName::from(&cluster_name).map_err(|_| CmdParseError {})?;
         let field = try_get!(it.next());
         let value = try_get!(it.next());
-        Ok((dbname, field, value))
+        Ok((cluster_name, field, value))
     }
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![];
-        for (db_name, config) in &self.config_map {
+        for (cluster_name, config) in &self.config_map {
             for (k, v) in config.to_str_map().into_iter() {
-                args.push(db_name.to_string());
+                args.push(cluster_name.to_string());
                 args.push(k);
                 args.push(v);
             }
@@ -347,48 +349,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_single_db() {
-        let args = vec!["dbname", "127.0.0.1:6379", "1", "0-1000"];
+    fn test_single_cluster() {
+        let args = vec!["cluster_name", "127.0.0.1:6379", "1", "0-1000"];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
-        let r = ProxyDBMap::parse(&mut arguments);
+        let r = ProxyClusterMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let proxy_db_map = r.expect("test_single_db");
-        assert_eq!(proxy_db_map.db_map.len(), 1);
+        let proxy_cluster_map = r.expect("test_single_db");
+        assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
 
-        assert_eq!(proxy_db_map.db_map_to_args(), args);
+        assert_eq!(proxy_cluster_map.cluster_map_to_args(), args);
     }
 
     #[test]
     fn test_multiple_slots() {
         let args = vec![
-            "dbname",
+            "cluster_name",
             "127.0.0.1:6379",
             "1",
             "0-1000",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:6379",
             "1",
             "1001-2000",
         ];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
 
-        let r = ProxyDBMap::parse(&mut arguments);
+        let r = ProxyClusterMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let proxy_db_map = r.expect("test_multiple_slots");
-        assert_eq!(proxy_db_map.db_map.len(), 1);
-        let db_name = DBName::from("dbname").unwrap();
+        let proxy_cluster_map = r.expect("test_multiple_slots");
+        assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
+        let cluster_name = ClusterName::from("cluster_name").unwrap();
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_slots")
                 .len(),
             1
         );
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_slots")
                 .get("127.0.0.1:6379")
                 .expect("test_multiple_slots")
@@ -396,37 +398,38 @@ mod tests {
             2
         );
 
-        assert_eq!(proxy_db_map.db_map_to_args(), args);
+        assert_eq!(proxy_cluster_map.cluster_map_to_args(), args);
     }
 
     #[test]
     fn test_multiple_nodes() {
         let args = vec![
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7001",
             "1",
             "1001-2000",
         ];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
-        let proxy_db_map = ProxyDBMap::parse(&mut arguments).expect("test_multiple_nodes");
-        assert_eq!(proxy_db_map.db_map.len(), 1);
-        let db_name = DBName::from("dbname").unwrap();
+        let proxy_cluster_map =
+            ProxyClusterMap::parse(&mut arguments).expect("test_multiple_nodes");
+        assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
+        let cluster_name = ClusterName::from("cluster_name").unwrap();
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_nodes")
                 .len(),
             2
         );
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_nodes")
                 .get("127.0.0.1:7000")
                 .expect("test_multiple_nodes")
@@ -434,9 +437,9 @@ mod tests {
             1
         );
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_nodes")
                 .get("127.0.0.1:7001")
                 .expect("test_multiple_nodes")
@@ -445,46 +448,46 @@ mod tests {
         );
 
         let mut expected_args = args.clone();
-        let mut actual_args = proxy_db_map.db_map_to_args();
+        let mut actual_args = proxy_cluster_map.cluster_map_to_args();
         expected_args.sort();
         actual_args.sort();
         assert_eq!(actual_args, expected_args);
     }
 
     #[test]
-    fn test_multiple_db() {
+    fn test_multiple_cluster() {
         let args = vec![
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7001",
             "1",
             "1001-2000",
-            "another_db",
+            "another_cluster",
             "127.0.0.1:7002",
             "1",
             "0-2000",
         ];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
-        let r = ProxyDBMap::parse(&mut arguments);
+        let r = ProxyClusterMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let proxy_db_map = r.expect("test_multiple_db");
-        assert_eq!(proxy_db_map.db_map.len(), 2);
-        let db_name = DBName::from("dbname").unwrap();
+        let proxy_cluster_map = r.expect("test_multiple_db");
+        assert_eq!(proxy_cluster_map.cluster_map.len(), 2);
+        let cluster_name = ClusterName::from("cluster_name").unwrap();
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_db")
                 .len(),
             2
         );
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_db")
                 .get("127.0.0.1:7000")
                 .expect("test_multiple_db")
@@ -492,28 +495,28 @@ mod tests {
             1
         );
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&db_name)
+            proxy_cluster_map
+                .cluster_map
+                .get(&cluster_name)
                 .expect("test_multiple_db")
                 .get("127.0.0.1:7001")
                 .expect("test_multiple_db")
                 .len(),
             1
         );
-        let another_db = DBName::from("another_db").unwrap();
+        let another_cluster = ClusterName::from("another_cluster").unwrap();
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&another_db)
+            proxy_cluster_map
+                .cluster_map
+                .get(&another_cluster)
                 .expect("test_multiple_nodes")
                 .len(),
             1
         );
         assert_eq!(
-            proxy_db_map
-                .db_map
-                .get(&another_db)
+            proxy_cluster_map
+                .cluster_map
+                .get(&another_cluster)
                 .expect("test_multiple_db")
                 .get("127.0.0.1:7002")
                 .expect("test_multiple_db")
@@ -522,7 +525,7 @@ mod tests {
         );
 
         let mut expected_args = args.clone();
-        let mut actual_args = proxy_db_map.db_map_to_args();
+        let mut actual_args = proxy_cluster_map.cluster_map_to_args();
         expected_args.sort();
         actual_args.sort();
         assert_eq!(actual_args, expected_args);
@@ -544,7 +547,7 @@ mod tests {
         let mut it = args.iter().map(|s| s.to_string()).peekable();
         let clusters_config = ClusterConfigMap::parse(&mut it).expect("test_clusters_config");
         assert_eq!(clusters_config.config_map.len(), 2);
-        let mydb = DBName::from("mydb").unwrap();
+        let mydb = ClusterName::from("mydb").unwrap();
         assert_eq!(
             clusters_config
                 .config_map
@@ -565,7 +568,7 @@ mod tests {
         assert_eq!(
             clusters_config
                 .config_map
-                .get(&DBName::from("otherdb").unwrap())
+                .get(&ClusterName::from("otherdb").unwrap())
                 .expect("test_clusters_config")
                 .migration_config
                 .delete_count,
@@ -626,11 +629,11 @@ mod tests {
     #[test]
     fn test_to_map() {
         let arguments = vec![
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7001",
             "IMPORTING",
             "1",
@@ -640,7 +643,7 @@ mod tests {
             "127.0.0.2:6001",
             "127.0.0.1:7001",
             "127.0.0.1:6002",
-            "another_db",
+            "another_cluster",
             "127.0.0.1:7002",
             "MIGRATING",
             "1",
@@ -656,41 +659,41 @@ mod tests {
             .into_iter()
             .map(|s| s.to_string())
             .peekable();
-        let r = ProxyDBMap::parse(&mut it);
-        let proxy_db_map = r.expect("test_to_map");
+        let r = ProxyClusterMap::parse(&mut it);
+        let proxy_cluster_map = r.expect("test_to_map");
 
-        let db_map = ProxyDBMap::new(proxy_db_map.db_map);
-        let mut args = db_map.db_map_to_args();
-        let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
+        let cluster_map = ProxyClusterMap::new(proxy_cluster_map.cluster_map);
+        let mut args = cluster_map.cluster_map_to_args();
+        let mut cluster_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         args.sort();
-        db_args.sort();
-        assert_eq!(args, db_args);
+        cluster_args.sort();
+        assert_eq!(args, cluster_args);
     }
 
     #[test]
-    fn test_parse_proxy_db_meta() {
+    fn test_parse_proxy_cluster_meta() {
         let arguments = vec![
             "233",
             "FORCE",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7001",
             "1",
             "1001-2000",
             "PEER",
-            "dbname",
+            "cluster_name",
             "127.0.0.2:7001",
             "1",
             "2001-3000",
-            "dbname",
+            "cluster_name",
             "127.0.0.2:7002",
             "1",
             "3001-4000",
             "CONFIG",
-            "dbname",
+            "cluster_name",
             "compression_strategy",
             "set_get_only",
         ];
@@ -700,23 +703,26 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        let (db_meta, extended_res) =
-            ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta");
+        let (cluster_meta, extended_res) =
+            ProxyClusterMeta::parse(&mut it).expect("test_parse_proxy_db_meta");
         assert!(extended_res.is_ok());
-        assert_eq!(db_meta.epoch, 233);
-        assert!(db_meta.flags.force);
-        let local = db_meta.local.get_map();
-        let peer = db_meta.peer.get_map();
-        let config = db_meta.clusters_config.get_map();
+        assert_eq!(cluster_meta.epoch, 233);
+        assert!(cluster_meta.flags.force);
+        let local = cluster_meta.local.get_map();
+        let peer = cluster_meta.peer.get_map();
+        let config = cluster_meta.clusters_config.get_map();
         assert_eq!(local.len(), 1);
-        let db_name = DBName::from("dbname").unwrap();
+        let cluster_name = ClusterName::from("cluster_name").unwrap();
         assert_eq!(
-            local.get(&db_name).expect("test_parse_proxy_db_meta").len(),
+            local
+                .get(&cluster_name)
+                .expect("test_parse_proxy_db_meta")
+                .len(),
             2
         );
         assert_eq!(
             local
-                .get(&db_name)
+                .get(&cluster_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.1:7000")
                 .expect("test_parse_proxy_db_meta")[0]
@@ -727,7 +733,7 @@ mod tests {
         );
         assert_eq!(
             local
-                .get(&db_name)
+                .get(&cluster_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.1:7001")
                 .expect("test_parse_proxy_db_meta")[0]
@@ -738,11 +744,13 @@ mod tests {
         );
         assert_eq!(peer.len(), 1);
         assert_eq!(
-            peer.get(&db_name).expect("test_parse_proxy_db_meta").len(),
+            peer.get(&cluster_name)
+                .expect("test_parse_proxy_db_meta")
+                .len(),
             2
         );
         assert_eq!(
-            peer.get(&db_name)
+            peer.get(&cluster_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.2:7001")
                 .expect("test_parse_proxy_db_meta")[0]
@@ -752,7 +760,7 @@ mod tests {
             2001
         );
         assert_eq!(
-            peer.get(&db_name)
+            peer.get(&cluster_name)
                 .expect("test_parse_proxy_db_meta")
                 .get("127.0.0.2:7002")
                 .expect("test_parse_proxy_db_meta")[0]
@@ -764,53 +772,53 @@ mod tests {
         assert_eq!(config.len(), 1);
         assert_eq!(
             config
-                .get(&db_name)
+                .get(&cluster_name)
                 .expect("test_parse_proxy_db_meta")
                 .compression_strategy,
             CompressionStrategy::SetGetOnly
         );
 
-        let mut args = db_meta.to_args();
-        let mut db_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
+        let mut args = cluster_meta.to_args();
+        let mut cluster_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         let extended = vec![
-            "dbname",
+            "cluster_name",
             "migration_delete_count",
             "16",
-            "dbname",
+            "cluster_name",
             "migration_max_migration_time",
             "10800",
-            "dbname",
+            "cluster_name",
             "migration_max_blocking_time",
             "10000",
-            "dbname",
+            "cluster_name",
             "migration_delete_interval",
             "500",
-            "dbname",
+            "cluster_name",
             "migration_scan_interval",
             "500",
-            "dbname",
+            "cluster_name",
             "migration_scan_count",
             "16",
         ]
         .into_iter()
         .map(|s| s.to_string());
-        db_args.extend(extended);
+        cluster_args.extend(extended);
         args.sort();
-        db_args.sort();
-        assert_eq!(args, db_args);
+        cluster_args.sort();
+        assert_eq!(args, cluster_args);
     }
 
     #[test]
-    fn test_parse_proxy_db_meta_without_peer() {
+    fn test_parse_proxy_cluster_meta_without_peer() {
         let arguments = vec![
             "233",
             "FORCE",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
             "CONFIG",
-            "dbname",
+            "cluster_name",
             "compression_strategy",
             "set_get_only",
         ];
@@ -820,36 +828,36 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        let (db_meta, extended_res) =
-            ProxyDBMeta::parse(&mut it).expect("test_parse_proxy_db_meta_without_peer");
+        let (cluster_meta, extended_res) =
+            ProxyClusterMeta::parse(&mut it).expect("test_parse_proxy_cluster_meta_without_peer");
         assert!(extended_res.is_ok());
-        assert_eq!(db_meta.epoch, 233);
-        assert!(db_meta.flags.force);
+        assert_eq!(cluster_meta.epoch, 233);
+        assert!(cluster_meta.flags.force);
         assert_eq!(
-            db_meta
+            cluster_meta
                 .get_configs()
-                .get(&DBName::from("dbname").unwrap())
+                .get(&ClusterName::from("cluster_name").unwrap())
                 .compression_strategy,
             CompressionStrategy::SetGetOnly
         );
     }
 
     #[test]
-    fn test_missing_config_db() {
+    fn test_missing_config_cluster() {
         let arguments = vec![
             "233",
             "FORCE",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
             "PEER",
-            "dbname",
+            "cluster_name",
             "127.0.0.2:7001",
             "1",
             "2001-3000",
             "CONFIG",
-            // "dbname", missing dbname
+            // "cluster_name", missing cluster_name
             "compression_strategy",
             "set_get_only",
         ];
@@ -859,10 +867,11 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        let (db_meta, extended_res) = ProxyDBMeta::parse(&mut it).expect("test_missing_config_db");
+        let (cluster_meta, extended_res) =
+            ProxyClusterMeta::parse(&mut it).expect("test_missing_config_db");
         assert!(extended_res.is_err());
-        assert_eq!(db_meta.epoch, 233);
-        assert!(db_meta.flags.force);
+        assert_eq!(cluster_meta.epoch, 233);
+        assert!(cluster_meta.flags.force);
     }
 
     #[test]
@@ -870,17 +879,17 @@ mod tests {
         let arguments = vec![
             "233",
             "FORCE",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
             "PEER",
-            "dbname",
+            "cluster_name",
             "127.0.0.2:7001",
             "1",
             "2001-3000",
             "CONFIG",
-            "dbname",
+            "cluster_name",
             "config_field_that_does_not_exist",
             "invalid_value",
         ];
@@ -890,11 +899,11 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        let (db_meta, extended_res) =
-            ProxyDBMeta::parse(&mut it).expect("test_invalid_config_field");
+        let (cluster_meta, extended_res) =
+            ProxyClusterMeta::parse(&mut it).expect("test_invalid_config_field");
         assert!(extended_res.is_err());
-        assert_eq!(db_meta.epoch, 233);
-        assert!(db_meta.flags.force);
+        assert_eq!(cluster_meta.epoch, 233);
+        assert!(cluster_meta.flags.force);
     }
 
     #[test]
@@ -902,12 +911,12 @@ mod tests {
         let arguments = vec![
             "233",
             "FORCE",
-            "dbname",
+            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
             "CONFIG",
-            "dbname",
+            "cluster_name",
             "config_field_that_does_not_exist",
             "invalid_value",
         ];
@@ -917,6 +926,6 @@ mod tests {
             .map(|s| s.to_string())
             .peekable();
 
-        assert!(ProxyDBMeta::parse(&mut it).is_err());
+        assert!(ProxyClusterMeta::parse(&mut it).is_err());
     }
 }

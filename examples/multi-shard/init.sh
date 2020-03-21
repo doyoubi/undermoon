@@ -24,6 +24,6 @@ for i in "${!proxy_list[@]}"; do
     done
 done
 
-redis-cli -h server_proxy1 -p 6001 UMCTL SETDB 1 FORCE mydb redis1:6379 1 0-5461 PEER mydb server_proxy2:6002 1 5462-10922 mydb server_proxy3:6003 1 10923-16383
-redis-cli -h server_proxy2 -p 6002 UMCTL SETDB 1 FORCE mydb redis2:6379 1 5462-10922 PEER mydb server_proxy1:6001 1 0-5461 mydb server_proxy3:6003 1 10923-16383
-redis-cli -h server_proxy3 -p 6003 UMCTL SETDB 1 FORCE mydb redis3:6379 1 10923-16383 PEER mydb server_proxy1:6001 1 0-5461 mydb server_proxy2:6002 1 5462-10922
+redis-cli -h server_proxy1 -p 6001 UMCTL SETCLUSTER 1 FORCE mydb redis1:6379 1 0-5461 PEER mydb server_proxy2:6002 1 5462-10922 mydb server_proxy3:6003 1 10923-16383
+redis-cli -h server_proxy2 -p 6002 UMCTL SETCLUSTER 1 FORCE mydb redis2:6379 1 5462-10922 PEER mydb server_proxy1:6001 1 0-5461 mydb server_proxy3:6003 1 10923-16383
+redis-cli -h server_proxy3 -p 6003 UMCTL SETCLUSTER 1 FORCE mydb redis3:6379 1 10923-16383 PEER mydb server_proxy1:6001 1 0-5461 mydb server_proxy2:6002 1 5462-10922

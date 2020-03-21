@@ -3,11 +3,11 @@ use super::backend::{
     CmdTaskSender, CmdTaskSenderFactory, ConnFactory, RRSenderGroupFactory,
     RecoverableBackendNodeFactory,
 };
+use super::cluster::ClusterTag;
 use super::command::{CommandError, CommandResult};
-use super::database::DBTag;
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::cluster::DBName;
+use crate::common::cluster::ClusterName;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
@@ -392,13 +392,13 @@ impl<T: CmdTask> From<CounterTask<T>> for Wrapper<T> {
     }
 }
 
-impl<T: CmdTask + DBTag> DBTag for CounterTask<T> {
-    fn get_db_name(&self) -> DBName {
-        self.inner.get_db_name()
+impl<T: CmdTask + ClusterTag> ClusterTag for CounterTask<T> {
+    fn get_cluster_name(&self) -> ClusterName {
+        self.inner.get_cluster_name()
     }
 
-    fn set_db_name(&mut self, db: DBName) {
-        self.inner.set_db_name(db)
+    fn set_cluster_name(&mut self, db: ClusterName) {
+        self.inner.set_cluster_name(db)
     }
 }
 
@@ -478,12 +478,12 @@ impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
     }
 }
 
-impl<T: CmdTask + DBTag> DBTag for BlockingHintTask<T> {
-    fn get_db_name(&self) -> DBName {
-        self.inner.get_db_name()
+impl<T: CmdTask + ClusterTag> ClusterTag for BlockingHintTask<T> {
+    fn get_cluster_name(&self) -> ClusterName {
+        self.inner.get_cluster_name()
     }
 
-    fn set_db_name(&mut self, db: DBName) {
-        self.inner.set_db_name(db)
+    fn set_cluster_name(&mut self, db: ClusterName) {
+        self.inner.set_cluster_name(db)
     }
 }

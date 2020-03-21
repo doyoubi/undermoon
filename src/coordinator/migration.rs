@@ -127,7 +127,7 @@ mod tests {
     use super::super::sync::BrokerMetaRetriever;
     use super::*;
     use crate::common::cluster::{
-        DBName, MigrationMeta, Proxy, RangeList, SlotRange, SlotRangeTag,
+        ClusterName, MigrationMeta, Proxy, RangeList, SlotRange, SlotRangeTag,
     };
     use crate::coordinator::core::MockProxyMetaSender;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient};
@@ -173,7 +173,7 @@ mod tests {
         let res: Vec<_> = checker.check("127.0.0.1:6000".to_string()).collect().await;
         assert_eq!(res.len(), 1);
         let meta = res[0].as_ref().unwrap();
-        assert_eq!(meta.db_name.to_string(), "mydb");
+        assert_eq!(meta.cluster_name.to_string(), "mydb");
         let tag = SlotRangeTag::Migrating(MigrationMeta {
             epoch: 7799,
             src_proxy_address: "127.0.0.1:6000".to_string(),
@@ -201,7 +201,7 @@ mod tests {
             tag,
         };
         MigrationTaskMeta {
-            db_name: DBName::from("mydb").unwrap(),
+            cluster_name: ClusterName::from("mydb").unwrap(),
             slot_range,
         }
     }
