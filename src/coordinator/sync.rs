@@ -1,7 +1,7 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, ProxyMetaRetriever, ProxyMetaSender};
-use crate::common::cluster::{DBName, Proxy, Role, SlotRange};
-use crate::common::db::{ClusterConfigMap, DBMapFlags, ProxyDBMap, ProxyDBMeta};
+use crate::common::cluster::{ClusterName, Proxy, Role, SlotRange};
+use crate::common::proto::{ClusterConfigMap, ClusterMapFlags, ProxyClusterMap, ProxyClusterMeta};
 use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
@@ -21,23 +21,23 @@ impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
 }
 
 impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
-    async fn send_meta_impl(&self, host: Proxy) -> Result<(), CoordinateError> {
+    async fn send_meta_impl(&self, proxy: Proxy) -> Result<(), CoordinateError> {
         let mut client = self
             .client_factory
-            .create_client(host.get_address().to_string())
+            .create_client(proxy.get_address().to_string())
             .await
             .map_err(CoordinateError::Redis)?;
-        let host_with_only_masters = filter_host_masters(host.clone());
+        let proxy_with_only_masters = filter_proxy_masters(proxy.clone());
         send_meta(
             &mut client,
             "SETREPL".to_string(),
-            generate_repl_meta_cmd_args(host, DBMapFlags { force: false }),
+            generate_repl_meta_cmd_args(proxy, ClusterMapFlags { force: false }),
         )
         .await?;
         send_meta(
             &mut client,
-            "SETDB".to_string(),
-            generate_host_meta_cmd_args(DBMapFlags { force: false }, host_with_only_masters),
+            "SETCLUSTER".to_string(),
+            generate_proxy_meta_cmd_args(ClusterMapFlags { force: false }, proxy_with_only_masters),
         )
         .await?;
         Ok(())
@@ -47,13 +47,13 @@ impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
 impl<F: RedisClientFactory> ProxyMetaSender for ProxyMetaRespSender<F> {
     fn send_meta<'s>(
         &'s self,
-        host: Proxy,
+        proxy: Proxy,
     ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>> {
-        Box::pin(self.send_meta_impl(host))
+        Box::pin(self.send_meta_impl(proxy))
     }
 }
 
-fn filter_host_masters(proxy: Proxy) -> Proxy {
+fn filter_proxy_masters(proxy: Proxy) -> Proxy {
     let address = proxy.get_address().to_string();
     let epoch = proxy.get_epoch();
     let free_nodes = proxy.get_free_nodes().to_vec();
@@ -79,47 +79,47 @@ impl<B: MetaDataBroker> BrokerMetaRetriever<B> {
 }
 
 impl<B: MetaDataBroker> ProxyMetaRetriever for BrokerMetaRetriever<B> {
-    fn get_host_meta<'s>(
+    fn get_proxy_meta<'s>(
         &'s self,
         address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, CoordinateError>> + Send + 's>> {
         Box::pin(
             self.broker
-                .get_host(address)
+                .get_proxy(address)
                 .map_err(CoordinateError::MetaData),
         )
     }
 }
 
-fn generate_host_meta_cmd_args(flags: DBMapFlags, proxy: Proxy) -> Vec<String> {
+fn generate_proxy_meta_cmd_args(flags: ClusterMapFlags, proxy: Proxy) -> Vec<String> {
     let epoch = proxy.get_epoch();
     let clusters_config = ClusterConfigMap::new(proxy.get_clusters_config().clone());
 
-    let mut db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+    let mut cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
 
     for peer_proxy in proxy.get_peers().iter() {
-        let dbs = db_map
+        let clusters = cluster_map
             .entry(peer_proxy.cluster_name.clone())
             .or_insert_with(HashMap::new);
-        dbs.insert(peer_proxy.proxy_address.clone(), peer_proxy.slots.clone());
+        clusters.insert(peer_proxy.proxy_address.clone(), peer_proxy.slots.clone());
     }
-    let peer = ProxyDBMap::new(db_map);
+    let peer = ProxyClusterMap::new(cluster_map);
 
-    let mut db_map: HashMap<DBName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+    let mut cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
 
     for node in proxy.into_nodes() {
-        let dbs = db_map
+        let clusters = cluster_map
             .entry(node.get_cluster_name().clone())
             .or_insert_with(HashMap::new);
-        dbs.insert(node.get_address().to_string(), node.into_slots().clone());
+        clusters.insert(node.get_address().to_string(), node.into_slots().clone());
     }
-    let local = ProxyDBMap::new(db_map);
+    let local = ProxyClusterMap::new(cluster_map);
 
-    let proxy_db_meta = ProxyDBMeta::new(epoch, flags, local, peer, clusters_config);
-    proxy_db_meta.to_args()
+    let proxy_cluster_meta = ProxyClusterMeta::new(epoch, flags, local, peer, clusters_config);
+    proxy_cluster_meta.to_args()
 }
 
-// sub_command should be SETDB, SETREPL
+// sub_command should be SETCLUSTER, SETREPL
 async fn send_meta<C: RedisClient>(
     client: &mut C,
     sub_command: String,
@@ -132,7 +132,7 @@ async fn send_meta<C: RedisClient>(
         .execute_single(cmd.into_iter().map(String::into_bytes).collect())
         .await
         .map_err(|e| {
-            error!("failed to send meta data of host {:?}", e);
+            error!("failed to send meta data of proxy {:?}", e);
             CoordinateError::Redis(e)
         })?;
     match resp {
@@ -157,7 +157,7 @@ async fn send_meta<C: RedisClient>(
     }
 }
 
-fn generate_repl_meta_cmd_args(proxy: Proxy, flags: DBMapFlags) -> Vec<String> {
+fn generate_repl_meta_cmd_args(proxy: Proxy, flags: ClusterMapFlags) -> Vec<String> {
     let epoch = proxy.get_epoch();
 
     let mut masters = Vec::new();
@@ -166,7 +166,7 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: DBMapFlags) -> Vec<String> {
     for free_node in proxy.get_free_nodes().iter() {
         // For free nodes we use empty cluster name.
         masters.push(MasterMeta {
-            db_name: DBName::new(),
+            cluster_name: ClusterName::new(),
             master_node_address: free_node.clone(),
             replicas: Vec::new(),
         })
@@ -175,7 +175,7 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: DBMapFlags) -> Vec<String> {
     for node in proxy.into_nodes().into_iter() {
         let role = node.get_role();
         let meta = node.get_repl_meta();
-        let db_name = node.get_cluster_name().clone();
+        let cluster_name = node.get_cluster_name().clone();
         match role {
             Role::Master => {
                 // For importing nodes in 0.1 migration protocol,
@@ -189,7 +189,7 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: DBMapFlags) -> Vec<String> {
                 let master_node_address = node.get_address().to_string();
                 let replicas = meta.get_peers().to_vec();
                 let master_meta = MasterMeta {
-                    db_name,
+                    cluster_name,
                     master_node_address,
                     replicas,
                 };
@@ -199,7 +199,7 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: DBMapFlags) -> Vec<String> {
                 let replica_node_address = node.get_address().to_string();
                 let masters = meta.get_peers().to_vec();
                 let replica_meta = ReplicaMeta {
-                    db_name,
+                    cluster_name,
                     replica_node_address,
                     masters,
                 };
@@ -234,7 +234,7 @@ mod tests {
     use tokio;
 
     fn gen_testing_proxy(role: Role) -> Proxy {
-        let dbname = DBName::from("mydb").unwrap();
+        let cluste_name = ClusterName::from("mycluster").unwrap();
         let slot_range = SlotRange {
             range_list: RangeList::try_from("1 233-666").unwrap(),
             tag: SlotRangeTag::None,
@@ -249,12 +249,12 @@ mod tests {
         let nodes = vec![Node::new(
             "127.0.0.1:7001".to_string(),
             "127.0.0.1:6000".to_string(),
-            dbname.clone(),
+            cluste_name.clone(),
             vec![slot_range],
             repl,
         )];
         let mut clusters_config = HashMap::new();
-        clusters_config.insert(dbname, ClusterConfig::default());
+        clusters_config.insert(cluste_name, ClusterConfig::default());
         Proxy::new(
             "127.0.0.1:6000".to_string(),
             7799,
@@ -270,7 +270,7 @@ mod tests {
             "7799",
             "NOFLAG",
             "master",
-            "mydb",
+            "mycluster",
             "127.0.0.1:7001",
             "1",
             "127.0.0.1:7002",
@@ -286,7 +286,7 @@ mod tests {
             "7799",
             "FORCE",
             "replica",
-            "mydb",
+            "mycluster",
             "127.0.0.1:7001",
             "1",
             "127.0.0.1:7002",
@@ -297,31 +297,42 @@ mod tests {
         .collect()
     }
 
-    fn gen_set_db_args() -> Vec<String> {
-        vec!["7799", "NOFLAG", "mydb", "127.0.0.1:7001", "1", "233-666"]
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect()
+    fn gen_set_cluster_args() -> Vec<String> {
+        vec![
+            "7799",
+            "NOFLAG",
+            "mycluster",
+            "127.0.0.1:7001",
+            "1",
+            "233-666",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
     #[test]
     fn test_master_generate_repl_meta_cmd_args() {
         let proxy = gen_testing_proxy(Role::Master);
-        let args = generate_repl_meta_cmd_args(proxy, DBMapFlags { force: false });
+        let args = generate_repl_meta_cmd_args(proxy, ClusterMapFlags { force: false });
         assert_eq!(args, gen_master_args())
     }
 
     #[test]
     fn test_replica_generate_repl_meta_cmd_args() {
         let proxy = gen_testing_proxy(Role::Replica);
-        let args = generate_repl_meta_cmd_args(proxy, DBMapFlags { force: true });
+        let args = generate_repl_meta_cmd_args(proxy, ClusterMapFlags { force: true });
         assert_eq!(args, gen_replica_args())
     }
 
     #[tokio::test]
     async fn test_send_meta() {
         let mut mock_client = MockRedisClient::new();
-        let cmd = vec![b"UMCTL".to_vec(), b"SETDB".to_vec(), b"test_args".to_vec()];
+        let cmd = vec![
+            b"UMCTL".to_vec(),
+            b"SETCLUSTER".to_vec(),
+            b"test_args".to_vec(),
+        ];
         mock_client
             .expect_execute_single()
             .withf(move |command: &Vec<BinSafeStr>| command.eq(&cmd))
@@ -329,7 +340,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(Resp::Simple(b"ok".to_vec())) }));
         let res = send_meta(
             &mut mock_client,
-            "SETDB".to_string(),
+            "SETCLUSTER".to_string(),
             vec!["test_args".to_string()],
         )
         .await;
@@ -348,14 +359,14 @@ mod tests {
                 .map(|s| s.into_bytes())
                 .collect(),
         );
-        let mut set_db_cmd = vec![b"UMCTL".to_vec(), b"SETDB".to_vec()];
-        set_db_cmd.append(
-            &mut gen_set_db_args()
+        let mut set_cluster_cmd = vec![b"UMCTL".to_vec(), b"SETCLUSTER".to_vec()];
+        set_cluster_cmd.append(
+            &mut gen_set_cluster_args()
                 .into_iter()
                 .map(|s| s.into_bytes())
                 .collect(),
         );
-        set_db_cmd.push(b"CONFIG".to_vec());
+        set_cluster_cmd.push(b"CONFIG".to_vec());
 
         mock_client
             .expect_execute_single()
@@ -365,8 +376,8 @@ mod tests {
                     command.eq(&set_repl_cmd)
                 } else {
                     // Ignore the config part
-                    let cmd = command.get(0..set_db_cmd.len()).unwrap().to_vec();
-                    cmd.eq(&set_db_cmd)
+                    let cmd = command.get(0..set_cluster_cmd.len()).unwrap().to_vec();
+                    cmd.eq(&set_cluster_cmd)
                 }
             })
             .times(2)
@@ -390,7 +401,7 @@ mod tests {
         let mut mock_broker = MockMetaDataBroker::new();
 
         mock_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(move |addr| addr == proxy_addr)
             .returning(move |_| {
                 let proxy = gen_testing_proxy(Role::Master);
@@ -398,7 +409,7 @@ mod tests {
             });
 
         let retriever = BrokerMetaRetriever::new(Arc::new(mock_broker));
-        let res = retriever.get_host_meta(proxy_addr.to_string()).await;
+        let res = retriever.get_proxy_meta(proxy_addr.to_string()).await;
         assert!(res.is_ok());
         let opt = res.unwrap();
         assert!(opt.is_some());
@@ -415,7 +426,7 @@ mod tests {
         let not_exist_proxy = "127.0.0.1:99999".to_string();
         let not_exist_proxy2 = not_exist_proxy.clone();
 
-        mock_broker.expect_get_host_addresses().returning(move || {
+        mock_broker.expect_get_proxy_addresses().returning(move || {
             let results = vec![
                 Err(MetaDataBrokerError::InvalidReply),
                 Ok(not_exist_proxy2.clone()),
@@ -424,7 +435,7 @@ mod tests {
             Box::pin(stream::iter(results))
         });
         mock_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(move |addr| addr == &proxy_addr)
             .times(1)
             .returning(move |_| {
@@ -432,7 +443,7 @@ mod tests {
                 Box::pin(async { Ok(Some(proxy)) })
             });
         mock_broker
-            .expect_get_host()
+            .expect_get_proxy()
             .withf(move |addr| addr == &not_exist_proxy)
             .times(1)
             .returning(move |_| Box::pin(async { Ok(None) }));

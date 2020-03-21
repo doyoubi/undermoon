@@ -6,14 +6,16 @@ use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
     BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
 };
-use super::database::{DBError, DBSendError, DBTag, DatabaseMap, DEFAULT_DB};
+use super::cluster::{
+    ClusterBackendMap, ClusterMetaError, ClusterSendError, ClusterTag, DEFAULT_CLUSTER,
+};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
-use crate::common::cluster::{DBName, MigrationTaskMeta, SlotRangeTag};
+use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
-use crate::common::db::ProxyDBMeta;
+use crate::common::proto::ProxyClusterMeta;
 use crate::common::track::TrackedFutureRegistry;
 use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
@@ -29,33 +31,33 @@ use std::sync::{Arc, Mutex};
 
 pub struct MetaMap<S: CmdTaskSender, T>
 where
-    <S as CmdTaskSender>::Task: DBTag,
-    T: CmdTask + DBTag,
+    <S as CmdTaskSender>::Task: ClusterTag,
+    T: CmdTask + ClusterTag,
 {
-    db_map: DatabaseMap<S>,
+    cluster_map: ClusterBackendMap<S>,
     migration_map: MigrationMap<T>,
     deleting_task_map: DeleteKeysTaskMap,
 }
 
 impl<S: CmdTaskSender, T> MetaMap<S, T>
 where
-    <S as CmdTaskSender>::Task: DBTag,
-    T: CmdTask + DBTag,
+    <S as CmdTaskSender>::Task: ClusterTag,
+    T: CmdTask + ClusterTag,
 {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let db_map = DatabaseMap::default();
+        let cluster_map = ClusterBackendMap::default();
         let migration_map = MigrationMap::new();
         let deleting_task_map = DeleteKeysTaskMap::new();
         Self {
-            db_map,
+            cluster_map,
             migration_map,
             deleting_task_map,
         }
     }
 
-    pub fn get_db_map(&self) -> &DatabaseMap<S> {
-        &self.db_map
+    pub fn get_cluster_map(&self) -> &ClusterBackendMap<S> {
+        &self.cluster_map
     }
 }
 
@@ -80,7 +82,7 @@ pub struct MetaManager<F: RedisClientFactory> {
     // inside meta_map.
     meta_map: SharedMetaMap,
     epoch: AtomicU64,
-    lock: Mutex<()>, // This is the write lock for `epoch`, `db`, and `task`.
+    lock: Mutex<()>, // This is the write lock for `epoch`, `cluster`, and `task`.
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, MigrationSenderFactory, CmdCtxFactory>,
     sender_factory: SenderFactory,
@@ -136,74 +138,76 @@ impl<F: RedisClientFactory> MetaManager<F> {
         }
     }
 
-    pub fn gen_cluster_nodes(&self, db_name: DBName) -> String {
+    pub fn gen_cluster_nodes(&self, cluster_name: ClusterName) -> String {
         let meta_map = self.meta_map.load();
-        let migration_states = meta_map.migration_map.get_states(&db_name);
-        meta_map.db_map.gen_cluster_nodes(
-            db_name,
+        let migration_states = meta_map.migration_map.get_states(&cluster_name);
+        meta_map.cluster_map.gen_cluster_nodes(
+            cluster_name,
             self.config.announce_address.clone(),
             &migration_states,
         )
     }
 
-    pub fn gen_cluster_slots(&self, db_name: DBName) -> Result<RespVec, String> {
+    pub fn gen_cluster_slots(&self, cluster_name: ClusterName) -> Result<RespVec, String> {
         let meta_map = self.meta_map.load();
-        let migration_states = meta_map.migration_map.get_states(&db_name);
-        meta_map.db_map.gen_cluster_slots(
-            db_name,
+        let migration_states = meta_map.migration_map.get_states(&cluster_name);
+        meta_map.cluster_map.gen_cluster_slots(
+            cluster_name,
             self.config.announce_address.clone(),
             &migration_states,
         )
     }
 
-    pub fn get_dbs(&self) -> Vec<DBName> {
-        self.meta_map.load().db_map.get_dbs()
+    pub fn get_clusters(&self) -> Vec<ClusterName> {
+        self.meta_map.load().cluster_map.get_clusters()
     }
 
-    pub fn set_meta(&self, db_meta: ProxyDBMeta) -> Result<(), DBError> {
+    pub fn set_meta(&self, cluster_meta: ProxyClusterMeta) -> Result<(), ClusterMetaError> {
         let sender_factory = &self.sender_factory;
         let migration_manager = &self.migration_manager;
 
         let _guard = self.lock.lock().expect("MetaManager::set_meta");
 
-        if db_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst) && !db_meta.get_flags().force {
-            return Err(DBError::OldEpoch);
+        if cluster_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst)
+            && !cluster_meta.get_flags().force
+        {
+            return Err(ClusterMetaError::OldEpoch);
         }
 
         let old_meta_map = self.meta_map.load();
-        let db_map = DatabaseMap::from_db_map(&db_meta, sender_factory);
+        let cluster_map = ClusterBackendMap::from_cluster_map(&cluster_meta, sender_factory);
         let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
             &old_meta_map.migration_map,
-            db_meta.get_local(),
+            cluster_meta.get_local(),
             self.blocking_map.clone(),
         );
 
         let left_slots_after_change = old_meta_map
             .migration_map
-            .get_left_slots_after_change(&migration_map, db_meta.get_local());
+            .get_left_slots_after_change(&migration_map, cluster_meta.get_local());
         let (deleting_task_map, new_deleting_tasks) = migration_manager
             .create_new_deleting_task_map(
                 &old_meta_map.deleting_task_map,
-                db_meta.get_local(),
+                cluster_meta.get_local(),
                 left_slots_after_change,
             );
 
         self.meta_map.store(Arc::new(MetaMap {
-            db_map,
+            cluster_map,
             migration_map,
             deleting_task_map,
         }));
-        self.epoch.store(db_meta.get_epoch(), Ordering::SeqCst);
+        self.epoch.store(cluster_meta.get_epoch(), Ordering::SeqCst);
 
         self.migration_manager.run_tasks(new_tasks);
         self.migration_manager
             .run_deleting_tasks(new_deleting_tasks);
-        debug!("Successfully update db meta data");
+        debug!("Successfully update cluster meta data");
 
         Ok(())
     }
 
-    pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), DBError> {
+    pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), ClusterMetaError> {
         self.replicator_manager.update_replicators(meta)
     }
 
@@ -213,12 +217,12 @@ impl<F: RedisClientFactory> MetaManager<F> {
 
     pub fn info(&self) -> String {
         let meta_map = self.meta_map.load();
-        let db_info = meta_map.db_map.info();
+        let cluster_info = meta_map.cluster_map.info();
         let mgr_info = meta_map.migration_map.info();
         let del_info = meta_map.deleting_task_map.info();
         format!(
-            "# DB\r\n{}\r\n# Migration\r\n{}\r\n{}\r\n",
-            db_info, mgr_info, del_info
+            "# Cluster\r\n{}\r\n# Migration\r\n{}\r\n{}\r\n",
+            cluster_info, mgr_info, del_info
         )
     }
 
@@ -262,13 +266,13 @@ impl<F: RedisClientFactory> MetaManager<F> {
         send_cmd_ctx(&self.meta_map, cmd_ctx);
     }
 
-    pub fn try_select_db(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
-        if cmd_ctx.get_db_name().as_str() != DEFAULT_DB {
+    pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
+        if cmd_ctx.get_cluster_name().as_str() != DEFAULT_CLUSTER {
             return cmd_ctx;
         }
 
-        if let Some(db_name) = self.meta_map.load().db_map.auto_select_db() {
-            cmd_ctx.set_db_name(db_name);
+        if let Some(cluster_name) = self.meta_map.load().cluster_map.auto_select_cluster() {
+            cmd_ctx.set_cluster_name(cluster_name);
         }
         cmd_ctx
     }
@@ -279,7 +283,7 @@ pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
     let mut cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
         Ok(()) => return,
         Err(e) => match e {
-            DBSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
+            ClusterSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
             err => {
                 error!("migration send task failed: {:?}", err);
                 return;
@@ -287,11 +291,11 @@ pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
         },
     };
 
-    cmd_ctx.log_event(TaskEvent::SentToDB);
-    let res = meta_map.db_map.send(cmd_ctx);
+    cmd_ctx.log_event(TaskEvent::SentToCluster);
+    let res = meta_map.cluster_map.send(cmd_ctx);
     if let Err(e) = res {
         match e {
-            DBSendError::MissingKey => (),
+            ClusterSendError::MissingKey => (),
             err => warn!("Failed to forward cmd_ctx: {:?}", err),
         }
     }

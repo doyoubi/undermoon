@@ -229,7 +229,7 @@ mod trait_mod {
     pub trait ProxyMetaSender: Sync + Send + 'static {
         fn send_meta<'s>(
             &'s self,
-            host: Proxy,
+            proxy: Proxy,
         ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
     }
 }
@@ -237,7 +237,7 @@ mod trait_mod {
 pub use self::trait_mod::{MockProxyMetaSender, ProxyMetaSender};
 
 pub trait ProxyMetaRetriever: Sync + Send + 'static {
-    fn get_host_meta<'s>(
+    fn get_proxy_meta<'s>(
         &'s self,
         address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, CoordinateError>> + Send + 's>>;
@@ -274,12 +274,12 @@ impl<P: ProxiesRetriever, M: ProxyMetaRetriever, S: ProxyMetaSender>
         sender: &S,
         address: String,
     ) -> Result<(), CoordinateError> {
-        let host_opt = meta_retriever.get_host_meta(address).await?;
-        let host = match host_opt {
-            Some(host) => host,
+        let proxy_opt = meta_retriever.get_proxy_meta(address).await?;
+        let proxy = match proxy_opt {
+            Some(proxy) => proxy,
             None => return Ok(()),
         };
-        if let Err(err) = sender.send_meta(host).await {
+        if let Err(err) = sender.send_meta(proxy).await {
             error!("failed to set meta: {:?}", err);
             return Err(err);
         }
@@ -405,21 +405,24 @@ impl<
         S: ProxyMetaSender,
     > ParMigrationStateSynchronizer<PR, SC, MC, MR, S>
 {
-    async fn set_db_meta(
+    async fn set_cluster_meta(
         address: String,
         meta_retriever: &MR,
         sender: &S,
     ) -> Result<(), CoordinateError> {
-        let host_opt = meta_retriever.get_host_meta(address.clone()).await?;
-        let host = match host_opt {
-            Some(host) => host,
+        let proxy_opt = meta_retriever.get_proxy_meta(address.clone()).await?;
+        let proxy = match proxy_opt {
+            Some(proxy) => proxy,
             None => {
-                error!("host can't be found after committing migration {}", address);
+                error!(
+                    "proxy can't be found after committing migration {}",
+                    address
+                );
                 return Ok(());
             }
         };
         info!("sending meta after committing migration {}", address);
-        sender.send_meta(host).await
+        sender.send_meta(proxy).await
     }
 
     async fn sync_migration_state(
@@ -445,8 +448,8 @@ impl<
         }
 
         // Send to dst first to make sure the slots will always have owner.
-        Self::set_db_meta(dst_address, meta_retriever, sender).await?;
-        Self::set_db_meta(src_address, meta_retriever, sender).await?;
+        Self::set_cluster_meta(dst_address, meta_retriever, sender).await?;
+        Self::set_cluster_meta(src_address, meta_retriever, sender).await?;
 
         Ok(())
     }

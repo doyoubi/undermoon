@@ -64,7 +64,7 @@ impl<
 
         let futs: Vec<Pin<Box<dyn Future<Output = CoordResult> + Send>>> = vec![
             Box::pin(self.loop_detect()),
-            Box::pin(self.loop_host_sync()),
+            Box::pin(self.loop_proxy_sync()),
             Box::pin(self.loop_failure_handler()),
             Box::pin(self.loop_migration_sync()),
         ];
@@ -85,7 +85,7 @@ impl<
         ParFailureDetector::new(retriever, checker, reporter)
     }
 
-    fn gen_host_meta_synchronizer(
+    fn gen_proxy_meta_synchronizer(
         data_broker: Arc<DB>,
         client_factory: Arc<F>,
     ) -> impl ProxyMetaSynchronizer {
@@ -141,14 +141,14 @@ impl<
         }
     }
 
-    async fn loop_host_sync(&self) -> Result<(), CoordinateError> {
+    async fn loop_proxy_sync(&self) -> Result<(), CoordinateError> {
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
         loop {
-            debug!("start sync host meta data");
-            defer!(debug!("host meta sync finished a round"));
+            debug!("start sync proxy meta data");
+            defer!(debug!("proxy meta sync finished a round"));
             let sync =
-                Self::gen_host_meta_synchronizer(data_broker.clone(), client_factory.clone());
+                Self::gen_proxy_meta_synchronizer(data_broker.clone(), client_factory.clone());
             let mut s = sync.run();
             while let Some(r) = s.next().await {
                 if let Err(e) = r {

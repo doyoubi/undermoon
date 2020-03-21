@@ -1,5 +1,5 @@
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
-use crate::common::cluster::{Cluster, DBName, MigrationTaskMeta, Node, Proxy};
+use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailuresPayload, ProxyAddressesPayload, ProxyPayload,
@@ -11,9 +11,11 @@ use chrono;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
+
 pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
     cfg.data(service).service(
-        web::scope("/api")
+        web::scope(MEM_BROKER_API_VERSION)
             .wrap_fn(|req, srv| {
                 let method = req.method().clone();
                 let peer_addr = match req.peer_addr() {
@@ -42,10 +44,10 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 "/clusters/meta/{cluster_name}",
                 web::get().to(get_cluster_by_name),
             )
-            .route("/proxies/addresses", web::get().to(get_host_addresses))
+            .route("/proxies/addresses", web::get().to(get_proxy_addresses))
             .route(
                 "/proxies/meta/{address}",
-                web::get().to(get_host_by_address),
+                web::get().to(get_proxy_by_address),
             )
             .route("/failures", web::get().to(get_failures))
             .route(
@@ -72,7 +74,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             )
             .route("clusters/config/{cluster_name}", web::patch().to(change_config))
 
-            .route("/proxies/nodes", web::post().to(add_host))
+            .route("/proxies/nodes", web::post().to(add_proxy))
             .route(
                 "/proxies/nodes/{proxy_address}",
                 web::delete().to(remove_proxy),
@@ -109,22 +111,22 @@ impl MemBrokerService {
             .clone()
     }
 
-    pub fn get_host_addresses(&self) -> Vec<String> {
+    pub fn get_proxy_addresses(&self) -> Vec<String> {
         self.store
             .read()
-            .expect("MemBrokerService::get_host_addresses")
+            .expect("MemBrokerService::get_proxy_addresses")
             .get_proxies()
     }
 
-    pub fn get_host_by_address(&self, address: &str) -> Option<Proxy> {
+    pub fn get_proxy_by_address(&self, address: &str) -> Option<Proxy> {
         let migration_limit = self.config.migration_limit;
         self.store
             .read()
-            .expect("MemBrokerService::get_host_by_address")
+            .expect("MemBrokerService::get_proxy_by_address")
             .get_proxy_by_address(address, migration_limit)
     }
 
-    pub fn get_cluster_names(&self) -> Vec<DBName> {
+    pub fn get_cluster_names(&self) -> Vec<ClusterName> {
         self.store
             .read()
             .expect("MemBrokerService::get_cluster_names")
@@ -139,14 +141,14 @@ impl MemBrokerService {
             .get_cluster_by_name(name, migration_limit)
     }
 
-    pub fn add_hosts(&self, host_resource: ProxyResource) -> Result<(), MetaStoreError> {
+    pub fn add_proxy(&self, proxy_resource: ProxyResource) -> Result<(), MetaStoreError> {
         let ProxyResource {
             proxy_address,
             nodes,
-        } = host_resource;
+        } = proxy_resource;
         self.store
             .write()
-            .expect("MemBrokerService::add_hosts")
+            .expect("MemBrokerService::add_proxy")
             .add_proxy(proxy_address, nodes)
     }
 
@@ -253,17 +255,17 @@ async fn get_all_metadata(state: ServiceState) -> impl Responder {
     web::Json(metadata)
 }
 
-async fn get_host_addresses(state: ServiceState) -> impl Responder {
-    let addresses = state.get_host_addresses();
+async fn get_proxy_addresses(state: ServiceState) -> impl Responder {
+    let addresses = state.get_proxy_addresses();
     web::Json(ProxyAddressesPayload { addresses })
 }
 
-async fn get_host_by_address(
+async fn get_proxy_by_address(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> impl Responder {
     let name = path.into_inner().0;
-    let host = state.get_host_by_address(&name);
-    web::Json(ProxyPayload { host })
+    let proxy = state.get_proxy_by_address(&name);
+    web::Json(ProxyPayload { proxy })
 }
 
 async fn get_cluster_names(state: ServiceState) -> impl Responder {
@@ -290,10 +292,10 @@ pub struct ProxyResource {
     nodes: [String; CHUNK_HALF_NODE_NUM],
 }
 
-async fn add_host(
-    (host_resource, state): (web::Json<ProxyResource>, ServiceState),
+async fn add_proxy(
+    (proxy_resource, state): (web::Json<ProxyResource>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    state.add_hosts(host_resource.into_inner()).map(|()| "")
+    state.add_proxy(proxy_resource.into_inner()).map(|()| "")
 }
 
 #[derive(Deserialize, Serialize)]

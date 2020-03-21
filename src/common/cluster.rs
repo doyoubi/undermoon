@@ -384,29 +384,31 @@ impl SlotRange {
     }
 }
 
-// To optimize the DBTag::get_db_name, we need to eliminate the heap allocation.
-// Thus we make DBName a stack string with limited size.
-pub const DB_NAME_MAX_LENGTH: usize = 31;
+// To optimize the ClusterTag::get_cluster_name, we need to eliminate the heap allocation.
+// Thus we make ClusterName a stack string with limited size.
+pub const CLUSTER_NAME_MAX_LENGTH: usize = 31;
 
 #[derive(Debug)]
-pub struct InvalidDBName;
+pub struct InvalidClusterName;
 
 #[derive(Debug)]
 pub struct CapacityError;
 
-type DBNameInner = arrayvec::ArrayString<[u8; DB_NAME_MAX_LENGTH]>;
+type ClusterNameInner = arrayvec::ArrayString<[u8; CLUSTER_NAME_MAX_LENGTH]>;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DBName(DBNameInner);
+pub struct ClusterName(ClusterNameInner);
 
-impl DBName {
+impl ClusterName {
     pub fn new() -> Self {
-        Self(DBNameInner::new())
+        Self(ClusterNameInner::new())
     }
 
     // TODO: use TryFrom
-    pub fn from(s: &str) -> Result<Self, InvalidDBName> {
-        Ok(Self(DBNameInner::from(s).map_err(|_| InvalidDBName)?))
+    pub fn from(s: &str) -> Result<Self, InvalidClusterName> {
+        Ok(Self(
+            ClusterNameInner::from(s).map_err(|_| InvalidClusterName)?,
+        ))
     }
 
     pub fn as_str(&self) -> &str {
@@ -418,25 +420,25 @@ impl DBName {
     }
 }
 
-impl Default for DBName {
+impl Default for ClusterName {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl fmt::Display for DBName {
+impl fmt::Display for ClusterName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0.to_string())
     }
 }
 
-impl fmt::Debug for DBName {
+impl fmt::Debug for ClusterName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0.to_string())
     }
 }
 
-impl Serialize for DBName {
+impl Serialize for ClusterName {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -445,30 +447,27 @@ impl Serialize for DBName {
     }
 }
 
-impl<'de> Deserialize<'de> for DBName {
+impl<'de> Deserialize<'de> for ClusterName {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        DBName::from(&s)
-            .map_err(|err| D::Error::custom(format!("invalid db name {}: {:?}", s, err)))
+        ClusterName::from(&s)
+            .map_err(|err| D::Error::custom(format!("invalid cluster name {}: {:?}", s, err)))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MigrationTaskMeta {
-    // TODO: need to change with overmoon later.
-    // #[serde(alias = "db_name")]
-    // pub cluster_name: DBName,
-    pub db_name: DBName,
+    pub cluster_name: ClusterName,
     pub slot_range: SlotRange,
 }
 
 impl MigrationTaskMeta {
     pub fn into_strings(self) -> Vec<String> {
         let MigrationTaskMeta {
-            db_name: cluster_name,
+            cluster_name,
             slot_range,
         } = self;
         let mut strs = vec![cluster_name.to_string()];
@@ -480,11 +479,11 @@ impl MigrationTaskMeta {
     where
         It: Iterator<Item = String>,
     {
-        let db_name_str = it.next()?;
-        let cluster_name = DBName::from(&db_name_str).ok()?;
+        let cluster_name_str = it.next()?;
+        let cluster_name = ClusterName::from(&cluster_name_str).ok()?;
         let slot_range = SlotRange::from_strings(it)?;
         Some(Self {
-            db_name: cluster_name,
+            cluster_name,
             slot_range,
         })
     }
@@ -563,13 +562,13 @@ impl ReplMeta {
 
 // (1) In proxy, all Node instances are masters.
 // Replica Node will only be used for replication.
-// (2) Coordinator will send the master Node metadata to proxies' database module
+// (2) Coordinator will send the master Node metadata to proxies' cluster module
 // and the replica Node metadata to proxies' replication module.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Node {
     address: String,
     proxy_address: String,
-    cluster_name: DBName,
+    cluster_name: ClusterName,
     slots: Vec<SlotRange>,
     repl: ReplMeta,
 }
@@ -578,7 +577,7 @@ impl Node {
     pub fn new(
         address: String,
         proxy_address: String,
-        cluster_name: DBName,
+        cluster_name: ClusterName,
         slots: Vec<SlotRange>,
         repl: ReplMeta,
     ) -> Self {
@@ -596,7 +595,7 @@ impl Node {
     pub fn get_proxy_address(&self) -> &str {
         &self.proxy_address
     }
-    pub fn get_cluster_name(&self) -> &DBName {
+    pub fn get_cluster_name(&self) -> &ClusterName {
         &self.cluster_name
     }
     pub fn get_slots(&self) -> &[SlotRange] {
@@ -622,7 +621,7 @@ impl Node {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cluster {
-    name: DBName,
+    name: ClusterName,
     epoch: u64,
     nodes: Vec<Node>,
     #[serde(default)]
@@ -630,7 +629,7 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub fn new(name: DBName, epoch: u64, nodes: Vec<Node>, config: ClusterConfig) -> Self {
+    pub fn new(name: ClusterName, epoch: u64, nodes: Vec<Node>, config: ClusterConfig) -> Self {
         Self {
             name,
             epoch,
@@ -638,7 +637,7 @@ impl Cluster {
             config,
         }
     }
-    pub fn get_name(&self) -> &DBName {
+    pub fn get_name(&self) -> &ClusterName {
         &self.name
     }
     pub fn get_nodes(&self) -> &[Node] {
@@ -688,7 +687,7 @@ impl Cluster {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PeerProxy {
     pub proxy_address: String,
-    pub cluster_name: DBName,
+    pub cluster_name: ClusterName,
     pub slots: Vec<SlotRange>,
 }
 
@@ -700,7 +699,7 @@ pub struct Proxy {
     free_nodes: Vec<String>,
     peers: Vec<PeerProxy>,
     #[serde(default)]
-    clusters_config: HashMap<DBName, ClusterConfig>,
+    clusters_config: HashMap<ClusterName, ClusterConfig>,
 }
 
 impl Proxy {
@@ -710,7 +709,7 @@ impl Proxy {
         nodes: Vec<Node>,
         free_nodes: Vec<String>,
         peers: Vec<PeerProxy>,
-        clusters_config: HashMap<DBName, ClusterConfig>,
+        clusters_config: HashMap<ClusterName, ClusterConfig>,
     ) -> Self {
         Self {
             address,
@@ -756,7 +755,7 @@ impl Proxy {
         &self.peers
     }
 
-    pub fn get_clusters_config(&self) -> &HashMap<DBName, ClusterConfig> {
+    pub fn get_clusters_config(&self) -> &HashMap<ClusterName, ClusterConfig> {
         &self.clusters_config
     }
 }
@@ -816,15 +815,15 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_host() {
-        let host_str = r#"{
+    fn test_deserialize_proxy() {
+        let proxy_str = r#"{
             "address": "server_proxy1:6001",
             "epoch": 1,
             "nodes": [
                 {
                     "address": "redis1:7001",
                     "proxy_address": "server_proxy1:6001",
-                    "cluster_name": "mydb",
+                    "cluster_name": "mycluster",
                     "repl": {
                         "role": "master",
                         "peers": [
@@ -839,7 +838,7 @@ mod tests {
                 {
                     "address": "redis4:7004",
                     "proxy_address": "server_proxy1:6001",
-                    "cluster_name": "mydb",
+                    "cluster_name": "mycluster",
                     "repl": {
                         "role": "replica",
                         "peers": [
@@ -855,30 +854,30 @@ mod tests {
             "free_nodes": [],
             "peers": [{
                 "proxy_address": "server_proxy2:6002",
-                "cluster_name": "mydb",
+                "cluster_name": "mycluster",
                 "slots": [{"range_list": [[5462, 10000]], "tag": "None"}]
             }],
             "clusters_config": {
-                "mydb": {
+                "mycluster": {
                     "compression_strategy": "set_get_only"
                 }
             }
         }"#;
-        let host: Proxy = serde_json::from_str(host_str).unwrap();
+        let proxy: Proxy = serde_json::from_str(proxy_str).unwrap();
 
         let mut config = ClusterConfig::default();
         config.compression_strategy = CompressionStrategy::SetGetOnly;
         let mut clusters_config = HashMap::new();
-        clusters_config.insert(DBName::from("mydb").unwrap(), config);
+        clusters_config.insert(ClusterName::from("mycluster").unwrap(), config);
 
-        let expected_host = Proxy::new(
+        let expected_proxy = Proxy::new(
             "server_proxy1:6001".to_string(),
             1,
             vec![
                 Node::new(
                     "redis1:7001".to_string(),
                     "server_proxy1:6001".to_string(),
-                    DBName::from("mydb").unwrap(),
+                    ClusterName::from("mycluster").unwrap(),
                     vec![SlotRange {
                         range_list: RangeList::try_from("1 0-5461").unwrap(),
                         tag: SlotRangeTag::None,
@@ -894,7 +893,7 @@ mod tests {
                 Node::new(
                     "redis4:7004".to_string(),
                     "server_proxy1:6001".to_string(),
-                    DBName::from("mydb").unwrap(),
+                    ClusterName::from("mycluster").unwrap(),
                     vec![],
                     ReplMeta::new(
                         Role::Replica,
@@ -908,7 +907,7 @@ mod tests {
             Vec::new(),
             vec![PeerProxy {
                 proxy_address: "server_proxy2:6002".to_string(),
-                cluster_name: DBName::from("mydb").unwrap(),
+                cluster_name: ClusterName::from("mycluster").unwrap(),
                 slots: vec![SlotRange {
                     range_list: RangeList::try_from("1 5462-10000").unwrap(),
                     tag: SlotRangeTag::None,
@@ -916,23 +915,23 @@ mod tests {
             }],
             clusters_config,
         );
-        assert_eq!(expected_host, host);
+        assert_eq!(expected_proxy, proxy);
     }
 
     #[test]
-    fn test_db_name_size() {
-        assert_eq!(size_of::<DBName>(), DB_NAME_MAX_LENGTH + 1);
+    fn test_cluster_name_size() {
+        assert_eq!(size_of::<ClusterName>(), CLUSTER_NAME_MAX_LENGTH + 1);
         // Align to 32 bytes.
-        assert_eq!(size_of::<DBName>(), 32);
-        let mut name = DBName::new();
-        // DBName should be able to store ASCII with just a byte unlike char.
-        for _ in 0..DB_NAME_MAX_LENGTH {
+        assert_eq!(size_of::<ClusterName>(), 32);
+        let mut name = ClusterName::new();
+        // ClusterName should be able to store ASCII with just a byte unlike char.
+        for _ in 0..CLUSTER_NAME_MAX_LENGTH {
             name.try_push('a').unwrap();
         }
         assert!(name.0.is_full());
         assert_eq!(
             name.as_str(),
-            (0..DB_NAME_MAX_LENGTH)
+            (0..CLUSTER_NAME_MAX_LENGTH)
                 .into_iter()
                 .map(|_| 'a')
                 .collect::<String>()

@@ -10,7 +10,7 @@ Let's suppose we're migrating slots `0-1000` from node A to node B, proxy A to p
 Broker add `MIGRATING` and `IMPORTING` flags to A and B, bumping the cluster epoch.
 
 #### (2) Coordinator synchronize the metadata.
-Coordinator sending the flags to node A and B by `UMCTL SETDB`.
+Coordinator sending the flags to node A and B by `UMCTL SETCLUSTER`.
 
 #### (3) Node A starts checking the replication process
 Proxy A checks whether the replication process on node A with node B has finished. Wait until the lag is close.
@@ -26,7 +26,7 @@ Proxy A will
 - These commands in the queue will wait for a short time to let the replication finish hopefully and start replying `MOVED` to proxy B.
 - Keep sending `UMCTL TMPSWITCH proxy_version db_name 0-1000 epoch proxy_A_address node_A_address proxy_B_address node_B_address` to proxy B.
 - After gets the `OK` reply from proxy B, proxy A set the `Tmp Tranferred Commited Tag`.
-- Now proxy A will start to reply `Tmp Tranferred Commited Tag for node A to node B migration on 0-1000 of SomeDB` for `UMCTL SETDB`
+- Now proxy A will start to reply `Tmp Tranferred Commited Tag for node A to node B migration on 0-1000 of SomeDB` for `UMCTL SETCLUSTER`
 - If proxy A waits for too long, it will directly change to the final state.
 
 #### (6) Proxy B reacts to UMCTL TMPSWITCH

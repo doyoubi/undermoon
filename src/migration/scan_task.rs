@@ -4,7 +4,7 @@ use super::task::{
     SwitchArg,
 };
 use crate::common::cluster::{
-    DBName, MigrationMeta, MigrationTaskMeta, RangeMap, SlotRange, SlotRangeTag,
+    ClusterName, MigrationMeta, MigrationTaskMeta, RangeMap, SlotRange, SlotRangeTag,
 };
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
@@ -17,7 +17,7 @@ use crate::proxy::backend::{
     CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, RedirectionSenderFactory, ReqTask,
 };
 use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
-use crate::proxy::database::DBSendError;
+use crate::proxy::cluster::ClusterSendError;
 use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use crate::proxy::service::ServerProxyConfig;
 use atomic_option::AtomicOption;
@@ -36,7 +36,7 @@ where
     BC: TaskBlockingController,
 {
     mgr_config: Arc<AtomicMigrationConfig>,
-    db_name: DBName,
+    cluster_name: ClusterName,
     slot_range: SlotRange,
     range_map: RangeMap,
     meta: MigrationMeta,
@@ -60,7 +60,7 @@ where
     pub fn new(
         _config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
-        db_name: DBName,
+        cluster_name: ClusterName,
         slot_range: SlotRange,
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
@@ -79,7 +79,7 @@ where
         let range_map = RangeMap::from(slot_range.get_range_list());
         Self {
             mgr_config,
-            db_name,
+            cluster_name,
             slot_range,
             range_map,
             meta,
@@ -99,7 +99,7 @@ where
         let arg = SwitchArg {
             version: UNDERMOON_MIGRATION_VERSION.to_string(),
             meta: MigrationTaskMeta {
-                db_name: self.db_name.clone(),
+                cluster_name: self.cluster_name.clone(),
                 slot_range: SlotRange {
                     range_list: self.slot_range.to_range_list(),
                     tag: SlotRangeTag::Migrating(self.meta.clone()),
@@ -226,8 +226,8 @@ where
             });
 
         let desc = format!(
-            "scan_migrating: db_name={} meta={:?} slot_range=({})",
-            self.db_name,
+            "scan_migrating: cluster_name={} meta={:?} slot_range=({})",
+            self.cluster_name,
             self.meta,
             self.slot_range.get_range_list().to_strings().join(" "),
         );
@@ -373,16 +373,19 @@ where
         Box::pin(fut)
     }
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>> {
+    fn send(
+        &self,
+        cmd_task: Self::Task,
+    ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>> {
         let state = self.state.get_state();
         match state {
             MigrationState::PreCheck => {
-                return Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
                     cmd_task, false,
                 )))
             }
             MigrationState::PreBlocking | MigrationState::PreSwitch => {
-                return Err(DBSendError::SlotNotFound(BlockingHintTask::new(
+                return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
                     cmd_task, true,
                 )));
             }
@@ -394,7 +397,7 @@ where
             .create(self.meta.dst_proxy_address.clone());
         redirection_sender
             .send(cmd_task)
-            .map_err(|_e| DBSendError::MigrationError)
+            .map_err(|_e| ClusterSendError::MigrationError)
     }
 
     fn get_state(&self) -> MigrationState {
@@ -537,14 +540,17 @@ where
         Box::pin(fut)
     }
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), DBSendError<BlockingHintTask<Self::Task>>> {
+    fn send(
+        &self,
+        cmd_task: Self::Task,
+    ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>> {
         if self.state.get_state() == MigrationState::PreCheck {
             let redirection_sender = self
                 .redirection_sender_factory
                 .create(self.meta.src_proxy_address.clone());
             return redirection_sender
                 .send(cmd_task)
-                .map_err(|_e| DBSendError::MigrationError);
+                .map_err(|_e| ClusterSendError::MigrationError);
         }
 
         self.cmd_handler.handle_cmd_task(cmd_task);

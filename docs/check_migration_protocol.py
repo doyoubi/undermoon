@@ -112,7 +112,7 @@ def gen_path_order_map():
     # Now the coordinator start to commit the switch
     m[(MetaStore.Md, MetaState.RedirectToSelf)][(MetaStore.Ms, MetaState.RedirectToPeer)] = True
 
-    # SETPEER SETDB
+    # SETPEER SETCLUSTER
     m[(MetaStore.Ms, MetaState.RedirectToPeer)][(MetaStore.Rs, MetaState.Slot)] = True
     m[(MetaStore.Rs, MetaState.Slot)][(MetaStore.Ms, MetaState.End)] = True
     m[(MetaStore.Ms, MetaState.End)][(MetaStore.Ls, MetaState.End)] = True
@@ -122,7 +122,7 @@ def gen_path_order_map():
     m[(MetaStore.Rd, MetaState.MgrSlot)][(MetaStore.Md, MetaState.RedirectToPeer)] = True
     m[(MetaStore.Md, MetaState.RedirectToPeer)][(MetaStore.Ld, MetaState.IptSlot)] = True
 
-    # SETPEER SETDB
+    # SETPEER SETCLUSTER
     m[(MetaStore.Ms, MetaState.RedirectToPeer)][(MetaStore.Rd, MetaState.End)] = True
     m[(MetaStore.Rd, MetaState.End)][(MetaStore.Md, MetaState.End)] = True
     m[(MetaStore.Md, MetaState.End)][(MetaStore.Ld, MetaState.Slot)] = True

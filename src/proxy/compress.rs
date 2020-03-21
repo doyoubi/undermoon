@@ -1,11 +1,11 @@
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use crate::common::cluster::DBName;
+use crate::common::cluster::ClusterName;
 use crate::common::config::{ClusterConfig, CompressionStrategy};
 use crate::protocol::RespPacket;
 use crate::protocol::{BulkStr, Resp};
-use crate::proxy::database::DBTag;
+use crate::proxy::cluster::ClusterTag;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -21,7 +21,7 @@ impl CmdCompressor {
     }
 
     pub fn try_compressing_cmd_ctx(&self, cmd_ctx: &mut CmdCtx) -> Result<(), CompressionError> {
-        let strategy = get_strategy(&cmd_ctx.get_db_name(), &self.meta_map);
+        let strategy = get_strategy(&cmd_ctx.get_cluster_name(), &self.meta_map);
 
         if strategy == CompressionStrategy::Disabled {
             return Err(CompressionError::Disabled);
@@ -88,7 +88,7 @@ impl CmdReplyDecompressor {
         cmd_ctx: &CmdCtx,
         packet: &mut RespPacket,
     ) -> Result<(), CompressionError> {
-        let strategy = get_strategy(&cmd_ctx.get_db_name(), &self.meta_map);
+        let strategy = get_strategy(&cmd_ctx.get_cluster_name(), &self.meta_map);
 
         if strategy == CompressionStrategy::Disabled {
             return Err(CompressionError::Disabled);
@@ -120,9 +120,9 @@ impl CmdReplyDecompressor {
     }
 }
 
-fn get_strategy(dbname: &DBName, meta_map: &SharedMetaMap) -> CompressionStrategy {
+fn get_strategy(cluster_name: &ClusterName, meta_map: &SharedMetaMap) -> CompressionStrategy {
     let meta_map = meta_map.lease();
-    match meta_map.get_db_map().get_config(&dbname) {
+    match meta_map.get_cluster_map().get_config(&cluster_name) {
         Some(config) => config.compression_strategy,
         None => ClusterConfig::default().compression_strategy,
     }

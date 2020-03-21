@@ -33,7 +33,7 @@ $ redis-server
 ```bash
 > redis-cli -p 5299
 # Initialize the proxy by `UMCTL` commands.
-127.0.0.1:5299> UMCTL SETDB 1 NOFLAGS mydb 127.0.0.1:6379 1 0-8000 PEER mydb 127.0.0.1:7000 1 8001-16383
+127.0.0.1:5299> UMCTL SETCLUSTER 1 NOFLAGS mydb 127.0.0.1:6379 1 0-8000 PEER mydb 127.0.0.1:7000 1 8001-16383
 
 # Done! We can use it like a Redis Cluster!
 127.0.0.1:5299> CLUSTER NODES
@@ -133,7 +133,7 @@ mydb________________server_proxy3:6003__ server_proxy3:6003 master - 0 0 1 conne
 The server-side proxy itself does not support failure detection and failover.
 But this can be easy done by using the two meta data management commands:
 
-- UMCTL SETDB
+- UMCTL SETCLUSTER
 - UMCTL SETREPL
 
 See the api docs later for details.
@@ -224,7 +224,7 @@ Before connecting to the cluster, you need to add these hosts to you `/etc/hosts
 
 Now get the metadata:
 ```bash
-$ curl localhost:7799/api/clusters/meta/mydb | python -m json.tool
+$ curl localhost:7799/api/v2/clusters/meta/mydb | python -m json.tool
 ```
 
 Pickup the randomly chosen proxies (in `proxy_address` field) for the cluster `mydb` and connect to them.
@@ -245,12 +245,12 @@ It also supports slots migration. See `examples/overmoon/init.py` for more detai
 
 ## API
 ### Server-side Proxy Commands
-#### UMCTL SETDB epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...] [PEER [dbname1 ip:port slot_range...]] [CONFIG [dbname1 field value...]]
+#### UMCTL SETCLUSTER epoch flags [dbname1 ip:port slot_range] [other_dbname ip:port slot_range...] [PEER [dbname1 ip:port slot_range...]] [CONFIG [dbname1 field value...]]
 
 Sets the mapping relationship between the server-side proxy and its corresponding redis instances behind it.
 
 - `epoch` is the logical time of the configuration this command is sending used to decide which configuration is more up-to-date.
-Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETDB|SETREPL]` requests which don't have higher epoch.
+Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETCLUSTER|SETREPL]` requests which don't have higher epoch.
 - `flags`: Currently it may be NOFLAG or FORCE. When it's `FORCE`, the server-side proxy will ignore the epoch rule above and will always accept the configuration
 - `slot_range` can be like
     - 1 0-1000
@@ -260,8 +260,8 @@ Every running server-side proxy will store its epoch and will reject all the `UM
 - `ip:port` should be the addresses of redis instances or other proxies for `PEER` part.
 
 Note that both these two commands set all the `local` or `peer` meta data of the proxy.
-For example, you can't add multiple backend redis instances one by one by sending multiple `UMCTL SETDB`.
-You should batch them in just one `UMCTL SETDB`.
+For example, you can't add multiple backend redis instances one by one by sending multiple `UMCTL SETCLUSTER`.
+You should batch them in just one `UMCTL SETCLUSTER`.
 
 #### UMCTL SETREPL epoch flags [[master|replica] dbname1 node_ip:node_port peer_num [peer_node_ip:peer_node_port peer_proxy_ip:peer_proxy_port]...] ...
 

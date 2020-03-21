@@ -26,25 +26,25 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
     ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send + 's>> {
         Box::pin(
             self.meta_data_broker
-                .get_host_addresses()
+                .get_proxy_addresses()
                 .map_err(CoordinateError::MetaData),
         )
     }
 }
 
-// Sometimes we can't just call MetaDataBroker::get_host_addresses() to
+// Sometimes we can't just call MetaDataBroker::get_proxy_addresses() to
 // get the addresses. There's a corner case we need to solve.
 // When the cluster is added some new proxies, the client may be redirected
 // to the new nodes especially when the migration starts.
 // But this time the metadata might have not synchronized to the new nodes
-// yet. This will cause a `db not found` error since the new nodes is still
+// yet. This will cause a `cluster not found` error since the new nodes is still
 // uninitialized. Thus we should always synchronize the metadata to the
 // new nodes first.
 //
 // NOTICE: The clients should not directly use the address list from
-// the MetaDataBroker::get_host_addresses(). They should check whether
+// the MetaDataBroker::get_proxy_addresses(). They should check whether
 // the server proxies are ready. Only after all the proxies get synchronized,
-// can the clients use the addresses from MetaDataBroker::get_host_addresses().
+// can the clients use the addresses from MetaDataBroker::get_proxy_addresses().
 pub struct BrokerOrderedProxiesRetriever<B: MetaDataBroker> {
     meta_data_broker: Arc<B>,
 }
@@ -66,7 +66,7 @@ impl<B: MetaDataBroker> BrokerOrderedProxiesRetriever<B> {
         added_tag: HashSet<String>,
     ) -> Vec<Result<String, CoordinateError>> {
         self.meta_data_broker
-            .get_host_addresses()
+            .get_proxy_addresses()
             .filter(move |res| {
                 let filter = match res {
                     Ok(addr) => !added_tag.contains(addr),
@@ -264,7 +264,7 @@ mod tests {
     use super::super::core::{FailureDetector, ParFailureDetector};
     use super::*;
     use crate::common::cluster::{
-        DBName, MigrationMeta, Node, RangeList, ReplMeta, Role, SlotRange, SlotRangeTag,
+        ClusterName, MigrationMeta, Node, RangeList, ReplMeta, Role, SlotRange, SlotRangeTag,
     };
     use crate::common::config::ClusterConfig;
     use crate::protocol::{
@@ -324,7 +324,7 @@ mod tests {
             .collect();
         let addresses_clone = addresses.clone();
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
         let broker = Arc::new(mock_broker);
         let retriever = BrokerProxiesRetriever::new(broker);
@@ -351,8 +351,8 @@ mod tests {
         mock_broker.expect_get_cluster_names().returning(move || {
             Box::pin(stream::iter(
                 vec![
-                    DBName::from("dybdb").unwrap(),
-                    DBName::from("notfound").unwrap(),
+                    ClusterName::from("dybcluster").unwrap(),
+                    ClusterName::from("notfound").unwrap(),
                 ]
                 .into_iter()
                 .map(Ok),
@@ -370,7 +370,7 @@ mod tests {
             Node::new(
                 "redis1:port1".to_string(),
                 "host1:port1".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Migrating(mgr_meta.clone()),
@@ -380,7 +380,7 @@ mod tests {
             Node::new(
                 "redis2:port2".to_string(),
                 "host2:port2".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 666-6699").unwrap(),
                     tag: SlotRangeTag::None,
@@ -390,7 +390,7 @@ mod tests {
             Node::new(
                 "redis3:port3".to_string(),
                 "host3:port3".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![SlotRange {
                     range_list: RangeList::try_from("1 0-233").unwrap(),
                     tag: SlotRangeTag::Importing(mgr_meta),
@@ -400,7 +400,7 @@ mod tests {
             Node::new(
                 "redis4:port4".to_string(),
                 "host4:port4".to_string(),
-                DBName::from("dybdb").unwrap(),
+                ClusterName::from("dybcluster").unwrap(),
                 vec![],
                 ReplMeta::new(Role::Master, Vec::new()),
             ),
@@ -409,7 +409,7 @@ mod tests {
             .expect_get_cluster()
             .returning(move |cluster_name| {
                 let cluster = match cluster_name.to_string().as_str() {
-                    "dybdb" => Some(Cluster::new(
+                    "dybcluster" => Some(Cluster::new(
                         cluster_name,
                         5299,
                         nodes.clone(),
@@ -420,7 +420,7 @@ mod tests {
                 Box::pin(future::ok(cluster))
             });
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses.clone().into_iter().map(Ok))));
 
         let broker = Arc::new(mock_broker);
@@ -454,7 +454,7 @@ mod tests {
             .collect();
         let addresses_clone = addresses.clone();
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
 
         let checker = PingFailureDetector::new(Arc::new(DummyClientFactory {}));
@@ -493,7 +493,7 @@ mod tests {
             .collect();
         let addresses_clone = addresses.clone();
         mock_broker
-            .expect_get_host_addresses()
+            .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
         mock_broker
             .expect_add_failure()
@@ -515,7 +515,7 @@ mod tests {
     async fn test_detector_partial_error() {
         let mut mock_broker = MockMetaDataBroker::new();
 
-        mock_broker.expect_get_host_addresses().returning(move || {
+        mock_broker.expect_get_proxy_addresses().returning(move || {
             let results = vec![
                 Err(MetaDataBrokerError::InvalidReply),
                 Ok(NODE1.to_string()),

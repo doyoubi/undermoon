@@ -1,5 +1,7 @@
 import requests
 
+BROKER_API_VERSION = 'v2'
+
 def init_hosts():
     hosts = {
         'server_proxy1:6001': ['redis1:6379', 'redis2:6379'],
@@ -15,25 +17,25 @@ def add_host(proxy_address, node_addresses):
         'proxy_address': proxy_address,
         'nodes': node_addresses,
     }
-    res = requests.put('http://localhost:7799/api/proxies/nodes', json=payload)
+    res = requests.put('http://localhost:7799/api/{}/proxies/nodes'.format(BROKER_API_VERSION), json=payload)
     print(res.status_code, res.text)
     res.raise_for_status()
 
 
 def add_cluster(cluster_name):
-    res = requests.post('http://localhost:7799/api/clusters/{}'.format(cluster_name))
+    res = requests.post('http://localhost:7799/api/{}/clusters/{}'.format(BROKER_API_VERSION, cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 
 
 def add_node(cluster_name):
-    res = requests.post('http://localhost:7799/api/clusters/nodes/{}'.format(cluster_name))
+    res = requests.post('http://localhost:7799/api/{}/clusters/nodes/{}'.format(BROKER_API_VERSION, cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 
 
 def get_cluster(cluster_name):
-    res = requests.get('http://localhost:7799/api/clusters/meta/{}'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/{}/clusters/meta/{}'.format(BROKER_API_VERSION, cluster_name))
     res.raise_for_status()
     return res.json()['cluster']
 
@@ -48,7 +50,7 @@ def migrate_slots(cluster_name):
 
     src_address = src['address']
     dst_address = dst['address']
-    res = requests.post('http://localhost:7799/api/clusters/{}/migrations/half/{}/{}'.format(cluster_name, src_address, dst_address))
+    res = requests.post('http://localhost:7799/api/{}/clusters/{}/migrations/half/{}/{}'.format(BROKER_API_VERSION, cluster_name, src_address, dst_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -63,7 +65,7 @@ def set_replica(cluster_name):
 
     master_address = master['address']
     replica_address = replica['address']
-    res = requests.post('http://localhost:7799/api/clusters/{}/replications/{}/{}'.format(cluster_name, master_address, replica_address))
+    res = requests.post('http://localhost:7799/api/{}/clusters/{}/replications/{}/{}'.format(BROKER_API_VERSION, cluster_name, master_address, replica_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -79,7 +81,7 @@ def replace_master_proxy(cluster_name, master=True):
         raise Exception('cannot find src and dst')
 
     proxy_address = node['proxy_address']
-    res = requests.post('http://localhost:7799/api/proxies/failover/{}'.format(proxy_address))
+    res = requests.post('http://localhost:7799/api/{}/proxies/failover/{}'.format(BROKER_API_VERSION, proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -87,15 +89,3 @@ def replace_master_proxy(cluster_name, master=True):
 cluster_name = 'mydb'
 init_hosts()
 add_cluster(cluster_name)
-add_node(cluster_name)
-print(get_cluster(cluster_name))
-set_replica(cluster_name)
-set_replica(cluster_name)
-
-# add_node(cluster_name)
-# migrate_slots(cluster_name)
-# add_node(cluster_name)
-# set_replica(cluster_name)
-
-# replace_master_proxy(cluster_name)
-# replace_master_proxy(cluster_name, False)

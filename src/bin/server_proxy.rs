@@ -57,7 +57,9 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
         announce_address: s
             .get::<String>("announce_address")
             .unwrap_or_else(|_| address),
-        auto_select_db: s.get::<bool>("auto_select_db").unwrap_or_else(|_| false),
+        auto_select_cluster: s
+            .get::<bool>("auto_select_cluster")
+            .unwrap_or_else(|_| false),
         slowlog_len,
         slowlog_log_slower_than: AtomicI64::new(
             s.get::<i64>("slowlog_log_slower_than")

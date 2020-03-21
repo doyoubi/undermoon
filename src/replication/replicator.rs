@@ -1,5 +1,5 @@
-use crate::common::cluster::{DBName, ReplPeer};
-use crate::common::db::DBMapFlags;
+use crate::common::cluster::{ClusterName, ReplPeer};
+use crate::common::proto::ClusterMapFlags;
 use crate::common::utils::{CmdParseError, ThreadSafe};
 use crate::protocol::{Array, BulkStr, RedisClientError, Resp};
 use futures::Future;
@@ -28,7 +28,7 @@ pub trait ReplicaReplicator: ThreadSafe {
 #[derive(Debug, Clone)]
 pub struct ReplicatorMeta {
     pub epoch: u64,
-    pub flags: DBMapFlags,
+    pub flags: ClusterMapFlags,
     pub masters: Vec<MasterMeta>,
     pub replicas: Vec<ReplicaMeta>,
 }
@@ -41,14 +41,14 @@ impl ReplicatorMeta {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct MasterMeta {
-    pub db_name: DBName,
+    pub cluster_name: ClusterName,
     pub master_node_address: String,
     pub replicas: Vec<ReplPeer>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ReplicaMeta {
-    pub db_name: DBName,
+    pub cluster_name: ClusterName,
     pub replica_node_address: String,
     pub masters: Vec<ReplPeer>,
 }
@@ -72,7 +72,7 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
     let epoch_str = it.next().ok_or(CmdParseError {})?;
     let epoch = epoch_str.parse::<u64>().map_err(|_e| CmdParseError {})?;
 
-    let flags = DBMapFlags::from_arg(&it.next().ok_or(CmdParseError {})?);
+    let flags = ClusterMapFlags::from_arg(&it.next().ok_or(CmdParseError {})?);
 
     let mut master_meta_array = Vec::new();
     let mut replica_meta_array = Vec::new();
@@ -81,8 +81,8 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
         let mut peers = Vec::new();
 
         let role = it.next().ok_or(CmdParseError {})?;
-        let db_name = it.next().ok_or(CmdParseError {})?;
-        let db_name = DBName::from(&db_name).map_err(|_| CmdParseError {})?;
+        let cluster_name = it.next().ok_or(CmdParseError {})?;
+        let cluster_name = ClusterName::from(&cluster_name).map_err(|_| CmdParseError {})?;
         let node_address = it.next().ok_or(CmdParseError {})?;
         let peer_num = it
             .next()
@@ -100,13 +100,13 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
 
         if role.to_uppercase() == "MASTER" {
             master_meta_array.push(MasterMeta {
-                db_name,
+                cluster_name,
                 master_node_address: node_address,
                 replicas: peers,
             })
         } else if role.to_uppercase() == "REPLICA" {
             replica_meta_array.push(ReplicaMeta {
-                db_name,
+                cluster_name,
                 replica_node_address: node_address,
                 masters: peers,
             })
@@ -138,7 +138,7 @@ pub fn encode_repl_meta(meta: ReplicatorMeta) -> Vec<String> {
 
     for master in masters.iter() {
         args.push("master".to_string());
-        args.push(master.db_name.to_string());
+        args.push(master.cluster_name.to_string());
         args.push(master.master_node_address.clone());
         args.push(master.replicas.len().to_string());
         for replica in master.replicas.iter() {
@@ -148,7 +148,7 @@ pub fn encode_repl_meta(meta: ReplicatorMeta) -> Vec<String> {
     }
     for replica in replicas.iter() {
         args.push("replica".to_string());
-        args.push(replica.db_name.to_string());
+        args.push(replica.cluster_name.to_string());
         args.push(replica.replica_node_address.clone());
         args.push(replica.masters.len().to_string());
         for master in replica.masters.iter() {
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn test_parse_and_encode_single_replicator() {
         let arguments =
-            "UMCTL SETREPL 233 force master testdb localhost:6000 1 localhost:6001 localhost:5299"
+            "UMCTL SETREPL 233 force master testcluster localhost:6000 1 localhost:6001 localhost:5299"
                 .split(' ')
                 .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
                 .collect();
@@ -207,20 +207,20 @@ mod tests {
         assert!(r.is_ok());
         let meta = r.expect("not success");
         assert_eq!(meta.epoch, 233);
-        assert_eq!(meta.flags, DBMapFlags { force: true });
+        assert_eq!(meta.flags, ClusterMapFlags { force: true });
         assert_eq!(meta.masters.len(), 1);
         assert_eq!(meta.replicas.len(), 0);
 
         let args = encode_repl_meta(meta.clone()).join(" ");
         assert_eq!(
             args,
-            "233 FORCE master testdb localhost:6000 1 localhost:6001 localhost:5299"
+            "233 FORCE master testcluster localhost:6000 1 localhost:6001 localhost:5299"
         );
     }
 
     #[test]
     fn test_parse_and_encode_multi_replicators() {
-        let arguments = "UMCTL SETREPL 233 noflag master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299"
+        let arguments = "UMCTL SETREPL 233 noflag master testcluster localhost:6000 1 localhost:6001 localhost:5299 replica testcluster localhost:6001 1 localhost:6000 localhost:5299"
             .split(' ')
             .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
             .collect();
@@ -229,25 +229,25 @@ mod tests {
         assert!(r.is_ok());
         let meta = r.expect("not success");
         assert_eq!(meta.epoch, 233);
-        assert_eq!(meta.flags, DBMapFlags { force: false });
+        assert_eq!(meta.flags, ClusterMapFlags { force: false });
         assert_eq!(meta.masters.len(), 1);
         assert_eq!(meta.replicas.len(), 1);
 
         let master = &meta.masters[0];
-        assert_eq!(master.db_name.as_str(), "testdb");
+        assert_eq!(master.cluster_name.as_str(), "testcluster");
         assert_eq!(master.master_node_address, "localhost:6000");
         assert_eq!(master.replicas.len(), 1);
         assert_eq!(master.replicas[0].node_address, "localhost:6001");
         assert_eq!(master.replicas[0].proxy_address, "localhost:5299");
 
         let replica = &meta.replicas[0];
-        assert_eq!(replica.db_name.as_str(), "testdb");
+        assert_eq!(replica.cluster_name.as_str(), "testcluster");
         assert_eq!(replica.replica_node_address, "localhost:6001");
         assert_eq!(replica.masters.len(), 1);
         assert_eq!(replica.masters[0].node_address, "localhost:6000");
         assert_eq!(replica.masters[0].proxy_address, "localhost:5299");
 
         let args = encode_repl_meta(meta.clone()).join(" ");
-        assert_eq!(args, "233 NOFLAG master testdb localhost:6000 1 localhost:6001 localhost:5299 replica testdb localhost:6001 1 localhost:6000 localhost:5299")
+        assert_eq!(args, "233 NOFLAG master testcluster localhost:6000 1 localhost:6001 localhost:5299 replica testcluster localhost:6001 1 localhost:6000 localhost:5299")
     }
 }

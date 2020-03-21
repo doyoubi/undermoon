@@ -1,4 +1,5 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
+use crate::broker::MEM_BROKER_API_VERSION;
 use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use futures::Future;
 use reqwest;
@@ -20,14 +21,18 @@ impl HttpMetaManipulationBroker {
 }
 
 impl HttpMetaManipulationBroker {
+    fn gen_url(&self, path: &str) -> String {
+        format!(
+            "http://{}{}{}",
+            self.broker_address, MEM_BROKER_API_VERSION, path
+        )
+    }
+
     async fn replace_proxy_impl(
         &self,
         failed_proxy_address: String,
     ) -> Result<Proxy, MetaManipulationBrokerError> {
-        let url = format!(
-            "http://{}/api/proxies/failover/{}",
-            self.broker_address, failed_proxy_address
-        );
+        let url = self.gen_url(&format!("/proxies/failover/{}", failed_proxy_address));
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("Failed to replace proxy {:?}", e);
             MetaManipulationBrokerError::InvalidReply
@@ -63,7 +68,7 @@ impl HttpMetaManipulationBroker {
         &self,
         meta: MigrationTaskMeta,
     ) -> Result<(), MetaManipulationBrokerError> {
-        let url = format!("http://{}/api/clusters/migrations", self.broker_address);
+        let url = self.gen_url("/clusters/migrations");
 
         let response = self
             .client

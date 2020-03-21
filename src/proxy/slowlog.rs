@@ -14,8 +14,8 @@ const MAX_ELEMENT_LENGTH: usize = 100;
 pub enum TaskEvent {
     Created = 0,
 
-    SentToMigrationDB = 1,
-    SentToDB = 2,
+    SentToMigrationBackend = 1,
+    SentToCluster = 2,
 
     SentToWritingQueue = 3,
     WritingQueueReceived = 4,
@@ -232,12 +232,13 @@ fn slowlog_to_report(log: &SlowlogRecord) -> RespVec {
         format!("session_id: {}", log.session_id),
         format!("created: {}", start_date),
         format!(
-            "sent_to_migration_db: {}",
-            log.event_map.get_used_time(TaskEvent::SentToMigrationDB)
+            "sent_to_migration_backend: {}",
+            log.event_map
+                .get_used_time(TaskEvent::SentToMigrationBackend)
         ),
         format!(
-            "sent_to_db: {}",
-            log.event_map.get_used_time(TaskEvent::SentToDB)
+            "sent_to_cluster: {}",
+            log.event_map.get_used_time(TaskEvent::SentToCluster)
         ),
         format!(
             "sent_to_queue: {}",
