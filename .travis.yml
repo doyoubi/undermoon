@@ -4,6 +4,7 @@ sudo: required
 
 rust:
   - 1.41.1
+  - stable
   - nightly
 
 matrix:
@@ -11,13 +12,15 @@ matrix:
     - rust: nightly
   fast_finish: true
 
-cache:
-  cargo: true
+install:
+  - echo 'Installing mylint'
+  - cargo install --git https://github.com/doyoubi/mylint-rs --tag v1.0
+  - echo 'Installing rustfmt'
+  - rustup component add rustfmt
+  - echo 'Installing clippy'
+  - rustup component add clippy
 
 script:
-  - cargo install --git https://github.com/doyoubi/mylint-rs --tag v1.0
-  - rustup component add rustfmt
-  - rustup component add clippy
   - cargo build --verbose --all
   - find src -name "*.rs" | xargs rustup run stable rustfmt
   - cargo clippy -- -W clippy::indexing_slicing
