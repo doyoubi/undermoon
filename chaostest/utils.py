@@ -8,6 +8,8 @@ from loguru import logger
 DOCKER_ENDPOINT = 'http+unix://%2Fvar%2Frun%2Fdocker.sock'
 OVERMOON_ENDPOINT = 'http://localhost:7799'
 
+BROKER_API_VERSION = 'v2'
+
 
 class HttpClient:
     def __init__(self, endpoint):
@@ -83,7 +85,7 @@ class OvermoonClient:
             logger.warning('OVERMOON: failed to connect to server proxy: {}', server_proxy.to_dict())
             return
 
-        r = self.client.post('/api/proxies/nodes', server_proxy.to_dict())
+        r = self.client.post('/api/{}/proxies/nodes'.format(BROKER_API_VERSION), server_proxy.to_dict())
         if r.status_code == 400:
             return
         if r.status_code == 200:
@@ -103,7 +105,7 @@ class OvermoonClient:
         payload = {
             'node_number': node_number,
         }
-        r = self.client.post('/api/clusters/meta/{}'.format(cluster_name), payload)
+        r = self.client.post('/api/{}/clusters/meta/{}'.format(BROKER_API_VERSION, cluster_name), payload)
         if r.status_code == 200:
             logger.warning('created cluster: {} {}', cluster_name, node_number)
             return
@@ -116,7 +118,7 @@ class OvermoonClient:
         logger.error('OVERMOON_ERROR: failed to create cluster: {} {}', r.status_code, r.text)
 
     def get_cluster_names(self):
-        r = self.client.get('/api/clusters/names')
+        r = self.client.get('/api/{}/clusters/names'.format(BROKER_API_VERSION))
         if r.status_code != 200:
             logger.error('OVERMOON_ERROR: failed to get cluster names: {} {}'.format(r.status_code, r.text))
             return
@@ -126,13 +128,13 @@ class OvermoonClient:
         return names
 
     def get_cluster(self, cluster_name):
-        r = self.client.get('/api/clusters/meta/{}'.format(cluster_name))
+        r = self.client.get('/api/{}/clusters/meta/{}'.format(BROKER_API_VERSION, cluster_name))
         if r.status_code == 200:
             return r.json()['cluster']
         logger.error('OVERMOON_ERROR: failed to get cluster: {} {} {}', cluster_name, r.status_code, r.text)
 
     def delete_cluster(self, cluster_name):
-        r = self.client.delete('/api/clusters/meta/{}'.format(cluster_name))
+        r = self.client.delete('/api/{}/clusters/meta/{}'.format(BROKER_API_VERSION, cluster_name))
         if r.status_code == 200:
             logger.warning('deleted cluster: {}', cluster_name)
             return
@@ -144,7 +146,7 @@ class OvermoonClient:
         payload = {
             'node_number': node_number,
         }
-        r = self.client.patch('/api/clusters/nodes/{}'.format(cluster_name), payload)
+        r = self.client.patch('/api/{}/clusters/nodes/{}'.format(BROKER_API_VERSION, cluster_name), payload)
         if r.status_code == 200:
             logger.info('added nodes to cluster {}', cluster_name)
             return
@@ -153,7 +155,7 @@ class OvermoonClient:
         logger.error('OVERMOON_ERROR: failed to add nodes: {} {} {}', cluster_name, r.status_code, r.text)
 
     def remove_unused_nodes(self, cluster_name):
-        r = self.client.delete('/api/clusters/free_nodes/{}'.format(cluster_name))
+        r = self.client.delete('/api/{}/clusters/free_nodes/{}'.format(BROKER_API_VERSION, cluster_name))
         if r.status_code == 200:
             logger.info('OVERMOON removed unused nodes')
             return True
@@ -167,7 +169,7 @@ class OvermoonClient:
         return False
 
     def scale_cluster(self, cluster_name):
-        r = self.client.post('/api/clusters/migrations/{}'.format(cluster_name))
+        r = self.client.post('/api/{}/clusters/migrations/{}'.format(BROKER_API_VERSION, cluster_name))
         if r.status_code == 200:
             logger.warning('start migration: {}', cluster_name)
             return
@@ -177,21 +179,21 @@ class OvermoonClient:
         logger.error('OVERMOON_ERROR: failed to start migration: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))
 
     def get_proxy_addresses(self):
-        r = self.client.get('/api/proxies/addresses')
+        r = self.client.get('/api/{}/proxies/addresses'.format(BROKER_API_VERSION))
         if r.status_code == 200:
             return r.json()['addresses']
         logger.error('OVERMOON_ERROR: failed to get proxy addresses: {} {}', r.status_code, r.text)
         return []
 
     def get_proxy(self, address):
-        r = self.client.get('/api/proxies/meta/{}'.format(address))
+        r = self.client.get('/api/{}/proxies/meta/{}'.format(BROKER_API_VERSION, address))
         if r.status_code == 200:
             return r.json()['host']
         logger.error('OVERMOON_ERROR: failed to get proxy meta: {} {}', r.status_code, r.text)
         return None
 
     def get_failures(self):
-        r = self.client.get('/api/failures')
+        r = self.client.get('/api/{}/failures'.format(BROKER_API_VERSION))
         if r.status_code == 200:
             return r.json()['addresses']
         logger.error('OVERMOON_ERROR: failed to get failed proxy addresses: {} {}', r.status_code, r.text)

@@ -1,6 +1,7 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
 use crate::common::cluster::{Cluster, DBName, Proxy};
 use crate::common::utils::vec_result_to_stream;
+use crate::broker::MEM_BROKER_API_VERSION;
 use futures::{Future, FutureExt, Stream};
 use reqwest;
 use serde_derive::Deserialize;
@@ -22,8 +23,12 @@ impl HttpMetaBroker {
 }
 
 impl HttpMetaBroker {
+    fn gen_url(&self, path: &str) -> String {
+        format!("http://{}/{}{}", self.broker_address, MEM_BROKER_API_VERSION, path)
+    }
+
     async fn get_cluster_names_impl(&self) -> Result<Vec<DBName>, MetaDataBrokerError> {
-        let url = format!("http://{}/api/clusters/names", self.broker_address);
+        let url = self.gen_url("/clusters/names");
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -36,7 +41,7 @@ impl HttpMetaBroker {
     }
 
     async fn get_cluster_impl(&self, name: DBName) -> Result<Option<Cluster>, MetaDataBrokerError> {
-        let url = format!("http://{}/api/clusters/meta/{}", self.broker_address, name);
+        let url = self.gen_url(&format!("/clusters/meta/{}", name));
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -49,7 +54,7 @@ impl HttpMetaBroker {
     }
 
     async fn get_host_addresses_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
-        let url = format!("http://{}/api/proxies/addresses", self.broker_address);
+        let url = self.gen_url("/proxies/addresses");
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get host addresses {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -62,10 +67,7 @@ impl HttpMetaBroker {
     }
 
     async fn get_host_impl(&self, address: String) -> Result<Option<Proxy>, MetaDataBrokerError> {
-        let url = format!(
-            "http://{}/api/proxies/meta/{}",
-            self.broker_address, address
-        );
+        let url = self.gen_url(&format!("/proxies/meta/{}", address));
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get host {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -82,10 +84,7 @@ impl HttpMetaBroker {
         address: String,
         reporter_id: String,
     ) -> Result<(), MetaDataBrokerError> {
-        let url = format!(
-            "http://{}/api/failures/{}/{}",
-            self.broker_address, address, reporter_id
-        );
+        let url = self.gen_url(&format!("/failures/{}/{}", address, reporter_id));
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("failed to add failures {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -109,7 +108,7 @@ impl HttpMetaBroker {
     }
 
     async fn get_failures_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
-        let url = format!("http://{}/api/failures", self.broker_address);
+        let url = self.gen_url("/failures");
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("Failed to get failures {:?}", e);
             MetaDataBrokerError::InvalidReply

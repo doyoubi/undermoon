@@ -5,7 +5,7 @@ and use the HTTP 200 to indicate success or failure.
 
 HTTP Broker should at least implement the following apis to work with Coordinator:
 
-##### (1) GET /api/clusters/names
+##### (1) GET /api/v2/clusters/names
 Get all the cluster names.
 ```
 Response:
@@ -14,7 +14,7 @@ Response:
 }
 ```
 
-##### (2) GET /api/clusters/meta/<cluster_name>
+##### (2) GET /api/v2/clusters/meta/<cluster_name>
 Get the meta data of <cluster_name>.
 ```
 Response:
@@ -50,7 +50,7 @@ If not:
 { "cluster": null }
 ```
 
-##### (3) GET /api/proxies/addresses
+##### (3) GET /api/v2/proxies/addresses
 Get all the server-side proxy addresses.
 ```
 Response:
@@ -59,7 +59,7 @@ Response:
 }
 ```
 
-##### (4) GET /api/proxies/meta/<server_proxy_address>
+##### (4) GET /api/v2/proxies/meta/<server_proxy_address>
 Get the meta data of <server_proxy_address>
 ```
 Response:
@@ -106,14 +106,14 @@ If not:
 { "host": null }
 ```
 
-##### (5) POST /api/failures/<server_proxy_address>/<reporter_id>
+##### (5) POST /api/v2/failures/<server_proxy_address>/<reporter_id>
 Report a suspected failure and tag it use a unique <reporter_id> for every Coordinator.
 ```
 Response:
 empty payload
 ```
 
-##### (6) GET /api/failures
+##### (6) GET /api/v2/failures
 Get all the failures.
 ```
 Response:
@@ -122,7 +122,7 @@ Response:
 }
 ```
 
-##### (7) POST /api/proxies/failover/<server_proxy_address>
+##### (7) POST /api/v2/proxies/failover/<server_proxy_address>
 Try to do the failover for the specified proxy.
 ```
 Request:
@@ -157,7 +157,7 @@ If not:
 HTTP 409
 ```
 
-##### (8) PUT /api/clusters/migrations
+##### (8) PUT /api/v2/clusters/migrations
 Try to commit the migration
 ```
 Request:

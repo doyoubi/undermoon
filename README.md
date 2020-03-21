@@ -224,7 +224,7 @@ Before connecting to the cluster, you need to add these hosts to you `/etc/hosts
 
 Now get the metadata:
 ```bash
-$ curl localhost:7799/api/clusters/meta/mydb | python -m json.tool
+$ curl localhost:7799/api/v2/clusters/meta/mydb | python -m json.tool
 ```
 
 Pickup the randomly chosen proxies (in `proxy_address` field) for the cluster `mydb` and connect to them.

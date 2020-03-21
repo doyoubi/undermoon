@@ -1,5 +1,7 @@
 import requests
 
+BROKER_API_VERSION = 'v2'
+
 def init_hosts():
     hosts = {
         'server_proxy1:6001': ['redis1:6379', 'redis2:6379'],
@@ -18,7 +20,7 @@ def add_host(proxy_address, node_addresses):
         'proxy_address': proxy_address,
         'nodes': node_addresses,
     }
-    res = requests.post('http://localhost:7799/api/proxies/nodes', json=payload)
+    res = requests.post('http://localhost:7799/api/{}/proxies/nodes'.format(BROKER_API_VERSION), json=payload)
     print(res.status_code, res.text)
     if res.status_code == 400:
         return
@@ -30,25 +32,25 @@ def add_cluster(cluster_name):
         'cluster_name': cluster_name,
         'node_number': 4,
     }
-    res = requests.post('http://localhost:7799/api/clusters', json=payload)
+    res = requests.post('http://localhost:7799/api/{}clusters'.format(BROKER_API_VERSION), json=payload)
     print(res.status_code, res.text)
     res.raise_for_status()
 
 
 def add_node(cluster_name):
-    res = requests.put('http://localhost:7799/api/clusters/nodes/{}'.format(cluster_name))
+    res = requests.put('http://localhost:7799/api/{}/clusters/nodes/{}'.format(BROKER_API_VERSION, cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 
 
 def get_cluster(cluster_name):
-    res = requests.get('http://localhost:7799/api/clusters/meta/{}'.format(cluster_name))
+    res = requests.get('http://localhost:7799/api/{}/clusters/meta/{}'.format(BROKER_API_VERSION, cluster_name))
     res.raise_for_status()
     return res.json()['cluster']
 
 
 def migrate_slots(cluster_name):
-    res = requests.post('http://localhost:7799/api/clusters/migrations/{}'.format(cluster_name))
+    res = requests.post('http://localhost:7799/api/{}/clusters/migrations/{}'.format(BROKER_API_VERSION, cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 
@@ -64,7 +66,7 @@ def replace_proxy(cluster_name, master=True):
         raise Exception('cannot find src and dst')
 
     proxy_address = node['proxy_address']
-    res = requests.post('http://localhost:7799/api/proxies/failover/{}'.format(proxy_address))
+    res = requests.post('http://localhost:7799/api/{}/proxies/failover/{}'.format(BROKER_API_VERSION, proxy_address))
     print(res.status_code, res.text)
     res.raise_for_status()
 

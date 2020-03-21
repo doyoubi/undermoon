@@ -11,9 +11,11 @@ use chrono;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+pub const MEM_BROKER_API_VERSION: &'static str = "/api/v2";
+
 pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
     cfg.data(service).service(
-        web::scope("/api")
+        web::scope(MEM_BROKER_API_VERSION)
             .wrap_fn(|req, srv| {
                 let method = req.method().clone();
                 let peer_addr = match req.peer_addr() {
