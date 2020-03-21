@@ -399,16 +399,19 @@ type ClusterNameInner = arrayvec::ArrayString<[u8; CLUSTER_NAME_MAX_LENGTH]>;
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ClusterName(ClusterNameInner);
 
-impl ClusterName {
-    pub fn new() -> Self {
-        Self(ClusterNameInner::new())
-    }
+impl TryFrom<&str> for ClusterName {
+    type Error = InvalidClusterName;
 
-    // TODO: use TryFrom
-    pub fn from(s: &str) -> Result<Self, InvalidClusterName> {
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
         Ok(Self(
             ClusterNameInner::from(s).map_err(|_| InvalidClusterName)?,
         ))
+    }
+}
+
+impl ClusterName {
+    pub fn new() -> Self {
+        Self(ClusterNameInner::new())
     }
 
     pub fn as_str(&self) -> &str {
@@ -453,7 +456,7 @@ impl<'de> Deserialize<'de> for ClusterName {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        ClusterName::from(&s)
+        ClusterName::try_from(s.as_str())
             .map_err(|err| D::Error::custom(format!("invalid cluster name {}: {:?}", s, err)))
     }
 }
@@ -480,7 +483,7 @@ impl MigrationTaskMeta {
         It: Iterator<Item = String>,
     {
         let cluster_name_str = it.next()?;
-        let cluster_name = ClusterName::from(&cluster_name_str).ok()?;
+        let cluster_name = ClusterName::try_from(cluster_name_str.as_str()).ok()?;
         let slot_range = SlotRange::from_strings(it)?;
         Some(Self {
             cluster_name,
@@ -776,8 +779,7 @@ mod tests {
                 "dst_proxy_address": "127.0.0.1:7001",
                 "dst_node_address": "127.0.0.1:6380"
             }}"#;
-        let slot_range: SlotRangeTag =
-            serde_json::from_str(importing_str).expect("unexpected string");
+        let slot_range: SlotRangeTag = serde_json::from_str(importing_str).unwrap();
         let meta = MigrationMeta {
             epoch: 233,
             src_proxy_address: "127.0.0.1:7000".to_string(),
@@ -794,23 +796,22 @@ mod tests {
                 "dst_proxy_address": "127.0.0.1:7001",
                 "dst_node_address": "127.0.0.1:6380"
             }}"#;
-        let slot_range: SlotRangeTag =
-            serde_json::from_str(migrating_str).expect("unexpected string");
+        let slot_range: SlotRangeTag = serde_json::from_str(migrating_str).unwrap();
         assert_eq!(SlotRangeTag::Migrating(meta), slot_range);
 
         let none_str = "\"None\"";
-        let slot_range: SlotRangeTag = serde_json::from_str(none_str).expect("unexpected string");
+        let slot_range: SlotRangeTag = serde_json::from_str(none_str).unwrap();
         assert_eq!(SlotRangeTag::None, slot_range);
     }
 
     #[test]
     fn test_deserialize_role() {
         let master_str = "\"master\"";
-        let role: Role = serde_json::from_str(master_str).expect("unexpected string");
+        let role: Role = serde_json::from_str(master_str).unwrap();
         assert_eq!(Role::Master, role);
 
         let replica_str = "\"replica\"";
-        let role: Role = serde_json::from_str(replica_str).expect("unexpected string");
+        let role: Role = serde_json::from_str(replica_str).unwrap();
         assert_eq!(Role::Replica, role);
     }
 
@@ -868,7 +869,7 @@ mod tests {
         let mut config = ClusterConfig::default();
         config.compression_strategy = CompressionStrategy::SetGetOnly;
         let mut clusters_config = HashMap::new();
-        clusters_config.insert(ClusterName::from("mycluster").unwrap(), config);
+        clusters_config.insert(ClusterName::try_from("mycluster").unwrap(), config);
 
         let expected_proxy = Proxy::new(
             "server_proxy1:6001".to_string(),
@@ -877,7 +878,7 @@ mod tests {
                 Node::new(
                     "redis1:7001".to_string(),
                     "server_proxy1:6001".to_string(),
-                    ClusterName::from("mycluster").unwrap(),
+                    ClusterName::try_from("mycluster").unwrap(),
                     vec![SlotRange {
                         range_list: RangeList::try_from("1 0-5461").unwrap(),
                         tag: SlotRangeTag::None,
@@ -893,7 +894,7 @@ mod tests {
                 Node::new(
                     "redis4:7004".to_string(),
                     "server_proxy1:6001".to_string(),
-                    ClusterName::from("mycluster").unwrap(),
+                    ClusterName::try_from("mycluster").unwrap(),
                     vec![],
                     ReplMeta::new(
                         Role::Replica,
@@ -907,7 +908,7 @@ mod tests {
             Vec::new(),
             vec![PeerProxy {
                 proxy_address: "server_proxy2:6002".to_string(),
-                cluster_name: ClusterName::from("mycluster").unwrap(),
+                cluster_name: ClusterName::try_from("mycluster").unwrap(),
                 slots: vec![SlotRange {
                     range_list: RangeList::try_from("1 5462-10000").unwrap(),
                     tag: SlotRangeTag::None,

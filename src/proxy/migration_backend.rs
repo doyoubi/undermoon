@@ -457,6 +457,7 @@ mod tests {
     use crate::protocol::{BulkStr, Resp};
     use dashmap::DashMap;
     use std::collections::HashMap;
+    use std::convert::TryFrom;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::RwLock;
     use tokio;
@@ -598,7 +599,7 @@ mod tests {
             Resp::Bulk(BulkStr::Str("GET".to_string().into())),
             Resp::Bulk(BulkStr::Str("somekey".to_string().into())),
         ]));
-        let cluster = Arc::new(RwLock::new(ClusterName::from("mycluster").unwrap()));
+        let cluster = Arc::new(RwLock::new(ClusterName::try_from("mycluster").unwrap()));
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair();

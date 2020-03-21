@@ -201,7 +201,7 @@ mod tests {
             tag,
         };
         MigrationTaskMeta {
-            cluster_name: ClusterName::from("mycluster").unwrap(),
+            cluster_name: ClusterName::try_from("mycluster").unwrap(),
             slot_range,
         }
     }

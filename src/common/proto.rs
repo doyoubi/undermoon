@@ -4,6 +4,7 @@ use crate::common::cluster::ClusterName;
 use crate::common::config::ClusterConfig;
 use crate::protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::iter::Peekable;
 use std::str;
 
@@ -241,7 +242,8 @@ impl ProxyClusterMap {
         It: Iterator<Item = String>,
     {
         let cluster_name = try_get!(it.next());
-        let cluster_name = ClusterName::from(&cluster_name).map_err(|_| CmdParseError {})?;
+        let cluster_name =
+            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
         let addr = try_get!(it.next());
         let slot_range = try_parse!(Self::parse_tagged_slot_range(it));
         Ok((cluster_name, addr, slot_range))
@@ -321,7 +323,8 @@ impl ClusterConfigMap {
         It: Iterator<Item = String>,
     {
         let cluster_name = try_get!(it.next());
-        let cluster_name = ClusterName::from(&cluster_name).map_err(|_| CmdParseError {})?;
+        let cluster_name =
+            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
         let field = try_get!(it.next());
         let value = try_get!(it.next());
         Ok((cluster_name, field, value))
@@ -378,7 +381,7 @@ mod tests {
         assert!(r.is_ok());
         let proxy_cluster_map = r.unwrap();
         assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
-        let cluster_name = ClusterName::from("cluster_name").unwrap();
+        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
         assert_eq!(
             proxy_cluster_map
                 .cluster_map
@@ -416,7 +419,7 @@ mod tests {
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
         let proxy_cluster_map = ProxyClusterMap::parse(&mut arguments).unwrap();
         assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
-        let cluster_name = ClusterName::from("cluster_name").unwrap();
+        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
         assert_eq!(
             proxy_cluster_map
                 .cluster_map
@@ -474,7 +477,7 @@ mod tests {
         assert!(r.is_ok());
         let proxy_cluster_map = r.unwrap();
         assert_eq!(proxy_cluster_map.cluster_map.len(), 2);
-        let cluster_name = ClusterName::from("cluster_name").unwrap();
+        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
         assert_eq!(
             proxy_cluster_map
                 .cluster_map
@@ -503,7 +506,7 @@ mod tests {
                 .len(),
             1
         );
-        let another_cluster = ClusterName::from("another_cluster").unwrap();
+        let another_cluster = ClusterName::try_from("another_cluster").unwrap();
         assert_eq!(
             proxy_cluster_map
                 .cluster_map
@@ -546,7 +549,7 @@ mod tests {
         let mut it = args.iter().map(|s| s.to_string()).peekable();
         let clusters_config = ClusterConfigMap::parse(&mut it).unwrap();
         assert_eq!(clusters_config.config_map.len(), 2);
-        let mycluster = ClusterName::from("mycluster").unwrap();
+        let mycluster = ClusterName::try_from("mycluster").unwrap();
         assert_eq!(
             clusters_config
                 .config_map
@@ -567,7 +570,7 @@ mod tests {
         assert_eq!(
             clusters_config
                 .config_map
-                .get(&ClusterName::from("othercluster").unwrap())
+                .get(&ClusterName::try_from("othercluster").unwrap())
                 .unwrap()
                 .migration_config
                 .delete_count,
@@ -710,7 +713,7 @@ mod tests {
         let peer = cluster_meta.peer.get_map();
         let config = cluster_meta.clusters_config.get_map();
         assert_eq!(local.len(), 1);
-        let cluster_name = ClusterName::from("cluster_name").unwrap();
+        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
         assert_eq!(local.get(&cluster_name).unwrap().len(), 2);
         assert_eq!(
             local
@@ -819,7 +822,7 @@ mod tests {
         assert_eq!(
             cluster_meta
                 .get_configs()
-                .get(&ClusterName::from("cluster_name").unwrap())
+                .get(&ClusterName::try_from("cluster_name").unwrap())
                 .compression_strategy,
             CompressionStrategy::SetGetOnly
         );

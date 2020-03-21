@@ -9,6 +9,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
 use std::cmp::{min, Ordering};
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -349,7 +350,7 @@ impl MetaStore {
     }
 
     pub fn get_cluster_by_name(&self, cluster_name: &str, migration_limit: u64) -> Option<Cluster> {
-        let cluster_name = ClusterName::from(&cluster_name).ok()?;
+        let cluster_name = ClusterName::try_from(cluster_name).ok()?;
 
         let cluster_store =
             Self::get_cluster_store(&self.clusters, &cluster_name, migration_limit)?;
@@ -528,8 +529,8 @@ impl MetaStore {
         cluster_name: String,
         node_num: usize,
     ) -> Result<(), MetaStoreError> {
-        let cluster_name =
-            ClusterName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
         if self.clusters.contains_key(&cluster_name) {
             return Err(MetaStoreError::AlreadyExisted);
         }
@@ -620,8 +621,8 @@ impl MetaStore {
     }
 
     pub fn remove_cluster(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let cluster_name =
-            ClusterName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
 
         let cluster_store = match self.clusters.remove(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
@@ -646,8 +647,8 @@ impl MetaStore {
         cluster_name: String,
         num: usize,
     ) -> Result<Vec<Node>, MetaStoreError> {
-        let cluster_name =
-            ClusterName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
 
         match self.clusters.get(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
@@ -701,8 +702,8 @@ impl MetaStore {
     }
 
     pub fn audo_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let cluster_name =
-            ClusterName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.bump_global_epoch();
 
         let removed_chunks = match self.clusters.get_mut(&cluster_name) {
@@ -770,8 +771,8 @@ impl MetaStore {
     }
 
     pub fn migrate_slots(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let cluster_name =
-            ClusterName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.bump_global_epoch();
 
         let cluster = match self.clusters.get_mut(&cluster_name) {
@@ -1341,7 +1342,6 @@ impl MetaStore {
         };
 
         self.takeover_master(&cluster_name, failed_proxy_address.clone())?;
-        self.bump_global_epoch();
 
         let proxy_resource = self.generate_new_free_proxy(failed_proxy_address.clone())?;
         let new_epoch = self.bump_global_epoch();
@@ -1385,7 +1385,7 @@ impl MetaStore {
         cluster_name: &ClusterName,
         failed_proxy_address: String,
     ) -> Result<(), MetaStoreError> {
-        self.bump_global_epoch();
+        let new_epoch = self.bump_global_epoch();
 
         let cluster = self
             .clusters
@@ -1400,6 +1400,7 @@ impl MetaStore {
                 break;
             }
         }
+        cluster.epoch = new_epoch;
         Ok(())
     }
 
@@ -1461,8 +1462,8 @@ impl MetaStore {
         cluster_name: String,
         config: HashMap<String, String>,
     ) -> Result<(), MetaStoreError> {
-        let cluster_name =
-            ClusterName::from(&cluster_name).map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.bump_global_epoch();
         match self.clusters.get_mut(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
@@ -2106,7 +2107,7 @@ mod tests {
 
             for slot_range in slot_range_set.into_iter() {
                 let task_meta = MigrationTaskMeta {
-                    cluster_name: ClusterName::from(&cluster_name).unwrap(),
+                    cluster_name: ClusterName::try_from(cluster_name.as_str()).unwrap(),
                     slot_range,
                 };
                 injection(store, migration_limit);
