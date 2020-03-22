@@ -10,21 +10,23 @@ use crate::common::cluster::ClusterName;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{
-    str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY,
-    TRY_AGAIN_REPLY,
+    change_bulk_array_element, str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY,
+    OK_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
 };
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
 use crate::migration::task::parse_switch_command;
 use crate::migration::task::MgrSubCmd;
-use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
+use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec, VFunctor};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use btoi::btou;
 use futures::future;
+use futures_timer::Delay;
 use std::convert::TryFrom;
 use std::str;
 use std::sync::{self, Arc};
+use std::time::Duration;
 
 pub struct SharedForwardHandler<F: RedisClientFactory> {
     handler: sync::Arc<ForwardHandler<F>>,
@@ -431,6 +433,11 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                     "EXISTS",
                 )))
             }
+            DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH => {
+                CmdReplyFuture::Right(Box::pin(
+                    self.handle_list_blocking_commands(cmd_ctx, reply_receiver),
+                ))
+            }
             _ => {
                 self.handle_single_key_data_cmd(cmd_ctx);
                 CmdReplyFuture::Left(reply_receiver)
@@ -597,6 +604,91 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         let resp = Resp::Integer(count.to_string().into_bytes());
         cmd_ctx.set_resp_result(Ok(resp));
         reply_receiver.await
+    }
+
+    async fn handle_list_blocking_commands(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+    ) -> TaskResult {
+        let data_cmd_type = cmd_ctx.get_data_cmd_type();
+
+        let non_blocking_cmd_name = match data_cmd_type {
+            DataCmdType::BLPOP => "LPOP",
+            DataCmdType::BRPOP => "RPOP",
+            DataCmdType::BRPOPLPUSH => "RPOPLPUSH",
+            _ => {
+                let cmd_name = cmd_ctx.get_cmd().get_command_name().map(|s| s.to_string());
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    format!("ERR unexpected command name {:?}", cmd_name).into_bytes(),
+                )));
+                return reply_receiver.await;
+            }
+        };
+
+        match (data_cmd_type, cmd_ctx.get_cmd().get_command_len()) {
+            (DataCmdType::BLPOP, Some(len)) if len >= 2 => (),
+            (DataCmdType::BRPOP, Some(len)) if len >= 2 => (),
+            (DataCmdType::BRPOPLPUSH, Some(len)) if len == 4 => (),
+            _ => {
+                let cmd_name = cmd_ctx.get_cmd().get_command_name().map(|s| s.to_string());
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    format!("ERR invalid argument number for {:?}", cmd_name).into_bytes(),
+                )));
+                return reply_receiver.await;
+            }
+        }
+
+        let timeout = match cmd_ctx.get_cmd().get_command_last_element() {
+            None => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(b"ERR wrong number of arguments".to_vec())));
+                return reply_receiver.await;
+            }
+            Some(last) => match btoi::btou::<u64>(last) {
+                Err(_) => {
+                    cmd_ctx
+                        .set_resp_result(Ok(Resp::Error(b"ERR invalid timeout argument".to_vec())));
+                    return reply_receiver.await;
+                }
+                Ok(timeout) => timeout,
+            },
+        };
+
+        let mut non_blocking_cmd = cmd_ctx.get_cmd().get_resp_slice().map(|b| b.to_vec());
+        change_bulk_array_element(
+            &mut non_blocking_cmd,
+            0,
+            non_blocking_cmd_name.to_string().into_bytes(),
+        );
+        if let Resp::Arr(Array::Arr(ref mut resps)) = non_blocking_cmd {
+            resps.push(Resp::Bulk(BulkStr::Str(timeout.to_string().into_bytes())));
+        }
+        debug!("list blocking command: {:?}", non_blocking_cmd);
+
+        let factory = CmdCtxFactory::default();
+        let mut retry_num = 0;
+        loop {
+            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, non_blocking_cmd.clone());
+            self.handle_single_key_data_cmd(sub_cmd_ctx);
+
+            let resp = match fut.await {
+                Err(err) => {
+                    cmd_ctx.set_result(Err(err));
+                    return reply_receiver.await;
+                }
+                Ok(resp) => resp,
+            };
+
+            match resp {
+                Resp::Bulk(BulkStr::Nil) if timeout == 0 || retry_num < timeout => retry_num += 1,
+                resp => {
+                    cmd_ctx.set_resp_result(Ok(resp));
+                    return reply_receiver.await;
+                }
+            }
+
+            Delay::new(Duration::from_secs(1)).await;
+        }
     }
 
     fn handle_single_key_data_cmd(&self, cmd_ctx: CmdCtx) {

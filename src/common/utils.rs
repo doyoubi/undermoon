@@ -79,6 +79,13 @@ pub fn get_command_element<T: AsRef<[u8]>>(resp: &Resp<T>, index: usize) -> Opti
     }
 }
 
+pub fn get_command_len<T>(resp: &Resp<T>) -> Option<usize> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => Some(resps.len()),
+        _ => None,
+    }
+}
+
 pub fn change_bulk_array_element(resp: &mut RespVec, index: usize, data: Vec<u8>) -> bool {
     match resp {
         Resp::Arr(Array::Arr(ref mut resps)) => {

@@ -72,6 +72,7 @@ impl CmdType {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DataCmdType {
+    // String commands
     APPEND,
     BITCOUNT,
     BITFIELD,
@@ -100,6 +101,10 @@ pub enum DataCmdType {
     EVALSHA,
     DEL,
     EXISTS,
+    // List commands
+    BLPOP,
+    BRPOP,
+    BRPOPLPUSH,
     Others,
 }
 
@@ -147,6 +152,9 @@ impl DataCmdType {
             b"EVALSHA" => DataCmdType::EVALSHA,
             b"DEL" => DataCmdType::DEL,
             b"EXISTS" => DataCmdType::EXISTS,
+            b"BLPOP" => DataCmdType::BLPOP,
+            b"BRPOP" => DataCmdType::BRPOP,
+            b"BRPOPLPUSH" => DataCmdType::BRPOPLPUSH,
             _ => DataCmdType::Others,
         }
     }
@@ -193,6 +201,14 @@ impl Command {
 
     pub fn get_command_element(&self, index: usize) -> Option<&[u8]> {
         self.request.get_array_element(index)
+    }
+
+    pub fn get_command_len(&self) -> Option<usize> {
+        self.request.get_array_len()
+    }
+
+    pub fn get_command_last_element(&self) -> Option<&[u8]> {
+        self.request.get_array_last_element()
     }
 
     pub fn get_command_name(&self) -> Option<&str> {
