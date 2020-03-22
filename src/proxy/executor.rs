@@ -618,20 +618,28 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             DataCmdType::BRPOP => "RPOP",
             DataCmdType::BRPOPLPUSH => "RPOPLPUSH",
             _ => {
-                let cmd_name = cmd_ctx.get_cmd().get_command_name().map(|s| s.to_string());
+                let cmd_name = cmd_ctx
+                    .get_cmd()
+                    .get_command_name()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(String::new);
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    format!("ERR unexpected command name {:?}", cmd_name).into_bytes(),
+                    format!("ERR unexpected command name '{}'", cmd_name).into_bytes(),
                 )));
                 return reply_receiver.await;
             }
         };
 
         match (data_cmd_type, cmd_ctx.get_cmd().get_command_len()) {
-            (DataCmdType::BLPOP, Some(len)) if len >= 2 => (),
-            (DataCmdType::BRPOP, Some(len)) if len >= 2 => (),
+            (DataCmdType::BLPOP, Some(len)) if len > 2 => (),
+            (DataCmdType::BRPOP, Some(len)) if len > 2 => (),
             (DataCmdType::BRPOPLPUSH, Some(len)) if len == 4 => (),
             _ => {
-                let cmd_name = cmd_ctx.get_cmd().get_command_name().map(|s| s.to_string());
+                let cmd_name = cmd_ctx
+                    .get_cmd()
+                    .get_command_name()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(String::new);
                 cmd_ctx.set_resp_result(Ok(Resp::Error(
                     format!("ERR invalid argument number for {:?}", cmd_name).into_bytes(),
                 )));
@@ -661,9 +669,8 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             non_blocking_cmd_name.to_string().into_bytes(),
         );
         if let Resp::Arr(Array::Arr(ref mut resps)) = non_blocking_cmd {
-            resps.push(Resp::Bulk(BulkStr::Str(timeout.to_string().into_bytes())));
+            resps.pop(); // pop out the timeout argument
         }
-        debug!("list blocking command: {:?}", non_blocking_cmd);
 
         let factory = CmdCtxFactory::default();
         let mut retry_num = 0;
