@@ -20,7 +20,7 @@ def add_host(proxy_address, node_addresses):
         'proxy_address': proxy_address,
         'nodes': node_addresses,
     }
-    res = requests.post('http://localhost:7799/api/{}/proxies/nodes'.format(BROKER_API_VERSION), json=payload)
+    res = requests.post('http://localhost:7799/api/{}/proxies/meta'.format(BROKER_API_VERSION), json=payload)
     print(res.status_code, res.text)
     if res.status_code == 400:
         return

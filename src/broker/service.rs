@@ -72,11 +72,11 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 "/clusters/migrations/{cluster_name}",
                 web::post().to(migrate_slots),
             )
-            .route("clusters/config/{cluster_name}", web::patch().to(change_config))
+            .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
 
-            .route("/proxies/nodes", web::post().to(add_proxy))
+            .route("/proxies/meta", web::post().to(add_proxy))
             .route(
-                "/proxies/nodes/{proxy_address}",
+                "/proxies/meta/{proxy_address}",
                 web::delete().to(remove_proxy),
             ),
     );
@@ -141,15 +141,16 @@ impl MemBrokerService {
             .get_cluster_by_name(name, migration_limit)
     }
 
-    pub fn add_proxy(&self, proxy_resource: ProxyResource) -> Result<(), MetaStoreError> {
-        let ProxyResource {
+    pub fn add_proxy(&self, proxy_resource: ProxyResourcePayload) -> Result<(), MetaStoreError> {
+        let ProxyResourcePayload {
             proxy_address,
             nodes,
+            host,
         } = proxy_resource;
         self.store
             .write()
             .expect("MemBrokerService::add_proxy")
-            .add_proxy(proxy_address, nodes)
+            .add_proxy(proxy_address, nodes, host)
     }
 
     pub fn add_cluster(&self, cluster_name: String, node_num: usize) -> Result<(), MetaStoreError> {
@@ -287,13 +288,14 @@ async fn get_failures(state: ServiceState) -> impl Responder {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct ProxyResource {
+pub struct ProxyResourcePayload {
     proxy_address: String,
     nodes: [String; CHUNK_HALF_NODE_NUM],
+    host: Option<String>,
 }
 
 async fn add_proxy(
-    (proxy_resource, state): (web::Json<ProxyResource>, ServiceState),
+    (proxy_resource, state): (web::Json<ProxyResourcePayload>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     state.add_proxy(proxy_resource.into_inner()).map(|()| "")
 }

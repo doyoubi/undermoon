@@ -85,7 +85,7 @@ class OvermoonClient:
             logger.warning('OVERMOON: failed to connect to server proxy: {}', server_proxy.to_dict())
             return
 
-        r = self.client.post('/api/{}/proxies/nodes'.format(BROKER_API_VERSION), server_proxy.to_dict())
+        r = self.client.post('/api/{}/proxies/meta'.format(BROKER_API_VERSION), server_proxy.to_dict())
         if r.status_code == 400:
             return
         if r.status_code == 200:
