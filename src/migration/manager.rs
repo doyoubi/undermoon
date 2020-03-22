@@ -7,8 +7,8 @@ use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{get_slot, ThreadSafe};
 use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
-use crate::protocol::RedisClientFactory;
 use crate::protocol::Resp;
+use crate::protocol::{Array, BulkStr, RedisClientFactory, RespVec};
 use crate::proxy::backend::{
     CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, ReqTask,
 };
@@ -232,15 +232,16 @@ where
         }
     }
 
-    pub fn info(&self) -> String {
-        self.task_map
+    pub fn info(&self) -> RespVec {
+        let tasks = self
+            .task_map
             .iter()
             .map(|(cluster_name, tasks)| {
                 let mut lines = vec![format!("name: {}", cluster_name)];
                 for task_meta in tasks.keys() {
                     if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
                         lines.push(format!(
-                            "{} -> {} {}",
+                            "{} {} -> {}",
                             task_meta
                                 .slot_range
                                 .range_list
@@ -254,10 +255,15 @@ where
                         error!("invalid slot range migration meta");
                     }
                 }
-                lines.join("\n")
+                Resp::Arr(Array::Arr(
+                    lines
+                        .into_iter()
+                        .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+                        .collect(),
+                ))
             })
-            .collect::<Vec<String>>()
-            .join("\r\n")
+            .collect::<Vec<RespVec>>();
+        Resp::Arr(Array::Arr(tasks))
     }
 
     pub fn send(&self, mut cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {

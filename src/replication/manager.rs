@@ -5,7 +5,7 @@ use super::replicator::{
 use crate::common::cluster::ClusterName;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::track::TrackedFutureRegistry;
-use crate::protocol::RedisClientFactory;
+use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
 use crate::proxy::cluster::ClusterMetaError;
 use itertools::Either;
 use std::collections::HashMap;
@@ -209,10 +209,10 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         (master_metadata, replica_metadata)
     }
 
-    pub fn get_metadata_report(&self) -> String {
+    pub fn get_metadata_report(&self) -> RespVec {
         let (master_metadata, replica_metadata) = self.get_metadata();
 
-        let mut report = String::new();
+        let mut reports = vec![];
 
         for meta in master_metadata.into_iter() {
             let MasterMeta {
@@ -220,35 +220,51 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 master_node_address,
                 replicas,
             } = meta;
-            report.push_str(&format!("cluster:{}\n", cluster_name));
-            report.push_str("role:master\n");
-            report.push_str(&format!("node_address:{}\n", master_node_address));
+            let mut master_meta = vec![];
+            master_meta.push(format!("cluster:{}\n", cluster_name));
+            master_meta.push("role:master\n".to_string());
+            master_meta.push(format!("node_address:{}\n", master_node_address));
             for replica in replicas.into_iter() {
-                report.push_str(&format!(
+                master_meta.push(format!(
                     "replica:{}@{}\n",
                     replica.node_address, replica.proxy_address
                 ));
             }
-            report.push('\n');
+
+            let master_meta = Resp::Arr(Array::Arr(
+                master_meta
+                    .into_iter()
+                    .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+                    .collect(),
+            ));
+            reports.push(master_meta);
         }
+
         for meta in replica_metadata.into_iter() {
             let ReplicaMeta {
                 cluster_name,
                 replica_node_address,
                 masters,
             } = meta;
-            report.push_str(&format!("cluster:{}\n", cluster_name));
-            report.push_str("role:replica\n");
-            report.push_str(&format!("node_address:{}\n", replica_node_address));
+            let mut replica_meta = vec![];
+            replica_meta.push(format!("cluster:{}\n", cluster_name));
+            replica_meta.push("role:replica\n".to_string());
+            replica_meta.push(format!("node_address:{}\n", replica_node_address));
             for master in masters.into_iter() {
-                report.push_str(&format!(
+                replica_meta.push(format!(
                     "master:{}@{}\n",
                     master.node_address, master.proxy_address
                 ));
             }
-            report.push('\n');
+            let replica_meta = Resp::Arr(Array::Arr(
+                replica_meta
+                    .into_iter()
+                    .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+                    .collect(),
+            ));
+            reports.push(replica_meta);
         }
 
-        report
+        Resp::Arr(Array::Arr(reports))
     }
 }

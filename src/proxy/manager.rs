@@ -21,7 +21,7 @@ use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
-use crate::protocol::{RedisClientFactory, RespPacket, RespVec};
+use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec};
 use crate::proxy::backend::{CmdTask, DefaultConnFactory};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
@@ -211,19 +211,26 @@ impl<F: RedisClientFactory> MetaManager<F> {
         self.replicator_manager.update_replicators(meta)
     }
 
-    pub fn get_replication_info(&self) -> String {
+    pub fn get_replication_info(&self) -> RespVec {
         self.replicator_manager.get_metadata_report()
     }
 
-    pub fn info(&self) -> String {
+    pub fn info(&self) -> RespVec {
         let meta_map = self.meta_map.load();
         let cluster_info = meta_map.cluster_map.info();
         let mgr_info = meta_map.migration_map.info();
         let del_info = meta_map.deleting_task_map.info();
-        format!(
-            "# Cluster\r\n{}\r\n# Migration\r\n{}\r\n{}\r\n",
-            cluster_info, mgr_info, del_info
-        )
+        let repl_info = self.replicator_manager.get_metadata_report();
+        Resp::Arr(Array::Arr(vec![
+            Resp::Bulk(BulkStr::Str(b"Cluster".to_vec())),
+            cluster_info,
+            Resp::Bulk(BulkStr::Str(b"Replication".to_vec())),
+            repl_info,
+            Resp::Bulk(BulkStr::Str(b"Migration".to_vec())),
+            mgr_info,
+            Resp::Bulk(BulkStr::Str(b"DeletingKeyTask".to_vec())),
+            del_info,
+        ]))
     }
 
     pub fn handle_switch(

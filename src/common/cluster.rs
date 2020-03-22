@@ -418,6 +418,10 @@ impl ClusterName {
         self.0.as_str()
     }
 
+    pub fn as_bytes(&self) -> Vec<u8> {
+        self.0.as_str().to_string().into_bytes()
+    }
+
     pub fn try_push(&mut self, c: char) -> Result<(), CapacityError> {
         self.0.try_push(c).map_err(|_| CapacityError)
     }

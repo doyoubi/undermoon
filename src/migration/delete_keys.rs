@@ -5,10 +5,11 @@ use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::proto::ProxyClusterMap;
 use crate::common::resp_execution::keep_connecting_and_sending;
 use crate::migration::task::MigrationError;
-use crate::protocol::{RedisClient, RedisClientError, RedisClientFactory, Resp};
+use crate::protocol::{
+    Array, BulkStr, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
+};
 use atomic_option::AtomicOption;
 use futures::{Future, FutureExt};
-use itertools::Itertools;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,12 +27,12 @@ impl DeleteKeysTaskMap {
         }
     }
 
-    pub fn info(&self) -> String {
-        let tasks: Vec<String> = self
+    pub fn info(&self) -> RespVec {
+        let tasks: Vec<RespVec> = self
             .task_map
             .iter()
             .map(|(cluster, nodes)| {
-                nodes
+                let lines = nodes
                     .iter()
                     .map(|(address, task)| {
                         format!(
@@ -42,10 +43,12 @@ impl DeleteKeysTaskMap {
                             task.is_finished()
                         )
                     })
-                    .join(",")
+                    .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+                    .collect::<Vec<_>>();
+                Resp::Arr(Array::Arr(lines))
             })
             .collect();
-        format!("deleting_tasks:{}", tasks.join(","))
+        Resp::Arr(Array::Arr(tasks))
     }
 
     pub fn update_from_old_task_map<F: RedisClientFactory>(
