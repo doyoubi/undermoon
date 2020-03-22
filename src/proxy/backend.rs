@@ -358,7 +358,7 @@ where
     let socket = match TcpStream::connect(address).await {
         Ok(socket) => socket,
         Err(err) => {
-            error!("failed to connect: {:?}", err);
+            error!("failed to connect: {} {:?}", address, err);
             return Err(BackendError::Io(err));
         }
     };
@@ -429,7 +429,7 @@ where
         let (writer, reader) = match conn_factory.create_conn(sock_address).await {
             Ok(conn) => conn,
             Err(err) => {
-                error!("failed to connect: {:?}", err);
+                error!("failed to connect: {} {:?}", address, err);
                 retry_state.take();
 
                 let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();

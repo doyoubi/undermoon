@@ -93,20 +93,36 @@ where
         }
     }
 
-    pub fn info(&self) -> String {
+    pub fn info(&self) -> RespVec {
         let local = self
             .local_clusters
             .iter()
-            .map(|(_, local_cluster)| local_cluster.info())
-            .collect::<Vec<String>>()
-            .join("\r\n");
+            .map(|(cluster_name, local_cluster)| {
+                let info = local_cluster.info();
+                Resp::Arr(Array::Arr(vec![
+                    Resp::Bulk(BulkStr::Str(cluster_name.as_bytes())),
+                    info,
+                ]))
+            })
+            .collect::<Vec<RespVec>>();
         let peer = self
             .remote_clusters
             .iter()
-            .map(|(_, remote_cluster)| remote_cluster.info())
-            .collect::<Vec<String>>()
-            .join("\r\n");
-        format!("{}\r\n{}", local, peer)
+            .map(|(cluster_name, remote_cluster)| {
+                let info = remote_cluster.info();
+                Resp::Arr(Array::Arr(vec![
+                    Resp::Bulk(BulkStr::Str(cluster_name.as_bytes())),
+                    info,
+                ]))
+            })
+            .collect::<Vec<RespVec>>();
+
+        Resp::Arr(Array::Arr(vec![
+            Resp::Bulk(BulkStr::Str(b"local".to_vec())),
+            Resp::Arr(Array::Arr(local)),
+            Resp::Bulk(BulkStr::Str(b"peer".to_vec())),
+            Resp::Arr(Array::Arr(peer)),
+        ]))
     }
 
     pub fn send(
@@ -256,27 +272,18 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         }
     }
 
-    pub fn info(&self) -> String {
-        let mut lines = vec![
+    pub fn info(&self) -> RespVec {
+        let lines = vec![
             format!("name: {}", self.name),
             format!("epoch: {}", self.epoch),
             "nodes:".to_string(),
         ];
-        for (node, slot_ranges) in self.slot_ranges.iter() {
-            let slot_ranges = slot_ranges
-                .iter()
-                .map(|slot_range| {
-                    format!(
-                        "{:?} {}",
-                        slot_range.tag.get_migration_meta(),
-                        slot_range.get_range_list().to_strings().join(" "),
-                    )
-                })
-                .collect::<Vec<String>>()
-                .join(", ");
-            lines.push(format!("{}: {}", node, slot_ranges));
-        }
-        lines.join("\r\n")
+        let mut arr: Vec<_> = lines
+            .into_iter()
+            .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+            .collect();
+        arr.extend(format_slot_ranges(&self.slot_ranges));
+        Resp::Arr(Array::Arr(arr))
     }
 
     pub fn send(
@@ -358,23 +365,14 @@ impl RemoteCluster {
         }
     }
 
-    pub fn info(&self) -> String {
-        let mut lines = vec!["peers:".to_string()];
-        for (node, slot_ranges) in self.slot_ranges.iter() {
-            let slot_ranges = slot_ranges
-                .iter()
-                .map(|slot_range| {
-                    format!(
-                        "{:?} {}",
-                        slot_range.tag.get_migration_meta(),
-                        slot_range.get_range_list().to_strings().join(" "),
-                    )
-                })
-                .collect::<Vec<String>>()
-                .join(", ");
-            lines.push(format!("{}: {}", node, slot_ranges));
-        }
-        lines.join("\r\n")
+    pub fn info(&self) -> RespVec {
+        let lines = vec!["peers:".to_string()];
+        let mut arr: Vec<_> = lines
+            .into_iter()
+            .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+            .collect();
+        arr.extend(format_slot_ranges(&self.slot_ranges));
+        Resp::Arr(Array::Arr(arr))
     }
 
     pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), ClusterSendError<T>> {
@@ -419,6 +417,42 @@ impl RemoteCluster {
     ) -> Result<Vec<RespVec>, String> {
         gen_cluster_slots_helper(&self.slot_ranges, migration_states)
     }
+}
+
+fn format_slot_ranges(slot_ranges: &HashMap<String, Vec<SlotRange>>) -> Vec<RespVec> {
+    let mut arr = vec![];
+    for (node, slot_ranges) in slot_ranges.iter() {
+        let slot_ranges = slot_ranges
+            .iter()
+            .map(|slot_range| {
+                let mut lines = vec![];
+                if let Some(meta) = slot_range.tag.get_migration_meta() {
+                    let meta_lines = vec![
+                        meta.epoch.to_string().into_bytes(),
+                        format!("src_proxy: {}", meta.src_proxy_address).into_bytes(),
+                        format!("src_node: {}", meta.src_node_address).into_bytes(),
+                        format!("dst_proxy: {}", meta.dst_proxy_address).into_bytes(),
+                        format!("dst_node: {}", meta.dst_node_address).into_bytes(),
+                    ];
+                    lines.extend(meta_lines.into_iter().map(|s| Resp::Bulk(BulkStr::Str(s))));
+                }
+                lines.push(Resp::Bulk(BulkStr::Str(
+                    slot_range
+                        .get_range_list()
+                        .to_strings()
+                        .join(" ")
+                        .into_bytes(),
+                )));
+                Resp::Arr(Array::Arr(lines))
+            })
+            .collect::<Vec<RespVec>>();
+        let slot_ranges = Resp::Arr(Array::Arr(slot_ranges));
+        arr.push(Resp::Arr(Array::Arr(vec![
+            Resp::Bulk(BulkStr::Str(node.to_string().into_bytes())),
+            slot_ranges,
+        ])));
+    }
+    arr
 }
 
 pub enum ClusterSendError<T: CmdTask> {

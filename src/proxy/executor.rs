@@ -187,6 +187,9 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             self.handle_umctl_set_cluster(cmd_ctx);
         } else if sub_cmd.eq("SETREPL") {
             self.handle_umctl_setrepl(cmd_ctx);
+        } else if sub_cmd.eq("INFO") {
+            let resp = self.manager.info();
+            cmd_ctx.set_resp_result(Ok(resp));
         } else if sub_cmd.eq("INFOREPL") {
             self.handle_umctl_info_repl(cmd_ctx);
         } else if sub_cmd.eq("INFOMGR") {
@@ -636,12 +639,7 @@ impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Info => cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(
-                format!(
-                    "version:{}\r\n\r\n{}",
-                    UNDERMOON_VERSION,
-                    self.manager.info()
-                )
-                .into_bytes(),
+                format!("version:{}\r\n", UNDERMOON_VERSION,).into_bytes(),
             )))),
             CmdType::Auth => self.handle_auth(cmd_ctx),
             CmdType::Quit => {
