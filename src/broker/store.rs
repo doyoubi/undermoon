@@ -513,7 +513,7 @@ impl MetaStore {
         let host = match (host, proxy_address.split(':').next()) {
             (Some(h), _) => h,
             (None, Some(h)) => h.to_string(),
-            _ => return Err(MetaStoreError::InvalidProxyAddress),
+            (None, None) => return Err(MetaStoreError::InvalidProxyAddress),
         };
 
         self.bump_global_epoch();
@@ -1594,6 +1594,37 @@ mod tests {
         assert_eq!(proxy.get_free_nodes().len(), 2);
 
         store.remove_proxy(proxy_address.to_string()).unwrap();
+    }
+
+    #[test]
+    fn test_specifying_host_when_adding_proxy() {
+        let proxy_address = "127.0.0.1:7000";
+        let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
+
+        {
+            let mut store = MetaStore::default();
+            store
+                .add_proxy(proxy_address.to_string(), nodes.clone(), None)
+                .unwrap();
+            let proxies = store.get_free_proxies();
+            let proxy = proxies.get(0).unwrap();
+            assert_eq!(proxy.proxy_address, proxy_address);
+            assert_eq!(proxy.host, "127.0.0.1");
+        }
+        {
+            let mut store = MetaStore::default();
+            store
+                .add_proxy(
+                    proxy_address.to_string(),
+                    nodes.clone(),
+                    Some("localhost".to_string()),
+                )
+                .unwrap();
+            let proxies = store.get_free_proxies();
+            let proxy = proxies.get(0).unwrap();
+            assert_eq!(proxy.proxy_address, proxy_address);
+            assert_eq!(proxy.host, "localhost");
+        }
     }
 
     fn check_cluster_and_proxy(store: &MetaStore) {
