@@ -23,7 +23,13 @@ const CHUNK_NODE_NUM: usize = 4;
 pub struct ProxyResource {
     pub proxy_address: String,
     pub node_addresses: [String; NODES_PER_PROXY],
+    pub host: String,
     pub cluster: Option<ClusterName>,
+}
+
+struct HostProxy {
+    pub host: String,
+    pub proxy_address: String,
 }
 
 type ProxySlot = String;
@@ -116,6 +122,7 @@ struct ChunkStore {
     stable_slots: [Option<SlotRange>; CHUNK_PARTS],
     migrating_slots: [Vec<MigrationSlotRangeStore>; CHUNK_PARTS],
     proxy_addresses: [String; CHUNK_PARTS],
+    hosts: [String; CHUNK_PARTS],
     node_addresses: [String; CHUNK_NODE_NUM],
 }
 
@@ -153,6 +160,7 @@ impl ClusterStore {
                 stable_slots: chunk.stable_slots.clone(),
                 migrating_slots: [vec![], vec![]],
                 proxy_addresses: chunk.proxy_addresses.clone(),
+                hosts: chunk.hosts.clone(),
                 node_addresses: chunk.node_addresses.clone(),
             };
             chunks.push(new_chunk);
@@ -497,10 +505,16 @@ impl MetaStore {
         &mut self,
         proxy_address: String,
         nodes: [String; NODES_PER_PROXY],
+        host: Option<String>,
     ) -> Result<(), MetaStoreError> {
         if proxy_address.split(':').count() != 2 {
             return Err(MetaStoreError::InvalidProxyAddress);
         }
+        let host = match (host, proxy_address.split(':').next()) {
+            (Some(h), _) => h,
+            (None, Some(h)) => h.to_string(),
+            (None, None) => return Err(MetaStoreError::InvalidProxyAddress),
+        };
 
         self.bump_global_epoch();
 
@@ -511,6 +525,7 @@ impl MetaStore {
             .or_insert_with(|| ProxyResource {
                 proxy_address: proxy_address.clone(),
                 node_addresses: nodes,
+                host,
                 cluster: None,
             });
 
@@ -608,6 +623,7 @@ impl MetaStore {
                     first_proxy.proxy_address.clone(),
                     second_proxy.proxy_address.clone(),
                 ],
+                hosts: [first_proxy.host.clone(), second_proxy.host.clone()],
                 node_addresses: [
                     first_proxy.node_addresses[0].clone(),
                     first_proxy.node_addresses[1].clone(),
@@ -1057,7 +1073,7 @@ impl MetaStore {
         Ok(())
     }
 
-    fn get_free_proxies(&self) -> Vec<String> {
+    fn get_free_proxies(&self) -> Vec<HostProxy> {
         let failed_proxies = self.failed_proxies.clone();
         let failures = self.failures.clone();
 
@@ -1073,7 +1089,10 @@ impl MetaStore {
             if failures.contains_key(proxy_address) {
                 continue;
             }
-            free_proxies.push(proxy_address.clone());
+            free_proxies.push(HostProxy {
+                host: proxy_resource.host.clone(),
+                proxy_address: proxy_address.clone(),
+            });
         }
         free_proxies
     }
@@ -1085,7 +1104,7 @@ impl MetaStore {
             .values()
             .filter_map(|proxy| {
                 if proxy.cluster.is_none() {
-                    proxy.proxy_address.split(':').next().map(|s| s.to_string())
+                    Some(proxy.host.clone())
                 } else {
                     None
                 }
@@ -1094,23 +1113,13 @@ impl MetaStore {
 
         let mut link_table: HashMap<String, HashMap<String, usize>> = HashMap::new();
         for proxy_resource in self.all_proxies.values() {
-            let first = proxy_resource.proxy_address.clone();
-            let first_host = first
-                .split(':')
-                .next()
-                .expect("build_link_table")
-                .to_string();
+            let first_host = proxy_resource.host.clone();
             if !free_hosts.contains(&first_host) {
                 continue;
             }
 
             for proxy_resource in self.all_proxies.values() {
-                let second = proxy_resource.proxy_address.clone();
-                let second_host = second
-                    .split(':')
-                    .next()
-                    .expect("build_link_table")
-                    .to_string();
+                let second_host = proxy_resource.host.clone();
                 if first_host == second_host {
                     continue;
                 }
@@ -1133,18 +1142,8 @@ impl MetaStore {
 
         for cluster in self.clusters.values() {
             for chunk in cluster.chunks.iter() {
-                let first = chunk.proxy_addresses[0].clone();
-                let second = chunk.proxy_addresses[1].clone();
-                let first_host = first
-                    .split(':')
-                    .next()
-                    .expect("build_link_table")
-                    .to_string();
-                let second_host = second
-                    .split(':')
-                    .next()
-                    .expect("build_link_table")
-                    .to_string();
+                let first_host = chunk.hosts[0].clone();
+                let second_host = chunk.hosts[1].clone();
                 let linked_num = link_table
                     .entry(first_host.clone())
                     .or_insert_with(HashMap::new)
@@ -1162,23 +1161,27 @@ impl MetaStore {
         link_table
     }
 
-    fn generate_free_chunks(
-        &self,
-        proxy_num: NonZeroUsize,
-    ) -> Result<Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>, MetaStoreError> {
+    fn generate_free_host_proxies(&self) -> HashMap<String, Vec<ProxySlot>> {
         // host => proxies
         let mut host_proxies: HashMap<String, Vec<ProxySlot>> = HashMap::new();
-        for proxy_address in self.get_free_proxies().into_iter() {
-            let host = proxy_address
-                .split(':')
-                .next()
-                .expect("consume_proxy: get host from address")
-                .to_string();
+        for host_proxy in self.get_free_proxies().into_iter() {
+            let HostProxy {
+                host,
+                proxy_address,
+            } = host_proxy;
             host_proxies
                 .entry(host)
                 .or_insert_with(Vec::new)
                 .push(proxy_address);
         }
+        host_proxies
+    }
+
+    fn generate_free_chunks(
+        &self,
+        proxy_num: NonZeroUsize,
+    ) -> Result<Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>, MetaStoreError> {
+        let mut host_proxies = self.generate_free_host_proxies();
 
         host_proxies = Self::remove_redundant_chunks(host_proxies, proxy_num)?;
 
@@ -1279,20 +1282,13 @@ impl MetaStore {
                         **host != first_host && free_count != None && free_count != Some(0)
                     })
                     .min_by(|(host1, count1), (host2, count2)| {
-                        let r = count1.cmp(count2);
-                        if r != Ordering::Equal {
-                            return r;
-                        }
-                        let host1_free = host_proxies
-                            .get(*host1)
-                            .map(|proxies| proxies.len())
-                            .expect("allocate_chunk: get back host");
-                        let host2_free = host_proxies
-                            .get(*host2)
-                            .map(|proxies| proxies.len())
-                            .expect("allocate_chunk: get back host");
-                        // Need to reverse it as we want the host with maximum proxies.
-                        host2_free.cmp(&host1_free)
+                        Self::second_host_cmp(
+                            host1.as_str(),
+                            **count1,
+                            host2.as_str(),
+                            **count2,
+                            &host_proxies,
+                        )
                     })
                     .map(|t| t.0.clone())
                     .expect("allocate_chunk: invalid state, cannot get free proxy");
@@ -1320,6 +1316,29 @@ impl MetaStore {
         }
 
         Ok(new_proxy_pairs)
+    }
+
+    fn second_host_cmp(
+        host1: &str,
+        count1: usize,
+        host2: &str,
+        count2: usize,
+        free_host_proxies: &HashMap<String, Vec<ProxySlot>>,
+    ) -> Ordering {
+        let r = count1.cmp(&count2);
+        if r != Ordering::Equal {
+            return r;
+        }
+        let host1_free = free_host_proxies
+            .get(host1)
+            .map(|proxies| proxies.len())
+            .expect("second_host_cmp: get back host");
+        let host2_free = free_host_proxies
+            .get(host2)
+            .map(|proxies| proxies.len())
+            .expect("second_host_cmp: get back host");
+        // Need to reverse it as we want the host with maximum proxies.
+        host2_free.cmp(&host1_free)
     }
 
     pub fn replace_failed_proxy(
@@ -1408,46 +1427,41 @@ impl MetaStore {
         &self,
         failed_proxy_address: String,
     ) -> Result<ProxyResource, MetaStoreError> {
-        let free_hosts: HashSet<String> = self
-            .get_free_proxies()
-            .into_iter()
-            .map(|address| {
-                address
-                    .split(':')
-                    .next()
-                    .expect("consume_new_proxy: split address")
-                    .to_string()
-            })
-            .collect();
+        let free_host_proxies = self.generate_free_host_proxies();
         let link_table = self.build_link_table();
 
-        let failed_proxy_host = failed_proxy_address
-            .split(':')
-            .next()
-            .ok_or_else(|| MetaStoreError::InvalidProxyAddress)?
-            .to_string();
+        let failed_proxy_host = self
+            .all_proxies
+            .get(&failed_proxy_address)
+            .ok_or_else(|| MetaStoreError::ProxyNotFound)?
+            .host
+            .clone();
+
         let link_count_table = link_table
             .get(&failed_proxy_host)
             .expect("consume_new_proxy: cannot find failed proxy");
         let peer_host = link_count_table
             .iter()
-            .filter(|(peer_host, _)| free_hosts.contains(*peer_host))
-            .min_by_key(|(_, count)| *count)
+            .filter(|(peer_host, _)| free_host_proxies.contains_key(*peer_host))
+            .min_by(|(host1, count1), (host2, count2)| {
+                Self::second_host_cmp(
+                    host1.as_str(),
+                    **count1,
+                    host2.as_str(),
+                    **count2,
+                    &free_host_proxies,
+                )
+            })
             .map(|(peer_address, _)| peer_address)
             .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
 
         let peer_proxy = self
             .get_free_proxies()
             .iter()
-            .find(|address| {
-                peer_host
-                    == address
-                        .split(':')
-                        .next()
-                        .expect("consume_new_proxy: split address")
-            })
+            .find(|host_proxy| peer_host == &host_proxy.host)
             .expect("consume_new_proxy: get peer address")
-            .to_string();
+            .proxy_address
+            .clone();
 
         let new_proxy = self
             .all_proxies
@@ -1540,7 +1554,9 @@ mod tests {
                     format!("127.0.0.{}:60{:02}", host_index, i * 2),
                     format!("127.0.0.{}:60{:02}", host_index, i * 2 + 1),
                 ];
-                store.add_proxy(proxy_address, node_addresses).unwrap();
+                store
+                    .add_proxy(proxy_address, node_addresses, None)
+                    .unwrap();
             }
         }
     }
@@ -1554,11 +1570,11 @@ mod tests {
         let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
 
         assert!(store
-            .add_proxy("127.0.0.1".to_string(), nodes.clone())
+            .add_proxy("127.0.0.1".to_string(), nodes.clone(), None)
             .is_err());
 
         store
-            .add_proxy(proxy_address.to_string(), nodes.clone())
+            .add_proxy(proxy_address.to_string(), nodes.clone(), None)
             .unwrap();
         assert_eq!(store.get_global_epoch(), 1);
         assert_eq!(store.all_proxies.len(), 1);
@@ -1578,6 +1594,37 @@ mod tests {
         assert_eq!(proxy.get_free_nodes().len(), 2);
 
         store.remove_proxy(proxy_address.to_string()).unwrap();
+    }
+
+    #[test]
+    fn test_specifying_host_when_adding_proxy() {
+        let proxy_address = "127.0.0.1:7000";
+        let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
+
+        {
+            let mut store = MetaStore::default();
+            store
+                .add_proxy(proxy_address.to_string(), nodes.clone(), None)
+                .unwrap();
+            let proxies = store.get_free_proxies();
+            let proxy = proxies.get(0).unwrap();
+            assert_eq!(proxy.proxy_address, proxy_address);
+            assert_eq!(proxy.host, "127.0.0.1");
+        }
+        {
+            let mut store = MetaStore::default();
+            store
+                .add_proxy(
+                    proxy_address.to_string(),
+                    nodes.clone(),
+                    Some("localhost".to_string()),
+                )
+                .unwrap();
+            let proxies = store.get_free_proxies();
+            let proxy = proxies.get(0).unwrap();
+            assert_eq!(proxy.proxy_address, proxy_address);
+            assert_eq!(proxy.host, "localhost");
+        }
     }
 
     fn check_cluster_and_proxy(store: &MetaStore) {
@@ -1892,7 +1939,7 @@ mod tests {
             .node_addresses
             .clone();
         let err = store
-            .add_proxy(failed_proxy_address.clone(), nodes)
+            .add_proxy(failed_proxy_address.clone(), nodes, None)
             .unwrap_err();
         assert_eq!(err, MetaStoreError::AlreadyExisted);
         assert_eq!(
