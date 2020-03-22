@@ -613,10 +613,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     ) -> TaskResult {
         let data_cmd_type = cmd_ctx.get_data_cmd_type();
 
-        let non_blocking_cmd_name = match data_cmd_type {
-            DataCmdType::BLPOP => "LPOP",
-            DataCmdType::BRPOP => "RPOP",
-            DataCmdType::BRPOPLPUSH => "RPOPLPUSH",
+        let (non_blocking_cmd_name, lrpop) = match data_cmd_type {
+            DataCmdType::BLPOP => ("LPOP", true),
+            DataCmdType::BRPOP => ("RPOP", true),
+            DataCmdType::BRPOPLPUSH => ("RPOPLPUSH", false),
             _ => {
                 let cmd_name = cmd_ctx
                     .get_cmd()
@@ -630,10 +630,10 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             }
         };
 
-        match (data_cmd_type, cmd_ctx.get_cmd().get_command_len()) {
-            (DataCmdType::BLPOP, Some(len)) if len > 2 => (),
-            (DataCmdType::BRPOP, Some(len)) if len > 2 => (),
-            (DataCmdType::BRPOPLPUSH, Some(len)) if len == 4 => (),
+        let arg_len = match (data_cmd_type, cmd_ctx.get_cmd().get_command_len()) {
+            (DataCmdType::BLPOP, Some(len)) if len > 2 => len,
+            (DataCmdType::BRPOP, Some(len)) if len > 2 => len,
+            (DataCmdType::BRPOPLPUSH, Some(len)) if len == 4 => len,
             _ => {
                 let cmd_name = cmd_ctx
                     .get_cmd()
@@ -645,7 +645,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 )));
                 return reply_receiver.await;
             }
-        }
+        };
 
         let timeout = match cmd_ctx.get_cmd().get_command_last_element() {
             None => {
@@ -662,38 +662,78 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             },
         };
 
-        let mut non_blocking_cmd = cmd_ctx.get_cmd().get_resp_slice().map(|b| b.to_vec());
-        change_bulk_array_element(
-            &mut non_blocking_cmd,
-            0,
-            non_blocking_cmd_name.to_string().into_bytes(),
-        );
-        if let Resp::Arr(Array::Arr(ref mut resps)) = non_blocking_cmd {
-            resps.pop(); // pop out the timeout argument
-        }
-
         let factory = CmdCtxFactory::default();
         let mut retry_num = 0;
         loop {
-            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, non_blocking_cmd.clone());
-            self.handle_single_key_data_cmd(sub_cmd_ctx);
-
-            let resp = match fut.await {
-                Err(err) => {
-                    cmd_ctx.set_result(Err(err));
-                    return reply_receiver.await;
+            let mut cmds = vec![];
+            if lrpop {
+                // BLPOP, BRPOP
+                // exclude the timeout argument
+                for i in 1..(arg_len - 1) {
+                    let key = match cmd_ctx.get_cmd().get_command_element(i) {
+                        None => break, // invalid state
+                        Some(key) => key.to_vec(),
+                    };
+                    let non_blocking_cmd =
+                        vec![non_blocking_cmd_name.to_string().into_bytes(), key.clone()];
+                    let arr: Vec<RespVec> = non_blocking_cmd
+                        .into_iter()
+                        .map(|s| Resp::Bulk(BulkStr::Str(s)))
+                        .collect();
+                    let resp = Resp::Arr(Array::Arr(arr));
+                    cmds.push((key, resp));
                 }
-                Ok(resp) => resp,
-            };
+            } else {
+                // BRPOPLPUSH
+                let mut resp = cmd_ctx.get_cmd().get_resp_slice().map(|b| b.to_vec());
+                change_bulk_array_element(
+                    &mut resp,
+                    0,
+                    non_blocking_cmd_name.to_string().into_bytes(),
+                );
+                if let Resp::Arr(Array::Arr(ref mut resps)) = resp {
+                    resps.pop(); // pop out the timeout argument
+                }
+                // BRPOPLPUSH does not need to care about key.
+                cmds.push((vec![], resp));
+            }
 
-            match resp {
-                Resp::Bulk(BulkStr::Nil) if timeout == 0 || retry_num < timeout => retry_num += 1,
-                resp => {
-                    cmd_ctx.set_resp_result(Ok(resp));
-                    return reply_receiver.await;
+            for (key, non_blocking_cmd) in cmds.into_iter() {
+                let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, non_blocking_cmd);
+                self.handle_single_key_data_cmd(sub_cmd_ctx);
+
+                let resp = match fut.await {
+                    Err(err) => {
+                        cmd_ctx.set_result(Err(err));
+                        return reply_receiver.await;
+                    }
+                    Ok(resp) => resp,
+                };
+
+                match resp {
+                    Resp::Bulk(BulkStr::Nil) if timeout == 0 || retry_num < timeout => {}
+                    Resp::Bulk(BulkStr::Nil) if lrpop => {
+                        // BLPOP, BRPOP need to change resposne to Array::Nil.
+                        cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Nil)));
+                        return reply_receiver.await;
+                    }
+                    Resp::Bulk(BulkStr::Str(s)) if lrpop => {
+                        // BLPOP, BRPOP need to include the key.
+                        let resp = Resp::Arr(Array::Arr(vec![
+                            Resp::Bulk(BulkStr::Str(key)),
+                            Resp::Bulk(BulkStr::Str(s)),
+                        ]));
+                        cmd_ctx.set_resp_result(Ok(resp));
+                        return reply_receiver.await;
+                    }
+                    resp => {
+                        cmd_ctx.set_resp_result(Ok(resp));
+                        return reply_receiver.await;
+                    }
                 }
             }
 
+            retry_num += 1;
             Delay::new(Duration::from_secs(1)).await;
         }
     }
