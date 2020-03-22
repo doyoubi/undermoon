@@ -274,7 +274,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
 
     fn handle_umctl_info_repl(&self, cmd_ctx: CmdCtx) {
         let report = self.manager.get_replication_info();
-        cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(report.into_bytes()))));
+        cmd_ctx.set_resp_result(Ok(report));
     }
 
     fn handle_umctl_mgr_cmd(&self, cmd_ctx: CmdCtx, sub_cmd: MgrSubCmd) {

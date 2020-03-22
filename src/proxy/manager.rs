@@ -211,7 +211,7 @@ impl<F: RedisClientFactory> MetaManager<F> {
         self.replicator_manager.update_replicators(meta)
     }
 
-    pub fn get_replication_info(&self) -> String {
+    pub fn get_replication_info(&self) -> RespVec {
         self.replicator_manager.get_metadata_report()
     }
 
@@ -220,9 +220,12 @@ impl<F: RedisClientFactory> MetaManager<F> {
         let cluster_info = meta_map.cluster_map.info();
         let mgr_info = meta_map.migration_map.info();
         let del_info = meta_map.deleting_task_map.info();
+        let repl_info = self.replicator_manager.get_metadata_report();
         Resp::Arr(Array::Arr(vec![
             Resp::Bulk(BulkStr::Str(b"Cluster".to_vec())),
             cluster_info,
+            Resp::Bulk(BulkStr::Str(b"Replication".to_vec())),
+            repl_info,
             Resp::Bulk(BulkStr::Str(b"Migration".to_vec())),
             mgr_info,
             Resp::Bulk(BulkStr::Str(b"DeletingKeyTask".to_vec())),
