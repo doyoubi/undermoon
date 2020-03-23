@@ -268,9 +268,10 @@ impl TaskReply {
 pub type CommandResult<T> = Result<Box<T>, CommandError>;
 pub type TaskResult = Result<Box<TaskReply>, CommandError>;
 
-pub fn new_command_pair() -> (CmdReplySender, CmdReplyReceiver) {
+pub fn new_command_pair(cmd: &Command) -> (CmdReplySender, CmdReplyReceiver) {
     let (s, r) = oneshot::channel::<TaskResult>();
     let reply_sender = CmdReplySender {
+        data_cmd_type: cmd.get_data_cmd_type(),
         reply_sender: Some(s),
     };
     let reply_receiver = CmdReplyReceiver { reply_receiver: r };
@@ -278,6 +279,7 @@ pub fn new_command_pair() -> (CmdReplySender, CmdReplyReceiver) {
 }
 
 pub struct CmdReplySender {
+    data_cmd_type: DataCmdType,
     reply_sender: Option<oneshot::Sender<TaskResult>>,
 }
 
@@ -304,7 +306,12 @@ impl CmdReplySender {
         match self.reply_sender.take() {
             Some(reply_sender) => {
                 if let Err(CommandError::Dropped) = &res {
-                    error!("command is dropped {:?}", Backtrace::new());
+                    match self.data_cmd_type {
+                        DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH => {
+                            error!("blocking command is dropped")
+                        }
+                        _ => error!("command is dropped {:?}", Backtrace::new()),
+                    }
                 }
                 Some(reply_sender.send(res).map_err(|_| CommandError::Canceled))
             }

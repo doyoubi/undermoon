@@ -13,6 +13,8 @@ use crate::protocol::{
 use futures::{future, stream, Future, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use std::boxed::Box;
+use std::cmp::min;
+use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
@@ -158,7 +160,7 @@ impl CmdTaskFactory for CmdCtxFactory {
     ) {
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
-        let (reply_sender, reply_receiver) = new_command_pair();
+        let (reply_sender, reply_receiver) = new_command_pair(&cmd);
         let cmd_ctx = CmdCtx::new(
             another_task.get_cluster(),
             cmd,
@@ -195,7 +197,7 @@ impl<H: CmdCtxHandler> Session<H> {
 
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
-        let (reply_sender, reply_receiver) = new_command_pair();
+        let (reply_sender, reply_receiver) = new_command_pair(&cmd);
         let mut cmd_ctx = CmdCtx::new(
             self.cluster_name.clone(),
             cmd,
@@ -237,8 +239,20 @@ where
 
     let mut reply_receiver_list = Vec::with_capacity(session_batch_buf.get());
     let mut replies = Vec::with_capacity(session_batch_buf.get());
+    let mut read_buf = VecDeque::with_capacity(session_batch_buf.get());
 
-    while let Some(reqs) = reader.next().await {
+    loop {
+        let reqs = if read_buf.is_empty() {
+            match reader.next().await {
+                Some(reqs) => reqs,
+                None => return Ok(()),
+            }
+        } else {
+            read_buf
+                .drain(..min(read_buf.len(), session_batch_buf.get()))
+                .collect()
+        };
+
         for req in reqs.into_iter() {
             let packet = match req {
                 Ok(packet) => packet,
@@ -254,7 +268,34 @@ where
         }
 
         for reply_receiver in reply_receiver_list.drain(..) {
-            let res = reply_receiver.await.map_err(SessionError::CmdErr);
+            let res = {
+                // reply_fut may block forever for some commands, such as BLPOP, BRPOP, BRPOPLPUSH.
+                // Then even the connection is closed, this future won't exit.
+                // We need to select it with tcp stream read to detect closed connection.
+                let mut reply_fut = Some(reply_receiver);
+                let res = loop {
+                    let fut = reply_fut.take().ok_or_else(|| {
+                        error!("session invalid state: cannot get reply_fut.");
+                        SessionError::InvalidState
+                    })?;
+                    match future::select(fut, reader.next()).await {
+                        future::Either::Left((res, read_fut)) => {
+                            let _ = read_fut; // can be dropped without losing any item.
+                            break res;
+                        }
+                        future::Either::Right((read_result, fut)) => {
+                            reply_fut = Some(fut);
+                            match read_result {
+                                Some(reqs) => read_buf.extend(reqs),
+                                None => return Ok(()),
+                            }
+                            continue;
+                        }
+                    }
+                };
+                res.map_err(SessionError::CmdErr)
+            };
+
             let packet = match res {
                 Ok(task_reply) => {
                     let (request, packet, mut slowlog) = (*task_reply).into_inner();
@@ -283,8 +324,6 @@ where
             return Err(err);
         }
     }
-
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -332,7 +371,7 @@ mod tests {
         ))])));
         let cluster_name = Arc::new(RwLock::new(ClusterName::try_from("mycluster").unwrap()));
         let cmd = Command::new(Box::new(request));
-        let (sender, receiver) = new_command_pair();
+        let (sender, receiver) = new_command_pair(&cmd);
         let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799);
         drop(cmd_ctx);
         let err = match receiver.await {

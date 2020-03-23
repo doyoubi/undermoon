@@ -17,7 +17,7 @@ thread_number = 2
 session_channel_size = 4096
 backend_channel_size = 4096
 
-backend_conn_num = 4
+backend_conn_num = 2
 
 # Batching syscall
 backend_batch_min_time = 20000

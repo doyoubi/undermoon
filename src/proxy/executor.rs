@@ -8,10 +8,11 @@ use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::cluster::ClusterName;
 use crate::common::proto::ProxyClusterMeta;
+use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{
-    change_bulk_array_element, str_ascii_case_insensitive_eq, NOT_READY_FOR_SWITCHING_REPLY,
-    OK_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
+    change_bulk_array_element, same_slot, str_ascii_case_insensitive_eq,
+    NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
 };
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
@@ -446,6 +447,16 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     async fn handle_mget(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        let arg_len = cmd_ctx.get_cmd().get_command_len().unwrap_or(0);
+        let in_same_slot =
+            same_slot((1..arg_len).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
+        if !in_same_slot {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+            )));
+            return reply_receiver.await;
+        }
+
         let factory = CmdCtxFactory::default();
         let mut futs = vec![];
         for i in 1.. {
@@ -489,6 +500,17 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 
     async fn handle_mset(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        let arg_len = cmd_ctx.get_cmd().get_command_len().unwrap_or(0);
+        let in_same_slot = same_slot(
+            (0..(arg_len / 2)).filter_map(|i| cmd_ctx.get_cmd().get_command_element(2 * i + 1)),
+        );
+        if !in_same_slot {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+            )));
+            return reply_receiver.await;
+        }
+
         let factory = CmdCtxFactory::default();
         let mut futs = vec![];
         for i in 0.. {
@@ -540,12 +562,23 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
         reply_receiver.await
     }
 
+    // DEL and EXISTS
     async fn handle_multi_int_cmd(
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
         cmd_name: &'static str,
     ) -> TaskResult {
+        let arg_len = cmd_ctx.get_cmd().get_command_len().unwrap_or(0);
+        let in_same_slot =
+            same_slot((1..arg_len).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
+        if !in_same_slot {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+            )));
+            return reply_receiver.await;
+        }
+
         let factory = CmdCtxFactory::default();
         let mut futs = vec![];
         for i in 1.. {
@@ -661,6 +694,15 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
                 Ok(timeout) => timeout,
             },
         };
+
+        let in_same_slot =
+            same_slot((1..(arg_len - 1)).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
+        if !in_same_slot {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+            )));
+            return reply_receiver.await;
+        }
 
         let factory = CmdCtxFactory::default();
         let mut retry_num = 0;

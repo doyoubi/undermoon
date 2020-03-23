@@ -130,6 +130,19 @@ pub fn get_slot(key: &[u8]) -> usize {
     State::<XMODEM>::calculate(get_hash_tag(key)) as usize % SLOT_NUM
 }
 
+pub fn same_slot<'a, It: Iterator<Item = &'a [u8]>>(mut key_iter: It) -> bool {
+    let slot = match key_iter.next() {
+        None => return false,
+        Some(k) => get_slot(k),
+    };
+    for k in key_iter {
+        if get_slot(k) != slot {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn pretty_print_bytes(data: &[u8]) -> String {
     match str::from_utf8(data) {
         Ok(s) => s.to_string(),
