@@ -4,7 +4,7 @@ use super::fp::{RFunctor, VFunctor};
 use super::resp::{BinSafeStr, IndexedResp, Resp, RespSlice, RespVec};
 use super::stateless::{parse_indexed_resp, ParseError};
 use crate::common::utils::{
-    change_bulk_array_element, change_bulk_str, get_command_element, ThreadSafe,
+    change_bulk_array_element, change_bulk_str, get_command_element, get_command_len, ThreadSafe,
 };
 use crate::protocol::EncodeError;
 use bytes::BytesMut;
@@ -110,6 +110,19 @@ impl RespPacket {
         match self {
             Self::Indexed(indexed_resp) => indexed_resp.get_array_element(index),
             Self::Data(resp) => get_command_element(&resp, index),
+        }
+    }
+
+    pub fn get_array_last_element(&self) -> Option<&[u8]> {
+        let len = self.get_array_len()?;
+        let index = len.checked_sub(1)?;
+        self.get_array_element(index)
+    }
+
+    pub fn get_array_len(&self) -> Option<usize> {
+        match self {
+            Self::Indexed(indexed_resp) => indexed_resp.get_array_len(),
+            Self::Data(resp) => get_command_len(&resp),
         }
     }
 

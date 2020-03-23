@@ -79,6 +79,13 @@ pub fn get_command_element<T: AsRef<[u8]>>(resp: &Resp<T>, index: usize) -> Opti
     }
 }
 
+pub fn get_command_len<T>(resp: &Resp<T>) -> Option<usize> {
+    match resp {
+        Resp::Arr(Array::Arr(ref resps)) => Some(resps.len()),
+        _ => None,
+    }
+}
+
 pub fn change_bulk_array_element(resp: &mut RespVec, index: usize, data: Vec<u8>) -> bool {
     match resp {
         Resp::Arr(Array::Arr(ref mut resps)) => {
@@ -121,6 +128,19 @@ pub fn get_hash_tag(key: &[u8]) -> &[u8] {
 
 pub fn get_slot(key: &[u8]) -> usize {
     State::<XMODEM>::calculate(get_hash_tag(key)) as usize % SLOT_NUM
+}
+
+pub fn same_slot<'a, It: Iterator<Item = &'a [u8]>>(mut key_iter: It) -> bool {
+    let slot = match key_iter.next() {
+        None => return false,
+        Some(k) => get_slot(k),
+    };
+    for k in key_iter {
+        if get_slot(k) != slot {
+            return false;
+        }
+    }
+    true
 }
 
 pub fn pretty_print_bytes(data: &[u8]) -> String {

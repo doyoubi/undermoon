@@ -72,6 +72,7 @@ impl CmdType {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DataCmdType {
+    // String commands
     APPEND,
     BITCOUNT,
     BITFIELD,
@@ -100,6 +101,10 @@ pub enum DataCmdType {
     EVALSHA,
     DEL,
     EXISTS,
+    // List commands
+    BLPOP,
+    BRPOP,
+    BRPOPLPUSH,
     Others,
 }
 
@@ -147,6 +152,9 @@ impl DataCmdType {
             b"EVALSHA" => DataCmdType::EVALSHA,
             b"DEL" => DataCmdType::DEL,
             b"EXISTS" => DataCmdType::EXISTS,
+            b"BLPOP" => DataCmdType::BLPOP,
+            b"BRPOP" => DataCmdType::BRPOP,
+            b"BRPOPLPUSH" => DataCmdType::BRPOPLPUSH,
             _ => DataCmdType::Others,
         }
     }
@@ -193,6 +201,14 @@ impl Command {
 
     pub fn get_command_element(&self, index: usize) -> Option<&[u8]> {
         self.request.get_array_element(index)
+    }
+
+    pub fn get_command_len(&self) -> Option<usize> {
+        self.request.get_array_len()
+    }
+
+    pub fn get_command_last_element(&self) -> Option<&[u8]> {
+        self.request.get_array_last_element()
     }
 
     pub fn get_command_name(&self) -> Option<&str> {
@@ -252,9 +268,10 @@ impl TaskReply {
 pub type CommandResult<T> = Result<Box<T>, CommandError>;
 pub type TaskResult = Result<Box<TaskReply>, CommandError>;
 
-pub fn new_command_pair() -> (CmdReplySender, CmdReplyReceiver) {
+pub fn new_command_pair(cmd: &Command) -> (CmdReplySender, CmdReplyReceiver) {
     let (s, r) = oneshot::channel::<TaskResult>();
     let reply_sender = CmdReplySender {
+        data_cmd_type: cmd.get_data_cmd_type(),
         reply_sender: Some(s),
     };
     let reply_receiver = CmdReplyReceiver { reply_receiver: r };
@@ -262,6 +279,7 @@ pub fn new_command_pair() -> (CmdReplySender, CmdReplyReceiver) {
 }
 
 pub struct CmdReplySender {
+    data_cmd_type: DataCmdType,
     reply_sender: Option<oneshot::Sender<TaskResult>>,
 }
 
@@ -288,7 +306,12 @@ impl CmdReplySender {
         match self.reply_sender.take() {
             Some(reply_sender) => {
                 if let Err(CommandError::Dropped) = &res {
-                    error!("command is dropped {:?}", Backtrace::new());
+                    match self.data_cmd_type {
+                        DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH => {
+                            error!("blocking command is dropped")
+                        }
+                        _ => error!("command is dropped {:?}", Backtrace::new()),
+                    }
                 }
                 Some(reply_sender.send(res).map_err(|_| CommandError::Canceled))
             }
