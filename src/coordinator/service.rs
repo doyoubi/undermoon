@@ -125,8 +125,8 @@ impl<
         let client_factory = self.client_factory.clone();
         let reporter_id = self.config.reporter_id.clone();
         loop {
-            debug!("start detecting failures");
-            defer!(debug!("detecting finished a round"));
+            trace!("start detecting failures");
+            defer!(trace!("detecting finished a round"));
             if let Err(e) = Self::gen_detector(
                 reporter_id.clone(),
                 data_broker.clone(),
@@ -145,8 +145,8 @@ impl<
         let data_broker = self.data_broker.clone();
         let client_factory = self.client_factory.clone();
         loop {
-            debug!("start sync proxy meta data");
-            defer!(debug!("proxy meta sync finished a round"));
+            trace!("start sync proxy meta data");
+            defer!(trace!("proxy meta sync finished a round"));
             let sync =
                 Self::gen_proxy_meta_synchronizer(data_broker.clone(), client_factory.clone());
             let mut s = sync.run();
@@ -163,8 +163,8 @@ impl<
         let data_broker = self.data_broker.clone();
         let mani_broker = self.mani_broker.clone();
         loop {
-            debug!("start handling failures");
-            defer!(debug!("handling failures finished a round"));
+            trace!("start handling failures");
+            defer!(trace!("handling failures finished a round"));
             let handler = Self::gen_failure_handler(data_broker.clone(), mani_broker.clone());
             let mut s = handler.run();
             while let Some(r) = s.next().await {
@@ -181,8 +181,8 @@ impl<
         let mani_broker = self.mani_broker.clone();
         let client_factory = self.client_factory.clone();
         loop {
-            debug!("start handling migration sync");
-            defer!(debug!("handling migration finished a round"));
+            trace!("start handling migration sync");
+            defer!(trace!("handling migration finished a round"));
             let sync = Self::gen_migration_state_synchronizer(
                 data_broker.clone(),
                 mani_broker.clone(),

@@ -494,10 +494,20 @@ impl MetaStore {
         }
         self.failures
             .retain(|_, proxy_failure_map| !proxy_failure_map.is_empty());
+
+        let all_proxies = &self.all_proxies;
         self.failures
             .iter()
             .filter(|(_, v)| v.len() >= failure_quorum as usize)
-            .map(|(address, _)| address.clone())
+            .filter_map(|(address, _)| {
+                all_proxies.get(address).and_then(|proxy_resource| {
+                    if proxy_resource.cluster.is_some() {
+                        Some(address.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
             .collect()
     }
 
@@ -1114,16 +1124,13 @@ impl MetaStore {
         let mut link_table: HashMap<String, HashMap<String, usize>> = HashMap::new();
         for proxy_resource in self.all_proxies.values() {
             let first_host = proxy_resource.host.clone();
-            if !free_hosts.contains(&first_host) {
-                continue;
-            }
 
             for proxy_resource in self.all_proxies.values() {
                 let second_host = proxy_resource.host.clone();
                 if first_host == second_host {
                     continue;
                 }
-                if !free_hosts.contains(&second_host) {
+                if !free_hosts.contains(&first_host) && !free_hosts.contains(&second_host) {
                     continue;
                 }
 
@@ -1428,7 +1435,9 @@ impl MetaStore {
         failed_proxy_address: String,
     ) -> Result<ProxyResource, MetaStoreError> {
         let free_host_proxies = self.generate_free_host_proxies();
+        info!("generate_new_free_proxy: free host proxies {:?}", free_host_proxies);
         let link_table = self.build_link_table();
+        info!("generate_new_free_proxy: link table {:?}", link_table);
 
         let failed_proxy_host = self
             .all_proxies

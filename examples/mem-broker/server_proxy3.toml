@@ -1,1 +1,2 @@
 address = "server_proxy3:6003"
+auto_select_cluster = true

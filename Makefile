@@ -59,15 +59,6 @@ docker-build-release:
 	docker rm undermoon-builder-container
 	docker image build -f examples/Dockerfile-undermoon-release -t undermoon .
 
-docker-multi-redis:
-	docker-compose -f examples/docker-compose-multi-redis.yml up
-
-docker-multi-shard:
-	docker-compose -f examples/docker-compose-multi-shard.yml up
-
-docker-failover:
-	docker-compose -f examples/docker-compose-multi-shard.yml -f examples/docker-compose-failover.yml up
-
 docker-mem-broker:
 	docker-compose -f examples/docker-compose-mem-broker.yml up
 
