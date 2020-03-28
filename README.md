@@ -262,6 +262,7 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 - [Proxy UMCTL command](./docs/meta_command.md)
 - [HTTP Broker API](./docs/broker_http_api.md)
 - [Memory Broker API](./docs/memory_broker_api.md)
+- [Chunk](./docs/chunk.md)
 
 ## TODO
 - Limit running commands, connections

@@ -8,7 +8,7 @@ We will deploy all the following parts in one machine:
 - coordinator
 - two proxies with four nodes.
 
-![architecture](docs/architecture.svg)
+![architecture](./architecture.svg)
 
 ## Build the Binaries
 ```bash
@@ -30,14 +30,8 @@ $ RUST_LOG=undermoon=debug,coordinator=debug UNDERMOON_BROKER_ADDRESS=127.0.0.1:
 ## Deploy Server Proxy and Redis
 
 #### Chunk
-![Chunk](docs/chunk.svg)
-
-Chunk is the basic building block of a cluster to provide the created cluster with a good topology for workload balancing.
-It consists of 2 proxies and 4 Redis nodes evenly distributed in two machines.
-
-Normally, the first half has 1 master and 1 replica and their peers locate in the second half.
-
-After the second half failed, all the Redis nodes in the first half will become masters.
+Refers to the [chunk docs](./chunk.md) for detailed explanation.
+![Chunk](./chunk.svg)
 
 #### Run Server Proxy and Redis
 Run 2 server proxies and 4 Redis nodes:
