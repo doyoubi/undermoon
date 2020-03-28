@@ -125,7 +125,7 @@ async fn send_meta<C: RedisClient>(
     sub_command: String,
     args: Vec<String>,
 ) -> Result<(), CoordinateError> {
-    debug!("sending meta {} {:?}", sub_command, args);
+    trace!("sending meta {} {:?}", sub_command, args);
     let mut cmd = vec!["UMCTL".to_string(), sub_command.clone()];
     cmd.extend(args);
     let resp = client

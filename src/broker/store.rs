@@ -7,6 +7,7 @@ use crate::common::config::ClusterConfig;
 use crate::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::{min, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -484,6 +485,23 @@ impl MetaStore {
         falure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Vec<String> {
+        self.get_failures_helper(falure_ttl, failure_quorum, false)
+    }
+
+    pub fn get_all_failures(
+        &mut self,
+        falure_ttl: chrono::Duration,
+        failure_quorum: u64,
+    ) -> Vec<String> {
+        self.get_failures_helper(falure_ttl, failure_quorum, true)
+    }
+
+    pub fn get_failures_helper(
+        &mut self,
+        falure_ttl: chrono::Duration,
+        failure_quorum: u64,
+        include_free_proxies: bool,
+    ) -> Vec<String> {
         let now = Utc::now();
         for reporter_map in self.failures.values_mut() {
             reporter_map.retain(|_, report_time| {
@@ -494,10 +512,23 @@ impl MetaStore {
         }
         self.failures
             .retain(|_, proxy_failure_map| !proxy_failure_map.is_empty());
+
+        let all_proxies = &self.all_proxies;
         self.failures
             .iter()
             .filter(|(_, v)| v.len() >= failure_quorum as usize)
-            .map(|(address, _)| address.clone())
+            .filter_map(|(address, _)| {
+                all_proxies.get(address).and_then(|proxy_resource| {
+                    if include_free_proxies {
+                        return Some(address.clone());
+                    }
+                    if proxy_resource.cluster.is_some() {
+                        Some(address.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
             .collect()
     }
 
@@ -1114,16 +1145,13 @@ impl MetaStore {
         let mut link_table: HashMap<String, HashMap<String, usize>> = HashMap::new();
         for proxy_resource in self.all_proxies.values() {
             let first_host = proxy_resource.host.clone();
-            if !free_hosts.contains(&first_host) {
-                continue;
-            }
 
             for proxy_resource in self.all_proxies.values() {
                 let second_host = proxy_resource.host.clone();
                 if first_host == second_host {
                     continue;
                 }
-                if !free_hosts.contains(&second_host) {
+                if !free_hosts.contains(&first_host) && !free_hosts.contains(&second_host) {
                     continue;
                 }
 
@@ -1428,7 +1456,12 @@ impl MetaStore {
         failed_proxy_address: String,
     ) -> Result<ProxyResource, MetaStoreError> {
         let free_host_proxies = self.generate_free_host_proxies();
+        info!(
+            "generate_new_free_proxy: free host proxies {:?}",
+            free_host_proxies
+        );
         let link_table = self.build_link_table();
+        info!("generate_new_free_proxy: link table {:?}", link_table);
 
         let failed_proxy_host = self
             .all_proxies
@@ -1520,7 +1553,6 @@ pub enum MetaStoreError {
     InvalidProxyAddress,
     MigrationTaskNotFound,
     MigrationRunning,
-    NotSupported,
     InvalidConfig {
         key: String,
         value: String,
@@ -1529,15 +1561,62 @@ pub enum MetaStoreError {
     SlotsAlreadyEven,
 }
 
+impl MetaStoreError {
+    pub fn to_code(&self) -> &str {
+        match self {
+            Self::InUse => "IN_USE",
+            Self::NotInUse => "NOT_IN_USE",
+            Self::NoAvailableResource => "NO_AVAILABLE_RESOURCE",
+            Self::ResourceNotBalance => "RESOURCE_NOT_BALANCE",
+            Self::AlreadyExisted => "ALREADY_EXISTED",
+            Self::ClusterNotFound => "CLUSTER_NOT_FOUND",
+            Self::FreeNodeNotFound => "FREE_NODE_NOT_FOUND",
+            Self::ProxyNotFound => "PROXY_NOT_FOUND",
+            Self::InvalidNodeNum => "INVALID_NODE_NUMBER",
+            Self::InvalidClusterName => "INVALID_CLUSTER_NAME",
+            Self::InvalidMigrationTask => "INVALID_MIGRATION_TASK",
+            Self::InvalidProxyAddress => "INVALID_PROXY_ADDRESS",
+            Self::MigrationTaskNotFound => "MIGRATION_TASK_NOT_FOUND",
+            Self::MigrationRunning => "MIGRATION_RUNNING",
+            Self::InvalidConfig { .. } => "INVALID_CONFIG",
+            Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
+        }
+    }
+}
+
 impl fmt::Display for MetaStoreError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{}", self.to_code())
     }
 }
 
 impl Error for MetaStoreError {
     fn cause(&self) -> Option<&dyn Error> {
         None
+    }
+}
+
+impl Serialize for MetaStoreError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let error_code = self.to_string();
+        match self {
+            Self::InvalidConfig { key, value, error } => {
+                let mut state = serializer.serialize_struct("MetaStoreError", 4)?;
+                state.serialize_field("error", &error_code)?;
+                state.serialize_field("key", &key)?;
+                state.serialize_field("value", &value)?;
+                state.serialize_field("message", &error)?;
+                state.end()
+            }
+            _ => {
+                let mut state = serializer.serialize_struct("MetaStoreError", 1)?;
+                state.serialize_field("error", &error_code)?;
+                state.end()
+            }
+        }
     }
 }
 
@@ -1854,9 +1933,16 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
 
         assert_eq!(
-            store.get_failures(chrono::Duration::max_value(), 1),
-            vec![failed_address.to_string()]
+            store.get_all_failures(chrono::Duration::max_value(), 1),
+            vec![failed_address.to_string()],
         );
+        assert!(store
+            .get_all_failures(chrono::Duration::max_value(), 2)
+            .is_empty(),);
+        // Proxies not in cluster do not count.
+        assert!(store
+            .get_failures(chrono::Duration::max_value(), 1)
+            .is_empty(),);
         assert!(store
             .get_failures(chrono::Duration::max_value(), 2)
             .is_empty(),);
@@ -2088,7 +2174,9 @@ mod tests {
         assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
         assert_eq!(
             store.get_free_proxies().len()
-                + store.get_failures(chrono::Duration::max_value(), 1).len(),
+                + store
+                    .get_all_failures(chrono::Duration::max_value(), 1)
+                    .len(),
             all_proxy_num - start_node_num / 2 - added_node_num / 2
         );
 
@@ -2449,5 +2537,32 @@ mod tests {
             })
             .count();
         assert_eq!(migrating_masters, 4);
+    }
+
+    // Docs examples:
+    #[test]
+    fn test_flatten_machines() {
+        let host_num = 6;
+        let proxy_per_host = 1;
+        let migration_limit = 2;
+        let added_node_num = 4;
+
+        let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+        test_scaling(
+            &mut store,
+            host_num * proxy_per_host,
+            added_node_num,
+            migration_limit,
+        );
+        assert_eq!(
+            store
+                .get_cluster_by_name(CLUSTER_NAME, 1)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            8
+        );
+        assert!(!store.get_free_proxies().is_empty());
+        add_failure_and_replace_proxy(&mut store, migration_limit);
     }
 }

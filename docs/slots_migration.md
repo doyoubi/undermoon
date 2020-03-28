@@ -4,60 +4,41 @@ Goals:
 - Simple
 - Fast
 
-Let's suppose we're migrating slots `0-1000` from node A to node B, proxy A to proxy B.
+The migration process is based on the following Redis commands:
+- SCAN
+- DUMP
+- PTTL
+- RESTORE
 
-#### (1) Broker changes the metadata.
-Broker add `MIGRATING` and `IMPORTING` flags to A and B, bumping the cluster epoch.
+The SCAN command has a great property that
+it can guarantee that all the keys set before the first SCAN command will finally be returned,
+for multiple times sometimes though. We can perform a 3 stage migration to mimic the replication.
 
-#### (2) Coordinator synchronize the metadata.
-Coordinator sending the flags to node A and B by `UMCTL SETCLUSTER`.
+- Wait for all the commands to be finished by Redis.
+- Redirect all the read and write operation to destination Redis.
+  The destination Redis will need to dump the data of the key from the source Redis
+  before processing the commands.
+- Start the scanning and forward the data to peer Redis.
 
-#### (3) Node A starts checking the replication process
-Proxy A checks whether the replication process on node A with node B has finished. Wait until the lag is close.
-
-#### (4) Node B starts the replication with node A.
-Proxy B send `SLAVEOF node_A_ip node_A_port` to node B to start the replication.
-
-Now the commands for slots `0-1000` is still owned by node A. Proxy B will redirect them to proxy A.
-
-#### (5) Proxy A transfers the slot range to proxy B temporarily.
-Proxy A will
-- Set the `Tmp Tranferred Started Tag` for `0-1000`. Now all the commands on `0-1000` will be redirected to a queue.
-- These commands in the queue will wait for a short time to let the replication finish hopefully and start replying `MOVED` to proxy B.
-- Keep sending `UMCTL TMPSWITCH proxy_version db_name 0-1000 epoch proxy_A_address node_A_address proxy_B_address node_B_address` to proxy B.
-- After gets the `OK` reply from proxy B, proxy A set the `Tmp Tranferred Commited Tag`.
-- Now proxy A will start to reply `Tmp Tranferred Commited Tag for node A to node B migration on 0-1000 of SomeDB` for `UMCTL SETCLUSTER`
-- If proxy A waits for too long, it will directly change to the final state.
-
-#### (6) Proxy B reacts to UMCTL TMPSWITCH
-Proxy B sets the `Tmp Tranferred Started Tag` and starts accepting commands on `0-1000` and returns `OK` to proxy A.
-Proxy B does not stop the replication now.
-If proxy B waits for too long, it will directly change to the final state.
-
-#### (7) Coordinator Reacts to the Done Flag from proxy A.
-Coordinator finds out the migration is done from the reply of `UMCTL INFOMGR` and writes that to the broker.
-
-#### (8) Broker sets the new metadata.
-Broker cleans up `MIGRATING` and `IMPORTING` flags and bumps the epoch.
-
-### (9) Coordinator synchronize the new metadata.
-Coordinator gets the new metadata.
-
-### (10) Proxy A clean up the migration.
-Proxy A sets the new metadata and stop the migration process.
-
-### (11) Proxy B cleanup the migration.
-Proxy B sets the new metadata and stop the replication.
-
-## Notices
-- When broker replace nodes with importing flags, it should also change the corresponding nodes with migration flags.
-- Every migration task should be associated with the epoch at which it starts. This epoch should also be stored inside the migrating and importing metadata transferred to proxies.
-- Migrating meta should contains
-  - epoch
-  - cluster(db name)
-  - src proxy address
-  - src node address
-  - dst proxy address
-  - dst node address
-  - slot ranges
-- Migration metadata are bounded to nodes, not cluster.
+## Detailed Steps
+- The migrating proxy check whether the importing proxy
+  has also received the migration task by a `PreCheck` command.
+- The migrating proxy blocks all the newly added commands to `Queue`,
+  and wait for the existing commands to be finished.
+- The migrating proxy send a `TmpSwitch` command to importing proxy.
+  Upon receiving this command,
+  the import proxy start to process the keys inside the importing slot ranges.
+  When the command returns, the migrating proxy release all the commands inside `Queue` and redirect them to the importing proxy.
+- The migrating proxy use `SCAN`, `PTTL`, `DUMP`, `RESTORE`
+  to forward all the data inside the migrating slot ranges to peer importing Redis.
+  The `RESTORE` does not set the `REPLACE` flag.
+- When the importing proxy processes commands, no matter read or write operation, it will first
+  - Send `EXISTS` and the processed command to local importing Redis,
+    if `EXISTS` returns true, forward the command to the local importing Redis.
+  - Send `DUMP` and `PTTL`to migrating Redis to get the data.
+  - Apply the data and processed command to local Redis.
+  - Forward the command to the local importing Redis
+- When the migrating proxy finishes the scanning,
+  it propose the `CommitSwitch` to the importing proxy.
+  Then the importing proxy will only need to process the command in local Redis.
+- Notify `coordinator` and wait for the final commit by `UMCTL SETCLUSTER`.
