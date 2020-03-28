@@ -107,6 +107,10 @@ So the node number of each Redis cluster will be the multiples of 4 with half ma
 The design of chunk makes it very easy to build a cluster with a good topology for **workload balancing**.
 
 ## Getting Started
+The following examples use docker to create an `undermoon` cluster.
+
+Or you can set them up without docker following this docs: [setting up undermoon manually](docs/set_up_manually.md).
+
 Requirements:
 
 - docker-compose
@@ -238,6 +242,7 @@ Let's shutdown one of the proxies like `server_proxy5:6005` here.
 $ docker ps | grep server_proxy5 | awk '{print $1}' | xargs docker kill
 ```
 
+The `undermoon` will detect the failure, replace the failed proxy, promote the new master, and add new replica to the new master.
 ```bash
 # server_proxy5 is replaced by server_proxy3
 $ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
