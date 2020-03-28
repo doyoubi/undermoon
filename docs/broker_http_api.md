@@ -24,22 +24,21 @@ If the cluster exists:
         "name": "cluster_name1",
         "epoch": 1,
         "nodes": [{
-            "address": "127.0.0.1:7001",
-            "proxy_address": "127.0.0.1:6001",
-            "cluster_name": "cluster_name1",
+            "address": "redis9:6379",
+            "proxy_address": "server_proxy5:6005",
+            "cluster_name": "mycluster",
+            "slots": [{
+                "range_list": [[0, 8191]],
+                "tag": "None"
+            }],
             "repl": {
                 "role": "master",
                 "peers": [{
-                    "node_address": "127.0.0.1:7002",
-                    "proxy_address": "127.0.0.1:7003",
-                }...]
-            },
-            "slots": [{
-                "start": 0,
-                "end": 5000,
-                "tag": "None"
-            }, ...]
-        }, ...],
+                    "node_address": "redis2:6379",
+                    "proxy_address": "server_proxy1:6001"
+                }]
+            }
+          }, ...],
         "config": {
             "compression_strategy": "disabled"
         }
@@ -80,18 +79,16 @@ If the proxy exists:
                 }...]
             },
             "slots": [{
-                "start": 0,
-                "end": 5000,
+                "range_list": [[0, 5000]],
                 "tag": "None"
             }, ...]
         }, ...],
-        "free_nodes": ["127.0.0.1:7004"],
+        "free_nodes": ["127.0.0.1:7004"],  // For free proxies
         "peers": [{
             "proxy_address": "127.0.0.1:6001",
             "cluster_name": "cluster_name1",
             "slots": [{
-                "start": 0,
-                "end": 5000,
+                "range_list": [[0, 5000]],
                 "tag": "None"
             }, ...]
         }, ...],
@@ -146,8 +143,7 @@ If success:
                 }...]
             },
             "slots": [{
-                "start": 0,
-                "end": 5000,
+                "range_list": [[0, 5000]],
                 "tag": "None"
             }, ...]
         }, ...]
@@ -164,8 +160,7 @@ Request:
 {
     "cluster_name": "mydb",
     "slot_range": {
-        "start": 0,
-        "end": 5000,
+        "range_list": [[0, 5000]],
         "tag": {
             "Migrating": {
                 "epoch": 233,
