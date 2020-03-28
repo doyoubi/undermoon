@@ -484,6 +484,23 @@ impl MetaStore {
         falure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Vec<String> {
+        self.get_failures_helper(falure_ttl, failure_quorum, false)
+    }
+
+    pub fn get_all_failures(
+        &mut self,
+        falure_ttl: chrono::Duration,
+        failure_quorum: u64,
+    ) -> Vec<String> {
+        self.get_failures_helper(falure_ttl, failure_quorum, true)
+    }
+
+    pub fn get_failures_helper(
+        &mut self,
+        falure_ttl: chrono::Duration,
+        failure_quorum: u64,
+        include_free_proxies: bool,
+    ) -> Vec<String> {
         let now = Utc::now();
         for reporter_map in self.failures.values_mut() {
             reporter_map.retain(|_, report_time| {
@@ -501,6 +518,9 @@ impl MetaStore {
             .filter(|(_, v)| v.len() >= failure_quorum as usize)
             .filter_map(|(address, _)| {
                 all_proxies.get(address).and_then(|proxy_resource| {
+                    if include_free_proxies {
+                        return Some(address.clone());
+                    }
                     if proxy_resource.cluster.is_some() {
                         Some(address.clone())
                     } else {
@@ -1435,7 +1455,10 @@ impl MetaStore {
         failed_proxy_address: String,
     ) -> Result<ProxyResource, MetaStoreError> {
         let free_host_proxies = self.generate_free_host_proxies();
-        info!("generate_new_free_proxy: free host proxies {:?}", free_host_proxies);
+        info!(
+            "generate_new_free_proxy: free host proxies {:?}",
+            free_host_proxies
+        );
         let link_table = self.build_link_table();
         info!("generate_new_free_proxy: link table {:?}", link_table);
 
@@ -1863,9 +1886,16 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
 
         assert_eq!(
-            store.get_failures(chrono::Duration::max_value(), 1),
-            vec![failed_address.to_string()]
+            store.get_all_failures(chrono::Duration::max_value(), 1),
+            vec![failed_address.to_string()],
         );
+        assert!(store
+            .get_all_failures(chrono::Duration::max_value(), 2)
+            .is_empty(),);
+        // Proxies not in cluster do not count.
+        assert!(store
+            .get_failures(chrono::Duration::max_value(), 1)
+            .is_empty(),);
         assert!(store
             .get_failures(chrono::Duration::max_value(), 2)
             .is_empty(),);
@@ -2097,7 +2127,9 @@ mod tests {
         assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
         assert_eq!(
             store.get_free_proxies().len()
-                + store.get_failures(chrono::Duration::max_value(), 1).len(),
+                + store
+                    .get_all_failures(chrono::Duration::max_value(), 1)
+                    .len(),
             all_proxy_num - start_node_num / 2 - added_node_num / 2
         );
 
@@ -2458,5 +2490,32 @@ mod tests {
             })
             .count();
         assert_eq!(migrating_masters, 4);
+    }
+
+    // Docs examples:
+    #[test]
+    fn test_flatten_machines() {
+        let host_num = 6;
+        let proxy_per_host = 1;
+        let migration_limit = 2;
+        let added_node_num = 4;
+
+        let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+        test_scaling(
+            &mut store,
+            host_num * proxy_per_host,
+            added_node_num,
+            migration_limit,
+        );
+        assert_eq!(
+            store
+                .get_cluster_by_name(CLUSTER_NAME, 1)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            8
+        );
+        assert!(!store.get_free_proxies().is_empty());
+        add_failure_and_replace_proxy(&mut store, migration_limit);
     }
 }
