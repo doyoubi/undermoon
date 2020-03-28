@@ -7,6 +7,7 @@ use crate::common::config::ClusterConfig;
 use crate::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::{min, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -1552,7 +1553,6 @@ pub enum MetaStoreError {
     InvalidProxyAddress,
     MigrationTaskNotFound,
     MigrationRunning,
-    NotSupported,
     InvalidConfig {
         key: String,
         value: String,
@@ -1561,15 +1561,62 @@ pub enum MetaStoreError {
     SlotsAlreadyEven,
 }
 
+impl MetaStoreError {
+    pub fn to_code(&self) -> &str {
+        match self {
+            Self::InUse => "IN_USE",
+            Self::NotInUse => "NOT_IN_USE",
+            Self::NoAvailableResource => "NO_AVAILABLE_RESOURCE",
+            Self::ResourceNotBalance => "RESOURCE_NOT_BALANCE",
+            Self::AlreadyExisted => "ALREADY_EXISTED",
+            Self::ClusterNotFound => "CLUSTER_NOT_FOUND",
+            Self::FreeNodeNotFound => "FREE_NODE_NOT_FOUND",
+            Self::ProxyNotFound => "PROXY_NOT_FOUND",
+            Self::InvalidNodeNum => "INVALID_NODE_NUMBER",
+            Self::InvalidClusterName => "INVALID_CLUSTER_NAME",
+            Self::InvalidMigrationTask => "INVALID_MIGRATION_TASK",
+            Self::InvalidProxyAddress => "INVALID_PROXY_ADDRESS",
+            Self::MigrationTaskNotFound => "MIGRATION_TASK_NOT_FOUND",
+            Self::MigrationRunning => "MIGRATION_RUNNING",
+            Self::InvalidConfig { .. } => "INVALID_CONFIG",
+            Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
+        }
+    }
+}
+
 impl fmt::Display for MetaStoreError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{}", self.to_code())
     }
 }
 
 impl Error for MetaStoreError {
     fn cause(&self) -> Option<&dyn Error> {
         None
+    }
+}
+
+impl Serialize for MetaStoreError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let error_code = self.to_string();
+        match self {
+            Self::InvalidConfig { key, value, error } => {
+                let mut state = serializer.serialize_struct("MetaStoreError", 4)?;
+                state.serialize_field("error", &error_code)?;
+                state.serialize_field("key", &key)?;
+                state.serialize_field("value", &value)?;
+                state.serialize_field("message", &error)?;
+                state.end()
+            }
+            _ => {
+                let mut state = serializer.serialize_struct("MetaStoreError", 1)?;
+                state.serialize_field("error", &error_code)?;
+                state.end()
+            }
+        }
     }
 }
 

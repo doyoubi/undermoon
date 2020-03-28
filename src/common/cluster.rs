@@ -403,6 +403,12 @@ impl TryFrom<&str> for ClusterName {
     type Error = InvalidClusterName;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
+        for c in s.chars() {
+            if c.is_ascii_alphanumeric() || c == '@' || c == '-' || c == '_' {
+                continue;
+            }
+            return Err(InvalidClusterName);
+        }
         Ok(Self(
             ClusterNameInner::from(s).map_err(|_| InvalidClusterName)?,
         ))

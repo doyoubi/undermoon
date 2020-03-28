@@ -397,11 +397,11 @@ async fn replace_failed_node(
 impl error::ResponseError for MetaStoreError {
     fn status_code(&self) -> http::StatusCode {
         match self {
-            MetaStoreError::InUse => http::StatusCode::BAD_REQUEST,
-            MetaStoreError::NotInUse => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::InUse => http::StatusCode::CONFLICT,
+            MetaStoreError::NotInUse => http::StatusCode::CONFLICT,
             MetaStoreError::NoAvailableResource => http::StatusCode::CONFLICT,
             MetaStoreError::ResourceNotBalance => http::StatusCode::CONFLICT,
-            MetaStoreError::AlreadyExisted => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::AlreadyExisted => http::StatusCode::CONFLICT,
             MetaStoreError::ClusterNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::FreeNodeNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::ProxyNotFound => http::StatusCode::NOT_FOUND,
@@ -411,13 +411,12 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::InvalidProxyAddress => http::StatusCode::BAD_REQUEST,
             MetaStoreError::MigrationTaskNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::MigrationRunning => http::StatusCode::CONFLICT,
-            MetaStoreError::NotSupported => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
         }
     }
 
     fn error_response(&self) -> HttpResponse {
-        ResponseBuilder::new(self.status_code()).body(format!("{:?}", self))
+        ResponseBuilder::new(self.status_code()).json(self)
     }
 }
