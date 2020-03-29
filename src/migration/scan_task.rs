@@ -8,8 +8,9 @@ use crate::common::cluster::{
 };
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
+use crate::common::response::NOT_READY_FOR_SWITCHING_REPLY;
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::{pretty_print_bytes, ThreadSafe, NOT_READY_FOR_SWITCHING_REPLY};
+use crate::common::utils::{pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::RespVec;
 use crate::protocol::{RedisClientError, RedisClientFactory, Resp};

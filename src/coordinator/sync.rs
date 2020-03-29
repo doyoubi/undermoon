@@ -2,7 +2,7 @@ use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, ProxyMetaRetriever, ProxyMetaSender};
 use crate::common::cluster::{ClusterName, Proxy, Role, SlotRange};
 use crate::common::proto::{ClusterConfigMap, ClusterMapFlags, ProxyClusterMap, ProxyClusterMeta};
-use crate::common::utils::{OK_REPLY, OLD_EPOCH_REPLY};
+use crate::common::response::{OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
 use futures::{Future, TryFutureExt};

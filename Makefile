@@ -12,6 +12,7 @@ install-linters:
 
 lint:
 	find src -name "*.rs" | xargs rustup run stable rustfmt
+	find tests -name "*.rs" | xargs rustup run stable rustfmt
 	cargo clippy -- -W clippy::indexing_slicing
 	mylint -s Expect -s IndexExpression
 

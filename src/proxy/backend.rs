@@ -2,6 +2,7 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::batch::TryChunksTimeoutStreamExt;
+use crate::common::response::ERR_BACKEND_CONNECTION;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
 use crate::protocol::{
@@ -251,7 +252,7 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
         self.node.send(cmd_task).map_err(|e| {
             let cmd_task = e.into_inner();
             cmd_task.set_resp_result(Ok(Resp::Error(
-                format!("backend connection failed: {}", self.address).into_bytes(),
+                format!("{}: {}", ERR_BACKEND_CONNECTION, self.address).into_bytes(),
             )));
             error!("backend node is closed");
             BackendError::Canceled
