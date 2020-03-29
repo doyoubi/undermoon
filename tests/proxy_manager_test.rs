@@ -10,7 +10,7 @@ mod tests {
     use arc_swap::ArcSwap;
     use connection::DummyOkConnFactory;
     use futures_timer::Delay;
-    use redis_client::DummyOkClientFactory;
+    use redis_client::DummyClientFactory;
     use std::convert::TryFrom;
     use std::num::NonZeroUsize;
     use std::str;
@@ -18,22 +18,24 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
     use tokio;
-    use undermoon::common::cluster::ClusterName;
+    use undermoon::common::cluster::{ClusterName, MigrationTaskMeta, SlotRange, RangeList, Range, SlotRangeTag, MigrationMeta};
     use undermoon::common::proto::ProxyClusterMeta;
     use undermoon::common::response::{
         ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, OK_REPLY,
     };
     use undermoon::common::track::TrackedFutureRegistry;
     use undermoon::common::utils::pretty_print_bytes;
-    use undermoon::protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket, VFunctor};
+    use undermoon::protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket, VFunctor, RespVec};
     use undermoon::proxy::command::{new_command_pair, CmdReplyReceiver, Command};
     use undermoon::proxy::manager::MetaManager;
     use undermoon::proxy::manager::MetaMap;
     use undermoon::proxy::service::ServerProxyConfig;
     use undermoon::proxy::session::CmdCtx;
+    use undermoon::migration::task::{MigrationState, SwitchArg, MgrSubCmd};
+    use undermoon::common::version::UNDERMOON_MIGRATION_VERSION;
 
     const TEST_CLUSTER: &str = "test_cluster";
-    type TestMetaManager = MetaManager<DummyOkClientFactory, DummyOkConnFactory>;
+    type TestMetaManager = MetaManager<DummyClientFactory, DummyOkConnFactory>;
 
     fn gen_config() -> ServerProxyConfig {
         ServerProxyConfig {
@@ -59,7 +61,7 @@ mod tests {
 
     fn gen_testing_manager() -> TestMetaManager {
         let config = Arc::new(gen_config());
-        let client_factory = Arc::new(DummyOkClientFactory {});
+        let client_factory = Arc::new(DummyClientFactory {});
         let conn_factory = Arc::new(DummyOkConnFactory {});
         let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::new())));
         let future_registry = Arc::new(TrackedFutureRegistry::default());
@@ -165,15 +167,15 @@ mod tests {
         let s = if is_migrating {
             "233 NOFLAGS \
             test_cluster 127.0.0.1:6379 1 0-8000 \
-            test_cluster 127.0.0.1:6379 migrating 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000 \
+            test_cluster 127.0.0.1:6379 migrating 1 8001-16383 233 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000 \
             PEER \
-            test_cluster 127.0.0.1:6000 importing 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000"
+            test_cluster 127.0.0.1:6000 importing 1 8001-16383 233 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000"
         } else {
             "233 NOFLAGS \
-            test_cluster 127.0.0.1:7000 importing 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000 \
+            test_cluster 127.0.0.1:7000 importing 1 8001-16383 233 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000 \
             PEER \
             test_cluster 127.0.0.1:5299 1 0-8000 \
-            test_cluster 127.0.0.1:5299 migrating 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000"
+            test_cluster 127.0.0.1:5299 migrating 1 8001-16383 233 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000"
         };
         let mut iter = s.split(' ').map(|s| s.to_string()).peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
@@ -181,21 +183,62 @@ mod tests {
         meta
     }
 
+    fn resp_contains(resp: &RespVec, pat: &str) -> bool {
+        match resp {
+            Resp::Arr(Array::Arr(resps)) => {
+                resps.iter().any(|resp| resp_contains(resp, pat))
+            }
+            Resp::Bulk(BulkStr::Str(s)) => str::from_utf8(s.as_slice()).unwrap().contains(pat),
+            _ => false,
+        }
+    }
+
     #[tokio::test]
     async fn test_migration() {
         let src_manager = gen_testing_manager();
         let dst_manager = gen_testing_manager();
 
-        src_manager.set_meta(gen_proxy_cluster_meta()).unwrap();
-        wait_backend_ready(&src_manager).await;
-
+        // dst proxy will be set first by coordinator.
         dst_manager
             .set_meta(gen_migration_cluster_meta(false))
             .unwrap();
         src_manager
             .set_meta(gen_migration_cluster_meta(true))
             .unwrap();
+        wait_backend_ready(&src_manager).await;
         wait_backend_ready(&dst_manager).await;
+
+        let switch_arg = SwitchArg{
+            version: UNDERMOON_MIGRATION_VERSION.to_string(),
+            meta: MigrationTaskMeta{
+                cluster_name: ClusterName::try_from("test_cluster").unwrap(),
+                slot_range: SlotRange{
+                    range_list: RangeList::from_single_range(Range(8001, 16383)),
+                    tag: SlotRangeTag::Migrating(MigrationMeta{
+                        epoch: 233,
+                        src_proxy_address: "127.0.0.1:5299".to_string(),
+                        src_node_address: "127.0.0.1:6379".to_string(),
+                        dst_proxy_address: "127.0.0.1:6000".to_string(),
+                        dst_node_address: "127.0.0.1:7000".to_string(),
+                    }),
+                },
+            },
+        };
+        dst_manager.handle_switch(switch_arg.clone(), MgrSubCmd::PreCheck).unwrap();
+        dst_manager.handle_switch(switch_arg, MgrSubCmd::PreSwitch).unwrap();
+
+        loop {
+            Delay::new(Duration::from_millis(1)).await;
+            let info = src_manager.info();
+            if !resp_contains(&info, MigrationState::Scanning.to_string().as_str()) {
+                continue;
+            }
+            let info = dst_manager.info();
+            if !resp_contains(&info, MigrationState::PreSwitch.to_string().as_str()) {
+                continue;
+            }
+            break;
+        }
 
         {
             // Slots 0-8000 for source proxy should process normally.
@@ -234,23 +277,6 @@ mod tests {
             let s = str::from_utf8(err_msg.as_slice()).unwrap();
             assert!(s.starts_with(ERR_MOVED));
         }
-        {
-            // Slots 8001-16383 for destination proxy should process normally.
-            // The slot of key `a` is 15495.
-            let (cmd_ctx, reply_receiver) = gen_set_command(b"a".to_vec());
-            src_manager.send(cmd_ctx);
-
-            let result = reply_receiver.await;
-            let (_, response, _) = result.unwrap().into_inner();
-            let resp = response.into_resp_vec();
-            let s = match resp {
-                Resp::Simple(s) => s,
-                other => panic!(format!(
-                    "unexpected pattern {:?}",
-                    other.map(|b| pretty_print_bytes(b.as_slice()))
-                )),
-            };
-            assert_eq!(s, OK_REPLY.as_bytes());
-        }
+        // TODO: Add tests for destination proxy.
     }
 }

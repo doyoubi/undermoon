@@ -8,7 +8,7 @@ extern crate scopeguard;
 pub mod broker;
 pub mod common;
 pub mod coordinator;
-mod migration;
+pub mod migration;
 pub mod protocol;
 pub mod proxy;
 pub mod replication;
