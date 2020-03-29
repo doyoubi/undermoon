@@ -1,4 +1,6 @@
-use super::backend::{BackendResult, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory};
+use super::backend::{
+    BackendResult, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory,
+};
 use super::compress::{CmdReplyDecompressor, CompressionError};
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
@@ -6,13 +8,20 @@ use crate::common::utils::Wrapper;
 use crate::protocol::{BulkStr, Resp, RespPacket};
 use std::marker::PhantomData;
 
-pub struct DecompressCommitHandlerFactory<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> {
-    meta_map: SharedMetaMap,
+pub struct DecompressCommitHandlerFactory<
+    T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>,
+    C: ConnFactory<Pkt = RespPacket>,
+> {
+    meta_map: SharedMetaMap<C>,
     phanthom: PhantomData<T>,
 }
 
-impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> DecompressCommitHandlerFactory<T> {
-    pub fn new(meta_map: SharedMetaMap) -> Self {
+impl<T, C> DecompressCommitHandlerFactory<T, C>
+where
+    T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>,
+    C: ConnFactory<Pkt = RespPacket>,
+{
+    pub fn new(meta_map: SharedMetaMap<C>) -> Self {
         Self {
             meta_map,
             phanthom: PhantomData,
@@ -20,10 +29,12 @@ impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> DecompressCommitHandl
     }
 }
 
-impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandlerFactory
-    for DecompressCommitHandlerFactory<T>
+impl<T, C> CmdTaskResultHandlerFactory for DecompressCommitHandlerFactory<T, C>
+where
+    T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>,
+    C: ConnFactory<Pkt = RespPacket>,
 {
-    type Handler = DecompressCommitHandler<T>;
+    type Handler = DecompressCommitHandler<T, C>;
 
     fn create(&self) -> Self::Handler {
         DecompressCommitHandler {
@@ -33,13 +44,18 @@ impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandlerF
     }
 }
 
-pub struct DecompressCommitHandler<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> {
-    decompressor: CmdReplyDecompressor,
+pub struct DecompressCommitHandler<
+    T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>,
+    C: ConnFactory<Pkt = RespPacket>,
+> {
+    decompressor: CmdReplyDecompressor<C>,
     phanthom: PhantomData<T>,
 }
 
-impl<T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>> CmdTaskResultHandler
-    for DecompressCommitHandler<T>
+impl<T, C> CmdTaskResultHandler for DecompressCommitHandler<T, C>
+where
+    T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>,
+    C: ConnFactory<Pkt = RespPacket>,
 {
     type Task = T;
 
