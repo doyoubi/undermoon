@@ -22,7 +22,7 @@ use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec};
-use crate::proxy::backend::{CmdTask, DefaultConnFactory};
+use crate::proxy::backend::{CmdTask, ConnFactory};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
@@ -61,43 +61,40 @@ where
     }
 }
 
-type BasicSenderFactory = BasicBlockingSenderFactory<
-    DecompressCommitHandlerFactory<CounterTask<CmdCtx>>,
-    DefaultConnFactory<RespPacket>,
+type BasicSenderFactory<C> =
+    BasicBlockingSenderFactory<DecompressCommitHandlerFactory<CounterTask<CmdCtx>, C>, C>;
+type SenderFactory<C> = BlockingBackendSenderFactory<
+    DecompressCommitHandlerFactory<CounterTask<CmdCtx>, C>,
+    C,
+    BlockingTaskRetrySender<C>,
 >;
-type SenderFactory = BlockingBackendSenderFactory<
-    DecompressCommitHandlerFactory<CounterTask<CmdCtx>>,
-    DefaultConnFactory<RespPacket>,
-    BlockingTaskRetrySender,
->;
-type MigrationSenderFactory =
-    MigrationBackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
-pub type SharedMetaMap =
-    Arc<ArcSwap<MetaMap<<SenderFactory as CmdTaskSenderFactory>::Sender, CmdCtx>>>;
+type MigrationSenderFactory<C> = MigrationBackendSenderFactory<ReplyCommitHandlerFactory, C>;
+pub type SharedMetaMap<C> =
+    Arc<ArcSwap<MetaMap<<SenderFactory<C> as CmdTaskSenderFactory>::Sender, CmdCtx>>>;
 
-pub struct MetaManager<F: RedisClientFactory> {
+pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
     config: Arc<ServerProxyConfig>,
     // Now replicator is not in meta_map, if later we need consistency
     // between replication metadata and other metadata, we should put that
     // inside meta_map.
-    meta_map: SharedMetaMap,
+    meta_map: SharedMetaMap<C>,
     epoch: AtomicU64,
     lock: Mutex<()>, // This is the write lock for `epoch`, `cluster`, and `task`.
     replicator_manager: ReplicatorManager<F>,
-    migration_manager: MigrationManager<F, MigrationSenderFactory, CmdCtxFactory>,
-    sender_factory: SenderFactory,
-    blocking_map: Arc<BlockingMap<BasicSenderFactory, BlockingTaskRetrySender>>,
+    migration_manager: MigrationManager<F, MigrationSenderFactory<C>, CmdCtxFactory>,
+    sender_factory: SenderFactory<C>,
+    blocking_map: Arc<BlockingMap<BasicSenderFactory<C>, BlockingTaskRetrySender<C>>>,
 }
 
-impl<F: RedisClientFactory> MetaManager<F> {
+impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> {
     pub fn new(
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
-        meta_map: SharedMetaMap,
+        conn_factory: Arc<C>,
+        meta_map: SharedMetaMap<C>,
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
-        let conn_factory = Arc::new(DefaultConnFactory::default());
         let blocking_task_sender = Arc::new(BlockingTaskRetrySender::new(meta_map.clone()));
         let basic_sender_factory = gen_basic_blocking_sender_factory(
             config.clone(),
@@ -285,7 +282,10 @@ impl<F: RedisClientFactory> MetaManager<F> {
     }
 }
 
-pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
+pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
+    meta_map: &SharedMetaMap<C>,
+    cmd_ctx: CmdCtx,
+) {
     let meta_map = meta_map.lease();
     let mut cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
         Ok(()) => return,
@@ -308,17 +308,17 @@ pub fn send_cmd_ctx(meta_map: &SharedMetaMap, cmd_ctx: CmdCtx) {
     }
 }
 
-pub struct BlockingTaskRetrySender {
-    meta_map: SharedMetaMap,
+pub struct BlockingTaskRetrySender<C: ConnFactory<Pkt = RespPacket>> {
+    meta_map: SharedMetaMap<C>,
 }
 
-impl BlockingTaskRetrySender {
-    fn new(meta_map: SharedMetaMap) -> Self {
+impl<C: ConnFactory<Pkt = RespPacket>> BlockingTaskRetrySender<C> {
+    fn new(meta_map: SharedMetaMap<C>) -> Self {
         Self { meta_map }
     }
 }
 
-impl CmdTaskSender for BlockingTaskRetrySender {
+impl<C: ConnFactory<Pkt = RespPacket>> CmdTaskSender for BlockingTaskRetrySender<C> {
     type Task = CmdCtx;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
@@ -327,4 +327,4 @@ impl CmdTaskSender for BlockingTaskRetrySender {
     }
 }
 
-impl BlockingCmdTaskSender for BlockingTaskRetrySender {}
+impl<C: ConnFactory<Pkt = RespPacket>> BlockingCmdTaskSender for BlockingTaskRetrySender<C> {}

@@ -238,10 +238,14 @@ where
             .iter()
             .map(|(cluster_name, tasks)| {
                 let mut lines = vec![format!("name: {}", cluster_name)];
-                for task_meta in tasks.keys() {
+                for (task_meta, mgr_task) in tasks.iter() {
                     if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
+                        let state = match &mgr_task.task {
+                            Either::Left(task) => task.get_state(),
+                            Either::Right(task) => task.get_state(),
+                        };
                         lines.push(format!(
-                            "{} {} -> {}",
+                            "{} {} -> {} {}",
                             task_meta
                                 .slot_range
                                 .range_list
@@ -249,7 +253,8 @@ where
                                 .to_strings()
                                 .join(" "),
                             migration_meta.src_node_address,
-                            migration_meta.dst_node_address
+                            migration_meta.dst_node_address,
+                            state,
                         ));
                     } else {
                         error!("invalid slot range migration meta");

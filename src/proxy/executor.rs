@@ -1,4 +1,4 @@
-use super::backend::{CmdTask, CmdTaskFactory};
+use super::backend::{CmdTask, CmdTaskFactory, ConnFactory};
 use super::cluster::{ClusterMetaError, ClusterTag};
 use super::command::{CmdReplyReceiver, CmdType, DataCmdType, TaskResult};
 use super::compress::{CmdCompressor, CompressionError};
@@ -9,16 +9,16 @@ use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::cluster::ClusterName;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
-use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::{
-    change_bulk_array_element, same_slot, str_ascii_case_insensitive_eq,
+use crate::common::response::{
     NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
 };
+use crate::common::track::TrackedFutureRegistry;
+use crate::common::utils::{change_bulk_array_element, same_slot, str_ascii_case_insensitive_eq};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
 use crate::migration::task::parse_switch_command;
 use crate::migration::task::MgrSubCmd;
-use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec, VFunctor};
+use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec, VFunctor};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use btoi::btou;
@@ -29,11 +29,15 @@ use std::str;
 use std::sync::{self, Arc};
 use std::time::Duration;
 
-pub struct SharedForwardHandler<F: RedisClientFactory> {
-    handler: sync::Arc<ForwardHandler<F>>,
+pub struct SharedForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
+    handler: sync::Arc<ForwardHandler<F, C>>,
 }
 
-impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
+impl<F, C> Clone for SharedForwardHandler<F, C>
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
+{
     fn clone(&self) -> Self {
         Self {
             handler: self.handler.clone(),
@@ -41,12 +45,17 @@ impl<F: RedisClientFactory> Clone for SharedForwardHandler<F> {
     }
 }
 
-impl<F: RedisClientFactory> SharedForwardHandler<F> {
+impl<F, C> SharedForwardHandler<F, C>
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
+{
     pub fn new(
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
-        meta_map: SharedMetaMap,
+        meta_map: SharedMetaMap<C>,
+        conn_factory: Arc<C>,
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         Self {
@@ -55,32 +64,42 @@ impl<F: RedisClientFactory> SharedForwardHandler<F> {
                 client_factory,
                 slow_request_logger,
                 meta_map,
+                conn_factory,
                 future_registry,
             )),
         }
     }
 }
 
-impl<F: RedisClientFactory> CmdCtxHandler for SharedForwardHandler<F> {
+impl<F, C> CmdCtxHandler for SharedForwardHandler<F, C>
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
+{
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         self.handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
     }
 }
 
-pub struct ForwardHandler<F: RedisClientFactory> {
+pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
     config: Arc<ServerProxyConfig>,
-    manager: MetaManager<F>,
+    manager: MetaManager<F, C>,
     slow_request_logger: Arc<SlowRequestLogger>,
-    compressor: CmdCompressor,
+    compressor: CmdCompressor<C>,
     future_registry: Arc<TrackedFutureRegistry>,
 }
 
-impl<F: RedisClientFactory> ForwardHandler<F> {
+impl<F, C> ForwardHandler<F, C>
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
+{
     pub fn new(
         config: Arc<ServerProxyConfig>,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
-        meta_map: SharedMetaMap,
+        meta_map: SharedMetaMap<C>,
+        conn_factory: Arc<C>,
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         Self {
@@ -88,6 +107,7 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
             manager: MetaManager::new(
                 config,
                 client_factory,
+                conn_factory,
                 meta_map.clone(),
                 future_registry.clone(),
             ),
@@ -98,7 +118,11 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 }
 
-impl<F: RedisClientFactory> ForwardHandler<F> {
+impl<F, C> ForwardHandler<F, C>
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
+{
     fn handle_auth(&self, mut cmd_ctx: CmdCtx) {
         let key = cmd_ctx.get_key();
         let cluster = match key {
@@ -807,7 +831,11 @@ impl<F: RedisClientFactory> ForwardHandler<F> {
     }
 }
 
-impl<F: RedisClientFactory> CmdCtxHandler for ForwardHandler<F> {
+impl<F, C> CmdCtxHandler for ForwardHandler<F, C>
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
+{
     fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         let mut cmd_ctx = cmd_ctx;
         if self.config.auto_select_cluster {

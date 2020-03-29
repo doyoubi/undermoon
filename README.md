@@ -33,7 +33,7 @@ but also enable you to build a self-managed distributed Redis supporting:
 - Serving multiple clusters for different users
 - Spreading the flood evenly to all the physical machines
 - Scaling fast
-- Much easier operation.
+- Much easier operation and kubernetes integration.
 
 #### Why server-side proxy?
 Redis and most redis proxies such as redis-cluster-proxy, corvus, aster, codis are deployed in separated machines
@@ -263,6 +263,7 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 - [HTTP Broker API](./docs/broker_http_api.md)
 - [Memory Broker API](./docs/memory_broker_api.md)
 - [Chunk](./docs/chunk.md)
+- [Slot Migration](./docs/slots_migration.md)
 
 ## TODO
 - Limit running commands, connections

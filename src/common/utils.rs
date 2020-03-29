@@ -1,3 +1,4 @@
+use super::response::ERR_MOVED;
 use crate::protocol::RespVec;
 use crate::protocol::{Array, BulkStr, Resp};
 use crc16::{State, XMODEM};
@@ -106,7 +107,7 @@ pub fn change_bulk_str(resp: &mut RespVec, data: Vec<u8>) -> bool {
 }
 
 pub fn gen_moved(slot: usize, addr: String) -> String {
-    format!("MOVED {} {}", slot, addr)
+    format!("{} {} {}", ERR_MOVED, slot, addr)
 }
 
 pub fn get_hash_tag(key: &[u8]) -> &[u8] {
@@ -150,10 +151,6 @@ pub fn pretty_print_bytes(data: &[u8]) -> String {
     }
 }
 
-pub const OK_REPLY: &str = "OK";
-pub const OLD_EPOCH_REPLY: &str = "OLD_EPOCH";
-pub const TRY_AGAIN_REPLY: &str = "TRY_AGAIN";
-pub const NOT_READY_FOR_SWITCHING_REPLY: &str = "NOT_READY_FOR_SWITCHING";
 pub const SLOT_NUM: usize = 16384;
 
 pub const MIGRATING_TAG: &str = "MIGRATING";

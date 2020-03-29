@@ -16,6 +16,7 @@ use std::time::Duration;
 use string_error::into_err;
 use undermoon::common::track::TrackedFutureRegistry;
 use undermoon::protocol::PooledRedisClientFactory;
+use undermoon::proxy::backend::DefaultConnFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::manager::MetaMap;
 use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
@@ -113,6 +114,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(client_factory),
         slow_request_logger.clone(),
         meta_map,
+        Arc::new(DefaultConnFactory::default()),
         future_registry.clone(),
     );
     let server = ServerProxyService::new(

@@ -17,5 +17,5 @@ to achieve **workload balancing**:
 - After failover happens, in each cluster,
   the flood of failed masters should be evenly distributed in all machines.
 
-The algorithm detail and provement of algorithm terminal is documented in
+The algorithm detail and the proof of algorithm terminal is documented in
 [chunk allocation](./chunk_allocation.txt).

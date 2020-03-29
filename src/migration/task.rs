@@ -42,6 +42,20 @@ pub enum MigrationState {
     SwitchCommitted = 5,
 }
 
+impl fmt::Display for MigrationState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            Self::PreCheck => "PRE_CHECK",
+            Self::PreBlocking => "PRE_BLOCKING",
+            Self::PreSwitch => "PRE_SWITCH",
+            Self::Scanning => "SCANNING",
+            Self::FinalSwitch => "FINAL_SWITCH",
+            Self::SwitchCommitted => "SWITCH_COMMITTED",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Debug)]
 pub struct AtomicMigrationState {
     inner: AtomicU16,
@@ -103,6 +117,7 @@ pub trait ImportingTask: ThreadSafe {
     ) -> Result<(), MigrationError>;
 }
 
+#[derive(Debug, Clone)]
 pub struct SwitchArg {
     pub version: String,
     pub meta: MigrationTaskMeta,

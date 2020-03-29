@@ -1,7 +1,7 @@
 pub mod backend;
 pub mod blocking;
 pub mod cluster;
-mod command;
+pub mod command;
 mod compress;
 pub mod executor;
 pub mod manager;

@@ -4,6 +4,7 @@ use super::slot::SlotMap;
 use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
+use crate::common::response::ERR_CLUSTER_NOT_FOUND;
 use crate::common::utils::{gen_moved, get_slot};
 use crate::migration::task::MigrationState;
 use crate::protocol::{Array, BulkStr, Resp, RespVec};
@@ -150,8 +151,9 @@ where
                 } else {
                     let cluster_name = cmd_task.get_cluster_name().to_string();
                     debug!("cluster not found: {}", cluster_name);
-                    let resp =
-                        Resp::Error(format!("cluster not found: {}", cluster_name).into_bytes());
+                    let resp = Resp::Error(
+                        format!("{}: {}", ERR_CLUSTER_NOT_FOUND, cluster_name).into_bytes(),
+                    );
                     cmd_task.set_resp_result(Ok(resp));
                     Err(ClusterSendError::ClusterNotFound(cluster_name))
                 }

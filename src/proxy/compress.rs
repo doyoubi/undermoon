@@ -1,3 +1,5 @@
+use super::backend::ConnFactory;
+use super::cluster::ClusterTag;
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
@@ -5,18 +7,20 @@ use crate::common::cluster::ClusterName;
 use crate::common::config::{ClusterConfig, CompressionStrategy};
 use crate::protocol::RespPacket;
 use crate::protocol::{BulkStr, Resp};
-use crate::proxy::cluster::ClusterTag;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use zstd;
 
-pub struct CmdCompressor {
-    meta_map: SharedMetaMap,
+pub struct CmdCompressor<C: ConnFactory<Pkt = RespPacket>> {
+    meta_map: SharedMetaMap<C>,
 }
 
-impl CmdCompressor {
-    pub fn new(meta_map: SharedMetaMap) -> Self {
+impl<C> CmdCompressor<C>
+where
+    C: ConnFactory<Pkt = RespPacket>,
+{
+    pub fn new(meta_map: SharedMetaMap<C>) -> Self {
         Self { meta_map }
     }
 
@@ -74,12 +78,15 @@ impl CmdCompressor {
     }
 }
 
-pub struct CmdReplyDecompressor {
-    meta_map: SharedMetaMap,
+pub struct CmdReplyDecompressor<C: ConnFactory<Pkt = RespPacket>> {
+    meta_map: SharedMetaMap<C>,
 }
 
-impl CmdReplyDecompressor {
-    pub fn new(meta_map: SharedMetaMap) -> Self {
+impl<C> CmdReplyDecompressor<C>
+where
+    C: ConnFactory<Pkt = RespPacket>,
+{
+    pub fn new(meta_map: SharedMetaMap<C>) -> Self {
         Self { meta_map }
     }
 
@@ -120,7 +127,10 @@ impl CmdReplyDecompressor {
     }
 }
 
-fn get_strategy(cluster_name: &ClusterName, meta_map: &SharedMetaMap) -> CompressionStrategy {
+fn get_strategy<C: ConnFactory<Pkt = RespPacket>>(
+    cluster_name: &ClusterName,
+    meta_map: &SharedMetaMap<C>,
+) -> CompressionStrategy {
     let meta_map = meta_map.lease();
     match meta_map.get_cluster_map().get_config(&cluster_name) {
         Some(config) => config.compression_strategy,
