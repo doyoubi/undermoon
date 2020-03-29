@@ -44,11 +44,10 @@ where
     <S as CmdTaskSender>::Task: ClusterTag,
     T: CmdTask + ClusterTag,
 {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         let cluster_map = ClusterBackendMap::default();
-        let migration_map = MigrationMap::new();
-        let deleting_task_map = DeleteKeysTaskMap::new();
+        let migration_map = MigrationMap::empty();
+        let deleting_task_map = DeleteKeysTaskMap::empty();
         Self {
             cluster_map,
             migration_map,

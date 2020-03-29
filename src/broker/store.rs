@@ -439,7 +439,7 @@ impl MetaStore {
                         0 => 3,
                         1 => 2,
                         2 => 1,
-                        3 | _ => 0,
+                        _ => 0,
                     };
                     let peer = ReplPeer {
                         node_address: chunk

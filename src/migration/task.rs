@@ -62,7 +62,7 @@ pub struct AtomicMigrationState {
 }
 
 impl AtomicMigrationState {
-    pub fn new() -> Self {
+    pub fn initial_state() -> Self {
         Self {
             inner: AtomicU16::new(MigrationState::PreCheck as u16),
         }

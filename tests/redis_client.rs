@@ -3,7 +3,10 @@ extern crate undermoon;
 use futures::{future, Future};
 use std::pin::Pin;
 use std::str;
-use undermoon::protocol::{BinSafeStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec, BulkStr};
+use undermoon::protocol::{
+    BinSafeStr, BulkStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp,
+    RespVec,
+};
 
 pub struct DummyRedisClient {}
 

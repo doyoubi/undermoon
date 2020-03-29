@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
 
     let slow_request_logger = Arc::new(SlowRequestLogger::new(config.clone()));
-    let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::new())));
+    let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::empty())));
     let future_registry = Arc::new(TrackedFutureRegistry::default());
 
     let forward_handler = SharedForwardHandler::new(

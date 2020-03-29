@@ -21,7 +21,7 @@ pub struct DeleteKeysTaskMap {
 }
 
 impl DeleteKeysTaskMap {
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         Self {
             task_map: HashMap::new(),
         }

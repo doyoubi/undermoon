@@ -166,7 +166,7 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: ClusterMapFlags) -> Vec<Stri
     for free_node in proxy.get_free_nodes().iter() {
         // For free nodes we use empty cluster name.
         masters.push(MasterMeta {
-            cluster_name: ClusterName::new(),
+            cluster_name: ClusterName::empty(),
             master_node_address: free_node.clone(),
             replicas: Vec::new(),
         })

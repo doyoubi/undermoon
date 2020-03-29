@@ -9,11 +9,10 @@ use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use crate::common::cluster::ClusterName;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
-use crate::common::response::{
-    NOT_READY_FOR_SWITCHING_REPLY, OK_REPLY, OLD_EPOCH_REPLY, TRY_AGAIN_REPLY,
-};
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::{change_bulk_array_element, same_slot, str_ascii_case_insensitive_eq};
+use crate::common::utils::{
+    change_bulk_array_element, get_slot, same_slot, str_ascii_case_insensitive_eq,
+};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
 use crate::migration::task::parse_switch_command;
@@ -167,6 +166,17 @@ where
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
                 Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),
             }
+        } else if str_ascii_case_insensitive_eq(&sub_cmd, "keyslot") {
+            match cmd_ctx.get_cmd().get_command_element(2) {
+                Some(key) => {
+                    let slot = get_slot(key);
+                    cmd_ctx.set_resp_result(Ok(Resp::Integer(slot.to_string().into_bytes())));
+                }
+                None => {
+                    cmd_ctx
+                        .set_resp_result(Ok(Resp::Error(String::from("Missing key").into_bytes())));
+                }
+            }
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Unsupported sub command").into_bytes(),
@@ -263,10 +273,12 @@ where
                 }
             },
             Err(err) => match err {
-                ClusterMetaError::OldEpoch => cmd_ctx
-                    .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
-                ClusterMetaError::TryAgain => cmd_ctx
-                    .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
+                ClusterMetaError::OldEpoch => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::OLD_EPOCH_REPLY.to_string().into_bytes(),
+                ))),
+                ClusterMetaError::TryAgain => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::TRY_AGAIN_REPLY.to_string().into_bytes(),
+                ))),
             },
         }
     }
@@ -290,10 +302,12 @@ where
             Err(e) => {
                 //                debug!("Failed to update replicator meta data {:?}", e);
                 match e {
-                    ClusterMetaError::OldEpoch => cmd_ctx
-                        .set_resp_result(Ok(Resp::Error(OLD_EPOCH_REPLY.to_string().into_bytes()))),
-                    ClusterMetaError::TryAgain => cmd_ctx
-                        .set_resp_result(Ok(Resp::Error(TRY_AGAIN_REPLY.to_string().into_bytes()))),
+                    ClusterMetaError::OldEpoch => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        response::OLD_EPOCH_REPLY.to_string().into_bytes(),
+                    ))),
+                    ClusterMetaError::TryAgain => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        response::TRY_AGAIN_REPLY.to_string().into_bytes(),
+                    ))),
                 }
             }
         }
@@ -325,7 +339,7 @@ where
                     SwitchError::InvalidArg => "Invalid Arg".to_string(),
                     SwitchError::TaskNotFound => "No Corresponding Task Found".to_string(),
                     SwitchError::PeerMigrating => "Peer Not Migrating".to_string(),
-                    SwitchError::NotReady => NOT_READY_FOR_SWITCHING_REPLY.to_string(),
+                    SwitchError::NotReady => response::NOT_READY_FOR_SWITCHING_REPLY.to_string(),
                     SwitchError::MgrErr(err) => format!("switch failed: {:?}", err),
                 };
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
@@ -584,7 +598,7 @@ where
             }
         }
 
-        let resp = Resp::Simple(OK_REPLY.to_string().into_bytes());
+        let resp = Resp::Simple(response::OK_REPLY.to_string().into_bytes());
         cmd_ctx.set_resp_result(Ok(resp));
         reply_receiver.await
     }
