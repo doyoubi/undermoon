@@ -71,7 +71,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 ```
 
 #### (5) Add nodes to cluster
-`PATCH` /clusters/nodes/<cluster_name>
+`PATCH` /api/v2/clusters/nodes/<cluster_name>
 
 ##### Request
 ```json
@@ -97,7 +97,7 @@ HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
 #### (6) Delete Unused nodes in a cluster
-`DELETE` /clusters/free_nodes/<cluster_name>
+`DELETE` /api/v2/clusters/free_nodes/<cluster_name>
 
 ##### Success
 ```
@@ -113,7 +113,7 @@ HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
 #### (7) Start migration
-`POST` /clusters/migrations/<cluster_name>
+`POST` /api/v2/clusters/migrations/<cluster_name>
   
 ##### Success
 ```
@@ -129,7 +129,7 @@ HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
 #### (8) Change cluster config
-`PATCH` /clusters/config/<cluster_name>
+`PATCH` /api/v2/clusters/config/<cluster_name>
 
 ##### Request
 ```
@@ -156,7 +156,7 @@ HTTP 409 {
 ```
 
 #### (9) Add proxy
-`POST` /proxies/meta
+`POST` /api/v2/proxies/meta
 
 ##### Request
 ```
@@ -179,7 +179,7 @@ HTTP 409 { "error": "ALREADY_EXISTED" }
 ```
 
 #### (10) Delete proxy
-`DELETE` /proxies/meta/{proxy_address}
+`DELETE` /api/v2/proxies/meta/{proxy_address}
 
 ##### Success
 ```
@@ -190,4 +190,18 @@ HTTP 200
 ```
 HTTP 404 { "error": "PROXY_NOT_FOUND" }
 HTTP 409 { "error": "IN_USE" }
+```
+
+#### (11) Balance Masters
+`PUT` /api/v2/clusters/balance/<cluster_name>
+
+##### Success
+```
+HTTP 200
+```
+
+##### Error
+```
+HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
+HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 ```

@@ -35,7 +35,7 @@ struct HostProxy {
 
 type ProxySlot = String;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 enum ChunkRolePosition {
     Normal,
     FirstChunkMaster,
@@ -1515,9 +1515,6 @@ impl MetaStore {
         match self.clusters.get_mut(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
             Some(ref mut cluster) => {
-                if cluster.name != cluster_name {
-                    return Err(MetaStoreError::ClusterNotFound);
-                }
                 let mut cluster_config = cluster.config.clone();
                 for (k, v) in config.iter() {
                     cluster_config.set_field(k, v).map_err(|err| {
@@ -1529,6 +1526,39 @@ impl MetaStore {
                     })?;
                 }
                 cluster.config = cluster_config;
+                cluster.set_epoch(new_epoch);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn balance_masters(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let new_epoch = self.bump_global_epoch();
+
+        let failed_proxies = &self.failed_proxies;
+        let failures = &self.failures;
+
+        let failed_proxy_exists = |addresses: &[String; CHUNK_PARTS]| -> bool {
+            for address in addresses.iter() {
+                if failed_proxies.contains(address) || failures.contains_key(address) {
+                    return true;
+                }
+            }
+            false
+        };
+
+        match self.clusters.get_mut(&cluster_name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(ref mut cluster) => {
+                for chunk in cluster.chunks.iter_mut() {
+                    if failed_proxy_exists(&chunk.proxy_addresses) {
+                        continue;
+                    }
+                    chunk.role_position = ChunkRolePosition::Normal;
+                }
                 cluster.set_epoch(new_epoch);
             }
         }
@@ -2564,5 +2594,90 @@ mod tests {
         );
         assert!(!store.get_free_proxies().is_empty());
         add_failure_and_replace_proxy(&mut store, migration_limit);
+    }
+
+    #[test]
+    fn test_balance_masters() {
+        let mut store = MetaStore::default();
+        let host_num = 3;
+        let proxy_per_host = 1;
+        let all_proxy_num = host_num * proxy_per_host;
+        add_testing_proxies(&mut store, host_num, proxy_per_host);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+
+        let proxy_address = cluster
+            .get_nodes()
+            .get(0)
+            .unwrap()
+            .get_proxy_address()
+            .to_string();
+        store
+            .replace_failed_proxy(proxy_address.clone(), 1)
+            .unwrap();
+
+        for chunk in store
+            .clusters
+            .get(&ClusterName::try_from(cluster_name.as_str()).unwrap())
+            .unwrap()
+            .chunks
+            .iter()
+        {
+            assert_ne!(chunk.role_position, ChunkRolePosition::Normal);
+        }
+
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let epoch1 = cluster.get_epoch();
+        store.balance_masters(cluster_name.clone()).unwrap();
+        for chunk in store
+            .clusters
+            .get(&ClusterName::try_from(cluster_name.as_str()).unwrap())
+            .unwrap()
+            .chunks
+            .iter()
+        {
+            assert_eq!(chunk.role_position, ChunkRolePosition::Normal);
+        }
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let epoch2 = cluster.get_epoch();
+        assert!(epoch2 > epoch1);
+
+        // Won't change role for failed proxy
+        let cluster = store.get_cluster_by_name(cluster_name.as_str(), 1).unwrap();
+        let proxy_address = cluster
+            .get_nodes()
+            .get(0)
+            .unwrap()
+            .get_proxy_address()
+            .to_string();
+        let err = store
+            .replace_failed_proxy(proxy_address.clone(), 1)
+            .unwrap_err();
+        assert_eq!(err, MetaStoreError::NoAvailableResource);
+
+        for chunk in store
+            .clusters
+            .get(&ClusterName::try_from(cluster_name.as_str()).unwrap())
+            .unwrap()
+            .chunks
+            .iter()
+        {
+            assert_ne!(chunk.role_position, ChunkRolePosition::Normal);
+        }
+
+        assert!(store.get_free_proxies().is_empty());
+        store.balance_masters(cluster_name.clone()).unwrap();
+        for chunk in store
+            .clusters
+            .get(&ClusterName::try_from(cluster_name.as_str()).unwrap())
+            .unwrap()
+            .chunks
+            .iter()
+        {
+            assert_ne!(chunk.role_position, ChunkRolePosition::Normal);
+        }
     }
 }

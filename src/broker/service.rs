@@ -73,6 +73,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::post().to(migrate_slots),
             )
             .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
+            .route("/clusters/balance/{cluster_name}", web::put().to(balance_masters))
 
             .route("/proxies/meta", web::post().to(add_proxy))
             .route(
@@ -194,6 +195,13 @@ impl MemBrokerService {
             .write()
             .expect("MemBrokerService::change_config")
             .change_config(cluster_name, config)
+    }
+
+    pub fn balance_masters(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::balance_masters")
+            .balance_masters(cluster_name)
     }
 
     pub fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
@@ -359,6 +367,13 @@ async fn change_config(
     state
         .change_config(cluster_name, config.into_inner())
         .map(|()| "")
+}
+
+async fn balance_masters(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    let cluster_name = path.into_inner().0;
+    state.balance_masters(cluster_name).map(|()| "")
 }
 
 async fn remove_proxy(
