@@ -20,10 +20,12 @@ mod tests {
     use tokio;
     use undermoon::common::cluster::ClusterName;
     use undermoon::common::proto::ProxyClusterMeta;
-    use undermoon::common::response::{ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, OK_REPLY};
+    use undermoon::common::response::{
+        ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, OK_REPLY,
+    };
     use undermoon::common::track::TrackedFutureRegistry;
     use undermoon::common::utils::pretty_print_bytes;
-    use undermoon::protocol::{Array, BulkStr, Resp, RespPacket, VFunctor};
+    use undermoon::protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket, VFunctor};
     use undermoon::proxy::command::{new_command_pair, CmdReplyReceiver, Command};
     use undermoon::proxy::manager::MetaManager;
     use undermoon::proxy::manager::MetaMap;
@@ -31,6 +33,7 @@ mod tests {
     use undermoon::proxy::session::CmdCtx;
 
     const TEST_CLUSTER: &str = "test_cluster";
+    type TestMetaManager = MetaManager<DummyOkClientFactory, DummyOkConnFactory>;
 
     fn gen_config() -> ServerProxyConfig {
         ServerProxyConfig {
@@ -42,7 +45,9 @@ mod tests {
             thread_number: NonZeroUsize::new(2).unwrap(),
             session_channel_size: 1024,
             backend_channel_size: 1024,
-            backend_conn_num: NonZeroUsize::new(2).unwrap(),
+            // Should only be 1 so that when `wait_backend_ready` is done,
+            // the whole backend is ready.
+            backend_conn_num: NonZeroUsize::new(1).unwrap(),
             backend_batch_min_time: 10000,
             backend_batch_max_time: 10000,
             backend_batch_buf: NonZeroUsize::new(50).unwrap(),
@@ -52,7 +57,7 @@ mod tests {
         }
     }
 
-    fn gen_testing_manager() -> MetaManager<DummyOkClientFactory, DummyOkConnFactory> {
+    fn gen_testing_manager() -> TestMetaManager {
         let config = Arc::new(gen_config());
         let client_factory = Arc::new(DummyOkClientFactory {});
         let conn_factory = Arc::new(DummyOkConnFactory {});
@@ -67,11 +72,11 @@ mod tests {
         )
     }
 
-    fn gen_set_command() -> (CmdCtx, CmdReplyReceiver) {
+    fn gen_set_command(key: BinSafeStr) -> (CmdCtx, CmdReplyReceiver) {
         let cluster_name = Arc::new(RwLock::new(ClusterName::try_from(TEST_CLUSTER).unwrap()));
         let resp = RespPacket::Data(Resp::Arr(Array::Arr(vec![
             Resp::Bulk(BulkStr::Str(b"SET".to_vec())),
-            Resp::Bulk(BulkStr::Str(b"key".to_vec())),
+            Resp::Bulk(BulkStr::Str(key)),
             Resp::Bulk(BulkStr::Str(b"value".to_vec())),
         ])));
         let command = Command::new(Box::new(resp));
@@ -93,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn test_cluster_not_found() {
         let manager = gen_testing_manager();
-        let (cmd_ctx, reply_receiver) = gen_set_command();
+        let (cmd_ctx, reply_receiver) = gen_set_command(b"key".to_vec());
 
         manager.send(cmd_ctx);
 
@@ -109,22 +114,15 @@ mod tests {
         assert!(err_str.starts_with(ERR_CLUSTER_NOT_FOUND));
     }
 
-    #[tokio::test]
-    async fn test_data_command() {
-        let meta = gen_proxy_cluster_meta();
-        let manager = gen_testing_manager();
-
-        manager.set_meta(meta).unwrap();
-
+    async fn wait_backend_ready(manager: &TestMetaManager) {
         loop {
-            let (cmd_ctx, reply_receiver) = gen_set_command();
+            let (cmd_ctx, reply_receiver) = gen_set_command(b"key".to_vec());
             manager.send(cmd_ctx);
 
             let result = reply_receiver.await;
             let (_, response, _) = result.unwrap().into_inner();
             let resp = response.into_resp_vec();
-            let s = match resp {
-                Resp::Simple(s) => s,
+            match resp {
                 Resp::Error(err_str)
                     if str::from_utf8(err_str.as_slice())
                         .unwrap()
@@ -134,13 +132,125 @@ mod tests {
                     Delay::new(Duration::from_millis(1)).await;
                     continue;
                 }
+                _ => break,
+            };
+        }
+    }
+
+    #[tokio::test]
+    async fn test_data_command() {
+        let meta = gen_proxy_cluster_meta();
+        let manager = gen_testing_manager();
+
+        manager.set_meta(meta).unwrap();
+        wait_backend_ready(&manager).await;
+
+        let (cmd_ctx, reply_receiver) = gen_set_command(b"key".to_vec());
+        manager.send(cmd_ctx);
+
+        let result = reply_receiver.await;
+        let (_, response, _) = result.unwrap().into_inner();
+        let resp = response.into_resp_vec();
+        let s = match resp {
+            Resp::Simple(s) => s,
+            other => panic!(format!(
+                "unexpected pattern {:?}",
+                other.map(|b| pretty_print_bytes(b.as_slice()))
+            )),
+        };
+        assert_eq!(s, OK_REPLY.as_bytes());
+    }
+
+    fn gen_migration_cluster_meta(is_migrating: bool) -> ProxyClusterMeta {
+        let s = if is_migrating {
+            "233 NOFLAGS \
+            test_cluster 127.0.0.1:6379 1 0-8000 \
+            test_cluster 127.0.0.1:6379 migrating 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000 \
+            PEER \
+            test_cluster 127.0.0.1:6000 importing 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000"
+        } else {
+            "233 NOFLAGS \
+            test_cluster 127.0.0.1:7000 importing 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000 \
+            PEER \
+            test_cluster 127.0.0.1:5299 1 0-8000 \
+            test_cluster 127.0.0.1:5299 migrating 1 8001-16383 2 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000"
+        };
+        let mut iter = s.split(' ').map(|s| s.to_string()).peekable();
+        let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
+        assert!(extended_args.is_ok());
+        meta
+    }
+
+    #[tokio::test]
+    async fn test_migration() {
+        let src_manager = gen_testing_manager();
+        let dst_manager = gen_testing_manager();
+
+        src_manager.set_meta(gen_proxy_cluster_meta()).unwrap();
+        wait_backend_ready(&src_manager).await;
+
+        dst_manager
+            .set_meta(gen_migration_cluster_meta(false))
+            .unwrap();
+        src_manager
+            .set_meta(gen_migration_cluster_meta(true))
+            .unwrap();
+        wait_backend_ready(&dst_manager).await;
+
+        {
+            // Slots 0-8000 for source proxy should process normally.
+            // The slot of key `b` is 3300.
+            let (cmd_ctx, reply_receiver) = gen_set_command(b"b".to_vec());
+            src_manager.send(cmd_ctx);
+
+            let result = reply_receiver.await;
+            let (_, response, _) = result.unwrap().into_inner();
+            let resp = response.into_resp_vec();
+            let s = match resp {
+                Resp::Simple(s) => s,
                 other => panic!(format!(
                     "unexpected pattern {:?}",
                     other.map(|b| pretty_print_bytes(b.as_slice()))
                 )),
             };
             assert_eq!(s, OK_REPLY.as_bytes());
-            break;
+        }
+        {
+            // Slots 8001-16383 for source proxy should trigger redirection.
+            // The slot of key `a` is 15495.
+            let (cmd_ctx, reply_receiver) = gen_set_command(b"a".to_vec());
+            src_manager.send(cmd_ctx);
+
+            let result = reply_receiver.await;
+            let (_, response, _) = result.unwrap().into_inner();
+            let resp = response.into_resp_vec();
+            let err_msg = match resp {
+                Resp::Error(err_msg) => err_msg,
+                other => panic!(format!(
+                    "unexpected pattern {:?}",
+                    other.map(|b| pretty_print_bytes(b.as_slice()))
+                )),
+            };
+            let s = str::from_utf8(err_msg.as_slice()).unwrap();
+            assert!(s.starts_with(ERR_MOVED));
+        }
+        {
+            // Slots 8001-16383 for destination proxy should process normally.
+            // The slot of key `a` is 15495.
+            let (cmd_ctx, reply_receiver) = gen_set_command(b"a".to_vec());
+            src_manager.send(cmd_ctx);
+
+            let result = reply_receiver.await;
+            let (_, response, _) = result.unwrap().into_inner();
+            let resp = response.into_resp_vec();
+            let s = match resp {
+                Resp::Simple(s) => s,
+                other => panic!(format!(
+                    "unexpected pattern {:?}",
+                    other.map(|b| pretty_print_bytes(b.as_slice()))
+                )),
+            };
+            assert_eq!(s, OK_REPLY.as_bytes());
         }
     }
 }
