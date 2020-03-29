@@ -319,9 +319,9 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
     }
 }
 
-type ConnSink<T> = Pin<Box<dyn Sink<T, Error = BackendError> + Send>>;
-type ConnStream<T> = Pin<Box<dyn Stream<Item = Result<T, BackendError>> + Send>>;
-type CreateConnResult<T> = Result<(ConnSink<T>, ConnStream<T>), BackendError>;
+pub type ConnSink<T> = Pin<Box<dyn Sink<T, Error = BackendError> + Send>>;
+pub type ConnStream<T> = Pin<Box<dyn Stream<Item = Result<T, BackendError>> + Send>>;
+pub type CreateConnResult<T> = Result<(ConnSink<T>, ConnStream<T>), BackendError>;
 
 pub trait ConnFactory: ThreadSafe {
     type Pkt: Packet;
