@@ -3,24 +3,19 @@ extern crate undermoon;
 use futures::{future, Future};
 use std::pin::Pin;
 use std::str;
+use std::sync::Arc;
 use undermoon::protocol::{
-    BinSafeStr, BulkStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp,
-    RespVec,
+    BinSafeStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, RespVec,
 };
 
-pub struct DummyRedisClient {}
+pub struct DummyRedisClient {
+    handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>,
+}
 
 impl DummyRedisClient {
-    fn gen_reply(cmd: Vec<BinSafeStr>) -> RespVec {
+    fn gen_reply(&self, cmd: Vec<BinSafeStr>) -> RespVec {
         let cmd_name = str::from_utf8(cmd[0].as_slice()).unwrap().to_uppercase();
-        match cmd_name.as_str() {
-            "EXISTS" => Resp::Integer(b"0".to_vec()),
-            "DUMP" => Resp::Bulk(BulkStr::Str(b"binary_format_xxx".to_vec())),
-            "RESTORE" => Resp::Simple(b"OK".to_vec()),
-            "PTTL" => Resp::Integer(b"-1".to_vec()),
-            "UMCTL" => Resp::Simple(b"OK".to_vec()),
-            _ => Resp::Simple(b"OK".to_vec()),
-        }
+        (self.handle_func)(cmd_name.as_str())
     }
 }
 
@@ -30,12 +25,20 @@ impl RedisClient for DummyRedisClient {
         command: OptionalMulti<Vec<BinSafeStr>>,
     ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>
     {
-        let res = command.map(|cmd| Self::gen_reply(cmd));
+        let res = command.map(|cmd| self.gen_reply(cmd));
         Box::pin(async { Ok(res) })
     }
 }
 
-pub struct DummyClientFactory {}
+pub struct DummyClientFactory {
+    handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>,
+}
+
+impl DummyClientFactory {
+    pub fn new(handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>) -> Self {
+        Self { handle_func }
+    }
+}
 
 impl RedisClientFactory for DummyClientFactory {
     type Client = DummyRedisClient;
@@ -44,6 +47,7 @@ impl RedisClientFactory for DummyClientFactory {
         &self,
         _address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send>> {
-        Box::pin(future::ok(DummyRedisClient {}))
+        let handle_func = self.handle_func.clone();
+        Box::pin(future::ok(DummyRedisClient { handle_func }))
     }
 }

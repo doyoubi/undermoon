@@ -61,10 +61,12 @@ mod tests {
         }
     }
 
-    fn gen_testing_manager() -> TestMetaManager {
+    fn gen_testing_manager(
+        handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>,
+    ) -> TestMetaManager {
         let config = Arc::new(gen_config());
-        let client_factory = Arc::new(DummyClientFactory {});
-        let conn_factory = Arc::new(DummyOkConnFactory {});
+        let client_factory = Arc::new(DummyClientFactory::new(handle_func.clone()));
+        let conn_factory = Arc::new(DummyOkConnFactory::new(handle_func));
         let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::empty())));
         let future_registry = Arc::new(TrackedFutureRegistry::default());
         MetaManager::new(
@@ -101,7 +103,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cluster_not_found() {
-        let manager = gen_testing_manager();
+        let manager = gen_testing_manager(Arc::new(always_ok));
         let (cmd_ctx, reply_receiver) = gen_set_command(b"key".to_vec());
 
         manager.send(cmd_ctx);
@@ -141,10 +143,25 @@ mod tests {
         }
     }
 
+    pub fn always_ok(_: &str) -> RespVec {
+        Resp::Simple(b"OK".to_vec())
+    }
+
+    pub fn handle_migration_command(cmd_name: &str) -> RespVec {
+        match cmd_name {
+            "EXISTS" => Resp::Integer(b"0".to_vec()),
+            "DUMP" => Resp::Bulk(BulkStr::Str(b"binary_format_xxx".to_vec())),
+            "RESTORE" => Resp::Simple(b"OK".to_vec()),
+            "PTTL" => Resp::Integer(b"-1".to_vec()),
+            "UMCTL" => Resp::Simple(b"OK".to_vec()),
+            _ => Resp::Simple(b"OK".to_vec()),
+        }
+    }
+
     #[tokio::test]
     async fn test_data_command() {
         let meta = gen_proxy_cluster_meta();
-        let manager = gen_testing_manager();
+        let manager = gen_testing_manager(Arc::new(always_ok));
 
         manager.set_meta(meta).unwrap();
         wait_backend_ready(&manager).await;
@@ -194,9 +211,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_migration() {
-        let src_manager = gen_testing_manager();
-        let dst_manager = gen_testing_manager();
+    async fn test_manager_migration() {
+        let src_manager = gen_testing_manager(Arc::new(handle_migration_command));
+        let dst_manager = gen_testing_manager(Arc::new(handle_migration_command));
 
         // dst proxy will be set first by coordinator.
         dst_manager
@@ -281,6 +298,42 @@ mod tests {
             let s = str::from_utf8(err_msg.as_slice()).unwrap();
             assert!(s.starts_with(ERR_MOVED));
         }
-        // TODO: Add tests for destination proxy.
+        {
+            // Slots 0-8000 for destination proxy should trigger redirection.
+            // The slot of key `b` is 3300.
+            let (cmd_ctx, reply_receiver) = gen_set_command(b"b".to_vec());
+            dst_manager.send(cmd_ctx);
+
+            let result = reply_receiver.await;
+            let (_, response, _) = result.unwrap().into_inner();
+            let resp = response.into_resp_vec();
+            let err_msg = match resp {
+                Resp::Error(err_msg) => err_msg,
+                other => panic!(format!(
+                    "unexpected pattern {:?}",
+                    other.map(|b| pretty_print_bytes(b.as_slice()))
+                )),
+            };
+            let s = str::from_utf8(err_msg.as_slice()).unwrap();
+            assert!(s.starts_with(ERR_MOVED));
+        }
+        {
+            // Slots 8001-16383 for source proxy should be able to be processed.
+            // The slot of key `a` is 15495.
+            let (cmd_ctx, reply_receiver) = gen_set_command(b"a".to_vec());
+            dst_manager.send(cmd_ctx);
+
+            let result = reply_receiver.await;
+            let (_, response, _) = result.unwrap().into_inner();
+            let resp = response.into_resp_vec();
+            let s = match resp {
+                Resp::Simple(s) => s,
+                other => panic!(format!(
+                    "unexpected pattern {:?}",
+                    other.map(|b| pretty_print_bytes(b.as_slice()))
+                )),
+            };
+            assert_eq!(s, OK_REPLY.as_bytes());
+        }
     }
 }
