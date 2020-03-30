@@ -154,6 +154,27 @@ mod tests {
             "RESTORE" => Resp::Simple(b"OK".to_vec()),
             "PTTL" => Resp::Integer(b"-1".to_vec()),
             "UMCTL" => Resp::Simple(b"OK".to_vec()),
+            "SCAN" => Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(b"1".to_vec())),
+                Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(
+                    b"some_key".to_vec(),
+                ))])),
+            ])),
+            _ => Resp::Simple(b"OK".to_vec()),
+        }
+    }
+
+    pub fn handle_command_for_finished_migration(cmd_name: &str) -> RespVec {
+        match cmd_name {
+            "EXISTS" => Resp::Integer(b"1".to_vec()),
+            "DUMP" => Resp::Bulk(BulkStr::Str(b"binary_format_xxx".to_vec())),
+            "RESTORE" => Resp::Simple(b"OK".to_vec()),
+            "PTTL" => Resp::Integer(b"-1".to_vec()),
+            "UMCTL" => Resp::Simple(b"OK".to_vec()),
+            "SCAN" => Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str(b"0".to_vec())),
+                Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(b"1".to_vec()))])),
+            ])),
             _ => Resp::Simple(b"OK".to_vec()),
         }
     }
@@ -182,8 +203,8 @@ mod tests {
         assert_eq!(s, OK_REPLY.as_bytes());
     }
 
-    fn gen_migration_cluster_meta(is_migrating: bool) -> ProxyClusterMeta {
-        let s = if is_migrating {
+    fn gen_migration_cluster_meta(is_source_proxy: bool) -> ProxyClusterMeta {
+        let s = if is_source_proxy {
             "233 NOFLAGS \
             test_cluster 127.0.0.1:6379 1 0-8000 \
             test_cluster 127.0.0.1:6379 migrating 1 8001-16383 233 127.0.0.1:5299 127.0.0.1:6379 127.0.0.1:6000 127.0.0.1:7000 \
@@ -202,6 +223,24 @@ mod tests {
         meta
     }
 
+    fn gen_migration_comitted_cluster_meta(is_source_proxy: bool) -> ProxyClusterMeta {
+        let s = if is_source_proxy {
+            "666 NOFLAGS \
+            test_cluster 127.0.0.1:6379 1 0-8000 \
+            PEER \
+            test_cluster 127.0.0.1:6000 1 8001-16383"
+        } else {
+            "666 NOFLAGS \
+            test_cluster 127.0.0.1:7000 1 8001-16383 \
+            PEER \
+            test_cluster 127.0.0.1:5299 1 0-8000"
+        };
+        let mut iter = s.split(' ').map(|s| s.to_string()).peekable();
+        let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
+        assert!(extended_args.is_ok());
+        meta
+    }
+
     fn resp_contains(resp: &RespVec, pat: &str) -> bool {
         match resp {
             Resp::Arr(Array::Arr(resps)) => resps.iter().any(|resp| resp_contains(resp, pat)),
@@ -210,57 +249,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_manager_migration() {
-        let src_manager = gen_testing_manager(Arc::new(handle_migration_command));
-        let dst_manager = gen_testing_manager(Arc::new(handle_migration_command));
-
-        // dst proxy will be set first by coordinator.
-        dst_manager
-            .set_meta(gen_migration_cluster_meta(false))
-            .unwrap();
-        src_manager
-            .set_meta(gen_migration_cluster_meta(true))
-            .unwrap();
-        wait_backend_ready(&src_manager).await;
-        wait_backend_ready(&dst_manager).await;
-
-        let switch_arg = SwitchArg {
-            version: UNDERMOON_MIGRATION_VERSION.to_string(),
-            meta: MigrationTaskMeta {
-                cluster_name: ClusterName::try_from("test_cluster").unwrap(),
-                slot_range: SlotRange {
-                    range_list: RangeList::from_single_range(Range(8001, 16383)),
-                    tag: SlotRangeTag::Migrating(MigrationMeta {
-                        epoch: 233,
-                        src_proxy_address: "127.0.0.1:5299".to_string(),
-                        src_node_address: "127.0.0.1:6379".to_string(),
-                        dst_proxy_address: "127.0.0.1:6000".to_string(),
-                        dst_node_address: "127.0.0.1:7000".to_string(),
-                    }),
-                },
-            },
-        };
-        dst_manager
-            .handle_switch(switch_arg.clone(), MgrSubCmd::PreCheck)
-            .unwrap();
-        dst_manager
-            .handle_switch(switch_arg, MgrSubCmd::PreSwitch)
-            .unwrap();
-
-        loop {
-            Delay::new(Duration::from_millis(1)).await;
-            let info = src_manager.info();
-            if !resp_contains(&info, MigrationState::Scanning.to_string().as_str()) {
-                continue;
-            }
-            let info = dst_manager.info();
-            if !resp_contains(&info, MigrationState::PreSwitch.to_string().as_str()) {
-                continue;
-            }
-            break;
-        }
-
+    async fn check_src_request(src_manager: &TestMetaManager) {
         {
             // Slots 0-8000 for source proxy should process normally.
             // The slot of key `b` is 3300.
@@ -298,6 +287,9 @@ mod tests {
             let s = str::from_utf8(err_msg.as_slice()).unwrap();
             assert!(s.starts_with(ERR_MOVED));
         }
+    }
+
+    async fn check_dst_request(dst_manager: &TestMetaManager) {
         {
             // Slots 0-8000 for destination proxy should trigger redirection.
             // The slot of key `b` is 3300.
@@ -335,5 +327,119 @@ mod tests {
             };
             assert_eq!(s, OK_REPLY.as_bytes());
         }
+    }
+
+    fn gen_switch_arg() -> SwitchArg {
+        SwitchArg {
+            version: UNDERMOON_MIGRATION_VERSION.to_string(),
+            meta: MigrationTaskMeta {
+                cluster_name: ClusterName::try_from("test_cluster").unwrap(),
+                slot_range: SlotRange {
+                    range_list: RangeList::from_single_range(Range(8001, 16383)),
+                    tag: SlotRangeTag::Migrating(MigrationMeta {
+                        epoch: 233,
+                        src_proxy_address: "127.0.0.1:5299".to_string(),
+                        src_node_address: "127.0.0.1:6379".to_string(),
+                        dst_proxy_address: "127.0.0.1:6000".to_string(),
+                        dst_node_address: "127.0.0.1:7000".to_string(),
+                    }),
+                },
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manager_migration() {
+        let src_manager = gen_testing_manager(Arc::new(handle_migration_command));
+        let dst_manager = gen_testing_manager(Arc::new(handle_migration_command));
+
+        // dst proxy will be set first by coordinator.
+        dst_manager
+            .set_meta(gen_migration_cluster_meta(false))
+            .unwrap();
+        src_manager
+            .set_meta(gen_migration_cluster_meta(true))
+            .unwrap();
+        wait_backend_ready(&src_manager).await;
+        wait_backend_ready(&dst_manager).await;
+
+        let switch_arg = gen_switch_arg();
+        dst_manager
+            .handle_switch(switch_arg.clone(), MgrSubCmd::PreCheck)
+            .unwrap();
+        dst_manager
+            .handle_switch(switch_arg, MgrSubCmd::PreSwitch)
+            .unwrap();
+
+        loop {
+            Delay::new(Duration::from_millis(1)).await;
+            let info = src_manager.info();
+            if !resp_contains(&info, MigrationState::Scanning.to_string().as_str()) {
+                continue;
+            }
+            let info = dst_manager.info();
+            if !resp_contains(&info, MigrationState::PreSwitch.to_string().as_str()) {
+                continue;
+            }
+            break;
+        }
+
+        check_src_request(&src_manager).await;
+        check_dst_request(&dst_manager).await;
+    }
+
+    #[tokio::test]
+    async fn test_manager_migration_with_scanning_done() {
+        let src_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
+        let dst_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
+
+        // dst proxy will be set first by coordinator.
+        dst_manager
+            .set_meta(gen_migration_cluster_meta(false))
+            .unwrap();
+        src_manager
+            .set_meta(gen_migration_cluster_meta(true))
+            .unwrap();
+        wait_backend_ready(&src_manager).await;
+        wait_backend_ready(&dst_manager).await;
+
+        let switch_arg = gen_switch_arg();
+        dst_manager
+            .handle_switch(switch_arg.clone(), MgrSubCmd::PreCheck)
+            .unwrap();
+        dst_manager
+            .handle_switch(switch_arg.clone(), MgrSubCmd::PreSwitch)
+            .unwrap();
+
+        loop {
+            Delay::new(Duration::from_millis(1)).await;
+            let info = src_manager.info();
+            if !resp_contains(&info, MigrationState::SwitchCommitted.to_string().as_str()) {
+                continue;
+            }
+            let info = dst_manager.info();
+            if !resp_contains(&info, MigrationState::PreSwitch.to_string().as_str()) {
+                continue;
+            }
+            break;
+        }
+
+        dst_manager
+            .handle_switch(switch_arg, MgrSubCmd::FinalSwitch)
+            .unwrap();
+
+        check_src_request(&src_manager).await;
+        check_dst_request(&dst_manager).await;
+
+        // dst will be set first.
+        dst_manager
+            .set_meta(gen_migration_comitted_cluster_meta(false))
+            .unwrap();
+        src_manager
+            .set_meta(gen_migration_comitted_cluster_meta(true))
+            .unwrap();
+
+        check_src_request(&src_manager).await;
+        check_dst_request(&dst_manager).await;
     }
 }
