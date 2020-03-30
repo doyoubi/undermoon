@@ -23,7 +23,8 @@ To be compatible with the existing Redis client,
 there're also some `Redis Cluster Proxies`
 like [redis-cluster-proxy(official)](https://github.com/RedisLabs/redis-cluster-proxy),
 [aster](https://github.com/wayslog/aster),
-and [corvus](https://github.com/eleme/corvus)
+[corvus](https://github.com/eleme/corvus),
+and [samaritan](https://github.com/samaritan-proxy/samaritan),
 to adapt the cluster protocol to the widely supported single instance protocol.
 
 #### Why another "Redis Cluster Protocol" implementation?
@@ -40,7 +41,7 @@ Redis and most redis proxies such as redis-cluster-proxy, corvus, aster, codis a
 as the proxies normally need to spread the requests to different Redis instances.
 
 Instead of routing requests, server-side proxy serves as a different role from these proxies
-and is similar to the cluster module of Redis, which make it able to migrate the data and scale in a super fast way
+and is analogous to the cluster module of Redis, which make it able to migrate the data and **scale fast**
 by using some customized migration protocols.
 
 #### Server-side Proxy
@@ -85,10 +86,11 @@ OK
 
 ### Architecture
 ![architecture](docs/architecture.svg)
-##### Metadata Broker
-Now it's a single point in-memory metadata storage storing all the metadata of the whole `undermoon` cluster,
+##### Metadata Storage
+Metadata storage stores all the metadata of the whole `undermoon` cluster,
 including existing Redis instances, proxies, and exposed Redis clusters.
-It will be replaced by [another implementation backed by Etcd]((https://github.com/doyoubi/overmoon)) in the future.
+Now it's a single point in-memory storage server
+which will be replaced by [another implementation backed by Etcd]((https://github.com/doyoubi/overmoon)) in the future.
 
 ##### Coordinator
 Coordinator will synchronize the metadata between broker and server proxy.
