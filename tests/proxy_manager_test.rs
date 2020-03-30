@@ -18,21 +18,23 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
     use tokio;
-    use undermoon::common::cluster::{ClusterName, MigrationTaskMeta, SlotRange, RangeList, Range, SlotRangeTag, MigrationMeta};
+    use undermoon::common::cluster::{
+        ClusterName, MigrationMeta, MigrationTaskMeta, Range, RangeList, SlotRange, SlotRangeTag,
+    };
     use undermoon::common::proto::ProxyClusterMeta;
     use undermoon::common::response::{
         ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, OK_REPLY,
     };
     use undermoon::common::track::TrackedFutureRegistry;
     use undermoon::common::utils::pretty_print_bytes;
-    use undermoon::protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket, VFunctor, RespVec};
+    use undermoon::common::version::UNDERMOON_MIGRATION_VERSION;
+    use undermoon::migration::task::{MgrSubCmd, MigrationState, SwitchArg};
+    use undermoon::protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket, RespVec, VFunctor};
     use undermoon::proxy::command::{new_command_pair, CmdReplyReceiver, Command};
     use undermoon::proxy::manager::MetaManager;
     use undermoon::proxy::manager::MetaMap;
     use undermoon::proxy::service::ServerProxyConfig;
     use undermoon::proxy::session::CmdCtx;
-    use undermoon::migration::task::{MigrationState, SwitchArg, MgrSubCmd};
-    use undermoon::common::version::UNDERMOON_MIGRATION_VERSION;
 
     const TEST_CLUSTER: &str = "test_cluster";
     type TestMetaManager = MetaManager<DummyClientFactory, DummyOkConnFactory>;
@@ -63,7 +65,7 @@ mod tests {
         let config = Arc::new(gen_config());
         let client_factory = Arc::new(DummyClientFactory {});
         let conn_factory = Arc::new(DummyOkConnFactory {});
-        let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::new())));
+        let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::empty())));
         let future_registry = Arc::new(TrackedFutureRegistry::default());
         MetaManager::new(
             config,
@@ -185,9 +187,7 @@ mod tests {
 
     fn resp_contains(resp: &RespVec, pat: &str) -> bool {
         match resp {
-            Resp::Arr(Array::Arr(resps)) => {
-                resps.iter().any(|resp| resp_contains(resp, pat))
-            }
+            Resp::Arr(Array::Arr(resps)) => resps.iter().any(|resp| resp_contains(resp, pat)),
             Resp::Bulk(BulkStr::Str(s)) => str::from_utf8(s.as_slice()).unwrap().contains(pat),
             _ => false,
         }
@@ -208,13 +208,13 @@ mod tests {
         wait_backend_ready(&src_manager).await;
         wait_backend_ready(&dst_manager).await;
 
-        let switch_arg = SwitchArg{
+        let switch_arg = SwitchArg {
             version: UNDERMOON_MIGRATION_VERSION.to_string(),
-            meta: MigrationTaskMeta{
+            meta: MigrationTaskMeta {
                 cluster_name: ClusterName::try_from("test_cluster").unwrap(),
-                slot_range: SlotRange{
+                slot_range: SlotRange {
                     range_list: RangeList::from_single_range(Range(8001, 16383)),
-                    tag: SlotRangeTag::Migrating(MigrationMeta{
+                    tag: SlotRangeTag::Migrating(MigrationMeta {
                         epoch: 233,
                         src_proxy_address: "127.0.0.1:5299".to_string(),
                         src_node_address: "127.0.0.1:6379".to_string(),
@@ -224,8 +224,12 @@ mod tests {
                 },
             },
         };
-        dst_manager.handle_switch(switch_arg.clone(), MgrSubCmd::PreCheck).unwrap();
-        dst_manager.handle_switch(switch_arg, MgrSubCmd::PreSwitch).unwrap();
+        dst_manager
+            .handle_switch(switch_arg.clone(), MgrSubCmd::PreCheck)
+            .unwrap();
+        dst_manager
+            .handle_switch(switch_arg, MgrSubCmd::PreSwitch)
+            .unwrap();
 
         loop {
             Delay::new(Duration::from_millis(1)).await;

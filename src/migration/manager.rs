@@ -225,7 +225,7 @@ impl<T> MigrationMap<T>
 where
     T: CmdTask + ClusterTag,
 {
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         Self {
             empty: true,
             task_map: HashMap::new(),

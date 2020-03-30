@@ -416,7 +416,7 @@ impl TryFrom<&str> for ClusterName {
 }
 
 impl ClusterName {
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         Self(ClusterNameInner::new())
     }
 
@@ -435,7 +435,7 @@ impl ClusterName {
 
 impl Default for ClusterName {
     fn default() -> Self {
-        Self::new()
+        Self::empty()
     }
 }
 
@@ -934,7 +934,7 @@ mod tests {
         assert_eq!(size_of::<ClusterName>(), CLUSTER_NAME_MAX_LENGTH + 1);
         // Align to 32 bytes.
         assert_eq!(size_of::<ClusterName>(), 32);
-        let mut name = ClusterName::new();
+        let mut name = ClusterName::empty();
         // ClusterName should be able to store ASCII with just a byte unlike char.
         for _ in 0..CLUSTER_NAME_MAX_LENGTH {
             name.try_push('a').unwrap();
