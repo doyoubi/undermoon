@@ -65,11 +65,18 @@ impl<B: MetaDataBroker> BrokerOrderedProxiesRetriever<B> {
         &self,
         added_tag: HashSet<String>,
     ) -> Vec<Result<String, CoordinateError>> {
+        // If the failed proxy is not in use, we can skip it.
+        let failed_proxy_addresses = self
+            .meta_data_broker
+            .get_failures()
+            .filter_map(|res| future::ready(res.ok()))
+            .collect::<HashSet<_>>()
+            .await;
         self.meta_data_broker
             .get_proxy_addresses()
             .filter(move |res| {
                 let filter = match res {
-                    Ok(addr) => !added_tag.contains(addr),
+                    Ok(addr) => !added_tag.contains(addr) && !failed_proxy_addresses.contains(addr),
                     _ => true,
                 };
                 future::ready(filter)
@@ -342,7 +349,8 @@ mod tests {
             "host2:port2",
             "host3:port3",
             "host4:port4",
-            "host5:port5",
+            "free_host5:port5",
+            "free_but_failed_host6:port6",
         ]
         .into_iter()
         .map(|s| s.to_string())
@@ -419,6 +427,13 @@ mod tests {
                 };
                 Box::pin(future::ok(cluster))
             });
+        mock_broker.expect_get_failures().returning(|| {
+            Box::pin(stream::iter(
+                vec!["free_but_failed_host6:port6".to_string()]
+                    .into_iter()
+                    .map(Ok),
+            ))
+        });
         mock_broker
             .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses.clone().into_iter().map(Ok))));
@@ -441,7 +456,8 @@ mod tests {
             assert_eq!(addrs[3], "host1:port1");
         }
         // free nodes
-        assert_eq!(addrs[4], "host5:port5");
+        assert_eq!(addrs[4], "free_host5:port5");
+        // No free_but_failed_host6 returned
     }
 
     #[tokio::test]
