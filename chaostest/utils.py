@@ -86,7 +86,7 @@ class OvermoonClient:
             return
 
         r = self.client.post('/api/{}/proxies/meta'.format(BROKER_API_VERSION), server_proxy.to_dict())
-        if r.status_code == 400:
+        if r.status_code in (400, 409):
             return
         if r.status_code == 200:
             logger.info('OVERMOON: recover server proxy: {}', server_proxy.to_dict())

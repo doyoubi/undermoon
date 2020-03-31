@@ -290,7 +290,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
         <H as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
     {
         let (tx, rx) = mpsc::unbounded();
-        let conn_failed = Arc::new(AtomicBool::new(true));
+        let conn_failed = Arc::new(AtomicBool::new(false));
         let handle_backend_fut = handle_backend(
             handler,
             rx,
@@ -426,10 +426,10 @@ where
         .fuse();
 
     loop {
-        conn_failed.store(true, Ordering::SeqCst);
         let (writer, reader) = match conn_factory.create_conn(sock_address).await {
             Ok(conn) => conn,
             Err(err) => {
+                conn_failed.store(true, Ordering::SeqCst);
                 error!("failed to connect: {} {:?}", address, err);
                 retry_state.take();
 
