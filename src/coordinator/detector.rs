@@ -18,6 +18,27 @@ impl<B: MetaDataBroker> BrokerProxiesRetriever<B> {
     pub fn new(meta_data_broker: Arc<B>) -> Self {
         Self { meta_data_broker }
     }
+
+    async fn retrieve_proxies_impl(&self) -> Vec<Result<String, CoordinateError>> {
+        let failed_proxy_addresses = self
+            .meta_data_broker
+            .get_failed_proxies()
+            .filter_map(|res| future::ready(res.ok()))
+            .collect::<HashSet<_>>()
+            .await;
+        self.meta_data_broker
+            .get_proxy_addresses()
+            .filter(move |res| {
+                let filter = match res {
+                    Ok(addr) => !failed_proxy_addresses.contains(addr),
+                    _ => true,
+                };
+                future::ready(filter)
+            })
+            .map_err(CoordinateError::MetaData)
+            .collect::<Vec<_>>()
+            .await
+    }
 }
 
 impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
@@ -25,9 +46,9 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<String, CoordinateError>> + Send + 's>> {
         Box::pin(
-            self.meta_data_broker
-                .get_proxy_addresses()
-                .map_err(CoordinateError::MetaData),
+            self.retrieve_proxies_impl()
+                .map(stream::iter)
+                .flatten_stream(),
         )
     }
 }
@@ -68,7 +89,7 @@ impl<B: MetaDataBroker> BrokerOrderedProxiesRetriever<B> {
         // If the failed proxy is not in use, we can skip it.
         let failed_proxy_addresses = self
             .meta_data_broker
-            .get_failures()
+            .get_failed_proxies()
             .filter_map(|res| future::ready(res.ok()))
             .collect::<HashSet<_>>()
             .await;
@@ -333,6 +354,9 @@ mod tests {
         mock_broker
             .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
+        mock_broker
+            .expect_get_failed_proxies()
+            .returning(|| Box::pin(stream::iter(vec![])));
         let broker = Arc::new(mock_broker);
         let retriever = BrokerProxiesRetriever::new(broker);
         let addrs: Vec<Result<String, CoordinateError>> =
@@ -427,7 +451,7 @@ mod tests {
                 };
                 Box::pin(future::ok(cluster))
             });
-        mock_broker.expect_get_failures().returning(|| {
+        mock_broker.expect_get_failed_proxies().returning(|| {
             Box::pin(stream::iter(
                 vec!["free_but_failed_host6:port6".to_string()]
                     .into_iter()
@@ -512,6 +536,9 @@ mod tests {
             .expect_get_proxy_addresses()
             .returning(move || Box::pin(stream::iter(addresses_clone.clone().into_iter().map(Ok))));
         mock_broker
+            .expect_get_failed_proxies()
+            .returning(|| Box::pin(stream::iter(vec![])));
+        mock_broker
             .expect_add_failure()
             .withf(|address: &String, _| address == NODE2)
             .times(1)
@@ -539,6 +566,9 @@ mod tests {
             ];
             Box::pin(stream::iter(results))
         });
+        mock_broker
+            .expect_get_failed_proxies()
+            .returning(|| Box::pin(stream::iter(vec![])));
         mock_broker
             .expect_add_failure()
             .withf(|address: &String, _| address == NODE2)

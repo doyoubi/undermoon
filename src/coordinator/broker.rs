@@ -42,6 +42,10 @@ mod trait_mod {
         fn get_failures<'s>(
             &'s self,
         ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+
+        fn get_failed_proxies<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
     }
 
     // Maybe we would want to support other database supporting redis protocol.

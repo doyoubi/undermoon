@@ -1565,6 +1565,10 @@ impl MetaStore {
 
         Ok(())
     }
+
+    pub fn get_failed_proxies(&self) -> Vec<String> {
+        self.failed_proxies.iter().cloned().collect()
+    }
 }
 
 #[derive(Debug, PartialEq)]

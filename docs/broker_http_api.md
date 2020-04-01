@@ -111,7 +111,8 @@ empty payload
 ```
 
 ##### (6) GET /api/v2/failures
-Get all the failures.
+Get all the failures reported by coordinator but not committed to be failed yet.
+It's used by coordinator and you probably need to use (9) instead.
 ```
 Response:
 {
@@ -173,6 +174,15 @@ Request:
     }
 }
 
+Response:
+{
+    "addresses": ["server_proxy_address1", ...],
+}
+```
+
+##### (9) GET /api/v2/proxies/failed/addresses
+Get all the failed proxies.
+```
 Response:
 {
     "addresses": ["server_proxy_address1", ...],

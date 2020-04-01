@@ -13,11 +13,11 @@ use std::sync::{atomic, Arc, RwLock};
 use tokio;
 
 type ReplicatorRecord = Either<Arc<dyn MasterReplicator>, Arc<dyn ReplicaReplicator>>;
-type ReplicatorMap = HashMap<(ClusterName, String), ReplicatorRecord>;
+type ReplicatorMap = HashMap<(ClusterName, String), (ReplicatorRecord, Arc<FutureAutoStopHandle>)>;
 
 pub struct ReplicatorManager<F: RedisClientFactory> {
     updating_epoch: atomic::AtomicU64,
-    replicators: RwLock<(u64, ReplicatorMap, Vec<FutureAutoStopHandle>)>,
+    replicators: RwLock<(u64, ReplicatorMap)>,
     client_factory: Arc<F>,
     future_registry: Arc<TrackedFutureRegistry>,
 }
@@ -26,7 +26,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
     pub fn new(client_factory: Arc<F>, future_registry: Arc<TrackedFutureRegistry>) -> Self {
         Self {
             updating_epoch: atomic::AtomicU64::new(0),
-            replicators: RwLock::new((0, HashMap::new(), vec![])),
+            replicators: RwLock::new((0, HashMap::new())),
             client_factory,
             future_registry,
         }
@@ -70,7 +70,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
 
         let mut new_replicators = HashMap::new();
         // Add existing replicators
-        for (key, replicator) in self
+        for (key, (replicator, handle)) in self
             .replicators
             .read()
             .expect("ReplicatorManager::update_replicators")
@@ -83,7 +83,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                     .and_then(|meta| replicator.as_ref().left().map(|m| m.get_meta() == meta))
             {
                 info!("reuse master replicator {} {}", key.0, key.1);
-                new_replicators.insert(key.clone(), replicator.clone());
+                new_replicators.insert(key.clone(), (replicator.clone(), handle.clone()));
             }
             if Some(true)
                 == replica_key_set
@@ -91,7 +91,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                     .and_then(|meta| replicator.as_ref().right().map(|m| m.get_meta() == meta))
             {
                 info!("reuse replica replicator {} {}", key.0, key.1);
-                new_replicators.insert(key.clone(), replicator.clone());
+                new_replicators.insert(key.clone(), (replicator.clone(), handle.clone()));
             }
         }
 
@@ -109,7 +109,6 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 self.client_factory.clone(),
             ));
             new_masters.insert(key.clone(), replicator.clone());
-            new_replicators.insert(key, Either::Left(replicator));
         }
         // Add new replicas
         for meta in replicas.into_iter() {
@@ -122,7 +121,6 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 self.client_factory.clone(),
             ));
             new_replicas.insert(key.clone(), replicator.clone());
-            new_replicators.insert(key, Either::Right(replicator));
         }
 
         {
@@ -137,24 +135,27 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 return Err(ClusterMetaError::OldEpoch);
             }
 
-            let mut handles = vec![];
             for (key, master) in new_masters.into_iter() {
                 debug!("spawn master {} {}", key.0, key.1);
                 let desc = format!(
                     "replicator: role=master cluster_name={} master_node_address={}",
                     key.0, key.1
                 );
-                let master = master.clone();
+                let master_clone = master.clone();
+                let key_clone = key.clone();
 
                 let fut = async move {
-                    if let Some(fut) = master.start() {
+                    if let Some(fut) = master_clone.start() {
                         if let Err(err) = fut.await {
-                            error!("master replicator {} {} exit {:?}", key.0, key.1, err);
+                            error!(
+                                "master replicator {} {} exit {:?}",
+                                key_clone.0, key_clone.1, err
+                            );
                         }
                     }
                 };
                 let (fut, handle) = new_auto_drop_future(fut);
-                handles.push(handle);
+                new_replicators.insert(key, (Either::Left(master), Arc::new(handle)));
 
                 let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
                 tokio::spawn(fut);
@@ -165,22 +166,26 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                     "replicator: role=replica cluster_name={} replica_node_address={}",
                     key.0, key.1
                 );
-                let replica = replica.clone();
+                let replica_clone = replica.clone();
+                let key_clone = key.clone();
 
                 let fut = async move {
-                    if let Some(fut) = replica.start() {
+                    if let Some(fut) = replica_clone.start() {
                         if let Err(err) = fut.await {
-                            error!("replica replicator {} {} exit {:?}", key.0, key.1, err);
+                            error!(
+                                "replica replicator {} {} exit {:?}",
+                                key_clone.0, key_clone.1, err
+                            );
                         }
                     }
                 };
                 let (fut, handle) = new_auto_drop_future(fut);
-                handles.push(handle);
+                new_replicators.insert(key, (Either::Right(replica), Arc::new(handle)));
 
                 let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
                 tokio::spawn(fut);
             }
-            *replicators = (epoch, new_replicators, handles);
+            *replicators = (epoch, new_replicators);
         }
         Ok(())
     }
@@ -193,7 +198,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
             .replicators
             .read()
             .expect("ReplicatorManager::get_metadata");
-        for (_key, replicator) in replicators.1.iter() {
+        for (_key, (replicator, _handle)) in replicators.1.iter() {
             match replicator {
                 Either::Left(master) => {
                     let meta = master.get_meta().clone();

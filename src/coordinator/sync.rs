@@ -435,6 +435,9 @@ mod tests {
             Box::pin(stream::iter(results))
         });
         mock_broker
+            .expect_get_failed_proxies()
+            .returning(|| Box::pin(stream::iter(vec![])));
+        mock_broker
             .expect_get_proxy()
             .withf(move |addr| addr == &proxy_addr)
             .times(1)

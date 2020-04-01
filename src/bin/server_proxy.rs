@@ -41,10 +41,10 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
 
     let slowlog_len = NonZeroUsize::new(s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024))
         .ok_or_else(|| "slowlog_len")?;
-    let thread_number = NonZeroUsize::new(s.get::<usize>("thread_number").unwrap_or_else(|_| 4))
+    let thread_number = NonZeroUsize::new(s.get::<usize>("thread_number").unwrap_or_else(|_| 2))
         .ok_or_else(|| "thread_number")?;
     let backend_conn_num =
-        NonZeroUsize::new(s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 16))
+        NonZeroUsize::new(s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 2))
             .ok_or_else(|| "backend_conn_num")?;
     let backend_batch_buf =
         NonZeroUsize::new(s.get::<usize>("backend_batch_buf").unwrap_or_else(|_| 10))

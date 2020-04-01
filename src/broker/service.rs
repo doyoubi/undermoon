@@ -2,7 +2,8 @@ use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_meta_broker::{
-    ClusterNamesPayload, ClusterPayload, FailuresPayload, ProxyAddressesPayload, ProxyPayload,
+    ClusterNamesPayload, ClusterPayload, FailedProxiesPayload, FailuresPayload,
+    ProxyAddressesPayload, ProxyPayload,
 };
 use actix_http::ResponseBuilder;
 use actix_web::dev::Service;
@@ -59,6 +60,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::post().to(replace_failed_node),
             )
             .route("/clusters/migrations", web::put().to(commit_migration))
+            .route("/proxies/failed/addresses", web::get().to(get_failed_proxies))
 
             // Additional api
             .route("/clusters/meta/{cluster_name}", web::post().to(add_cluster))
@@ -251,6 +253,13 @@ impl MemBrokerService {
             .expect("MemBrokerService::replace_failed_node")
             .replace_failed_proxy(failed_proxy_address, migration_limit)
     }
+
+    pub fn get_failed_proxies(&self) -> Vec<String> {
+        self.store
+            .read()
+            .expect("MemBrokerService::get_failed_proxies")
+            .get_failed_proxies()
+    }
 }
 
 type ServiceState = web::Data<Arc<MemBrokerService>>;
@@ -407,6 +416,11 @@ async fn replace_failed_node(
 ) -> Result<web::Json<Proxy>, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
     state.replace_failed_node(proxy_address).map(web::Json)
+}
+
+async fn get_failed_proxies(state: ServiceState) -> impl Responder {
+    let addresses = state.get_failed_proxies();
+    web::Json(FailedProxiesPayload { addresses })
 }
 
 impl error::ResponseError for MetaStoreError {
