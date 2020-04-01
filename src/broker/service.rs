@@ -1,6 +1,7 @@
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
+use crate::coordinator::http_mani_broker::ReplaceProxyResponse;
 use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailedProxiesPayload, FailuresPayload,
     ProxyAddressesPayload, ProxyPayload,
@@ -243,10 +244,10 @@ impl MemBrokerService {
             .commit_migration(task)
     }
 
-    pub fn replace_failed_node(
+    pub fn replace_failed_proxy(
         &self,
         failed_proxy_address: String,
-    ) -> Result<Proxy, MetaStoreError> {
+    ) -> Result<Option<Proxy>, MetaStoreError> {
         let migration_limit = self.config.migration_limit;
         self.store
             .write()
@@ -413,9 +414,12 @@ async fn commit_migration(
 
 async fn replace_failed_node(
     (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<web::Json<Proxy>, MetaStoreError> {
+) -> Result<web::Json<ReplaceProxyResponse>, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
-    state.replace_failed_node(proxy_address).map(web::Json)
+    state
+        .replace_failed_proxy(proxy_address)
+        .map(|proxy| ReplaceProxyResponse { proxy })
+        .map(web::Json)
 }
 
 async fn get_failed_proxies(state: ServiceState) -> impl Responder {

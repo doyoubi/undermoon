@@ -31,7 +31,7 @@ impl HttpMetaManipulationBroker {
     async fn replace_proxy_impl(
         &self,
         failed_proxy_address: String,
-    ) -> Result<Proxy, MetaManipulationBrokerError> {
+    ) -> Result<Option<Proxy>, MetaManipulationBrokerError> {
         let url = self.gen_url(&format!("/proxies/failover/{}", failed_proxy_address));
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("Failed to replace proxy {:?}", e);
@@ -41,10 +41,11 @@ impl HttpMetaManipulationBroker {
         let status = response.status();
 
         if status.is_success() {
-            response.json().await.map_err(|e| {
+            let ReplaceProxyResponse { proxy } = response.json().await.map_err(|e| {
                 error!("Failed to get json payload {:?}", e);
                 MetaManipulationBrokerError::InvalidReply
-            })
+            })?;
+            Ok(proxy)
         } else {
             error!(
                 "replace_proxy: Failed to replace node: status code {:?}",
@@ -112,7 +113,8 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
     fn replace_proxy<'s>(
         &'s self,
         failed_proxy_address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Proxy, MetaManipulationBrokerError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaManipulationBrokerError>> + Send + 's>>
+    {
         Box::pin(self.replace_proxy_impl(failed_proxy_address))
     }
 
@@ -122,4 +124,9 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>> {
         Box::pin(self.commit_migration_impl(meta))
     }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ReplaceProxyResponse {
+    pub proxy: Option<Proxy>,
 }

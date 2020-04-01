@@ -52,7 +52,8 @@ struct MigrationSlotRangeStore {
 impl MigrationSlotRangeStore {
     fn to_slot_range(&self, chunks: &[ChunkStore]) -> SlotRange {
         let src_chunk = chunks.get(self.meta.src_chunk_index).expect("get_cluster");
-        let src_proxy_index = Self::chunk_part_to_proxy_index(self.meta.src_chunk_part, src_chunk.role_position);
+        let src_proxy_index =
+            Self::chunk_part_to_proxy_index(self.meta.src_chunk_part, src_chunk.role_position);
         let src_proxy_address = src_chunk
             .proxy_addresses
             .get(src_proxy_index)
@@ -67,7 +68,8 @@ impl MigrationSlotRangeStore {
             .clone();
 
         let dst_chunk = chunks.get(self.meta.dst_chunk_index).expect("get_cluster");
-        let dst_proxy_index = Self::chunk_part_to_proxy_index(self.meta.dst_chunk_part, dst_chunk.role_position);
+        let dst_proxy_index =
+            Self::chunk_part_to_proxy_index(self.meta.dst_chunk_part, dst_chunk.role_position);
         let dst_proxy_address = dst_chunk
             .proxy_addresses
             .get(dst_proxy_index)
@@ -1383,7 +1385,7 @@ impl MetaStore {
         &mut self,
         failed_proxy_address: String,
         migration_limit: u64,
-    ) -> Result<Proxy, MetaStoreError> {
+    ) -> Result<Option<Proxy>, MetaStoreError> {
         let cluster_name = match self.all_proxies.get(&failed_proxy_address) {
             None => return Err(MetaStoreError::ProxyNotFound),
             Some(proxy) => proxy.cluster.clone(),
@@ -1393,7 +1395,8 @@ impl MetaStore {
 
         let cluster_name = match cluster_name {
             None => {
-                return Err(MetaStoreError::NotInUse);
+                self.failed_proxies.insert(failed_proxy_address);
+                return Ok(None);
             }
             Some(cluster_name) => cluster_name,
         };
@@ -1432,9 +1435,10 @@ impl MetaStore {
             proxy.cluster = Some(cluster_name);
         }
 
-        Ok(self
+        let proxy = self
             .get_proxy_by_address(&proxy_resource.proxy_address, migration_limit)
-            .expect("replace_failed_proxy"))
+            .expect("replace_failed_proxy");
+        Ok(Some(proxy))
     }
 
     fn takeover_master(
@@ -1460,7 +1464,7 @@ impl MetaStore {
                     peer_position.insert((
                         migrating_slot_range.meta.src_chunk_index,
                         migrating_slot_range.meta.src_chunk_part,
-                        ));
+                    ));
                     peer_position.insert((
                         migrating_slot_range.meta.dst_chunk_index,
                         migrating_slot_range.meta.dst_chunk_part,
@@ -1492,7 +1496,9 @@ impl MetaStore {
                     let src_part = migrating_slot_range.meta.src_chunk_part;
                     let dst_index = migrating_slot_range.meta.dst_chunk_index;
                     let dst_part = migrating_slot_range.meta.dst_chunk_part;
-                    if peer_position.contains(&(src_index, src_part)) || peer_position.contains(&(dst_index, dst_part)) {
+                    if peer_position.contains(&(src_index, src_part))
+                        || peer_position.contains(&(dst_index, dst_part))
+                    {
                         migrating_slot_range.meta.epoch = new_epoch;
                     }
                 }
@@ -2070,6 +2076,7 @@ mod tests {
 
         let new_proxy = store
             .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
+            .unwrap()
             .unwrap();
         assert_ne!(new_proxy.get_address(), failed_proxy_address);
         let epoch6 = store.get_global_epoch();
@@ -2479,6 +2486,7 @@ mod tests {
 
         let new_proxy = store
             .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
+            .unwrap()
             .unwrap();
         assert_ne!(new_proxy.get_address(), failed_proxy_address);
 
@@ -2672,6 +2680,7 @@ mod tests {
             .to_string();
         store
             .replace_failed_proxy(proxy_address.clone(), 1)
+            .unwrap()
             .unwrap();
 
         for chunk in store

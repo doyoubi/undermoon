@@ -128,6 +128,7 @@ empty payload
 
 Response:
 If success:
+Proxy is being used by a cluster.
 {
     "proxy": {
         "address": "server_proxy_address1",
@@ -150,6 +151,12 @@ If success:
         }, ...]
     }
 }
+
+Proxy is not in use:
+{
+    "proxy": null
+}
+
 If not:
 HTTP 409
 ```

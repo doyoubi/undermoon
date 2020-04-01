@@ -104,7 +104,7 @@ mod tests {
             .expect_replace_proxy()
             .withf(move |f| f == failure2)
             .times(1)
-            .returning(move |_| Box::pin(async { Ok(gen_testing_dummy_proxy()) }));
+            .returning(move |_| Box::pin(async { Ok(Some(gen_testing_dummy_proxy())) }));
         let mock_broker = Arc::new(mock_broker);
 
         let handler = ReplaceNodeHandler::new(mock_broker);
@@ -128,7 +128,7 @@ mod tests {
             .expect_replace_proxy()
             .withf(move |f| f == failure2)
             .times(1)
-            .returning(move |_| Box::pin(async { Ok(gen_testing_dummy_proxy()) }));
+            .returning(move |_| Box::pin(async { Ok(Some(gen_testing_dummy_proxy())) }));
         let mock_mani_broker = Arc::new(mock_mani_broker);
 
         let retriever = BrokerProxyFailureRetriever::new(mock_data_broker);

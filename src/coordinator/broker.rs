@@ -55,7 +55,11 @@ mod trait_mod {
         fn replace_proxy<'s>(
             &'s self,
             failed_proxy_address: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Proxy, MetaManipulationBrokerError>> + Send + 's>>;
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Option<Proxy>, MetaManipulationBrokerError>> + Send + 's,
+            >,
+        >;
 
         fn commit_migration<'s>(
             &'s self,
