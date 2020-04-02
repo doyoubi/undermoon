@@ -247,6 +247,9 @@ mod tests {
                 Box::pin(stream::iter(results))
             });
         mock_data_broker
+            .expect_get_failed_proxies()
+            .returning(|| Box::pin(stream::iter(vec![])));
+        mock_data_broker
             .expect_get_proxy()
             .withf(|proxy_addr| proxy_addr == "127.0.0.1:6000")
             .returning(|_| Box::pin(async { Ok(Some(gen_testing_dummy_proxy("127.0.0.1:6000"))) }));

@@ -42,6 +42,10 @@ mod trait_mod {
         fn get_failures<'s>(
             &'s self,
         ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
+
+        fn get_failed_proxies<'s>(
+            &'s self,
+        ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>>;
     }
 
     // Maybe we would want to support other database supporting redis protocol.
@@ -51,7 +55,11 @@ mod trait_mod {
         fn replace_proxy<'s>(
             &'s self,
             failed_proxy_address: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Proxy, MetaManipulationBrokerError>> + Send + 's>>;
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Option<Proxy>, MetaManipulationBrokerError>> + Send + 's,
+            >,
+        >;
 
         fn commit_migration<'s>(
             &'s self,

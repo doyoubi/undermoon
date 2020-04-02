@@ -52,9 +52,11 @@ struct MigrationSlotRangeStore {
 impl MigrationSlotRangeStore {
     fn to_slot_range(&self, chunks: &[ChunkStore]) -> SlotRange {
         let src_chunk = chunks.get(self.meta.src_chunk_index).expect("get_cluster");
+        let src_proxy_index =
+            Self::chunk_part_to_proxy_index(self.meta.src_chunk_part, src_chunk.role_position);
         let src_proxy_address = src_chunk
             .proxy_addresses
-            .get(self.meta.src_chunk_part)
+            .get(src_proxy_index)
             .expect("get_cluster")
             .clone();
         let src_node_index =
@@ -66,9 +68,11 @@ impl MigrationSlotRangeStore {
             .clone();
 
         let dst_chunk = chunks.get(self.meta.dst_chunk_index).expect("get_cluster");
+        let dst_proxy_index =
+            Self::chunk_part_to_proxy_index(self.meta.dst_chunk_part, dst_chunk.role_position);
         let dst_proxy_address = dst_chunk
             .proxy_addresses
-            .get(self.meta.dst_chunk_part)
+            .get(dst_proxy_index)
             .expect("get_cluster")
             .clone();
         let dst_node_index =
@@ -99,10 +103,18 @@ impl MigrationSlotRangeStore {
         }
     }
 
+    fn chunk_part_to_proxy_index(chunk_part: usize, role_position: ChunkRolePosition) -> usize {
+        match (chunk_part, role_position) {
+            (0, ChunkRolePosition::SecondChunkMaster) => 1,
+            (1, ChunkRolePosition::FirstChunkMaster) => 0,
+            (i, _) => i,
+        }
+    }
+
     fn chunk_part_to_node_index(chunk_part: usize, role_position: ChunkRolePosition) -> usize {
         match (chunk_part, role_position) {
             (0, ChunkRolePosition::SecondChunkMaster) => 3,
-            (1, ChunkRolePosition::FirstChunkMaster) => 2,
+            (1, ChunkRolePosition::FirstChunkMaster) => 1,
             (i, _) => 2 * i,
         }
     }
@@ -1373,7 +1385,7 @@ impl MetaStore {
         &mut self,
         failed_proxy_address: String,
         migration_limit: u64,
-    ) -> Result<Proxy, MetaStoreError> {
+    ) -> Result<Option<Proxy>, MetaStoreError> {
         let cluster_name = match self.all_proxies.get(&failed_proxy_address) {
             None => return Err(MetaStoreError::ProxyNotFound),
             Some(proxy) => proxy.cluster.clone(),
@@ -1383,7 +1395,8 @@ impl MetaStore {
 
         let cluster_name = match cluster_name {
             None => {
-                return Err(MetaStoreError::NotInUse);
+                self.failed_proxies.insert(failed_proxy_address);
+                return Ok(None);
             }
             Some(cluster_name) => cluster_name,
         };
@@ -1422,9 +1435,10 @@ impl MetaStore {
             proxy.cluster = Some(cluster_name);
         }
 
-        Ok(self
+        let proxy = self
             .get_proxy_by_address(&proxy_resource.proxy_address, migration_limit)
-            .expect("replace_failed_proxy"))
+            .expect("replace_failed_proxy");
+        Ok(Some(proxy))
     }
 
     fn takeover_master(
@@ -1438,13 +1452,56 @@ impl MetaStore {
             .clusters
             .get_mut(cluster_name)
             .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
+
+        let mut peer_position = HashSet::new();
+
         for chunk in cluster.chunks.iter_mut() {
             if chunk.proxy_addresses[0] == failed_proxy_address {
                 chunk.role_position = ChunkRolePosition::SecondChunkMaster;
+
+                for migrating_slot_range in chunk.migrating_slots[0].iter_mut() {
+                    migrating_slot_range.meta.epoch = new_epoch;
+                    peer_position.insert((
+                        migrating_slot_range.meta.src_chunk_index,
+                        migrating_slot_range.meta.src_chunk_part,
+                    ));
+                    peer_position.insert((
+                        migrating_slot_range.meta.dst_chunk_index,
+                        migrating_slot_range.meta.dst_chunk_part,
+                    ));
+                }
                 break;
             } else if chunk.proxy_addresses[1] == failed_proxy_address {
                 chunk.role_position = ChunkRolePosition::FirstChunkMaster;
+
+                for migrating_slot_range in chunk.migrating_slots[1].iter_mut() {
+                    migrating_slot_range.meta.epoch = new_epoch;
+                    peer_position.insert((
+                        migrating_slot_range.meta.src_chunk_index,
+                        migrating_slot_range.meta.src_chunk_part,
+                    ));
+                    peer_position.insert((
+                        migrating_slot_range.meta.dst_chunk_index,
+                        migrating_slot_range.meta.dst_chunk_part,
+                    ));
+                }
                 break;
+            }
+        }
+
+        for chunk in cluster.chunks.iter_mut() {
+            for migrating_slots in chunk.migrating_slots.iter_mut() {
+                for migrating_slot_range in migrating_slots.iter_mut() {
+                    let src_index = migrating_slot_range.meta.src_chunk_index;
+                    let src_part = migrating_slot_range.meta.src_chunk_part;
+                    let dst_index = migrating_slot_range.meta.dst_chunk_index;
+                    let dst_part = migrating_slot_range.meta.dst_chunk_part;
+                    if peer_position.contains(&(src_index, src_part))
+                        || peer_position.contains(&(dst_index, dst_part))
+                    {
+                        migrating_slot_range.meta.epoch = new_epoch;
+                    }
+                }
             }
         }
         cluster.epoch = new_epoch;
@@ -1564,6 +1621,10 @@ impl MetaStore {
         }
 
         Ok(())
+    }
+
+    pub fn get_failed_proxies(&self) -> Vec<String> {
+        self.failed_proxies.iter().cloned().collect()
     }
 }
 
@@ -2015,6 +2076,7 @@ mod tests {
 
         let new_proxy = store
             .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
+            .unwrap()
             .unwrap();
         assert_ne!(new_proxy.get_address(), failed_proxy_address);
         let epoch6 = store.get_global_epoch();
@@ -2250,9 +2312,12 @@ mod tests {
 
         // Due to migration limit, we might need to commit migration and get remaining ones multiple times
         loop {
+            injection(store, migration_limit);
+
             let cluster = store
                 .get_cluster_by_name(&cluster_name, migration_limit)
                 .unwrap();
+
             let slot_range_set: HashSet<_> = cluster
                 .get_nodes()
                 .iter()
@@ -2268,14 +2333,11 @@ mod tests {
                 break;
             }
 
-            injection(store, migration_limit);
-
             for slot_range in slot_range_set.into_iter() {
                 let task_meta = MigrationTaskMeta {
                     cluster_name: ClusterName::try_from(cluster_name.as_str()).unwrap(),
                     slot_range,
                 };
-                injection(store, migration_limit);
                 store.commit_migration(task_meta).unwrap();
             }
         }
@@ -2424,6 +2486,7 @@ mod tests {
 
         let new_proxy = store
             .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
+            .unwrap()
             .unwrap();
         assert_ne!(new_proxy.get_address(), failed_proxy_address);
 
@@ -2617,6 +2680,7 @@ mod tests {
             .to_string();
         store
             .replace_failed_proxy(proxy_address.clone(), 1)
+            .unwrap()
             .unwrap();
 
         for chunk in store

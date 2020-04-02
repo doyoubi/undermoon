@@ -120,7 +120,20 @@ impl HttpMetaBroker {
             MetaDataBrokerError::InvalidReply
         })?;
         let FailuresPayload { addresses } = response.json().await.map_err(|e| {
-            error!("Failed to get cluster names from json {:?}", e);
+            error!("Failed to get failures from json {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        })?;
+        Ok(addresses)
+    }
+
+    async fn get_failed_proxies_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
+        let url = self.gen_url("/proxies/failed/addresses");
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            error!("Failed to get failed proxies {:?}", e);
+            MetaDataBrokerError::InvalidReply
+        })?;
+        let FailedProxiesPayload { addresses } = response.json().await.map_err(|e| {
+            error!("Failed to get failed proxies from json {:?}", e);
             MetaDataBrokerError::InvalidReply
         })?;
         Ok(addresses)
@@ -180,6 +193,16 @@ impl MetaDataBroker for HttpMetaBroker {
                 .flatten_stream(),
         )
     }
+
+    fn get_failed_proxies<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
+        Box::pin(
+            self.get_failed_proxies_impl()
+                .map(vec_result_to_stream)
+                .flatten_stream(),
+        )
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -204,5 +227,10 @@ pub struct ProxyPayload {
 
 #[derive(Deserialize, Serialize)]
 pub struct FailuresPayload {
+    pub addresses: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct FailedProxiesPayload {
     pub addresses: Vec<String>,
 }
