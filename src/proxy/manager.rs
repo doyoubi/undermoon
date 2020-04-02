@@ -198,7 +198,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         self.migration_manager.run_tasks(new_tasks);
         self.migration_manager
             .run_deleting_tasks(new_deleting_tasks);
-        debug!("Successfully update cluster meta data");
 
         Ok(())
     }

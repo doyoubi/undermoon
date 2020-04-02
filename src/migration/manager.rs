@@ -378,7 +378,7 @@ where
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
-        blocking_ctrl_map: Arc<BCF>,
+        blocking_ctrl_factory: Arc<BCF>,
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> (Self, Vec<NewTask<T>>)
     where
@@ -455,7 +455,7 @@ where
                                 continue;
                             }
 
-                            let ctrl = blocking_ctrl_map.create(meta.src_node_address.clone());
+                            let ctrl = blocking_ctrl_factory.create(meta.src_node_address.clone());
                             let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
                                 mgr_config.clone(),

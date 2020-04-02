@@ -15,7 +15,7 @@ use crossbeam_channel;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 pub trait TaskBlockingController: ThreadSafe {
     type Sender: BlockingCmdTaskSender;
@@ -81,7 +81,7 @@ where
     F::Sender: CmdTaskSender<Task = CounterTask<BS::Task>> + ThreadSafe,
     BS: BlockingCmdTaskSender,
 {
-    ctrl_map: DashMap<String, Arc<TaskBlockingQueue<F::Sender, BS>>>,
+    ctrl_map: DashMap<String, Weak<TaskBlockingQueue<F::Sender, BS>>>,
     sender_factory: F,
     blocking_task_sender: Arc<BS>,
 }
@@ -106,13 +106,35 @@ where
 
     pub fn get_or_create(&self, address: String) -> Arc<TaskBlockingQueue<F::Sender, BS>> {
         match self.ctrl_map.entry(address.clone()) {
-            Entry::Occupied(ctrl) => ctrl.get().clone(),
-            Entry::Vacant(e) => {
-                let sender = self.sender_factory.create(address);
-                let ctrl = TaskBlockingQueue::new(sender, self.blocking_task_sender.clone());
-                e.insert(Arc::new(ctrl)).clone()
+            Entry::Occupied(mut entry) => {
+                if let Some(ctrl) = entry.get().upgrade() {
+                    return ctrl;
+                }
+                let (ctrl, ctrl_weak) = self.create_ctrl(address);
+                entry.insert(ctrl_weak);
+                ctrl
+            }
+            Entry::Vacant(entry) => {
+                let (ctrl, ctrl_weak) = self.create_ctrl(address);
+                entry.insert(ctrl_weak);
+                ctrl
             }
         }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn create_ctrl(
+        &self,
+        address: String,
+    ) -> (
+        Arc<TaskBlockingQueue<F::Sender, BS>>,
+        Weak<TaskBlockingQueue<F::Sender, BS>>,
+    ) {
+        let sender = self.sender_factory.create(address);
+        let ctrl = TaskBlockingQueue::new(sender, self.blocking_task_sender.clone());
+        let ctrl = Arc::new(ctrl);
+        let ctrl_weak = Arc::downgrade(&ctrl);
+        (ctrl, ctrl_weak)
     }
 }
 

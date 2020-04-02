@@ -23,7 +23,7 @@ use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tokio;
 use tokio::net::TcpStream;
@@ -442,7 +442,10 @@ where
                     };
                     let tasks = match tasks_opt {
                         Some(tasks) => tasks,
-                        None => break,
+                        None => {
+                            warn!("backend sender is closed. Exit backend connection handling.");
+                            return Err(BackendError::Canceled);
+                        }
                     };
                     for task in tasks.into_iter() {
                         task.set_resp_result(Ok(Resp::Error(
@@ -708,7 +711,7 @@ pub struct CachedSender<S: CmdTaskSender> {
 // TODO: support cleanup here to avoid memory leak.
 pub struct CachedSenderFactory<F: CmdTaskSenderFactory> {
     inner_factory: F,
-    cached_senders: Arc<RwLock<HashMap<String, Arc<F::Sender>>>>,
+    cached_senders: Arc<RwLock<HashMap<String, Weak<F::Sender>>>>,
 }
 
 impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
@@ -729,9 +732,10 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
             .read()
             .expect("CachedSenderFactory::create")
             .get(&address)
+            .and_then(|sender_weak| sender_weak.upgrade())
         {
             return CachedSender {
-                inner_sender: sender.clone(),
+                inner_sender: sender,
             };
         }
 
@@ -742,7 +746,9 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
                 .cached_senders
                 .write()
                 .expect("CachedSenderFactory::create");
-            guard.entry(address).or_insert(inner_sender).clone()
+            let inner_sender_weak = Arc::downgrade(&inner_sender);
+            guard.entry(address).or_insert(inner_sender_weak);
+            inner_sender
         };
 
         CachedSender {
