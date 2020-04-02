@@ -497,23 +497,6 @@ impl MetaStore {
         falure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Vec<String> {
-        self.get_failures_helper(falure_ttl, failure_quorum, false)
-    }
-
-    pub fn get_all_failures(
-        &mut self,
-        falure_ttl: chrono::Duration,
-        failure_quorum: u64,
-    ) -> Vec<String> {
-        self.get_failures_helper(falure_ttl, failure_quorum, true)
-    }
-
-    pub fn get_failures_helper(
-        &mut self,
-        falure_ttl: chrono::Duration,
-        failure_quorum: u64,
-        include_free_proxies: bool,
-    ) -> Vec<String> {
         let now = Utc::now();
         for reporter_map in self.failures.values_mut() {
             reporter_map.retain(|_, report_time| {
@@ -530,16 +513,11 @@ impl MetaStore {
             .iter()
             .filter(|(_, v)| v.len() >= failure_quorum as usize)
             .filter_map(|(address, _)| {
-                all_proxies.get(address).and_then(|proxy_resource| {
-                    if include_free_proxies {
-                        return Some(address.clone());
-                    }
-                    if proxy_resource.cluster.is_some() {
-                        Some(address.clone())
-                    } else {
-                        None
-                    }
-                })
+                if all_proxies.contains_key(address) {
+                    Some(address.clone())
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -1391,8 +1369,6 @@ impl MetaStore {
             Some(proxy) => proxy.cluster.clone(),
         };
 
-        self.failed_proxies.insert(failed_proxy_address.clone());
-
         let cluster_name = match cluster_name {
             None => {
                 self.failed_proxies.insert(failed_proxy_address);
@@ -1402,6 +1378,8 @@ impl MetaStore {
         };
 
         self.takeover_master(&cluster_name, failed_proxy_address.clone())?;
+
+        self.failed_proxies.insert(failed_proxy_address.clone());
 
         let proxy_resource = self.generate_new_free_proxy(failed_proxy_address.clone())?;
         let new_epoch = self.bump_global_epoch();
@@ -2024,16 +2002,9 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
 
         assert_eq!(
-            store.get_all_failures(chrono::Duration::max_value(), 1),
+            store.get_failures(chrono::Duration::max_value(), 1),
             vec![failed_address.to_string()],
         );
-        assert!(store
-            .get_all_failures(chrono::Duration::max_value(), 2)
-            .is_empty(),);
-        // Proxies not in cluster do not count.
-        assert!(store
-            .get_failures(chrono::Duration::max_value(), 1)
-            .is_empty(),);
         assert!(store
             .get_failures(chrono::Duration::max_value(), 2)
             .is_empty(),);
@@ -2266,9 +2237,7 @@ mod tests {
         assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
         assert_eq!(
             store.get_free_proxies().len()
-                + store
-                    .get_all_failures(chrono::Duration::max_value(), 1)
-                    .len(),
+                + store.get_failures(chrono::Duration::max_value(), 1).len(),
             all_proxy_num - start_node_num / 2 - added_node_num / 2
         );
 

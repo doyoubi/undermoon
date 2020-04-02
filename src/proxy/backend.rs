@@ -13,7 +13,7 @@ use futures::channel::mpsc;
 use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use futures_timer::Delay;
 use std::boxed::Box;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -23,7 +23,7 @@ use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tokio;
 use tokio::net::TcpStream;
@@ -445,7 +445,7 @@ where
                         None => {
                             warn!("backend sender is closed. Exit backend connection handling.");
                             return Err(BackendError::Canceled);
-                        },
+                        }
                     };
                     for task in tasks.into_iter() {
                         task.set_resp_result(Ok(Resp::Error(
@@ -662,7 +662,6 @@ pub struct RRSenderGroup<S: CmdTaskSender> {
     cursor: AtomicUsize,
 }
 
-
 pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
     group_size: NonZeroUsize,
     inner_factory: F,
@@ -709,9 +708,10 @@ pub struct CachedSender<S: CmdTaskSender> {
     inner_sender: Arc<S>,
 }
 
+// TODO: support cleanup here to avoid memory leak.
 pub struct CachedSenderFactory<F: CmdTaskSenderFactory> {
     inner_factory: F,
-    cached_senders: Arc<RwLock<HashMap<String, Arc<F::Sender>>>>,
+    cached_senders: Arc<RwLock<HashMap<String, Weak<F::Sender>>>>,
 }
 
 impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
@@ -720,11 +720,6 @@ impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
             inner_factory,
             cached_senders: Arc::new(RwLock::new(HashMap::new())),
         }
-    }
-
-    pub fn retain(&self, left_addresses: &HashSet<String>) {
-        let mut cached_senders = self.cached_senders.write().expect("CachedSenderFactory::retain");
-        cached_senders.retain(|address, _| left_addresses.contains(address));
     }
 }
 
@@ -737,9 +732,10 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
             .read()
             .expect("CachedSenderFactory::create")
             .get(&address)
+            .and_then(|sender_weak| sender_weak.upgrade())
         {
             return CachedSender {
-                inner_sender: sender.clone(),
+                inner_sender: sender,
             };
         }
 
@@ -750,7 +746,9 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
                 .cached_senders
                 .write()
                 .expect("CachedSenderFactory::create");
-            guard.entry(address).or_insert(inner_sender).clone()
+            let inner_sender_weak = Arc::downgrade(&inner_sender);
+            guard.entry(address).or_insert(inner_sender_weak);
+            inner_sender
         };
 
         CachedSender {

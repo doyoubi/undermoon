@@ -113,7 +113,7 @@ where
                 let (ctrl, ctrl_weak) = self.create_ctrl(address);
                 entry.insert(ctrl_weak);
                 ctrl
-            },
+            }
             Entry::Vacant(entry) => {
                 let (ctrl, ctrl_weak) = self.create_ctrl(address);
                 entry.insert(ctrl_weak);
@@ -122,7 +122,14 @@ where
         }
     }
 
-    fn create_ctrl(&self, address: String) -> (Arc<TaskBlockingQueue<F::Sender, BS>>, Weak<TaskBlockingQueue<F::Sender, BS>>) {
+    #[allow(clippy::type_complexity)]
+    fn create_ctrl(
+        &self,
+        address: String,
+    ) -> (
+        Arc<TaskBlockingQueue<F::Sender, BS>>,
+        Weak<TaskBlockingQueue<F::Sender, BS>>,
+    ) {
         let sender = self.sender_factory.create(address);
         let ctrl = TaskBlockingQueue::new(sender, self.blocking_task_sender.clone());
         let ctrl = Arc::new(ctrl);

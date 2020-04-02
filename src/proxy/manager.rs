@@ -159,7 +159,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn set_meta(&self, cluster_meta: ProxyClusterMeta) -> Result<(), ClusterMetaError> {
-        let new_node_addresses = cluster_meta.get_node_addresses();
         let sender_factory = &self.sender_factory;
         let migration_manager = &self.migration_manager;
 
@@ -199,8 +198,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         self.migration_manager.run_tasks(new_tasks);
         self.migration_manager
             .run_deleting_tasks(new_deleting_tasks);
-
-        self.sender_factory.retain(&new_node_addresses);
 
         Ok(())
     }
