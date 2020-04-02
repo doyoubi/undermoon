@@ -13,7 +13,7 @@ use futures::channel::mpsc;
 use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use futures_timer::Delay;
 use std::boxed::Box;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -442,7 +442,10 @@ where
                     };
                     let tasks = match tasks_opt {
                         Some(tasks) => tasks,
-                        None => break,
+                        None => {
+                            warn!("backend sender is closed. Exit backend connection handling.");
+                            return Err(BackendError::Canceled);
+                        },
                     };
                     for task in tasks.into_iter() {
                         task.set_resp_result(Ok(Resp::Error(
@@ -659,6 +662,7 @@ pub struct RRSenderGroup<S: CmdTaskSender> {
     cursor: AtomicUsize,
 }
 
+
 pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
     group_size: NonZeroUsize,
     inner_factory: F,
@@ -705,7 +709,6 @@ pub struct CachedSender<S: CmdTaskSender> {
     inner_sender: Arc<S>,
 }
 
-// TODO: support cleanup here to avoid memory leak.
 pub struct CachedSenderFactory<F: CmdTaskSenderFactory> {
     inner_factory: F,
     cached_senders: Arc<RwLock<HashMap<String, Arc<F::Sender>>>>,
@@ -717,6 +720,11 @@ impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
             inner_factory,
             cached_senders: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub fn retain(&self, left_addresses: &HashSet<String>) {
+        let mut cached_senders = self.cached_senders.write().expect("CachedSenderFactory::retain");
+        cached_senders.retain(|address, _| left_addresses.contains(address));
     }
 }
 

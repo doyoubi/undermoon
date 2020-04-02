@@ -3,7 +3,7 @@ use super::utils::{has_flags, CmdParseError};
 use crate::common::cluster::ClusterName;
 use crate::common::config::ClusterConfig;
 use crate::protocol::{Array, BulkStr, Resp};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::iter::Peekable;
 use std::str;
@@ -92,6 +92,16 @@ impl ProxyClusterMeta {
 
     pub fn get_configs(&self) -> &ClusterConfigMap {
         &self.clusters_config
+    }
+
+    pub fn get_node_addresses(&self) -> HashSet<String> {
+        let mut addresses = HashSet::new();
+        for cluster_map in self.local.cluster_map.values() {
+            for address in cluster_map.keys() {
+                addresses.insert(address.clone());
+            }
+        }
+        addresses
     }
 
     pub fn from_resp<T: AsRef<[u8]>>(
