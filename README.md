@@ -12,10 +12,10 @@
 Any storage system implementing redis protocol could also somehow work with undermoon,
 such as [KeyDB](https://github.com/JohnSully/KeyDB) and [pika](https://github.com/Qihoo360/pika).
 
-For more in-depth understanding of Redis Cluster Protocol and how Undermoon implement it,
+For more in-depth explanation of Redis Cluster Protocol and how Undermoon implement it,
 please refer to [Redis Cluster Protocl](./docs/redis_cluster_protocol.md).
 
-### Architecture
+## Architecture
 ![architecture](docs/architecture.svg)
 ##### Metadata Storage
 Metadata storage stores all the metadata of the whole `undermoon` cluster,

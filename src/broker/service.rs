@@ -1,3 +1,4 @@
+use super::persistence::MetaStorage;
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
@@ -92,19 +93,26 @@ pub struct MemBrokerConfig {
     pub failure_ttl: u64, // in seconds
     pub failure_quorum: u64,
     pub migration_limit: u64,
+    pub meta_filename: String,
+    pub auto_update_meta_file: bool,
 }
 
 pub struct MemBrokerService {
     config: MemBrokerConfig,
     store: Arc<RwLock<MetaStore>>,
+    meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
 }
 
 impl MemBrokerService {
-    pub fn new(config: MemBrokerConfig) -> Self {
+    pub fn new(
+        config: MemBrokerConfig,
+        meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
+    ) -> Self {
         info!("config: {:?}", config);
         Self {
             config,
             store: Arc::new(RwLock::new(MetaStore::default())),
+            meta_storage,
         }
     }
 

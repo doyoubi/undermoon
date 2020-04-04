@@ -7,6 +7,7 @@ extern crate env_logger;
 use actix_web::{middleware, App, HttpServer};
 use std::env;
 use std::sync::Arc;
+use undermoon::broker::persistence::JsonFileStorage;
 use undermoon::broker::service::{configure_app, MemBrokerConfig, MemBrokerService};
 
 fn gen_conf() -> MemBrokerConfig {
@@ -28,6 +29,12 @@ fn gen_conf() -> MemBrokerConfig {
         failure_ttl: s.get::<u64>("failure_ttl").unwrap_or_else(|_| 60),
         failure_quorum: s.get::<u64>("failure_quorum").unwrap_or_else(|_| 1),
         migration_limit: s.get::<u64>("migration_limit").unwrap_or_else(|_| 1),
+        meta_filename: s
+            .get::<String>("meta_filename")
+            .unwrap_or_else(|_| "metadata".to_string()),
+        auto_update_meta_file: s
+            .get::<bool>("auto_update_meta_file")
+            .unwrap_or_else(|_| false),
     }
 }
 
@@ -38,7 +45,9 @@ async fn main() -> std::io::Result<()> {
     let config = gen_conf();
     let address = config.address.clone();
 
-    let service = Arc::new(MemBrokerService::new(config));
+    let meta_storage = Arc::new(JsonFileStorage::new(config.meta_filename.clone()));
+
+    let service = Arc::new(MemBrokerService::new(config, meta_storage));
     HttpServer::new(move || {
         let service = service.clone();
         App::new()

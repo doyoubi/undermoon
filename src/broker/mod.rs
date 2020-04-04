@@ -1,3 +1,4 @@
+pub mod persistence;
 pub mod service;
 mod store;
 
