@@ -25,13 +25,14 @@ which will be replaced by [another implementation backed by Etcd]((https://githu
 
 ##### Coordinator
 Coordinator will synchronize the metadata between broker and server proxy.
-It also actively checks the liveness of server proxy and initiates a failover.
+It also actively checks the liveness of server proxy and initiates failover.
 
 ##### Storage Cluster
 The storage cluster consists of server proxies and Redis instances.
 It serves just like the official Redis Cluster to the applications.
 A Redis Cluster Proxy could be added between it and applications
-so that applications don't need to upgrade their Redis clients.
+so that applications don't need to upgrade their Redis clients to smart clients.
+
 ###### Chunk
 Chunk is the smallest building block of every single exposed Redis Cluster.
 Each chunk consists of 4 Redis instances and 2 server proxies evenly distributed in two different physical machines.
@@ -57,7 +58,7 @@ $ make docker-mem-broker
 ```
 
 #### Register Proxies
-After everything is up, run the initialize script to register the storage resources:
+After everything is up, run the initialize script to register the storage resources through HTTP API:
 ```bash
 $ ./examples/mem-broker/init.sh
 ```
@@ -87,7 +88,8 @@ Before connecting to the cluster, you need to add these hosts to you `/etc/hosts
 ```
 
 Let's checkout our cluster. It's created by some randomly chosen proxies.
-We need to find them out first. Note that you need to install the `jq` command.
+We need to find them out first.
+Note that you need to install the `jq` command to parse json easily for the command below.
 
 ```bash
 # List the proxies of the our "mycluster`:
@@ -113,6 +115,7 @@ server_proxy6:6006> get b
 -> Redirected to slot [3300] located at server_proxy5:6005
 (nil)
 ```
+Great! We can use our created cluster just like the official Redis Cluster.
 
 #### Scale Up
 It actually has 4 Redis nodes under the hood.
@@ -159,8 +162,10 @@ $ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.no
 ```
 
 #### Failover
-If you shutdown any proxy, as long as the whole `undermoon` cluster has remaining proxies,
-it will do the failover.
+If you shutdown any proxy, the replica will be promoted to master.
+And as long as the whole `undermoon` cluster has remaining free proxies,
+it can automatically replace the failed proxy,
+
 ```bash
 # List the proxies of the our "mycluster`:
 $ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
@@ -185,7 +190,7 @@ $ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.no
 "server_proxy4:6004"
 ```
 
-And we can remove the server_proxy3 from the `undermoon` cluster.
+And we can remove the server_proxy3 from the `undermoon` cluster now.
 ```bash
 $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 ```
@@ -199,8 +204,3 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 - [Proxy UMCTL command](./docs/meta_command.md)
 - [HTTP Broker API](./docs/broker_http_api.md)
 - [Memory Broker API](./docs/memory_broker_api.md)
-
-
-## TODO
-- Limit running commands, connections
-- Statistics
