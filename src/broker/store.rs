@@ -1,3 +1,4 @@
+use super::persistence::MetaSyncError;
 use crate::common::cluster::{
     Cluster, MigrationMeta, MigrationTaskMeta, Node, PeerProxy, Proxy, Range, RangeList, ReplMeta,
     ReplPeer, SlotRange, SlotRangeTag,
@@ -1628,6 +1629,7 @@ pub enum MetaStoreError {
         error: String,
     },
     SlotsAlreadyEven,
+    SyncError(MetaSyncError),
 }
 
 impl MetaStoreError {
@@ -1649,6 +1651,7 @@ impl MetaStoreError {
             Self::MigrationRunning => "MIGRATION_RUNNING",
             Self::InvalidConfig { .. } => "INVALID_CONFIG",
             Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
+            Self::SyncError(err) => err.to_code(),
         }
     }
 }
@@ -1662,6 +1665,12 @@ impl fmt::Display for MetaStoreError {
 impl Error for MetaStoreError {
     fn cause(&self) -> Option<&dyn Error> {
         None
+    }
+}
+
+impl From<MetaSyncError> for MetaStoreError {
+    fn from(sync_err: MetaSyncError) -> Self {
+        MetaStoreError::SyncError(sync_err)
     }
 }
 

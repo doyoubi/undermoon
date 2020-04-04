@@ -1,4 +1,4 @@
-use super::persistence::MetaStorage;
+use super::persistence::{MetaStorage, MetaSyncError};
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
@@ -114,6 +114,14 @@ impl MemBrokerService {
             store: Arc::new(RwLock::new(MetaStore::default())),
             meta_storage,
         }
+    }
+
+    async fn trigger_update(&self) -> Result<(), MetaSyncError> {
+        if self.config.auto_update_meta_file {
+            let store = self.store.clone();
+            self.meta_storage.store(store).await?;
+        }
+        Ok(())
     }
 
     pub fn get_all_data(&self) -> MetaStore {
@@ -323,7 +331,9 @@ pub struct ProxyResourcePayload {
 async fn add_proxy(
     (proxy_resource, state): (web::Json<ProxyResourcePayload>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    state.add_proxy(proxy_resource.into_inner()).map(|()| "")
+    let res = state.add_proxy(proxy_resource.into_inner()).map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -340,14 +350,18 @@ async fn add_cluster(
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     let CreateClusterPayload { node_number } = payload.into_inner();
-    state.add_cluster(cluster_name, node_number).map(|()| "")
+    let res = state.add_cluster(cluster_name, node_number).map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 async fn remove_cluster(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    state.remove_cluster(cluster_name).map(|()| "")
+    let res = state.remove_cluster(cluster_name).map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -364,14 +378,18 @@ async fn auto_add_nodes(
 ) -> Result<web::Json<Vec<Node>>, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     let node_num = payload.into_inner().node_number;
-    state.auto_add_node(cluster_name, node_num).map(web::Json)
+    let res = state.auto_add_node(cluster_name, node_num).map(web::Json)?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 async fn audo_delete_free_nodes(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    state.audo_delete_free_nodes(cluster_name).map(|()| "")
+    let res = state.audo_delete_free_nodes(cluster_name).map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 async fn change_config(
@@ -382,52 +400,71 @@ async fn change_config(
     ),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    state
+    let res = state
         .change_config(cluster_name, config.into_inner())
-        .map(|()| "")
+        .map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 async fn balance_masters(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    state.balance_masters(cluster_name).map(|()| "")
+    let res = state.balance_masters(cluster_name).map(|()| "");
+    let sync_res = state.trigger_update().await;
+    let res = res?;
+    sync_res?;
+    Ok(res)
 }
 
 async fn remove_proxy(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
-    state.remove_proxy(proxy_address).map(|()| "")
+    let res = state.remove_proxy(proxy_address).map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 async fn migrate_slots(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name,) = path.into_inner();
-    state.migrate_slots(cluster_name).map(|()| "")
+    let res = state.migrate_slots(cluster_name).map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
-async fn add_failure((path, state): (web::Path<(String, String)>, ServiceState)) -> &'static str {
+async fn add_failure(
+    (path, state): (web::Path<(String, String)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
     let (server_proxy_address, reporter_id) = path.into_inner();
     state.add_failure(server_proxy_address, reporter_id);
-    ""
+    state.trigger_update().await?;
+    Ok("")
 }
 
 async fn commit_migration(
     (task, state): (web::Json<MigrationTaskMeta>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    state.commit_migration(task.into_inner()).map(|()| "")
+    let res = state.commit_migration(task.into_inner()).map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
 }
 
 async fn replace_failed_node(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<web::Json<ReplaceProxyResponse>, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
-    state
+    let res = state
         .replace_failed_proxy(proxy_address)
         .map(|proxy| ReplaceProxyResponse { proxy })
-        .map(web::Json)
+        .map(web::Json);
+    let sync_res = state.trigger_update().await;
+    let res = res?;
+    sync_res?;
+    Ok(res)
 }
 
 async fn get_failed_proxies(state: ServiceState) -> impl Responder {
@@ -454,6 +491,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::MigrationRunning => http::StatusCode::CONFLICT,
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::SyncError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
