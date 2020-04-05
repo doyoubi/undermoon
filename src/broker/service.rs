@@ -1,4 +1,5 @@
 use super::persistence::{MetaStorage, MetaSyncError};
+use super::replication::MetaReplicator;
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
@@ -98,18 +99,22 @@ pub struct MemBrokerConfig {
     pub meta_filename: String,
     pub auto_update_meta_file: bool,
     pub update_meta_file_interval: Option<NonZeroU64>,
+    pub replica_addresses: Vec<String>,
+    pub sync_meta_interval: Option<NonZeroU64>,
 }
 
 pub struct MemBrokerService {
     config: MemBrokerConfig,
     store: Arc<RwLock<MetaStore>>,
     meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
+    meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
 }
 
 impl MemBrokerService {
     pub fn new(
         config: MemBrokerConfig,
         meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
+        meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
         last_meta_store: Option<MetaStore>,
     ) -> Result<Self, MetaStoreError> {
         info!("config: {:?}", config);
@@ -123,6 +128,7 @@ impl MemBrokerService {
             config,
             store: Arc::new(RwLock::new(meta_store)),
             meta_storage,
+            meta_replicator,
         };
         Ok(service)
     }
@@ -137,6 +143,15 @@ impl MemBrokerService {
     pub async fn update_meta_file(&self) -> Result<(), MetaSyncError> {
         let store = self.store.clone();
         self.meta_storage.store(store).await
+    }
+
+    pub async fn sync_meta(&self) -> Result<(), MetaSyncError> {
+        if self.config.replica_addresses.is_empty() {
+            return Ok(());
+        }
+        let store = self.store.read().map_err(|_| MetaSyncError::Lock)?.clone();
+        let store = Arc::new(store);
+        self.meta_replicator.sync_meta(store).await
     }
 
     pub fn get_all_data(&self) -> MetaStore {
