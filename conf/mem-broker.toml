@@ -7,4 +7,12 @@ migration_limit = 2
 auto_update_meta_file = false
 # Periodically update meta file.
 # This is in seconds.
+# Use zero to disable it.
 update_meta_file_interval = 30
+
+# The HTTP API address of other memory brokers.
+replica_addresses = []
+# Periodically update meta file.
+# This is in seconds.
+# Use zero to disable it.
+sync_meta_interval = 5

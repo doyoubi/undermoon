@@ -128,6 +128,7 @@ impl JsonFile {
 #[derive(Debug)]
 pub enum MetaSyncError {
     Io(io::Error),
+    Replication,
     Json,
     Lock,
 }
@@ -136,6 +137,7 @@ impl MetaSyncError {
     pub fn to_code(&self) -> &str {
         match self {
             Self::Io(_) => "PERSISTENCE_IO_ERROR",
+            Self::Replication => "REPLICATION_ERROR",
             Self::Json => "PERSISTENCE_JSON_ERROR",
             Self::Lock => "PERSISTENCE_LOCK_ERROR",
         }

@@ -11,8 +11,8 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 use undermoon::broker::{
-    configure_app, JsonFileStorage, MemBrokerConfig, MemBrokerService, MetaStorage, MetaStoreError,
-    MetaSyncError,
+    configure_app, JsonFileStorage, JsonMetaReplicator, MemBrokerConfig, MemBrokerService,
+    MetaStorage, MetaStoreError, MetaSyncError,
 };
 
 fn gen_conf() -> MemBrokerConfig {
@@ -43,6 +43,12 @@ fn gen_conf() -> MemBrokerConfig {
         update_meta_file_interval: NonZeroU64::new(
             s.get::<u64>("update_meta_file_interval")
                 .unwrap_or_else(|_| 60),
+        ),
+        replica_addresses: s
+            .get::<Vec<String>>("replica_addresses")
+            .unwrap_or_else(|_| vec![]),
+        sync_meta_interval: NonZeroU64::new(
+            s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 10),
         ),
     }
 }
@@ -77,27 +83,49 @@ async fn update_meta_file(service: Arc<MemBrokerService>, interval: Duration) {
     }
 }
 
+async fn sync_meta_to_replicas(service: Arc<MemBrokerService>, interval: Duration) {
+    loop {
+        Delay::new(interval).await;
+        trace!("periodically sync metadata to replicas");
+        if let Err(err) = service.sync_meta().await {
+            error!("failed to sync metadata to replicas: {}", err);
+        }
+    }
+}
+
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     let config = gen_conf();
     let address = config.address.clone();
-    let interval = config.update_meta_file_interval;
+    let update_file_interval = config.update_meta_file_interval;
+    let sync_meta_interval = config.sync_meta_interval;
 
     let meta_storage = Arc::new(JsonFileStorage::new(config.meta_filename.clone()));
     let meta_store = meta_storage
         .load()
         .await
         .map_err(meta_sync_error_to_io_err)?;
-    let service =
-        MemBrokerService::new(config, meta_storage, meta_store).map_err(meta_error_to_io_error)?;
+
+    let http_client = reqwest::Client::new();
+    let meta_replicator = JsonMetaReplicator::new(config.replica_addresses.clone(), http_client);
+    let meta_replicator = Arc::new(meta_replicator);
+
+    let service = MemBrokerService::new(config, meta_storage, meta_replicator, meta_store)
+        .map_err(meta_error_to_io_error)?;
     let service = Arc::new(service);
 
-    if let Some(interval) = interval {
+    if let Some(interval) = update_file_interval {
         info!("start periodically updating meta file");
         let interval = Duration::from_secs(interval.get());
         actix_rt::spawn(update_meta_file(service.clone(), interval));
+    }
+
+    if let Some(interval) = sync_meta_interval {
+        info!("start periodically sync meta to replicas");
+        let interval = Duration::from_secs(interval.get());
+        actix_rt::spawn(sync_meta_to_replicas(service.clone(), interval));
     }
 
     HttpServer::new(move || {
