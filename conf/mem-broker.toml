@@ -2,5 +2,9 @@ address = "127.0.0.1:7799"
 failure_ttl = 60
 failure_quorum = 1
 migration_limit = 2
-auto_update_meta_file = false
 
+# Refresh meta file on each update
+auto_update_meta_file = false
+# Periodically update meta file.
+# This is in seconds.
+update_meta_file_interval = 30

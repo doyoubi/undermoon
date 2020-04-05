@@ -5,8 +5,11 @@ extern crate log;
 extern crate config;
 extern crate env_logger;
 use actix_web::{middleware, App, HttpServer};
+use futures_timer::Delay;
 use std::env;
+use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::time::Duration;
 use undermoon::broker::{
     configure_app, JsonFileStorage, MemBrokerConfig, MemBrokerService, MetaStorage, MetaStoreError,
     MetaSyncError,
@@ -37,6 +40,10 @@ fn gen_conf() -> MemBrokerConfig {
         auto_update_meta_file: s
             .get::<bool>("auto_update_meta_file")
             .unwrap_or_else(|_| false),
+        update_meta_file_interval: NonZeroU64::new(
+            s.get::<u64>("update_meta_file_interval")
+                .unwrap_or_else(|_| 60),
+        ),
     }
 }
 
@@ -60,12 +67,23 @@ fn meta_error_to_io_error(err: MetaStoreError) -> std::io::Error {
     }
 }
 
+async fn update_meta_file(service: Arc<MemBrokerService>, interval: Duration) {
+    loop {
+        Delay::new(interval).await;
+        trace!("periodically update meta file");
+        if let Err(err) = service.update_meta_file().await {
+            error!("failed to update meta file: {}", err);
+        }
+    }
+}
+
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     let config = gen_conf();
     let address = config.address.clone();
+    let interval = config.update_meta_file_interval;
 
     let meta_storage = Arc::new(JsonFileStorage::new(config.meta_filename.clone()));
     let meta_store = meta_storage
@@ -74,8 +92,14 @@ async fn main() -> std::io::Result<()> {
         .map_err(meta_sync_error_to_io_err)?;
     let service =
         MemBrokerService::new(config, meta_storage, meta_store).map_err(meta_error_to_io_error)?;
-
     let service = Arc::new(service);
+
+    if let Some(interval) = interval {
+        info!("start periodically updating meta file");
+        let interval = Duration::from_secs(interval.get());
+        actix_rt::spawn(update_meta_file(service.clone(), interval));
+    }
+
     HttpServer::new(move || {
         let service = service.clone();
         App::new()

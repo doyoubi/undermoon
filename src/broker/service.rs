@@ -12,6 +12,7 @@ use actix_web::dev::Service;
 use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
 use chrono;
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};
 
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
@@ -41,6 +42,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             })
             .route("/version", web::get().to(get_version))
             .route("/metadata", web::get().to(get_all_metadata))
+            .route("/metadata", web::put().to(restore_metadata))
             // Broker api
             .route("/clusters/names", web::get().to(get_cluster_names))
             .route(
@@ -95,6 +97,7 @@ pub struct MemBrokerConfig {
     pub migration_limit: u64,
     pub meta_filename: String,
     pub auto_update_meta_file: bool,
+    pub update_meta_file_interval: Option<NonZeroU64>,
 }
 
 pub struct MemBrokerService {
@@ -126,10 +129,14 @@ impl MemBrokerService {
 
     async fn trigger_update(&self) -> Result<(), MetaSyncError> {
         if self.config.auto_update_meta_file {
-            let store = self.store.clone();
-            self.meta_storage.store(store).await?;
+            self.update_meta_file().await?;
         }
         Ok(())
+    }
+
+    pub async fn update_meta_file(&self) -> Result<(), MetaSyncError> {
+        let store = self.store.clone();
+        self.meta_storage.store(store).await
     }
 
     pub fn get_all_data(&self) -> MetaStore {
@@ -137,6 +144,13 @@ impl MemBrokerService {
             .read()
             .expect("MemBrokerService::get_all_data")
             .clone()
+    }
+
+    pub fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::restore_metadata")
+            .restore(meta_store)
     }
 
     pub fn get_proxy_addresses(&self) -> Vec<String> {
@@ -296,6 +310,12 @@ async fn get_version(_req: HttpRequest) -> &'static str {
 async fn get_all_metadata(state: ServiceState) -> impl Responder {
     let metadata = state.get_all_data();
     web::Json(metadata)
+}
+
+async fn restore_metadata(
+    (meta_store, state): (web::Json<MetaStore>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    state.restore_metadata(meta_store.into_inner()).map(|_| "")
 }
 
 async fn get_proxy_addresses(state: ServiceState) -> impl Responder {
@@ -500,7 +520,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SyncError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
-            MetaStoreError::InvalidMetaVersion => http::StatusCode::INTERNAL_SERVER_ERROR,
+            MetaStoreError::InvalidMetaVersion => http::StatusCode::CONFLICT,
         }
     }
 

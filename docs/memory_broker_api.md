@@ -2,7 +2,7 @@
 Memory Broker API is a superset of [Broker HTTP API](./broker_http_api.md).
 It includes the following additional APIs.
 
-#### (1) Get the version of undermoon
+#### Get the version of undermoon
 `GET` /api/v2/version
 
 ##### Success
@@ -12,7 +12,7 @@ HTTP 200
 0.3.0
 ```
 
-#### (2) Get inner metadata
+#### Get inner metadata
 This is not a stable API and should only be used for debugging.
 
 `GET` /api/v2/metadata
@@ -21,6 +21,7 @@ This is not a stable API and should only be used for debugging.
 HTTP 200
 
 {
+  "version": "mem-broker-0.1",
   "global_epoch": 0,
   "clusters": {},
   "all_proxies": {},
@@ -29,7 +30,33 @@ HTTP 200
 }
 ```
 
-#### (3) Create cluster
+#### Restore metadata
+Restore all the metadata.
+
+`PUT` /api/v2/metadata
+##### Request
+```
+{
+  "version": "mem-broker-0.1",
+  "global_epoch": 0,
+  "clusters": {},
+  "all_proxies": {},
+  "failed_proxies": [],
+  "failures": {}
+}
+```
+
+##### Success
+```
+HTTP 200
+```
+
+##### Error
+```
+HTTP 409 { "error": "INVALID_META_VERSION" }
+```
+
+#### Create cluster
 `POST` /api/v2/clusters/meta/<cluster_name>
 
 ##### Request
@@ -56,7 +83,7 @@ HTTP 409 { "error": "ALREADY_EXISTED" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
 ```
 
-#### (4) Delete cluster
+#### Delete cluster
 `DELETE` /api/v2/clusters/meta/<cluster_name>
 
 ##### Success
@@ -70,7 +97,7 @@ HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 ```
 
-#### (5) Add nodes to cluster
+#### Add nodes to cluster
 `PATCH` /api/v2/clusters/nodes/<cluster_name>
 
 ##### Request
@@ -96,7 +123,7 @@ HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
-#### (6) Delete Unused nodes in a cluster
+#### Delete Unused nodes in a cluster
 `DELETE` /api/v2/clusters/free_nodes/<cluster_name>
 
 ##### Success
@@ -112,7 +139,7 @@ HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
-#### (7) Start migration
+#### Start migration
 `POST` /api/v2/clusters/migrations/<cluster_name>
   
 ##### Success
@@ -128,7 +155,7 @@ HTTP 409 { "error": "SLOTS_ALREADY_EVEN" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
-#### (8) Change cluster config
+#### Change cluster config
 `PATCH` /api/v2/clusters/config/<cluster_name>
 
 ##### Request
@@ -155,7 +182,7 @@ HTTP 409 {
 }
 ```
 
-#### (9) Add proxy
+#### Add proxy
 `POST` /api/v2/proxies/meta
 
 ##### Request
@@ -178,7 +205,7 @@ HTTP 400 { "error": "INVALID_PROXY_ADDRESS" }
 HTTP 409 { "error": "ALREADY_EXISTED" }
 ```
 
-#### (10) Delete proxy
+#### Delete proxy
 `DELETE` /api/v2/proxies/meta/{proxy_address}
 
 ##### Success
@@ -192,7 +219,7 @@ HTTP 404 { "error": "PROXY_NOT_FOUND" }
 HTTP 409 { "error": "IN_USE" }
 ```
 
-#### (11) Balance Masters
+#### Balance Masters
 `PUT` /api/v2/clusters/balance/<cluster_name>
 
 ##### Success
