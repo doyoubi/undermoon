@@ -1616,6 +1616,18 @@ impl MetaStore {
     pub fn get_failed_proxies(&self) -> Vec<String> {
         self.failed_proxies.iter().cloned().collect()
     }
+
+    pub fn force_bump_all_epoch(&mut self, new_epoch: u64) -> Result<(), MetaStoreError> {
+        if new_epoch <= self.global_epoch {
+            return Err(MetaStoreError::SmallEpoch);
+        }
+        self.global_epoch = new_epoch;
+
+        for cluster in self.clusters.values_mut() {
+            cluster.epoch = new_epoch;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -1642,6 +1654,7 @@ pub enum MetaStoreError {
     SlotsAlreadyEven,
     SyncError(MetaSyncError),
     InvalidMetaVersion,
+    SmallEpoch,
 }
 
 impl MetaStoreError {
@@ -1665,6 +1678,7 @@ impl MetaStoreError {
             Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
             Self::SyncError(err) => err.to_code(),
             Self::InvalidMetaVersion => "INVALID_META_VERSION",
+            Self::SmallEpoch => "EPOCH_SMALLER_THAN_CURRENT",
         }
     }
 }
@@ -2734,5 +2748,28 @@ mod tests {
         {
             assert_ne!(chunk.role_position, ChunkRolePosition::Normal);
         }
+    }
+
+    #[test]
+    fn test_bump_epoch() {
+        let mut store = MetaStore::default();
+        let host_num = 3;
+        let proxy_per_host = 1;
+        let all_proxy_num = host_num * proxy_per_host;
+        add_testing_proxies(&mut store, host_num, proxy_per_host);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+
+        const NEW_EPOCH: u64 = 233;
+
+        assert!(cluster.get_epoch() < NEW_EPOCH);
+
+        store.force_bump_all_epoch(NEW_EPOCH).unwrap();
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        assert_eq!(cluster.get_epoch(), NEW_EPOCH);
+        assert_eq!(store.get_global_epoch(), NEW_EPOCH);
     }
 }
