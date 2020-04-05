@@ -1,3 +1,4 @@
+use super::persistence::MetaSyncError;
 use crate::common::cluster::{
     Cluster, MigrationMeta, MigrationTaskMeta, Node, PeerProxy, Proxy, Range, RangeList, ReplMeta,
     ReplPeer, SlotRange, SlotRangeTag,
@@ -5,6 +6,7 @@ use crate::common::cluster::{
 use crate::common::cluster::{ClusterName, Role};
 use crate::common::config::ClusterConfig;
 use crate::common::utils::SLOT_NUM;
+use crate::common::version::UNDERMOON_MEM_BROKER_META_VERSION;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
@@ -250,6 +252,7 @@ struct MigrationSlots {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct MetaStore {
+    version: String,
     global_epoch: u64,
     clusters: HashMap<ClusterName, ClusterStore>,
     // proxy_address => nodes and cluster_name
@@ -263,6 +266,7 @@ pub struct MetaStore {
 impl Default for MetaStore {
     fn default() -> Self {
         Self {
+            version: UNDERMOON_MEM_BROKER_META_VERSION.to_string(),
             global_epoch: 0,
             clusters: HashMap::new(),
             all_proxies: HashMap::new(),
@@ -273,6 +277,14 @@ impl Default for MetaStore {
 }
 
 impl MetaStore {
+    pub fn restore(&mut self, other: MetaStore) -> Result<(), MetaStoreError> {
+        if self.version != other.version {
+            return Err(MetaStoreError::InvalidMetaVersion);
+        }
+        *self = other;
+        Ok(())
+    }
+
     pub fn get_global_epoch(&self) -> u64 {
         self.global_epoch
     }
@@ -1628,6 +1640,8 @@ pub enum MetaStoreError {
         error: String,
     },
     SlotsAlreadyEven,
+    SyncError(MetaSyncError),
+    InvalidMetaVersion,
 }
 
 impl MetaStoreError {
@@ -1649,6 +1663,8 @@ impl MetaStoreError {
             Self::MigrationRunning => "MIGRATION_RUNNING",
             Self::InvalidConfig { .. } => "INVALID_CONFIG",
             Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
+            Self::SyncError(err) => err.to_code(),
+            Self::InvalidMetaVersion => "INVALID_META_VERSION",
         }
     }
 }
@@ -1662,6 +1678,12 @@ impl fmt::Display for MetaStoreError {
 impl Error for MetaStoreError {
     fn cause(&self) -> Option<&dyn Error> {
         None
+    }
+}
+
+impl From<MetaSyncError> for MetaStoreError {
+    fn from(sync_err: MetaSyncError) -> Self {
+        MetaStoreError::SyncError(sync_err)
     }
 }
 
