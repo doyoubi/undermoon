@@ -86,7 +86,8 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             .route(
                 "/proxies/meta/{proxy_address}",
                 web::delete().to(remove_proxy),
-            ),
+            )
+            .route("/epoch/{new_epoch}", web::put().to(bump_epoch)),
     );
 }
 
@@ -314,6 +315,13 @@ impl MemBrokerService {
             .expect("MemBrokerService::get_failed_proxies")
             .get_failed_proxies()
     }
+
+    pub fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::force_bump_all_epoch")
+            .force_bump_all_epoch(new_epoch)
+    }
 }
 
 type ServiceState = web::Data<Arc<MemBrokerService>>;
@@ -461,6 +469,15 @@ async fn balance_masters(
     Ok(res)
 }
 
+async fn bump_epoch(
+    (path, state): (web::Path<(u64,)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    let new_epoch = path.into_inner().0;
+    state.force_bump_all_epoch(new_epoch)?;
+    state.trigger_update().await?;
+    Ok("")
+}
+
 async fn remove_proxy(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
@@ -536,6 +553,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SyncError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::InvalidMetaVersion => http::StatusCode::CONFLICT,
+            MetaStoreError::SmallEpoch => http::StatusCode::CONFLICT,
         }
     }
 

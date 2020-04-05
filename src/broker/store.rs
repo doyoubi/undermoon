@@ -1616,6 +1616,25 @@ impl MetaStore {
     pub fn get_failed_proxies(&self) -> Vec<String> {
         self.failed_proxies.iter().cloned().collect()
     }
+
+    pub fn force_bump_all_epoch(&mut self, new_epoch: u64) -> Result<(), MetaStoreError> {
+        if new_epoch <= self.global_epoch {
+            return Err(MetaStoreError::SmallEpoch);
+        }
+        self.global_epoch = new_epoch;
+
+        for cluster in self.clusters.values_mut() {
+            cluster.epoch = new_epoch;
+            for chunk in cluster.chunks.iter_mut() {
+                for migrating_slots in chunk.migrating_slots.iter_mut() {
+                    for slots in migrating_slots.iter_mut() {
+                        slots.meta.epoch = new_epoch;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -1642,6 +1661,7 @@ pub enum MetaStoreError {
     SlotsAlreadyEven,
     SyncError(MetaSyncError),
     InvalidMetaVersion,
+    SmallEpoch,
 }
 
 impl MetaStoreError {
@@ -1665,6 +1685,7 @@ impl MetaStoreError {
             Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
             Self::SyncError(err) => err.to_code(),
             Self::InvalidMetaVersion => "INVALID_META_VERSION",
+            Self::SmallEpoch => "EPOCH_SMALLER_THAN_CURRENT",
         }
     }
 }

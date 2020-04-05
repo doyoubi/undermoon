@@ -232,3 +232,18 @@ HTTP 200
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 ```
+
+#### Force to bump all epoch
+Update all the epoch to the specified new epoch.
+This should only be used when metadata is stale after failover
+to make the metadata be able synchronized to server proxies again.
+`PUT` /api/v2/epoch/<new_epoch>
+
+##### Success
+```
+HTTP 200
+```
+
+##### Error
+```
+HTTP 409 { "error": "EPOCH_SMALLER_THAN_CURRENT" }
