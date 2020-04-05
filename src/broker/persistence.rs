@@ -4,6 +4,7 @@ use futures::Future;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::path::Path;
 use std::pin::Pin;
 use std::str;
 use std::sync::{Arc, RwLock};
@@ -18,7 +19,7 @@ pub trait MetaStorage {
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaSyncError>> + Send + 's>>;
     fn load<'s>(
         &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<MetaStore, MetaSyncError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<MetaStore>, MetaSyncError>> + Send + 's>>;
 }
 
 pub struct JsonFileStorage {
@@ -39,7 +40,7 @@ impl JsonFileStorage {
         self.json_file.store(store).await
     }
 
-    async fn load_impl(&self) -> Result<MetaStore, MetaSyncError> {
+    async fn load_impl(&self) -> Result<Option<MetaStore>, MetaSyncError> {
         let _guard = self.lock.lock().await;
         self.json_file.load().await
     }
@@ -55,7 +56,7 @@ impl MetaStorage for JsonFileStorage {
 
     fn load<'s>(
         &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<MetaStore, MetaSyncError>> + Send + 's>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<MetaStore>, MetaSyncError>> + Send + 's>> {
         Box::pin(self.load_impl())
     }
 }
@@ -97,7 +98,11 @@ impl JsonFile {
         Ok(())
     }
 
-    async fn load(&self) -> Result<MetaStore, MetaSyncError> {
+    async fn load(&self) -> Result<Option<MetaStore>, MetaSyncError> {
+        if !Path::new(self.filename.as_str()).exists() {
+            return Ok(None);
+        }
+
         let mut file = File::open(self.filename.as_str())
             .await
             .map_err(MetaSyncError::Io)?;

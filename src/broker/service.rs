@@ -107,13 +107,21 @@ impl MemBrokerService {
     pub fn new(
         config: MemBrokerConfig,
         meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
-    ) -> Self {
+        last_meta_store: Option<MetaStore>,
+    ) -> Result<Self, MetaStoreError> {
         info!("config: {:?}", config);
-        Self {
-            config,
-            store: Arc::new(RwLock::new(MetaStore::default())),
-            meta_storage,
+        let mut meta_store = MetaStore::default();
+        if let Some(last) = last_meta_store {
+            info!("restore metadata");
+            meta_store.restore(last)?;
         }
+
+        let service = Self {
+            config,
+            store: Arc::new(RwLock::new(meta_store)),
+            meta_storage,
+        };
+        Ok(service)
     }
 
     async fn trigger_update(&self) -> Result<(), MetaSyncError> {
@@ -492,6 +500,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SyncError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
+            MetaStoreError::InvalidMetaVersion => http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
