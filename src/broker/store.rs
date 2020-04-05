@@ -1625,13 +1625,6 @@ impl MetaStore {
 
         for cluster in self.clusters.values_mut() {
             cluster.epoch = new_epoch;
-            for chunk in cluster.chunks.iter_mut() {
-                for migrating_slots in chunk.migrating_slots.iter_mut() {
-                    for slots in migrating_slots.iter_mut() {
-                        slots.meta.epoch = new_epoch;
-                    }
-                }
-            }
         }
         Ok(())
     }
