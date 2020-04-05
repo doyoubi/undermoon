@@ -7,6 +7,7 @@ HTTP Broker should at least implement the following apis to work with Coordinato
 
 ##### (1) GET /api/v2/clusters/names?offset=<int>&limit=<int>
 Get all the cluster names.
+`offset` starts from zero.
 ```
 Response:
 {
@@ -51,6 +52,7 @@ If not:
 
 ##### (3) GET /api/v2/proxies/addresses?offset=<int>&limit=<int>
 Get all the server-side proxy addresses.
+`offset` starts from zero.
 ```
 Response:
 {

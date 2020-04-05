@@ -17,7 +17,7 @@ replica_addresses = []
 # replica_addresses = ["192.168.0.123:7799", "192.168.0.123:8899"]
 # replica_addresses = "192.168.0.123:7799,192.168.0.123:8899"
 
-# Periodically update meta file.
+# Periodically synchronize metadata to replicas.
 # This is in seconds.
 # Use zero to disable it.
 sync_meta_interval = 0

@@ -1407,11 +1407,6 @@ impl MetaStore {
             Some(proxy) => proxy.cluster.clone(),
         };
 
-        if self.failed_proxies.contains(&failed_proxy_address) {
-            self.failures.remove(&failed_proxy_address);
-            return Ok(None);
-        }
-
         let cluster_name = match cluster_name {
             None => {
                 self.failures.remove(&failed_proxy_address);
