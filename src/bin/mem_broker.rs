@@ -27,6 +27,16 @@ fn gen_conf() -> MemBrokerConfig {
         .map(|_| ())
         .unwrap_or_else(|e| warn!("failed to read config from env vars {:?}", e));
 
+    let replica_addresses = s
+        .get::<Vec<String>>("replica_addresses")
+        .unwrap_or_else(|_| {
+            s.get::<String>("replica_addresses")
+                .unwrap_or_else(|_| String::new())
+                .split(',')
+                .map(|s| s.to_string())
+                .collect()
+        });
+
     MemBrokerConfig {
         address: s
             .get::<String>("address")
@@ -44,9 +54,7 @@ fn gen_conf() -> MemBrokerConfig {
             s.get::<u64>("update_meta_file_interval")
                 .unwrap_or_else(|_| 60),
         ),
-        replica_addresses: s
-            .get::<Vec<String>>("replica_addresses")
-            .unwrap_or_else(|_| vec![]),
+        replica_addresses,
         sync_meta_interval: NonZeroU64::new(
             s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 10),
         ),
