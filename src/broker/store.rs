@@ -298,6 +298,19 @@ impl MetaStore {
         self.all_proxies.keys().cloned().collect()
     }
 
+    pub fn get_proxies_with_pagination(
+        &self,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> Vec<String> {
+        let offset = offset.unwrap_or(0);
+        let it = self.all_proxies.keys().skip(offset);
+        match limit {
+            None => it.cloned().collect(),
+            Some(limit) => it.take(limit).cloned().collect(),
+        }
+    }
+
     fn get_cluster_store(
         clusters: &HashMap<ClusterName, ClusterStore>,
         cluster_name: &ClusterName,
@@ -380,6 +393,19 @@ impl MetaStore {
 
     pub fn get_cluster_names(&self) -> Vec<ClusterName> {
         self.clusters.keys().cloned().collect()
+    }
+
+    pub fn get_cluster_names_with_pagination(
+        &self,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> Vec<ClusterName> {
+        let offset = offset.unwrap_or(0);
+        let it = self.clusters.keys().skip(offset);
+        match limit {
+            None => it.cloned().collect(),
+            Some(limit) => it.take(limit).cloned().collect(),
+        }
     }
 
     pub fn get_cluster_by_name(&self, cluster_name: &str, migration_limit: u64) -> Option<Cluster> {
