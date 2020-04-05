@@ -5,8 +5,9 @@ and use the HTTP 200 to indicate success or failure.
 
 HTTP Broker should at least implement the following apis to work with Coordinator:
 
-##### (1) GET /api/v2/clusters/names
+##### (1) GET /api/v2/clusters/names?offset=<int>&limit=<int>
 Get all the cluster names.
+`offset` starts from zero.
 ```
 Response:
 {
@@ -49,8 +50,9 @@ If not:
 { "cluster": null }
 ```
 
-##### (3) GET /api/v2/proxies/addresses
+##### (3) GET /api/v2/proxies/addresses?offset=<int>&limit=<int>
 Get all the server-side proxy addresses.
+`offset` starts from zero.
 ```
 Response:
 {

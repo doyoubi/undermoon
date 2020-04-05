@@ -97,6 +97,7 @@ pub struct MemBrokerConfig {
     pub failure_ttl: u64, // in seconds
     pub failure_quorum: u64,
     pub migration_limit: u64,
+    pub recover_from_meta_file: bool,
     pub meta_filename: String,
     pub auto_update_meta_file: bool,
     pub update_meta_file_interval: Option<NonZeroU64>,
@@ -169,11 +170,11 @@ impl MemBrokerService {
             .restore(meta_store)
     }
 
-    pub fn get_proxy_addresses(&self) -> Vec<String> {
+    pub fn get_proxy_addresses(&self, offset: Option<usize>, limit: Option<usize>) -> Vec<String> {
         self.store
             .read()
             .expect("MemBrokerService::get_proxy_addresses")
-            .get_proxies()
+            .get_proxies_with_pagination(offset, limit)
     }
 
     pub fn get_proxy_by_address(&self, address: &str) -> Option<Proxy> {
@@ -184,11 +185,15 @@ impl MemBrokerService {
             .get_proxy_by_address(address, migration_limit)
     }
 
-    pub fn get_cluster_names(&self) -> Vec<ClusterName> {
+    pub fn get_cluster_names(
+        &self,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> Vec<ClusterName> {
         self.store
             .read()
             .expect("MemBrokerService::get_cluster_names")
-            .get_cluster_names()
+            .get_cluster_names_with_pagination(offset, limit)
     }
 
     pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
@@ -341,8 +346,17 @@ async fn restore_metadata(
     state.restore_metadata(meta_store.into_inner()).map(|_| "")
 }
 
-async fn get_proxy_addresses(state: ServiceState) -> impl Responder {
-    let addresses = state.get_proxy_addresses();
+#[derive(Deserialize)]
+struct Pagination {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+async fn get_proxy_addresses(
+    (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
+) -> impl Responder {
+    let Pagination { offset, limit } = pagination;
+    let addresses = state.get_proxy_addresses(offset, limit);
     web::Json(ProxyAddressesPayload { addresses })
 }
 
@@ -354,8 +368,11 @@ async fn get_proxy_by_address(
     web::Json(ProxyPayload { proxy })
 }
 
-async fn get_cluster_names(state: ServiceState) -> impl Responder {
-    let names = state.get_cluster_names();
+async fn get_cluster_names(
+    (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
+) -> impl Responder {
+    let Pagination { offset, limit } = pagination;
+    let names = state.get_cluster_names(offset, limit);
     web::Json(ClusterNamesPayload { names })
 }
 

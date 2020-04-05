@@ -3,20 +3,21 @@ failure_ttl = 60
 failure_quorum = 1
 migration_limit = 2
 
+recover_from_meta_file = false
 meta_filename = "metadata"
 # Refresh meta file on each update
 auto_update_meta_file = false
 # Periodically update meta file.
 # This is in seconds.
 # Use zero to disable it.
-update_meta_file_interval = 30
+update_meta_file_interval = 0
 
 # The HTTP API address of other memory brokers.
 replica_addresses = []
 # replica_addresses = ["192.168.0.123:7799", "192.168.0.123:8899"]
 # replica_addresses = "192.168.0.123:7799,192.168.0.123:8899"
 
-# Periodically update meta file.
+# Periodically synchronize metadata to replicas.
 # This is in seconds.
 # Use zero to disable it.
-sync_meta_interval = 5
+sync_meta_interval = 0

@@ -32,7 +32,7 @@ fn gen_conf() -> MemBrokerConfig {
         .unwrap_or_else(|_| {
             s.get::<String>("replica_addresses")
                 .unwrap_or_else(|_| String::new())
-                .split(',')
+                .split_terminator(',')
                 .map(|s| s.to_string())
                 .collect()
         });
@@ -44,6 +44,9 @@ fn gen_conf() -> MemBrokerConfig {
         failure_ttl: s.get::<u64>("failure_ttl").unwrap_or_else(|_| 60),
         failure_quorum: s.get::<u64>("failure_quorum").unwrap_or_else(|_| 1),
         migration_limit: s.get::<u64>("migration_limit").unwrap_or_else(|_| 1),
+        recover_from_meta_file: s
+            .get::<bool>("recover_from_meta_file")
+            .unwrap_or_else(|_| false),
         meta_filename: s
             .get::<String>("meta_filename")
             .unwrap_or_else(|_| "metadata".to_string()),
@@ -52,11 +55,11 @@ fn gen_conf() -> MemBrokerConfig {
             .unwrap_or_else(|_| false),
         update_meta_file_interval: NonZeroU64::new(
             s.get::<u64>("update_meta_file_interval")
-                .unwrap_or_else(|_| 60),
+                .unwrap_or_else(|_| 0),
         ),
         replica_addresses,
         sync_meta_interval: NonZeroU64::new(
-            s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 10),
+            s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 0),
         ),
     }
 }
@@ -111,10 +114,14 @@ async fn main() -> std::io::Result<()> {
     let sync_meta_interval = config.sync_meta_interval;
 
     let meta_storage = Arc::new(JsonFileStorage::new(config.meta_filename.clone()));
-    let meta_store = meta_storage
-        .load()
-        .await
-        .map_err(meta_sync_error_to_io_err)?;
+    let meta_store = if config.recover_from_meta_file {
+        meta_storage
+            .load()
+            .await
+            .map_err(meta_sync_error_to_io_err)?
+    } else {
+        None
+    };
 
     let http_client = reqwest::Client::new();
     let meta_replicator = JsonMetaReplicator::new(config.replica_addresses.clone(), http_client);

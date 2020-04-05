@@ -2,10 +2,12 @@ use super::broker::{MetaDataBroker, MetaDataBrokerError};
 use crate::broker::MEM_BROKER_API_VERSION;
 use crate::common::cluster::{Cluster, ClusterName, Proxy};
 use crate::common::utils::vec_result_to_stream;
-use futures::{Future, FutureExt, Stream};
+use futures::{future, stream, Future, FutureExt, Stream, StreamExt};
 use reqwest;
 use serde_derive::Deserialize;
 use std::pin::Pin;
+
+const PAGE_SIZE: usize = 100;
 
 #[derive(Clone)]
 pub struct HttpMetaBroker {
@@ -30,8 +32,13 @@ impl HttpMetaBroker {
         )
     }
 
-    async fn get_cluster_names_impl(&self) -> Result<Vec<ClusterName>, MetaDataBrokerError> {
+    async fn get_cluster_names_impl(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<ClusterName>, MetaDataBrokerError> {
         let url = self.gen_url("/clusters/names");
+        let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -59,8 +66,13 @@ impl HttpMetaBroker {
         Ok(cluster)
     }
 
-    async fn get_proxy_addresses_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
+    async fn get_proxy_addresses_impl(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = self.gen_url("/proxies/addresses");
+        let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get proxy addresses {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -144,11 +156,18 @@ impl MetaDataBroker for HttpMetaBroker {
     fn get_cluster_names<'s>(
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<ClusterName, MetaDataBrokerError>> + Send + 's>> {
-        Box::pin(
-            self.get_cluster_names_impl()
-                .map(vec_result_to_stream)
-                .flatten_stream(),
-        )
+        let s = stream::iter(0..)
+            .then(move |page| {
+                let offset = page * PAGE_SIZE;
+                self.get_cluster_names_impl(offset, PAGE_SIZE)
+            })
+            .take_while(|names_res| match names_res {
+                Err(_) => future::ready(true),
+                Ok(names) => future::ready(!names.is_empty()),
+            })
+            .map(vec_result_to_stream)
+            .flatten();
+        Box::pin(s)
     }
 
     fn get_cluster<'s>(
@@ -162,11 +181,18 @@ impl MetaDataBroker for HttpMetaBroker {
     fn get_proxy_addresses<'s>(
         &'s self,
     ) -> Pin<Box<dyn Stream<Item = Result<String, MetaDataBrokerError>> + Send + 's>> {
-        Box::pin(
-            self.get_proxy_addresses_impl()
-                .map(vec_result_to_stream)
-                .flatten_stream(),
-        )
+        let s = stream::iter(0..)
+            .then(move |page| {
+                let offset = page * PAGE_SIZE;
+                self.get_proxy_addresses_impl(offset, PAGE_SIZE)
+            })
+            .take_while(|names_res| match names_res {
+                Err(_) => future::ready(true),
+                Ok(names) => future::ready(!names.is_empty()),
+            })
+            .map(vec_result_to_stream)
+            .flatten();
+        Box::pin(s)
     }
 
     fn get_proxy<'s>(
