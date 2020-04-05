@@ -97,6 +97,7 @@ pub struct MemBrokerConfig {
     pub failure_ttl: u64, // in seconds
     pub failure_quorum: u64,
     pub migration_limit: u64,
+    pub recover_from_meta_file: bool,
     pub meta_filename: String,
     pub auto_update_meta_file: bool,
     pub update_meta_file_interval: Option<NonZeroU64>,
