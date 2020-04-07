@@ -1,4 +1,5 @@
 use super::broker::{MetaDataBroker, MetaDataBrokerError};
+use super::service::BrokerAddresses;
 use crate::broker::MEM_BROKER_API_VERSION;
 use crate::common::cluster::{Cluster, ClusterName, Proxy};
 use crate::common::utils::vec_result_to_stream;
@@ -6,30 +7,34 @@ use futures::{future, stream, Future, FutureExt, Stream, StreamExt};
 use reqwest;
 use serde_derive::Deserialize;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const PAGE_SIZE: usize = 100;
 
-#[derive(Clone)]
 pub struct HttpMetaBroker {
-    broker_address: String,
+    broker_addresses: BrokerAddresses,
+    broker_index: AtomicUsize,
     client: reqwest::Client,
 }
 
 impl HttpMetaBroker {
-    pub fn new(broker_address: String, client: reqwest::Client) -> Self {
+    pub fn new(broker_addresses: BrokerAddresses, client: reqwest::Client) -> Self {
         HttpMetaBroker {
-            broker_address,
+            broker_addresses,
+            broker_index: AtomicUsize::new(0),
             client,
         }
     }
 }
 
 impl HttpMetaBroker {
-    fn gen_url(&self, path: &str) -> String {
-        format!(
-            "http://{}{}{}",
-            self.broker_address, MEM_BROKER_API_VERSION, path
-        )
+    fn gen_url(&self, path: &str) -> Option<String> {
+        let broker_addresses = self.broker_addresses.lease();
+        let num = broker_addresses.len();
+        let curr_index = self.broker_index.fetch_add(1, Ordering::Relaxed);
+        let broker = broker_addresses.get(curr_index % num)?;
+        let url = format!("http://{}{}{}", broker, MEM_BROKER_API_VERSION, path);
+        Some(url)
     }
 
     async fn get_cluster_names_impl(
@@ -37,7 +42,9 @@ impl HttpMetaBroker {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<ClusterName>, MetaDataBrokerError> {
-        let url = self.gen_url("/clusters/names");
+        let url = self
+            .gen_url("/clusters/names")
+            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
@@ -54,7 +61,9 @@ impl HttpMetaBroker {
         &self,
         name: ClusterName,
     ) -> Result<Option<Cluster>, MetaDataBrokerError> {
-        let url = self.gen_url(&format!("/clusters/meta/{}", name));
+        let url = self
+            .gen_url(&format!("/clusters/meta/{}", name))
+            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -71,7 +80,9 @@ impl HttpMetaBroker {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<String>, MetaDataBrokerError> {
-        let url = self.gen_url("/proxies/addresses");
+        let url = self
+            .gen_url("/proxies/addresses")
+            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get proxy addresses {:?}", e);
@@ -85,7 +96,9 @@ impl HttpMetaBroker {
     }
 
     async fn get_proxy_impl(&self, address: String) -> Result<Option<Proxy>, MetaDataBrokerError> {
-        let url = self.gen_url(&format!("/proxies/meta/{}", address));
+        let url = self
+            .gen_url(&format!("/proxies/meta/{}", address))
+            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get proxy {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -102,7 +115,9 @@ impl HttpMetaBroker {
         address: String,
         reporter_id: String,
     ) -> Result<(), MetaDataBrokerError> {
-        let url = self.gen_url(&format!("/failures/{}/{}", address, reporter_id));
+        let url = self
+            .gen_url(&format!("/failures/{}/{}", address, reporter_id))
+            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("failed to add failures {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -126,7 +141,9 @@ impl HttpMetaBroker {
     }
 
     async fn get_failures_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
-        let url = self.gen_url("/failures");
+        let url = self
+            .gen_url("/failures")
+            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("Failed to get failures {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -139,7 +156,9 @@ impl HttpMetaBroker {
     }
 
     async fn get_failed_proxies_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
-        let url = self.gen_url("/proxies/failed/addresses");
+        let url = self
+            .gen_url("/proxies/failed/addresses")
+            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("Failed to get failed proxies {:?}", e);
             MetaDataBrokerError::InvalidReply

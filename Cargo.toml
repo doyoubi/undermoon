@@ -18,7 +18,7 @@ path="src/bin/mem_broker.rs"
 
 [dependencies]
 bytes = "0.5.4"
-tokio = { version = "0.2.11", features = ["full"] }
+tokio = { version = "0.2", features = ["full"] }
 tokio-util = { version = "0.2", features = ["full"] }
 futures = "0.3.4"
 futures-timer = "3.0.1"

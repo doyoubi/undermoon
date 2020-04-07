@@ -31,6 +31,7 @@ $ RUST_LOG=undermoon=debug,coordinator=debug UNDERMOON_BROKER_ADDRESS=127.0.0.1:
 
 #### Chunk
 Refers to the [chunk docs](./chunk.md) for detailed explanation.
+
 ![Chunk](./chunk.svg)
 
 #### Run Server Proxy and Redis

@@ -6,8 +6,9 @@ extern crate log;
 extern crate config;
 extern crate env_logger;
 
-use futures::future::select_all;
+use arc_swap::ArcSwap;
 use reqwest;
+use std::cmp::max;
 use std::env;
 use std::error::Error;
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
 use undermoon::coordinator::service::{CoordinatorConfig, CoordinatorService};
 use undermoon::protocol::PooledRedisClientFactory;
 
-fn gen_conf() -> Vec<CoordinatorConfig> {
+fn gen_conf() -> CoordinatorConfig {
     let mut s = config::Config::new();
     // If config file is specified, load it.
     if let Some(conf_file_path) = env::args().nth(1) {
@@ -29,6 +30,10 @@ fn gen_conf() -> Vec<CoordinatorConfig> {
     s.merge(config::Environment::with_prefix("undermoon"))
         .map(|_| ())
         .unwrap_or_else(|e| warn!("failed to read config from env vars: {:?}", e));
+
+    let address = s
+        .get::<String>("address")
+        .unwrap_or_else(|_| "127.0.0.1:6699".to_string());
 
     let mut broker_address_list = vec![];
 
@@ -42,19 +47,19 @@ fn gen_conf() -> Vec<CoordinatorConfig> {
         )
     }
 
-    // Currently this address it not used. Later we should open a http
-    // api to expose some inner states.
     let reporter_id = s
         .get::<String>("reporter_id")
-        .unwrap_or_else(|_| "127.0.0.1:6699".to_string());
+        .unwrap_or_else(|_| address.clone());
 
-    broker_address_list
-        .into_iter()
-        .map(|broker_address| CoordinatorConfig {
-            broker_address,
-            reporter_id: reporter_id.clone(),
-        })
-        .collect()
+    let thread_number = s.get::<usize>("thread_number").unwrap_or_else(|_| 4);
+    let thread_number = max(1, thread_number);
+
+    CoordinatorConfig {
+        address,
+        broker_addresses: Arc::new(ArcSwap::new(Arc::new(broker_address_list))),
+        reporter_id,
+        thread_number,
+    }
 }
 
 fn gen_service(
@@ -62,11 +67,11 @@ fn gen_service(
 ) -> CoordinatorService<HttpMetaBroker, HttpMetaManipulationBroker, PooledRedisClientFactory> {
     let http_client = reqwest::Client::new();
     let data_broker = Arc::new(HttpMetaBroker::new(
-        config.broker_address.clone(),
+        config.broker_addresses.clone(),
         http_client.clone(),
     ));
     let mani_broker = Arc::new(HttpMetaManipulationBroker::new(
-        config.broker_address.clone(),
+        config.broker_addresses.clone(),
         http_client,
     ));
 
@@ -80,22 +85,21 @@ fn gen_service(
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
-    let configs = gen_conf();
-    let service_num = configs.len();
-    let services = configs.into_iter().map(gen_service);
-    let futs = select_all(services.map(|service| {
-        Box::pin(async move {
-            if let Err(err) = service.run().await {
-                error!("coordinator error {:?}", err);
-            }
-        })
-    }));
+    let config = gen_conf();
+    let thread_number = config.thread_number;
+
+    let service = gen_service(config);
+    let fut = async move {
+        if let Err(err) = service.run().await {
+            error!("coordinator error {:?}", err);
+        }
+    };
 
     let mut runtime = tokio::runtime::Builder::new()
         .threaded_scheduler()
-        .core_threads(service_num)
+        .core_threads(thread_number)
         .enable_all()
         .build()?;
-    runtime.block_on(futs);
+    runtime.block_on(fut);
     Ok(())
 }

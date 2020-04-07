@@ -1,5 +1,5 @@
 # UMCTL Command
-#### UMCTL SETCLUSTER
+## UMCTL SETCLUSTER
 UMCTL SETCLUSTER
 - epoch
 - flags
@@ -24,7 +24,7 @@ Note that both these two commands set all the `local` or `peer` meta data of the
 For example, you can't add multiple backend redis instances one by one by sending multiple `UMCTL SETCLUSTER`.
 You should batch them in just one `UMCTL SETCLUSTER`.
 
-#### UMCTL SETREPL
+## UMCTL SETREPL
 UMCTL SETREPL
 - epoch
 - flags

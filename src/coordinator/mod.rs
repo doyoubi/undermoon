@@ -1,4 +1,5 @@
 // Suppress warning from automock.
+mod api;
 #[allow(clippy::ptr_arg)]
 pub mod broker;
 mod core;
