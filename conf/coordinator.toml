@@ -1,3 +1,4 @@
 #broker_address = ["127.0.0.1:7799", "127.0.0.1:17799"]
 broker_address = "127.0.0.1:7799"
 reporter_id = "127.0.0.1:6699"
+thread_number = 2

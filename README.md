@@ -20,8 +20,8 @@ please refer to [Redis Cluster Protocl](./docs/redis_cluster_protocol.md).
 ##### Metadata Storage
 Metadata storage stores all the metadata of the whole `undermoon` cluster,
 including existing Redis instances, proxies, and exposed Redis clusters.
-Now it's an in-memory storage server
-and there's [another implementation backed by Etcd]((https://github.com/doyoubi/overmoon)) in the future.
+Now it's an in-memory storage server called `Memory Broker`
+and there's [another implementation backed by Etcd](https://github.com/doyoubi/overmoon) in the future.
 
 ##### Coordinator
 Coordinator will synchronize the metadata between broker and server proxy.
@@ -199,6 +199,7 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 - [Redis Cluster Protocol and Server Proxy](./docs/redis_cluster_protocol.md)
 - [Chunk](./docs/chunk.md)
 - [Slot Migration](./docs/slots_migration.md)
+- [Memory Broker Replica](./docs/mem_broker_replica.md)
 
 ## API
 - [Proxy UMCTL command](./docs/meta_command.md)

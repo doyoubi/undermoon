@@ -1,6 +1,7 @@
 use super::persistence::{MetaStorage, MetaSyncError};
 use super::replication::MetaReplicator;
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
+use crate::broker::recovery::{fetch_largest_epoch, EpochFetchResult};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_mani_broker::ReplaceProxyResponse;
@@ -87,6 +88,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 "/proxies/meta/{proxy_address}",
                 web::delete().to(remove_proxy),
             )
+            .route("/epoch/recovery", web::put().to(recover_epoch))
             .route("/epoch/{new_epoch}", web::put().to(bump_epoch)),
     );
 }
@@ -327,6 +329,23 @@ impl MemBrokerService {
             .expect("MemBrokerService::force_bump_all_epoch")
             .force_bump_all_epoch(new_epoch)
     }
+
+    pub async fn recover_epoch(&self) -> Result<Vec<String>, MetaStoreError> {
+        let proxy_addresses = self
+            .store
+            .read()
+            .expect("MemBrokerService::recover_epoch")
+            .get_proxies();
+        let EpochFetchResult {
+            largest_epoch,
+            failed_addresses,
+        } = fetch_largest_epoch(proxy_addresses).await;
+        self.store
+            .write()
+            .expect("MemBrokerService::recover_epoch")
+            .force_bump_all_epoch(largest_epoch + 1)?;
+        Ok(failed_addresses)
+    }
 }
 
 type ServiceState = web::Data<Arc<MemBrokerService>>;
@@ -547,6 +566,19 @@ async fn replace_failed_node(
 async fn get_failed_proxies(state: ServiceState) -> impl Responder {
     let addresses = state.get_failed_proxies();
     web::Json(FailedProxiesPayload { addresses })
+}
+
+#[derive(Deserialize, Serialize)]
+struct RecoverEpochResult {
+    failed_addresses: Vec<String>,
+}
+
+async fn recover_epoch(
+    state: ServiceState,
+) -> Result<web::Json<RecoverEpochResult>, MetaStoreError> {
+    let failed_addresses = state.recover_epoch().await?;
+    let result = RecoverEpochResult { failed_addresses };
+    Ok(web::Json(result))
 }
 
 impl error::ResponseError for MetaStoreError {
