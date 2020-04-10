@@ -10,7 +10,7 @@ use crate::common::version::UNDERMOON_MEM_BROKER_META_VERSION;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use std::cmp::{min, Ordering};
+use std::cmp::{max, min, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::error::Error;
@@ -1655,6 +1655,15 @@ impl MetaStore {
         }
         Ok(())
     }
+
+    pub fn recover_epoch(&mut self, exsting_largest_epoch: u64) {
+        let new_epoch = max(exsting_largest_epoch, self.global_epoch + 1);
+        self.global_epoch = new_epoch;
+
+        for cluster in self.clusters.values_mut() {
+            cluster.epoch = new_epoch;
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -2798,5 +2807,51 @@ mod tests {
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
         assert_eq!(cluster.get_epoch(), NEW_EPOCH);
         assert_eq!(store.get_global_epoch(), NEW_EPOCH);
+    }
+
+    #[test]
+    fn test_recover_epoch() {
+        let mut store = MetaStore::default();
+        let host_num = 3;
+        let proxy_per_host = 1;
+        let all_proxy_num = host_num * proxy_per_host;
+        add_testing_proxies(&mut store, host_num, proxy_per_host);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+
+        // The epoch of free proxy will be global epoch.
+        let new_epoch = store.get_global_epoch() + 1;
+        assert!(cluster.get_epoch() < new_epoch);
+
+        store.recover_epoch(new_epoch);
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        assert_eq!(cluster.get_epoch(), new_epoch);
+        assert_eq!(store.get_global_epoch(), new_epoch);
+    }
+
+    #[test]
+    fn test_recover_epoch_without_free_proxy() {
+        let mut store = MetaStore::default();
+        let host_num = 2;
+        let proxy_per_host = 1;
+        let all_proxy_num = host_num * proxy_per_host;
+        add_testing_proxies(&mut store, host_num, proxy_per_host);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+
+        let new_epoch = cluster.get_epoch() + 1;
+        store.bump_global_epoch();
+        assert!(cluster.get_epoch() < store.get_global_epoch());
+
+        store.recover_epoch(new_epoch);
+        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        assert!(new_epoch <= store.get_global_epoch());
+        assert_eq!(cluster.get_epoch(), store.get_global_epoch());
     }
 }

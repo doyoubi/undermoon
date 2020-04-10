@@ -53,7 +53,7 @@ and changing the config.
 $ redis-cli -p 6699 CONFIG SET brokers 127.0.0.1:8899
 ```
 
-In some rare cases the newest metadata of the master memory broker
+The newest metadata of the master memory broker
 has not been replicated to the replica memory broker and fail.
 We can't recover the lost data but we can bump the metadata epoch
 by collecting the epoch from all the recorded proxies
