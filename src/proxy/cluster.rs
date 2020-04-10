@@ -265,9 +265,6 @@ where
     }
 }
 
-// We combine the nodes and slot_map to let them fit into
-// the same lock with a smaller critical section
-// compared to the one we need if splitting them.
 struct SenderMap<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
@@ -387,16 +384,16 @@ impl<S: CmdTaskSender> LocalCluster<S> {
     }
 }
 
-pub struct RemoteCluster<S: CmdTaskSender> {
+pub struct RemoteCluster<P: CmdTaskSender> {
     name: ClusterName,
     epoch: u64,
     slot_map: SlotMap,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
-    remote_backend: Option<SenderMap<S>>,
+    remote_backend: Option<SenderMap<P>>,
 }
 
-impl<S: CmdTaskSender> RemoteCluster<S> {
-    pub fn from_slot_map<F: CmdTaskSenderFactory<Sender = S>>(
+impl<P: CmdTaskSender> RemoteCluster<P> {
+    pub fn from_slot_map<F: CmdTaskSenderFactory<Sender = P>>(
         sender_factory: &F,
         name: ClusterName,
         epoch: u64,
@@ -429,8 +426,8 @@ impl<S: CmdTaskSender> RemoteCluster<S> {
 
     pub fn send_remote(
         &self,
-        cmd_task: <S as CmdTaskSender>::Task,
-    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
+        cmd_task: <P as CmdTaskSender>::Task,
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
@@ -454,10 +451,10 @@ impl<S: CmdTaskSender> RemoteCluster<S> {
 
     pub fn send_remote_directly(
         &self,
-        cmd_task: <S as CmdTaskSender>::Task,
+        cmd_task: <P as CmdTaskSender>::Task,
         slot: usize,
         address: &str,
-    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         if let Some(remote_backend) = self.remote_backend.as_ref() {
             match remote_backend.nodes.get(address) {
                 Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::Backend),

@@ -17,6 +17,7 @@ DOCKER_COMPOSE_CONFIG = {
     'broker_port': 7799,
     'broker_address': 'broker:7799',
     'etcd_port': 2379,
+    'active_redirection': False,
     'pumba_commands': {
         'kill': "--random --interval 60s kill 're2:(server_proxy|coordinator|overmoon).*'",
         'delay': "--random --interval 20s netem --duration 5s delay 're2:(server_proxy|coordinator|overmoon).*'",

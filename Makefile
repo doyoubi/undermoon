@@ -77,11 +77,19 @@ docker-overmoon:
 	docker-compose -f examples/docker-compose-overmoon.yml up
 
 start-func-test:
-	python chaostest/render_compose.py mem_broker
+	python chaostest/render_compose.py -t mem_broker
+	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+
+start-func-test-active:
+	python chaostest/render_compose.py -t mem_broker -a
 	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
 
 start-chaos:
-	python chaostest/render_compose.py mem_broker enable_failure
+	python chaostest/render_compose.py -t mem_broker -f
+	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+
+start-chaos-active:
+	python chaostest/render_compose.py -t mem_broker -f -a
 	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
 
 stop-chaos:
