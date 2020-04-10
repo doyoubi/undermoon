@@ -1,6 +1,6 @@
 use super::backend::{
-    gen_migration_sender_factory, BackendError, CmdTaskSender, CmdTaskSenderFactory,
-    MigrationBackendSenderFactory,
+    gen_migration_sender_factory, gen_sender_factory, BackendError, BackendSenderFactory, CmdTask,
+    CmdTaskSender, CmdTaskSenderFactory, ConnFactory, IntoTask, MigrationBackendSenderFactory,
 };
 use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
@@ -22,26 +22,27 @@ use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec};
-use crate::proxy::backend::{CmdTask, ConnFactory};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub struct MetaMap<S: CmdTaskSender, T>
+pub struct MetaMap<S: CmdTaskSender, P: CmdTaskSender, T>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
     T: CmdTask + ClusterTag,
 {
-    cluster_map: ClusterBackendMap<S>,
+    cluster_map: ClusterBackendMap<S, P>,
     migration_map: MigrationMap<T>,
     deleting_task_map: DeleteKeysTaskMap,
 }
 
-impl<S: CmdTaskSender, T> MetaMap<S, T>
+impl<S: CmdTaskSender, P: CmdTaskSender, T> MetaMap<S, P, T>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
     T: CmdTask + ClusterTag,
 {
     pub fn empty() -> Self {
@@ -55,7 +56,7 @@ where
         }
     }
 
-    pub fn get_cluster_map(&self) -> &ClusterBackendMap<S> {
+    pub fn get_cluster_map(&self) -> &ClusterBackendMap<S, P> {
         &self.cluster_map
     }
 }
@@ -67,9 +68,19 @@ type SenderFactory<C> = BlockingBackendSenderFactory<
     C,
     BlockingTaskRetrySender<C>,
 >;
+
+type PeerSenderFactory<C> = BackendSenderFactory<ReplyCommitHandlerFactory, C>;
+
 type MigrationSenderFactory<C> = MigrationBackendSenderFactory<ReplyCommitHandlerFactory, C>;
-pub type SharedMetaMap<C> =
-    Arc<ArcSwap<MetaMap<<SenderFactory<C> as CmdTaskSenderFactory>::Sender, CmdCtx>>>;
+pub type SharedMetaMap<C> = Arc<
+    ArcSwap<
+        MetaMap<
+            <SenderFactory<C> as CmdTaskSenderFactory>::Sender,
+            <PeerSenderFactory<C> as CmdTaskSenderFactory>::Sender,
+            CmdCtx,
+        >,
+    >,
+>;
 
 pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
     config: Arc<ServerProxyConfig>,
@@ -82,6 +93,7 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<F, MigrationSenderFactory<C>, CmdCtxFactory>,
     sender_factory: SenderFactory<C>,
+    peer_sender_factory: PeerSenderFactory<C>,
     blocking_map: Arc<BlockingMap<BasicSenderFactory<C>, BlockingTaskRetrySender<C>>>,
 }
 
@@ -103,6 +115,13 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         );
         let blocking_map = Arc::new(BlockingMap::new(basic_sender_factory, blocking_task_sender));
         let sender_factory = gen_blocking_sender_factory(blocking_map.clone());
+        let reply_commit_handler_factory = Arc::new(ReplyCommitHandlerFactory::default());
+        let peer_sender_factory = gen_sender_factory(
+            config.clone(),
+            reply_commit_handler_factory,
+            conn_factory.clone(),
+            future_registry.clone(),
+        );
         let migration_sender_factory = Arc::new(gen_migration_sender_factory(
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
@@ -130,6 +149,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 future_registry,
             ),
             sender_factory,
+            peer_sender_factory,
             blocking_map,
         }
     }
@@ -159,7 +179,10 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn set_meta(&self, cluster_meta: ProxyClusterMeta) -> Result<(), ClusterMetaError> {
+        let active_redirection = self.config.active_redirection;
+
         let sender_factory = &self.sender_factory;
+        let peer_sender_factory = &self.peer_sender_factory;
         let migration_manager = &self.migration_manager;
 
         let _guard = self.lock.lock().expect("MetaManager::set_meta");
@@ -171,7 +194,12 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         }
 
         let old_meta_map = self.meta_map.load();
-        let cluster_map = ClusterBackendMap::from_cluster_map(&cluster_meta, sender_factory);
+        let cluster_map = ClusterBackendMap::from_cluster_map(
+            &cluster_meta,
+            sender_factory,
+            peer_sender_factory,
+            active_redirection,
+        );
         let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
             &old_meta_map.migration_map,
             cluster_meta.get_local(),
@@ -294,6 +322,22 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
         Ok(()) => return,
         Err(e) => match e {
             ClusterSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
+            ClusterSendError::Moved {
+                task,
+                slot,
+                address,
+            } => {
+                let res = meta_map
+                    .cluster_map
+                    .send_remote_directly(task, slot, address);
+                if let Err(e) = res {
+                    match e {
+                        ClusterSendError::MissingKey => (),
+                        err => warn!("Failed to forward cmd_ctx to remote: {:?}", err),
+                    }
+                }
+                return;
+            }
             err => {
                 error!("migration send task failed: {:?}", err);
                 return;

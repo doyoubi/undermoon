@@ -10,12 +10,12 @@ use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
 use crate::common::response::NOT_READY_FOR_SWITCHING_REPLY;
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::{pretty_print_bytes, ThreadSafe};
+use crate::common::utils::{gen_moved, get_slot, pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::RespVec;
 use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
 use crate::proxy::backend::{
-    CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, RedirectionSenderFactory, ReqTask,
+    CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, ReqTask,
 };
 use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
 use crate::proxy::cluster::ClusterSendError;
@@ -25,6 +25,7 @@ use atomic_option::AtomicOption;
 use futures::channel::oneshot;
 use futures::{future, select, Future, FutureExt, TryFutureExt};
 use futures_timer::Delay;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -43,12 +44,13 @@ where
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
-    redirection_sender_factory: RedirectionSenderFactory<T>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     task: Arc<ScanMigrationTask>,
     blocking_ctrl: Arc<BC>,
     future_registry: Arc<TrackedFutureRegistry>,
+    phantom: PhantomData<T>,
+    active_redirection: bool,
 }
 
 impl<RCF, T, BC> RedisScanMigratingTask<RCF, T, BC>
@@ -59,7 +61,7 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        _config: Arc<ServerProxyConfig>,
+        config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         cluster_name: ClusterName,
         slot_range: SlotRange,
@@ -76,8 +78,8 @@ where
             client_factory.clone(),
             mgr_config.clone(),
         );
-        let redirection_sender_factory = RedirectionSenderFactory::default();
         let range_map = RangeMap::from(slot_range.get_range_list());
+        let active_redirection = config.active_redirection;
         Self {
             mgr_config,
             cluster_name,
@@ -86,12 +88,13 @@ where
             meta,
             state: Arc::new(AtomicMigrationState::initial_state()),
             client_factory,
-            redirection_sender_factory,
             stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             task: Arc::new(task),
             blocking_ctrl,
             future_registry,
+            phantom: PhantomData,
+            active_redirection,
         }
     }
 
@@ -393,12 +396,11 @@ where
             _ => (),
         }
 
-        let redirection_sender = self
-            .redirection_sender_factory
-            .create(self.meta.dst_proxy_address.clone());
-        redirection_sender
-            .send(cmd_task)
-            .map_err(|_e| ClusterSendError::MigrationError)
+        handle_redirection(
+            cmd_task,
+            self.meta.dst_proxy_address.clone(),
+            self.active_redirection,
+        )
     }
 
     fn get_state(&self) -> MigrationState {
@@ -456,11 +458,11 @@ where
     state: Arc<AtomicMigrationState>,
     _client_factory: Arc<RCF>,
     _sender_factory: Arc<TSF>,
-    redirection_sender_factory: RedirectionSenderFactory<CTF::Task>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     cmd_handler: RestoreDataCmdTaskHandler<CTF, <TSF as CmdTaskSenderFactory>::Sender>,
     _cmd_task_factory: Arc<CTF>,
+    active_redirection: bool,
 }
 
 impl<RCF, TSF, CTF> RedisScanImportingTask<RCF, TSF, CTF>
@@ -471,6 +473,7 @@ where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     pub fn new(
+        config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         meta: MigrationMeta,
         slot_range: SlotRange,
@@ -483,8 +486,8 @@ where
         let cmd_handler =
             RestoreDataCmdTaskHandler::new(src_sender, dst_sender, cmd_task_factory.clone());
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
-        let redirection_sender_factory = RedirectionSenderFactory::default();
         let range_map = RangeMap::from(slot_range.get_range_list());
+        let active_redirection = config.active_redirection;
         Self {
             _mgr_config: mgr_config,
             meta,
@@ -492,11 +495,11 @@ where
             state: Arc::new(AtomicMigrationState::initial_state()),
             _client_factory: client_factory,
             _sender_factory: sender_factory,
-            redirection_sender_factory,
             stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             cmd_handler,
             _cmd_task_factory: cmd_task_factory,
+            active_redirection,
         }
     }
 }
@@ -546,12 +549,11 @@ where
         cmd_task: Self::Task,
     ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>> {
         if self.state.get_state() == MigrationState::PreCheck {
-            let redirection_sender = self
-                .redirection_sender_factory
-                .create(self.meta.src_proxy_address.clone());
-            return redirection_sender
-                .send(cmd_task)
-                .map_err(|_e| ClusterSendError::MigrationError);
+            return handle_redirection(
+                cmd_task,
+                self.meta.src_proxy_address.clone(),
+                self.active_redirection,
+            );
         }
 
         self.cmd_handler.handle_cmd_task(cmd_task);
@@ -611,5 +613,36 @@ impl ImportingTaskHandle {
 impl Drop for ImportingTaskHandle {
     fn drop(&mut self) {
         self.send_stop_signal()
+    }
+}
+
+fn handle_redirection<T: CmdTask>(
+    cmd_task: T,
+    redirection_address: String,
+    active_redirection: bool,
+) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
+    let key = match cmd_task.get_key() {
+        Some(key) => key,
+        None => {
+            let resp = Resp::Error("missing key".to_string().into_bytes());
+            cmd_task.set_resp_result(Ok(resp));
+            return Ok(());
+        }
+    };
+
+    let slot = get_slot(key);
+
+    if active_redirection {
+        let cmd_task = BlockingHintTask::new(cmd_task, false);
+        // Proceed the command inside this proxy.
+        Err(ClusterSendError::Moved {
+            task: cmd_task,
+            slot,
+            address: redirection_address,
+        })
+    } else {
+        let resp = Resp::Error(gen_moved(get_slot(key), redirection_address).into_bytes());
+        cmd_task.set_resp_result(Ok(resp));
+        Ok(())
     }
 }

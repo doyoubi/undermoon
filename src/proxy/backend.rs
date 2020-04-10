@@ -4,7 +4,7 @@ use super::slowlog::TaskEvent;
 use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::response::ERR_BACKEND_CONNECTION;
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::{gen_moved, get_slot, resolve_first_address, ThreadSafe};
+use crate::common::utils::{resolve_first_address, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
     OptionalMulti, Packet, Resp, RespCodec, RespVec,
@@ -60,6 +60,16 @@ pub trait CmdTask: ThreadSafe {
         Self: Sized;
 
     fn log_event(&mut self, event: TaskEvent);
+}
+
+pub trait IntoTask<T: CmdTask>: CmdTask {
+    fn into_task(self) -> T;
+}
+
+impl<T: CmdTask> IntoTask<T> for T {
+    fn into_task(self) -> T {
+        self
+    }
 }
 
 pub trait CmdTaskFactory {
@@ -762,49 +772,6 @@ impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
         self.inner_sender.send(cmd_task)
-    }
-}
-
-pub struct RedirectionSender<T: CmdTask> {
-    redirection_address: String,
-    phantom: PhantomData<T>,
-}
-
-impl<T: CmdTask> CmdTaskSender for RedirectionSender<T> {
-    type Task = T;
-
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        let key = match cmd_task.get_key() {
-            Some(key) => key,
-            None => {
-                let resp = Resp::Error("missing key".to_string().into_bytes());
-                cmd_task.set_resp_result(Ok(resp));
-                return Ok(());
-            }
-        };
-        let resp =
-            Resp::Error(gen_moved(get_slot(key), self.redirection_address.clone()).into_bytes());
-        cmd_task.set_resp_result(Ok(resp));
-        Ok(())
-    }
-}
-
-pub struct RedirectionSenderFactory<T: CmdTask>(PhantomData<T>);
-
-impl<T: CmdTask> Default for RedirectionSenderFactory<T> {
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<T: CmdTask> CmdTaskSenderFactory for RedirectionSenderFactory<T> {
-    type Sender = RedirectionSender<T>;
-
-    fn create(&self, address: String) -> Self::Sender {
-        RedirectionSender {
-            redirection_address: address,
-            phantom: PhantomData,
-        }
     }
 }
 

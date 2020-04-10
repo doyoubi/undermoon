@@ -1,5 +1,4 @@
-use super::backend::CmdTask;
-use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
+use super::backend::{BackendError, CmdTask, CmdTaskSender, CmdTaskSenderFactory, IntoTask};
 use super::slot::SlotMap;
 use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
@@ -39,17 +38,19 @@ pub trait ClusterTag {
     fn set_cluster_name(&mut self, cluster_name: ClusterName);
 }
 
-pub struct ClusterBackendMap<S: CmdTaskSender>
+pub struct ClusterBackendMap<S: CmdTaskSender, P: CmdTaskSender>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     local_clusters: HashMap<ClusterName, LocalCluster<S>>,
-    remote_clusters: HashMap<ClusterName, RemoteCluster>,
+    remote_clusters: HashMap<ClusterName, RemoteCluster<P>>,
 }
 
-impl<S: CmdTaskSender> Default for ClusterBackendMap<S>
+impl<S: CmdTaskSender, P: CmdTaskSender> Default for ClusterBackendMap<S, P>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     fn default() -> Self {
         Self {
@@ -59,13 +60,19 @@ where
     }
 }
 
-impl<S: CmdTaskSender> ClusterBackendMap<S>
+impl<S: CmdTaskSender, P: CmdTaskSender> ClusterBackendMap<S, P>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
-    pub fn from_cluster_map<F: CmdTaskSenderFactory<Sender = S>>(
+    pub fn from_cluster_map<
+        F: CmdTaskSenderFactory<Sender = S>,
+        PF: CmdTaskSenderFactory<Sender = P>,
+    >(
         cluster_meta: &ProxyClusterMeta,
         sender_factory: &F,
+        peer_sender_factory: &PF,
+        active_redirection: bool,
     ) -> Self {
         let epoch = cluster_meta.get_epoch();
 
@@ -84,8 +91,13 @@ where
 
         let mut remote_clusters = HashMap::new();
         for (cluster_name, slot_ranges) in cluster_meta.get_peer().get_map().iter() {
-            let remote_cluster =
-                RemoteCluster::from_slot_map(cluster_name.clone(), epoch, slot_ranges.clone());
+            let remote_cluster = RemoteCluster::from_slot_map(
+                peer_sender_factory,
+                cluster_name.clone(),
+                epoch,
+                slot_ranges.clone(),
+                active_redirection,
+            );
             remote_clusters.insert(cluster_name.clone(), remote_cluster);
         }
         Self {
@@ -129,18 +141,18 @@ where
     pub fn send(
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
-    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         let (cmd_task, cluster_exists) = match self.local_clusters.get(&cmd_task.get_cluster_name())
         {
             Some(local_cluster) => match local_cluster.send(cmd_task) {
                 Err(ClusterSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
-                others => return others,
+                others => return others.map_err(|err| err.map_task(|task| task.into_task())),
             },
             None => (cmd_task, false),
         };
 
         match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
-            Some(remote_cluster) => remote_cluster.send_remote(cmd_task),
+            Some(remote_cluster) => remote_cluster.send_remote(cmd_task.into_task()),
             None => {
                 if cluster_exists {
                     let resp = Resp::Error(
@@ -157,6 +169,26 @@ where
                     cmd_task.set_resp_result(Ok(resp));
                     Err(ClusterSendError::ClusterNotFound(cluster_name))
                 }
+            }
+        }
+    }
+
+    pub fn send_remote_directly(
+        &self,
+        cmd_task: <S as CmdTaskSender>::Task,
+        slot: usize,
+        address: String,
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
+        match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
+            Some(remote_cluster) => {
+                remote_cluster.send_remote_directly(cmd_task.into_task(), slot, address.as_str())
+            }
+            None => {
+                let resp = Resp::Error(
+                    format!("slot not found: {}", cmd_task.get_cluster_name()).into_bytes(),
+                );
+                cmd_task.set_resp_result(Ok(resp));
+                Err(ClusterSendError::SlotNotCovered)
             }
         }
     }
@@ -233,18 +265,31 @@ where
     }
 }
 
-// We combine the nodes and slot_map to let them fit into
-// the same lock with a smaller critical section
-// compared to the one we need if splitting them.
-struct LocalBackend<S: CmdTaskSender> {
+struct SenderMap<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
+}
+
+impl<S: CmdTaskSender> SenderMap<S> {
+    fn from_slot_map<F: CmdTaskSenderFactory<Sender = S>>(
+        sender_factory: &F,
+        slot_map: &HashMap<String, Vec<SlotRange>>,
+    ) -> Self {
+        let mut nodes = HashMap::new();
+        for addr in slot_map.keys() {
+            nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
+        }
+        Self {
+            nodes,
+            slot_map: SlotMap::from_ranges(slot_map.clone()),
+        }
+    }
 }
 
 pub struct LocalCluster<S: CmdTaskSender> {
     name: ClusterName,
     epoch: u64,
-    local_backend: LocalBackend<S>,
+    local_backend: SenderMap<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     config: ClusterConfig,
 }
@@ -257,14 +302,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         slot_map: HashMap<String, Vec<SlotRange>>,
         config: ClusterConfig,
     ) -> Self {
-        let mut nodes = HashMap::new();
-        for addr in slot_map.keys() {
-            nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
-        }
-        let local_backend = LocalBackend {
-            nodes,
-            slot_map: SlotMap::from_ranges(slot_map.clone()),
-        };
+        let local_backend = SenderMap::from_slot_map(sender_factory, &slot_map);
         LocalCluster {
             name,
             epoch,
@@ -346,24 +384,33 @@ impl<S: CmdTaskSender> LocalCluster<S> {
     }
 }
 
-pub struct RemoteCluster {
+pub struct RemoteCluster<P: CmdTaskSender> {
     name: ClusterName,
     epoch: u64,
     slot_map: SlotMap,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
+    remote_backend: Option<SenderMap<P>>,
 }
 
-impl RemoteCluster {
-    pub fn from_slot_map(
+impl<P: CmdTaskSender> RemoteCluster<P> {
+    pub fn from_slot_map<F: CmdTaskSenderFactory<Sender = P>>(
+        sender_factory: &F,
         name: ClusterName,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
-    ) -> RemoteCluster {
-        RemoteCluster {
+        active_redirection: bool,
+    ) -> Self {
+        let remote_backend = if active_redirection {
+            Some(SenderMap::from_slot_map(sender_factory, &slot_map))
+        } else {
+            None
+        };
+        Self {
             name,
             epoch,
             slot_map: SlotMap::from_ranges(slot_map.clone()),
             slot_ranges: slot_map,
+            remote_backend,
         }
     }
 
@@ -377,7 +424,10 @@ impl RemoteCluster {
         Resp::Arr(Array::Arr(arr))
     }
 
-    pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), ClusterSendError<T>> {
+    pub fn send_remote(
+        &self,
+        cmd_task: <P as CmdTaskSender>::Task,
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
@@ -386,17 +436,37 @@ impl RemoteCluster {
                 return Err(ClusterSendError::MissingKey);
             }
         };
-        match self.slot_map.get_by_key(key) {
-            Some(addr) => {
-                let resp = Resp::Error(gen_moved(get_slot(key), addr.to_string()).into_bytes());
-                cmd_task.set_resp_result(Ok(resp));
-                Ok(())
-            }
+
+        let slot = get_slot(key);
+
+        match self.slot_map.get(slot) {
+            Some(addr) => self.send_remote_directly(cmd_task, slot, addr),
             None => {
                 let resp = Resp::Error(format!("slot not covered {:?}", key).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
                 Err(ClusterSendError::SlotNotCovered)
             }
+        }
+    }
+
+    pub fn send_remote_directly(
+        &self,
+        cmd_task: <P as CmdTaskSender>::Task,
+        slot: usize,
+        address: &str,
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
+        if let Some(remote_backend) = self.remote_backend.as_ref() {
+            match remote_backend.nodes.get(address) {
+                Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::Backend),
+                None => {
+                    warn!("failed to get node");
+                    Err(ClusterSendError::SlotNotFound(cmd_task))
+                }
+            }
+        } else {
+            let resp = Resp::Error(gen_moved(slot, address.to_string()).into_bytes());
+            cmd_task.set_resp_result(Ok(resp));
+            Ok(())
         }
     }
 
@@ -464,6 +534,11 @@ pub enum ClusterSendError<T: CmdTask> {
     SlotNotCovered,
     Backend(BackendError),
     MigrationError,
+    Moved {
+        task: T,
+        slot: usize,
+        address: String,
+    },
 }
 
 impl<T: CmdTask> fmt::Display for ClusterSendError<T> {
@@ -483,31 +558,50 @@ impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
             Self::SlotNotCovered => "ClusterSendError::SlotNotCovered".to_string(),
             Self::Backend(err) => format!("ClusterSendError::Backend({})", err),
             Self::MigrationError => "ClusterSendError::MigrationError".to_string(),
+            Self::Moved { slot, address, .. } => {
+                format!("ClusterSendError::Moved({} {})", slot, address)
+            }
         };
         write!(f, "{}", s)
     }
 }
 
 impl<T: CmdTask> Error for ClusterSendError<T> {
-    fn description(&self) -> &str {
-        match self {
-            ClusterSendError::MissingKey => "missing key",
-            ClusterSendError::ClusterNotFound(_) => "cluster not found",
-            ClusterSendError::SlotNotFound(_) => "slot not found",
-            ClusterSendError::Backend(_) => "backend error",
-            ClusterSendError::SlotNotCovered => "slot not covered",
-            ClusterSendError::MigrationError => "migration queue error",
-        }
-    }
-
     fn cause(&self) -> Option<&dyn Error> {
         match self {
-            ClusterSendError::MissingKey => None,
-            ClusterSendError::ClusterNotFound(_) => None,
-            ClusterSendError::SlotNotFound(_) => None,
-            ClusterSendError::Backend(err) => Some(err),
-            ClusterSendError::SlotNotCovered => None,
-            ClusterSendError::MigrationError => None,
+            Self::MissingKey => None,
+            Self::ClusterNotFound(_) => None,
+            Self::SlotNotFound(_) => None,
+            Self::Backend(err) => Some(err),
+            Self::SlotNotCovered => None,
+            Self::MigrationError => None,
+            Self::Moved { .. } => None,
+        }
+    }
+}
+
+impl<T: CmdTask> ClusterSendError<T> {
+    pub fn map_task<P, F>(self: Self, f: F) -> ClusterSendError<P>
+    where
+        P: CmdTask,
+        F: Fn(T) -> P,
+    {
+        match self {
+            Self::MissingKey => ClusterSendError::MissingKey,
+            Self::ClusterNotFound(cluster) => ClusterSendError::ClusterNotFound(cluster),
+            Self::SlotNotFound(task) => ClusterSendError::SlotNotFound(f(task)),
+            Self::Backend(err) => ClusterSendError::Backend(err),
+            Self::SlotNotCovered => ClusterSendError::SlotNotCovered,
+            Self::MigrationError => ClusterSendError::MigrationError,
+            Self::Moved {
+                task,
+                slot,
+                address,
+            } => ClusterSendError::Moved {
+                task: f(task),
+                slot,
+                address,
+            },
         }
     }
 }

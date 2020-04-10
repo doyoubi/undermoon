@@ -498,6 +498,7 @@ where
                             }
 
                             let task = Arc::new(RedisScanImportingTask::new(
+                                config.clone(),
                                 mgr_config.clone(),
                                 meta.clone(),
                                 slot_range.clone(),
