@@ -66,6 +66,7 @@ where
     pub fn from_cluster_map<F: CmdTaskSenderFactory<Sender = S>>(
         cluster_meta: &ProxyClusterMeta,
         sender_factory: &F,
+        active_redirection: bool,
     ) -> Self {
         let epoch = cluster_meta.get_epoch();
 
@@ -84,8 +85,12 @@ where
 
         let mut remote_clusters = HashMap::new();
         for (cluster_name, slot_ranges) in cluster_meta.get_peer().get_map().iter() {
-            let remote_cluster =
-                RemoteCluster::from_slot_map(cluster_name.clone(), epoch, slot_ranges.clone());
+            let remote_cluster = RemoteCluster::from_slot_map(
+                cluster_name.clone(),
+                epoch,
+                slot_ranges.clone(),
+                active_redirection,
+            );
             remote_clusters.insert(cluster_name.clone(), remote_cluster);
         }
         Self {
@@ -236,15 +241,31 @@ where
 // We combine the nodes and slot_map to let them fit into
 // the same lock with a smaller critical section
 // compared to the one we need if splitting them.
-struct LocalBackend<S: CmdTaskSender> {
+struct SenderMap<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
+}
+
+impl<S: CmdTaskSender> SenderMap<S> {
+    fn from_slot_map<F: CmdTaskSenderFactory<Sender = S>>(
+        sender_factory: &F,
+        slot_map: &HashMap<String, Vec<SlotRange>>,
+    ) -> Self {
+        let mut nodes = HashMap::new();
+        for addr in slot_map.keys() {
+            nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
+        }
+        Self {
+            nodes,
+            slot_map: SlotMap::from_ranges(slot_map.clone()),
+        }
+    }
 }
 
 pub struct LocalCluster<S: CmdTaskSender> {
     name: ClusterName,
     epoch: u64,
-    local_backend: LocalBackend<S>,
+    local_backend: SenderMap<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     config: ClusterConfig,
 }
@@ -257,14 +278,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         slot_map: HashMap<String, Vec<SlotRange>>,
         config: ClusterConfig,
     ) -> Self {
-        let mut nodes = HashMap::new();
-        for addr in slot_map.keys() {
-            nodes.insert(addr.to_string(), sender_factory.create(addr.to_string()));
-        }
-        let local_backend = LocalBackend {
-            nodes,
-            slot_map: SlotMap::from_ranges(slot_map.clone()),
-        };
+        let local_backend = SenderMap::from_slot_map(sender_factory, &slot_map);
         LocalCluster {
             name,
             epoch,
@@ -351,6 +365,7 @@ pub struct RemoteCluster {
     epoch: u64,
     slot_map: SlotMap,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
+    active_redirection: bool,
 }
 
 impl RemoteCluster {
@@ -358,12 +373,14 @@ impl RemoteCluster {
         name: ClusterName,
         epoch: u64,
         slot_map: HashMap<String, Vec<SlotRange>>,
-    ) -> RemoteCluster {
-        RemoteCluster {
+        active_redirection: bool,
+    ) -> Self {
+        Self {
             name,
             epoch,
             slot_map: SlotMap::from_ranges(slot_map.clone()),
             slot_ranges: slot_map,
+            active_redirection,
         }
     }
 
@@ -386,11 +403,22 @@ impl RemoteCluster {
                 return Err(ClusterSendError::MissingKey);
             }
         };
-        match self.slot_map.get_by_key(key) {
+
+        let slot = get_slot(key);
+
+        match self.slot_map.get(slot) {
             Some(addr) => {
-                let resp = Resp::Error(gen_moved(get_slot(key), addr.to_string()).into_bytes());
-                cmd_task.set_resp_result(Ok(resp));
-                Ok(())
+                if self.active_redirection {
+                    Err(ClusterSendError::Moved {
+                        task: cmd_task,
+                        slot,
+                        address: addr.to_string(),
+                    })
+                } else {
+                    let resp = Resp::Error(gen_moved(get_slot(key), addr.to_string()).into_bytes());
+                    cmd_task.set_resp_result(Ok(resp));
+                    Ok(())
+                }
             }
             None => {
                 let resp = Resp::Error(format!("slot not covered {:?}", key).into_bytes());
@@ -464,6 +492,11 @@ pub enum ClusterSendError<T: CmdTask> {
     SlotNotCovered,
     Backend(BackendError),
     MigrationError,
+    Moved {
+        task: T,
+        slot: usize,
+        address: String,
+    },
 }
 
 impl<T: CmdTask> fmt::Display for ClusterSendError<T> {
@@ -483,31 +516,24 @@ impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
             Self::SlotNotCovered => "ClusterSendError::SlotNotCovered".to_string(),
             Self::Backend(err) => format!("ClusterSendError::Backend({})", err),
             Self::MigrationError => "ClusterSendError::MigrationError".to_string(),
+            Self::Moved { slot, address, .. } => {
+                format!("ClusterSendError::Moved({} {})", slot, address)
+            }
         };
         write!(f, "{}", s)
     }
 }
 
 impl<T: CmdTask> Error for ClusterSendError<T> {
-    fn description(&self) -> &str {
-        match self {
-            ClusterSendError::MissingKey => "missing key",
-            ClusterSendError::ClusterNotFound(_) => "cluster not found",
-            ClusterSendError::SlotNotFound(_) => "slot not found",
-            ClusterSendError::Backend(_) => "backend error",
-            ClusterSendError::SlotNotCovered => "slot not covered",
-            ClusterSendError::MigrationError => "migration queue error",
-        }
-    }
-
     fn cause(&self) -> Option<&dyn Error> {
         match self {
-            ClusterSendError::MissingKey => None,
-            ClusterSendError::ClusterNotFound(_) => None,
-            ClusterSendError::SlotNotFound(_) => None,
-            ClusterSendError::Backend(err) => Some(err),
-            ClusterSendError::SlotNotCovered => None,
-            ClusterSendError::MigrationError => None,
+            Self::MissingKey => None,
+            Self::ClusterNotFound(_) => None,
+            Self::SlotNotFound(_) => None,
+            Self::Backend(err) => Some(err),
+            Self::SlotNotCovered => None,
+            Self::MigrationError => None,
+            Self::Moved { .. } => None,
         }
     }
 }

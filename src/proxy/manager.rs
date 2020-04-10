@@ -159,6 +159,8 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn set_meta(&self, cluster_meta: ProxyClusterMeta) -> Result<(), ClusterMetaError> {
+        let active_redirection = self.config.active_redirection;
+
         let sender_factory = &self.sender_factory;
         let migration_manager = &self.migration_manager;
 
@@ -171,7 +173,8 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         }
 
         let old_meta_map = self.meta_map.load();
-        let cluster_map = ClusterBackendMap::from_cluster_map(&cluster_meta, sender_factory);
+        let cluster_map =
+            ClusterBackendMap::from_cluster_map(&cluster_meta, sender_factory, active_redirection);
         let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
             &old_meta_map.migration_map,
             cluster_meta.get_local(),
