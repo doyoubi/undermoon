@@ -193,6 +193,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             migration_map,
             deleting_task_map,
         }));
+        // Should go after the meta_map.store above
         self.epoch.store(cluster_meta.get_epoch(), Ordering::SeqCst);
 
         self.migration_manager.run_tasks(new_tasks);
@@ -277,6 +278,10 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             cmd_ctx.set_cluster_name(cluster_name);
         }
         cmd_ctx
+    }
+
+    pub fn get_epoch(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
     }
 }
 

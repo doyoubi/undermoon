@@ -1,3 +1,4 @@
+use super::api::ApiService;
 use super::broker::{MetaDataBroker, MetaManipulationBroker};
 use super::core::{
     CoordinateError, FailureDetector, FailureHandler, MigrationStateSynchronizer,
@@ -13,6 +14,7 @@ use super::recover::{BrokerProxyFailureRetriever, ReplaceNodeHandler};
 use super::sync::{BrokerMetaRetriever, ProxyMetaRespSender};
 use crate::common::utils::ThreadSafe;
 use crate::protocol::RedisClientFactory;
+use arc_swap::ArcSwap;
 use futures::future::select_all;
 use futures::{Future, StreamExt};
 use futures_timer::Delay;
@@ -20,10 +22,24 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub type BrokerAddresses = Arc<ArcSwap<Vec<String>>>;
+
 #[derive(Debug, Clone)]
 pub struct CoordinatorConfig {
-    pub broker_address: String,
+    pub address: String,
+    pub broker_addresses: BrokerAddresses,
     pub reporter_id: String,
+    pub thread_number: usize,
+}
+
+impl CoordinatorConfig {
+    pub fn get_broker_addresses(&self) -> Vec<String> {
+        self.broker_addresses.lease().clone()
+    }
+
+    pub fn set_broker_addresses(&self, addresses: Vec<String>) {
+        self.broker_addresses.store(Arc::new(addresses))
+    }
 }
 
 pub struct CoordinatorService<
@@ -35,15 +51,13 @@ pub struct CoordinatorService<
     data_broker: Arc<DB>,
     mani_broker: Arc<MB>,
     client_factory: Arc<F>,
+    api_service: Arc<ApiService>,
 }
 
 type CoordResult = Result<(), CoordinateError>;
 
-impl<
-        DB: MetaDataBroker + ThreadSafe + Clone,
-        MB: MetaManipulationBroker + Clone,
-        F: RedisClientFactory,
-    > CoordinatorService<DB, MB, F>
+impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClientFactory>
+    CoordinatorService<DB, MB, F>
 {
     pub fn new(
         config: CoordinatorConfig,
@@ -51,11 +65,13 @@ impl<
         mani_broker: Arc<MB>,
         client_factory: F,
     ) -> Self {
+        let api_service = Arc::new(ApiService::new(Arc::new(config.clone())));
         Self {
             config,
             data_broker,
             mani_broker,
             client_factory: Arc::new(client_factory),
+            api_service,
         }
     }
 
@@ -67,6 +83,7 @@ impl<
             Box::pin(self.loop_proxy_sync()),
             Box::pin(self.loop_failure_handler()),
             Box::pin(self.loop_migration_sync()),
+            Box::pin(self.api_service.run()),
         ];
 
         let (res, _, _) = select_all(futs).await;

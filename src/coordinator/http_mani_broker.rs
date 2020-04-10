@@ -1,38 +1,45 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
+use super::service::BrokerAddresses;
 use crate::broker::MEM_BROKER_API_VERSION;
 use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use futures::Future;
 use reqwest;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[derive(Clone)]
 pub struct HttpMetaManipulationBroker {
-    broker_address: String,
+    broker_addresses: BrokerAddresses,
+    broker_index: AtomicUsize,
     client: reqwest::Client,
 }
 
 impl HttpMetaManipulationBroker {
-    pub fn new(broker_address: String, client: reqwest::Client) -> Self {
+    pub fn new(broker_addresses: BrokerAddresses, client: reqwest::Client) -> Self {
         HttpMetaManipulationBroker {
-            broker_address,
+            broker_addresses,
+            broker_index: AtomicUsize::new(0),
             client,
         }
     }
 }
 
 impl HttpMetaManipulationBroker {
-    fn gen_url(&self, path: &str) -> String {
-        format!(
-            "http://{}{}{}",
-            self.broker_address, MEM_BROKER_API_VERSION, path
-        )
+    fn gen_url(&self, path: &str) -> Option<String> {
+        let broker_addresses = self.broker_addresses.lease();
+        let num = broker_addresses.len();
+        let curr_index = self.broker_index.fetch_add(1, Ordering::Relaxed);
+        let broker = broker_addresses.get(curr_index % num)?;
+        let url = format!("http://{}{}{}", broker, MEM_BROKER_API_VERSION, path);
+        Some(url)
     }
 
     async fn replace_proxy_impl(
         &self,
         failed_proxy_address: String,
     ) -> Result<Option<Proxy>, MetaManipulationBrokerError> {
-        let url = self.gen_url(&format!("/proxies/failover/{}", failed_proxy_address));
+        let url = self
+            .gen_url(&format!("/proxies/failover/{}", failed_proxy_address))
+            .ok_or_else(|| MetaManipulationBrokerError::NoBroker)?;
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("Failed to replace proxy {:?}", e);
             MetaManipulationBrokerError::InvalidReply
@@ -69,7 +76,9 @@ impl HttpMetaManipulationBroker {
         &self,
         meta: MigrationTaskMeta,
     ) -> Result<(), MetaManipulationBrokerError> {
-        let url = self.gen_url("/clusters/migrations");
+        let url = self
+            .gen_url("/clusters/migrations")
+            .ok_or_else(|| MetaManipulationBrokerError::NoBroker)?;
 
         let response = self
             .client

@@ -1,4 +1,5 @@
 mod persistence;
+mod recovery;
 mod replication;
 mod service;
 mod store;

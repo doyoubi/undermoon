@@ -561,6 +561,8 @@ pub enum CoordinateError {
     MetaData(MetaDataBrokerError),
     Redis(RedisClientError),
     InvalidReply,
+    InvalidAddress,
+    InvalidConfig,
 }
 
 impl fmt::Display for CoordinateError {

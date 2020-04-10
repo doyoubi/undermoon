@@ -76,6 +76,7 @@ pub use self::trait_mod::{
 pub enum MetaDataBrokerError {
     Io(io::Error),
     InvalidReply,
+    NoBroker,
 }
 
 impl fmt::Display for MetaDataBrokerError {
@@ -102,6 +103,7 @@ pub enum MetaManipulationBrokerError {
     Io(io::Error),
     ResourceNotAvailable,
     InvalidReply,
+    NoBroker,
 }
 
 impl fmt::Display for MetaManipulationBrokerError {
