@@ -340,10 +340,21 @@ impl MemBrokerService {
             largest_epoch,
             failed_addresses,
         } = fetch_largest_epoch(proxy_addresses).await;
-        self.store
+        info!(
+            "Get largest epoch {} with failed addresses: {:?}",
+            largest_epoch, failed_addresses
+        );
+        let res = self
+            .store
             .write()
             .expect("MemBrokerService::recover_epoch")
-            .force_bump_all_epoch(largest_epoch + 1)?;
+            .force_bump_all_epoch(largest_epoch + 1);
+        if let Err(err) = res {
+            match err {
+                MetaStoreError::SmallEpoch => (),
+                other => return Err(other),
+            }
+        }
         Ok(failed_addresses)
     }
 }

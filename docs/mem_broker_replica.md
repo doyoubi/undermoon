@@ -59,8 +59,8 @@ We can't recover the lost data but we can bump the metadata epoch
 by collecting the epoch from all the recorded proxies
 to recover the service.
 
-So we need to call this API after reconfiguring the coordinator.
+So we also need to call this API after reconfiguring the coordinator.
 ```
 $ curl -XPUT localhost:7799/api/v2/epoch/recovery
 ```
-Now the system should be able to scale and failover again.
+Now the system should be able to work again.
