@@ -1,6 +1,6 @@
 use super::backend::{
-    gen_migration_sender_factory, BackendError, CmdTaskSender, CmdTaskSenderFactory,
-    MigrationBackendSenderFactory,
+    gen_migration_sender_factory, gen_sender_factory, BackendError, BackendSenderFactory, CmdTask,
+    CmdTaskSender, CmdTaskSenderFactory, ConnFactory, IntoTask, MigrationBackendSenderFactory,
 };
 use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
@@ -22,7 +22,6 @@ use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec};
-use crate::proxy::backend::{CachedSenderFactory, CmdTask, ConnFactory};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::ArcSwap;
@@ -32,7 +31,7 @@ use std::sync::{Arc, Mutex};
 pub struct MetaMap<S: CmdTaskSender, P: CmdTaskSender, T>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
-    S: CmdTaskSender<Task = <P as CmdTaskSender>::Task>,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
     T: CmdTask + ClusterTag,
 {
     cluster_map: ClusterBackendMap<S, P>,
@@ -43,7 +42,7 @@ where
 impl<S: CmdTaskSender, P: CmdTaskSender, T> MetaMap<S, P, T>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
-    S: CmdTaskSender<Task = <P as CmdTaskSender>::Task>,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
     T: CmdTask + ClusterTag,
 {
     pub fn empty() -> Self {
@@ -70,8 +69,7 @@ type SenderFactory<C> = BlockingBackendSenderFactory<
     BlockingTaskRetrySender<C>,
 >;
 
-type PeerSenderFactory<C> = SenderFactory<C>;
-//type PeerSenderFactory<C> = CachedSenderFactory<BasicSenderFactory<C>>;
+type PeerSenderFactory<C> = BackendSenderFactory<ReplyCommitHandlerFactory, C>;
 
 type MigrationSenderFactory<C> = MigrationBackendSenderFactory<ReplyCommitHandlerFactory, C>;
 pub type SharedMetaMap<C> = Arc<
@@ -117,7 +115,13 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         );
         let blocking_map = Arc::new(BlockingMap::new(basic_sender_factory, blocking_task_sender));
         let sender_factory = gen_blocking_sender_factory(blocking_map.clone());
-        let peer_sender_factory = gen_blocking_sender_factory(blocking_map.clone());
+        let reply_commit_handler_factory = Arc::new(ReplyCommitHandlerFactory::default());
+        let peer_sender_factory = gen_sender_factory(
+            config.clone(),
+            reply_commit_handler_factory,
+            conn_factory.clone(),
+            future_registry.clone(),
+        );
         let migration_sender_factory = Arc::new(gen_migration_sender_factory(
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
@@ -325,7 +329,7 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
             } => {
                 let res = meta_map
                     .cluster_map
-                    .send_remote_directly(task.into(), slot, address);
+                    .send_remote_directly(task, slot, address);
                 if let Err(e) = res {
                     match e {
                         ClusterSendError::MissingKey => (),

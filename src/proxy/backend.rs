@@ -62,6 +62,16 @@ pub trait CmdTask: ThreadSafe {
     fn log_event(&mut self, event: TaskEvent);
 }
 
+pub trait IntoTask<T: CmdTask>: CmdTask {
+    fn into_task(self) -> T;
+}
+
+impl<T: CmdTask> IntoTask<T> for T {
+    fn into_task(self) -> T {
+        self
+    }
+}
+
 pub trait CmdTaskFactory {
     type Task: CmdTask;
 

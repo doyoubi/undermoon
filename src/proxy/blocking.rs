@@ -1,6 +1,6 @@
 use super::backend::{
     BackendError, CachedSenderFactory, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory,
-    CmdTaskSender, CmdTaskSenderFactory, ConnFactory, RRSenderGroupFactory,
+    CmdTaskSender, CmdTaskSenderFactory, ConnFactory, IntoTask, RRSenderGroupFactory,
     RecoverableBackendNodeFactory,
 };
 use super::cluster::ClusterTag;
@@ -507,5 +507,11 @@ impl<T: CmdTask + ClusterTag> ClusterTag for BlockingHintTask<T> {
 
     fn set_cluster_name(&mut self, cluster_name: ClusterName) {
         self.inner.set_cluster_name(cluster_name)
+    }
+}
+
+impl<T: CmdTask + ClusterTag> IntoTask<T> for BlockingHintTask<T> {
+    fn into_task(self) -> T {
+        self.into_inner()
     }
 }

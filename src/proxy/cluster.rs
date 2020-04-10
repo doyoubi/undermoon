@@ -1,5 +1,4 @@
-use super::backend::CmdTask;
-use super::backend::{BackendError, CmdTaskSender, CmdTaskSenderFactory};
+use super::backend::{BackendError, CmdTask, CmdTaskSender, CmdTaskSenderFactory, IntoTask};
 use super::slot::SlotMap;
 use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
@@ -42,7 +41,7 @@ pub trait ClusterTag {
 pub struct ClusterBackendMap<S: CmdTaskSender, P: CmdTaskSender>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
-    S: CmdTaskSender<Task = <P as CmdTaskSender>::Task>,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     local_clusters: HashMap<ClusterName, LocalCluster<S>>,
     remote_clusters: HashMap<ClusterName, RemoteCluster<P>>,
@@ -51,7 +50,7 @@ where
 impl<S: CmdTaskSender, P: CmdTaskSender> Default for ClusterBackendMap<S, P>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
-    S: CmdTaskSender<Task = <P as CmdTaskSender>::Task>,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     fn default() -> Self {
         Self {
@@ -64,7 +63,7 @@ where
 impl<S: CmdTaskSender, P: CmdTaskSender> ClusterBackendMap<S, P>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
-    S: CmdTaskSender<Task = <P as CmdTaskSender>::Task>,
+    <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     pub fn from_cluster_map<
         F: CmdTaskSenderFactory<Sender = S>,
@@ -142,18 +141,18 @@ where
     pub fn send(
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
-    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         let (cmd_task, cluster_exists) = match self.local_clusters.get(&cmd_task.get_cluster_name())
         {
             Some(local_cluster) => match local_cluster.send(cmd_task) {
                 Err(ClusterSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
-                others => return others,
+                others => return others.map_err(|err| err.map_task(|task| task.into_task())),
             },
             None => (cmd_task, false),
         };
 
         match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
-            Some(remote_cluster) => remote_cluster.send_remote(cmd_task),
+            Some(remote_cluster) => remote_cluster.send_remote(cmd_task.into_task()),
             None => {
                 if cluster_exists {
                     let resp = Resp::Error(
@@ -179,10 +178,10 @@ where
         cmd_task: <S as CmdTaskSender>::Task,
         slot: usize,
         address: String,
-    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
+    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
             Some(remote_cluster) => {
-                remote_cluster.send_remote_directly(cmd_task, slot, address.as_str())
+                remote_cluster.send_remote_directly(cmd_task.into_task(), slot, address.as_str())
             }
             None => {
                 let resp = Resp::Error(
@@ -580,6 +579,32 @@ impl<T: CmdTask> Error for ClusterSendError<T> {
             Self::SlotNotCovered => None,
             Self::MigrationError => None,
             Self::Moved { .. } => None,
+        }
+    }
+}
+
+impl<T: CmdTask> ClusterSendError<T> {
+    pub fn map_task<P, F>(self: Self, f: F) -> ClusterSendError<P>
+    where
+        P: CmdTask,
+        F: Fn(T) -> P,
+    {
+        match self {
+            Self::MissingKey => ClusterSendError::MissingKey,
+            Self::ClusterNotFound(cluster) => ClusterSendError::ClusterNotFound(cluster),
+            Self::SlotNotFound(task) => ClusterSendError::SlotNotFound(f(task)),
+            Self::Backend(err) => ClusterSendError::Backend(err),
+            Self::SlotNotCovered => ClusterSendError::SlotNotCovered,
+            Self::MigrationError => ClusterSendError::MigrationError,
+            Self::Moved {
+                task,
+                slot,
+                address,
+            } => ClusterSendError::Moved {
+                task: f(task),
+                slot,
+                address,
+            },
         }
     }
 }
