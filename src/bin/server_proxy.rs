@@ -88,7 +88,9 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
             .get::<usize>("session_batch_max_time")
             .unwrap_or_else(|_| 400_000),
         session_batch_buf,
-        active_redirection: s.get::<bool>("active_redirection").unwrap_or_else(|_| false),
+        active_redirection: s
+            .get::<bool>("active_redirection")
+            .unwrap_or_else(|_| false),
     };
     Ok(config)
 }
