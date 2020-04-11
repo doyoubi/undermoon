@@ -882,7 +882,7 @@ where
         };
 
         // UMFORWARD <redirection times>
-        match cmd_ctx.left_trim_cmd(2) {
+        match cmd_ctx.extract_inner_cmd(2) {
             Some(cmd_len) if cmd_len > 0 => (),
             _ => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(b"missing forwarded command".to_vec())));

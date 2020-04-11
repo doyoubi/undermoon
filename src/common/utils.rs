@@ -1,6 +1,6 @@
 use super::response::ERR_MOVED;
-use crate::protocol::RespVec;
 use crate::protocol::{Array, BulkStr, Resp};
+use crate::protocol::{BinSafeStr, RespVec};
 use crc16::{State, XMODEM};
 use futures::{stream, Stream};
 use std::cmp::min;
@@ -106,6 +106,22 @@ pub fn left_trim_array<T>(resp: &mut Resp<T>, removed_num: usize) -> Option<usiz
             Some(resps.len())
         }
         _ => None,
+    }
+}
+
+// Returns success or not
+pub fn array_append_front(resp: &mut RespVec, preceding_elements: Vec<BinSafeStr>) -> bool {
+    match resp {
+        Resp::Arr(Array::Arr(ref mut resps)) => {
+            let mut new_resps: Vec<_> = preceding_elements
+                .into_iter()
+                .map(|s| Resp::Bulk(BulkStr::Str(s)))
+                .collect();
+            new_resps.append(resps);
+            *resps = new_resps;
+            true
+        }
+        _ => false,
     }
 }
 

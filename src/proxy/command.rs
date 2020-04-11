@@ -1,6 +1,6 @@
 use super::slowlog::Slowlog;
 use crate::common::utils::byte_to_uppercase;
-use crate::protocol::{RespPacket, RespSlice, RespVec};
+use crate::protocol::{BinSafeStr, RespPacket, RespSlice, RespVec};
 use arrayvec::ArrayVec;
 use backtrace::Backtrace;
 use futures::channel::oneshot;
@@ -221,8 +221,20 @@ impl Command {
         self.request.change_bulk_array_element(index, data)
     }
 
-    pub fn left_trim_cmd(&mut self, removed_num: usize) -> Option<usize> {
-        self.request.left_trim_cmd(removed_num)
+    pub fn extract_inner_cmd(&mut self, removed_num: usize) -> Option<usize> {
+        let remaining = self.request.left_trim_cmd(removed_num)?;
+        self.cmd_type = CmdType::from_packet(&self.request);
+        self.data_cmd_type = DataCmdType::from_packet(&self.request);
+        Some(remaining)
+    }
+
+    pub fn wrap_cmd(&mut self, preceding_elements: Vec<BinSafeStr>) -> bool {
+        if !self.request.wrap_cmd(preceding_elements) {
+            return false;
+        }
+        self.cmd_type = CmdType::from_packet(&self.request);
+        self.data_cmd_type = DataCmdType::from_packet(&self.request);
+        true
     }
 
     pub fn get_type(&self) -> CmdType {

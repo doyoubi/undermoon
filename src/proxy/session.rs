@@ -8,7 +8,8 @@ use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::cluster::ClusterName;
 use crate::protocol::{
-    new_simple_packet_codec, DecodeError, EncodeError, Resp, RespCodec, RespPacket, RespVec,
+    new_simple_packet_codec, BinSafeStr, DecodeError, EncodeError, Resp, RespCodec, RespPacket,
+    RespVec,
 };
 use futures::{future, stream, Future, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
@@ -82,8 +83,12 @@ impl CmdCtx {
     }
 
     // Returns remaining elements
-    pub fn left_trim_cmd(&mut self, removed_num: usize) -> Option<usize> {
-        self.cmd.left_trim_cmd(removed_num)
+    pub fn extract_inner_cmd(&mut self, removed_num: usize) -> Option<usize> {
+        self.cmd.extract_inner_cmd(removed_num)
+    }
+
+    pub fn wrap_cmd(&mut self, preceding_element: Vec<BinSafeStr>) -> bool {
+        self.cmd.wrap_cmd(preceding_element)
     }
 
     pub fn get_cmd_type(&self) -> CmdType {
@@ -96,6 +101,10 @@ impl CmdCtx {
 
     pub fn set_redirection_times(&mut self, redirection_times: usize) {
         self.redirection_times = Some(redirection_times)
+    }
+
+    pub fn get_redirection_times(&self) -> Option<usize> {
+        self.redirection_times
     }
 }
 

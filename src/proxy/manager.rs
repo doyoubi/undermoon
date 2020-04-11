@@ -24,13 +24,14 @@ use crate::migration::task::SwitchArg;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, Lease};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct MetaMap<S: CmdTaskSender, P: CmdTaskSender, T>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
     T: CmdTask + ClusterTag,
 {
@@ -42,6 +43,7 @@ where
 impl<S: CmdTaskSender, P: CmdTaskSender, T> MetaMap<S, P, T>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
     T: CmdTask + ClusterTag,
 {
@@ -72,15 +74,13 @@ type SenderFactory<C> = BlockingBackendSenderFactory<
 type PeerSenderFactory<C> = BackendSenderFactory<ReplyCommitHandlerFactory, C>;
 
 type MigrationSenderFactory<C> = MigrationBackendSenderFactory<ReplyCommitHandlerFactory, C>;
-pub type SharedMetaMap<C> = Arc<
-    ArcSwap<
-        MetaMap<
-            <SenderFactory<C> as CmdTaskSenderFactory>::Sender,
-            <PeerSenderFactory<C> as CmdTaskSenderFactory>::Sender,
-            CmdCtx,
-        >,
-    >,
+
+type ProxyMetaMap<C> = MetaMap<
+    <SenderFactory<C> as CmdTaskSenderFactory>::Sender,
+    <PeerSenderFactory<C> as CmdTaskSenderFactory>::Sender,
+    CmdCtx,
 >;
+pub type SharedMetaMap<C> = Arc<ArcSwap<ProxyMetaMap<C>>>;
 
 pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
     config: Arc<ServerProxyConfig>,
@@ -327,15 +327,8 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
                 slot,
                 address,
             } => {
-                let res = meta_map
-                    .cluster_map
-                    .send_remote_directly(task, slot, address);
-                if let Err(e) = res {
-                    match e {
-                        ClusterSendError::MissingKey => (),
-                        err => warn!("Failed to forward cmd_ctx to remote: {:?}", err),
-                    }
-                }
+                let cmd_ctx = task.into_task();
+                send_cmd_ctx_to_remote_directly(&meta_map, cmd_ctx, slot, address);
                 return;
             }
             err => {
@@ -347,10 +340,37 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
 
     cmd_ctx.log_event(TaskEvent::SentToCluster);
     let res = meta_map.cluster_map.send(cmd_ctx);
+
     if let Err(e) = res {
         match e {
             ClusterSendError::MissingKey => (),
+            ClusterSendError::ActiveRedirection {
+                task,
+                slot,
+                address,
+            } => {
+                let cmd_ctx = task.into_task();
+                send_cmd_ctx_to_remote_directly(&meta_map, cmd_ctx, slot, address);
+                return;
+            }
             err => warn!("Failed to forward cmd_ctx: {:?}", err),
+        }
+    }
+}
+
+fn send_cmd_ctx_to_remote_directly<C: ConnFactory<Pkt = RespPacket>>(
+    meta_map: &Lease<Arc<ProxyMetaMap<C>>>,
+    cmd_ctx: CmdCtx,
+    slot: usize,
+    address: String,
+) {
+    let res = meta_map
+        .cluster_map
+        .send_remote_directly(cmd_ctx, slot, address);
+    if let Err(e) = res {
+        match e {
+            ClusterSendError::MissingKey => (),
+            err => warn!("Failed to forward cmd_ctx to remote: {:?}", err),
         }
     }
 }
