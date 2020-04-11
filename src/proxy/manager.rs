@@ -16,6 +16,7 @@ use super::slowlog::TaskEvent;
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::proto::ProxyClusterMeta;
+use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
@@ -25,6 +26,7 @@ use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, Resp
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::{ArcSwap, Lease};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -106,7 +108,10 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
-        let blocking_task_sender = Arc::new(BlockingTaskRetrySender::new(meta_map.clone()));
+        let blocking_task_sender = Arc::new(BlockingTaskRetrySender::new(
+            meta_map.clone(),
+            config.max_redirections,
+        ));
         let basic_sender_factory = gen_basic_blocking_sender_factory(
             config.clone(),
             reply_handler_factory,
@@ -294,7 +299,8 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
-        send_cmd_ctx(&self.meta_map, cmd_ctx);
+        let max_redirections = self.config.max_redirections;
+        send_cmd_ctx(&self.meta_map, cmd_ctx, max_redirections);
     }
 
     pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
@@ -316,6 +322,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
 pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     meta_map: &SharedMetaMap<C>,
     cmd_ctx: CmdCtx,
+    max_redirections: Option<NonZeroUsize>,
 ) {
     let meta_map = meta_map.lease();
     let mut cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
@@ -328,7 +335,13 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
                 address,
             } => {
                 let cmd_ctx = task.into_task();
-                send_cmd_ctx_to_remote_directly(&meta_map, cmd_ctx, slot, address);
+                send_cmd_ctx_to_remote_directly(
+                    &meta_map,
+                    cmd_ctx,
+                    slot,
+                    address,
+                    max_redirections,
+                );
                 return;
             }
             err => {
@@ -350,7 +363,13 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
                 address,
             } => {
                 let cmd_ctx = task.into_task();
-                send_cmd_ctx_to_remote_directly(&meta_map, cmd_ctx, slot, address);
+                send_cmd_ctx_to_remote_directly(
+                    &meta_map,
+                    cmd_ctx,
+                    slot,
+                    address,
+                    max_redirections,
+                );
                 return;
             }
             err => warn!("Failed to forward cmd_ctx: {:?}", err),
@@ -360,10 +379,34 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
 
 fn send_cmd_ctx_to_remote_directly<C: ConnFactory<Pkt = RespPacket>>(
     meta_map: &Lease<Arc<ProxyMetaMap<C>>>,
-    cmd_ctx: CmdCtx,
+    mut cmd_ctx: CmdCtx,
     slot: usize,
     address: String,
+    max_redirections: Option<NonZeroUsize>,
 ) {
+    let times = cmd_ctx
+        .get_redirection_times()
+        .or_else(|| max_redirections.map(|n| n.get()));
+    if let Some(times) = times {
+        let times = match times.checked_sub(1) {
+            None => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::ERR_TOO_MANY_REDIRECTIONS.to_string().into_bytes(),
+                )));
+                return;
+            }
+            Some(times) => times,
+        };
+
+        let res = cmd_ctx.wrap_cmd(vec![b"UMFORWARD".to_vec(), times.to_string().into_bytes()]);
+        if !res {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                b"failed to wrap command for redirections".to_vec(),
+            )));
+            return;
+        }
+    }
+
     let res = meta_map
         .cluster_map
         .send_remote_directly(cmd_ctx, slot, address);
@@ -377,11 +420,15 @@ fn send_cmd_ctx_to_remote_directly<C: ConnFactory<Pkt = RespPacket>>(
 
 pub struct BlockingTaskRetrySender<C: ConnFactory<Pkt = RespPacket>> {
     meta_map: SharedMetaMap<C>,
+    max_redirections: Option<NonZeroUsize>,
 }
 
 impl<C: ConnFactory<Pkt = RespPacket>> BlockingTaskRetrySender<C> {
-    fn new(meta_map: SharedMetaMap<C>) -> Self {
-        Self { meta_map }
+    fn new(meta_map: SharedMetaMap<C>, max_redirections: Option<NonZeroUsize>) -> Self {
+        Self {
+            meta_map,
+            max_redirections,
+        }
     }
 }
 
@@ -389,7 +436,7 @@ impl<C: ConnFactory<Pkt = RespPacket>> CmdTaskSender for BlockingTaskRetrySender
     type Task = CmdCtx;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        send_cmd_ctx(&self.meta_map, cmd_task);
+        send_cmd_ctx(&self.meta_map, cmd_task, self.max_redirections);
         Ok(())
     }
 }

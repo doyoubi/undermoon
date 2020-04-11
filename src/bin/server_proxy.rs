@@ -7,6 +7,7 @@ extern crate config;
 extern crate env_logger;
 
 use arc_swap::ArcSwap;
+use std::cmp::min;
 use std::env;
 use std::error::Error;
 use std::num::NonZeroUsize;
@@ -21,6 +22,7 @@ use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::manager::MetaMap;
 use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 use undermoon::proxy::slowlog::SlowRequestLogger;
+use undermoon::MAX_REDIRECTIONS;
 
 fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
     let mut s = config::Config::new();
@@ -52,6 +54,12 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
     let session_batch_buf =
         NonZeroUsize::new(s.get::<usize>("session_batch_buf").unwrap_or_else(|_| 10))
             .ok_or_else(|| "session_batch_buf")?;
+
+    let mut max_redirections = s.get::<usize>("max_redirections").unwrap_or_else(|_| 0);
+    if max_redirections != 0 {
+        max_redirections = min(MAX_REDIRECTIONS, max_redirections);
+    }
+    let max_redirections = NonZeroUsize::new(max_redirections);
 
     let config = ServerProxyConfig {
         address: address.clone(),
@@ -91,6 +99,7 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
         active_redirection: s
             .get::<bool>("active_redirection")
             .unwrap_or_else(|_| false),
+        max_redirections,
     };
     Ok(config)
 }

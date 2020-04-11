@@ -59,6 +59,7 @@ mod tests {
             session_batch_max_time: 10000,
             session_batch_buf: NonZeroUsize::new(50).unwrap(),
             active_redirection: false,
+            max_redirections: None,
         }
     }
 

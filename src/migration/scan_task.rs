@@ -31,6 +31,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+// Cover this case:
+// (1) random node
+// (2) importing node (PreSwitched not done)
+// (3) migrating node (PreSwitched done this time)
+// (4) importing node again and finally process it.
+pub const MAX_REDIRECTIONS: usize = 4;
+
 pub struct RedisScanMigratingTask<RCF, T, BC>
 where
     RCF: RedisClientFactory,

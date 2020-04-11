@@ -30,6 +30,7 @@ pub struct ServerProxyConfig {
     pub session_batch_max_time: usize,
     pub session_batch_buf: NonZeroUsize,
     pub active_redirection: bool,
+    pub max_redirections: Option<NonZeroUsize>,
 }
 
 impl ServerProxyConfig {
@@ -54,6 +55,10 @@ impl ServerProxyConfig {
             "session_batch_max_time" => Ok(self.session_batch_max_time.to_string()),
             "session_batch_buf" => Ok(self.session_batch_buf.to_string()),
             "active_redirection" => Ok(self.active_redirection.to_string()),
+            "max_redirections" => Ok(self
+                .max_redirections
+                .map(|n| n.get().to_string())
+                .unwrap_or("none".to_string())),
             _ => Err(ConfigError::FieldNotFound),
         }
     }
@@ -83,6 +88,7 @@ impl ServerProxyConfig {
             "session_batch_max_time" => Err(ConfigError::ReadonlyField),
             "session_batch_buf" => Err(ConfigError::ReadonlyField),
             "active_redirection" => Err(ConfigError::ReadonlyField),
+            "max_redirections" => Err(ConfigError::ReadonlyField),
             _ => Err(ConfigError::FieldNotFound),
         }
     }
