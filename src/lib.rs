@@ -12,3 +12,5 @@ pub mod migration;
 pub mod protocol;
 pub mod proxy;
 pub mod replication;
+
+pub use self::migration::MAX_REDIRECTIONS;

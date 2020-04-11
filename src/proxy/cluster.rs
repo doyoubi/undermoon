@@ -41,6 +41,7 @@ pub trait ClusterTag {
 pub struct ClusterBackendMap<S: CmdTaskSender, P: CmdTaskSender>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     local_clusters: HashMap<ClusterName, LocalCluster<S>>,
@@ -50,6 +51,7 @@ where
 impl<S: CmdTaskSender, P: CmdTaskSender> Default for ClusterBackendMap<S, P>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     fn default() -> Self {
@@ -63,6 +65,7 @@ where
 impl<S: CmdTaskSender, P: CmdTaskSender> ClusterBackendMap<S, P>
 where
     <S as CmdTaskSender>::Task: ClusterTag,
+    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     pub fn from_cluster_map<
@@ -141,18 +144,18 @@ where
     pub fn send(
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
-    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
+    ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
         let (cmd_task, cluster_exists) = match self.local_clusters.get(&cmd_task.get_cluster_name())
         {
             Some(local_cluster) => match local_cluster.send(cmd_task) {
                 Err(ClusterSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
-                others => return others.map_err(|err| err.map_task(|task| task.into_task())),
+                others => return others,
             },
             None => (cmd_task, false),
         };
 
         match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
-            Some(remote_cluster) => remote_cluster.send_remote(cmd_task.into_task()),
+            Some(remote_cluster) => remote_cluster.send_remote(cmd_task),
             None => {
                 if cluster_exists {
                     let resp = Resp::Error(
@@ -175,13 +178,13 @@ where
 
     pub fn send_remote_directly(
         &self,
-        cmd_task: <S as CmdTaskSender>::Task,
+        cmd_task: <P as CmdTaskSender>::Task,
         slot: usize,
         address: String,
     ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
             Some(remote_cluster) => {
-                remote_cluster.send_remote_directly(cmd_task.into_task(), slot, address.as_str())
+                remote_cluster.send_remote_directly(cmd_task, slot, address.as_str())
             }
             None => {
                 let resp = Resp::Error(
@@ -424,10 +427,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
         Resp::Arr(Array::Arr(arr))
     }
 
-    pub fn send_remote(
-        &self,
-        cmd_task: <P as CmdTaskSender>::Task,
-    ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
+    pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), ClusterSendError<T>> {
         let key = match cmd_task.get_key() {
             Some(key) => key,
             None => {
@@ -440,7 +440,19 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
         let slot = get_slot(key);
 
         match self.slot_map.get(slot) {
-            Some(addr) => self.send_remote_directly(cmd_task, slot, addr),
+            Some(addr) => {
+                if self.remote_backend.is_some() {
+                    Err(ClusterSendError::ActiveRedirection {
+                        task: cmd_task,
+                        slot,
+                        address: addr.to_string(),
+                    })
+                } else {
+                    let resp = Resp::Error(gen_moved(slot, addr.to_string()).into_bytes());
+                    cmd_task.set_resp_result(Ok(resp));
+                    Ok(())
+                }
+            }
             None => {
                 let resp = Resp::Error(format!("slot not covered {:?}", key).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
@@ -534,7 +546,7 @@ pub enum ClusterSendError<T: CmdTask> {
     SlotNotCovered,
     Backend(BackendError),
     MigrationError,
-    Moved {
+    ActiveRedirection {
         task: T,
         slot: usize,
         address: String,
@@ -558,7 +570,7 @@ impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
             Self::SlotNotCovered => "ClusterSendError::SlotNotCovered".to_string(),
             Self::Backend(err) => format!("ClusterSendError::Backend({})", err),
             Self::MigrationError => "ClusterSendError::MigrationError".to_string(),
-            Self::Moved { slot, address, .. } => {
+            Self::ActiveRedirection { slot, address, .. } => {
                 format!("ClusterSendError::Moved({} {})", slot, address)
             }
         };
@@ -575,7 +587,7 @@ impl<T: CmdTask> Error for ClusterSendError<T> {
             Self::Backend(err) => Some(err),
             Self::SlotNotCovered => None,
             Self::MigrationError => None,
-            Self::Moved { .. } => None,
+            Self::ActiveRedirection { .. } => None,
         }
     }
 }
@@ -593,11 +605,11 @@ impl<T: CmdTask> ClusterSendError<T> {
             Self::Backend(err) => ClusterSendError::Backend(err),
             Self::SlotNotCovered => ClusterSendError::SlotNotCovered,
             Self::MigrationError => ClusterSendError::MigrationError,
-            Self::Moved {
+            Self::ActiveRedirection {
                 task,
                 slot,
                 address,
-            } => ClusterSendError::Moved {
+            } => ClusterSendError::ActiveRedirection {
                 task: f(task),
                 slot,
                 address,

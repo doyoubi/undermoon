@@ -496,13 +496,16 @@ where
 
     async fn handle_mget(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
         let arg_len = cmd_ctx.get_cmd().get_command_len().unwrap_or(0);
-        let in_same_slot =
-            same_slot((1..arg_len).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
-        if !in_same_slot {
-            cmd_ctx.set_resp_result(Ok(Resp::Error(
-                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
-            )));
-            return reply_receiver.await;
+
+        if !self.config.active_redirection {
+            let in_same_slot =
+                same_slot((1..arg_len).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
+            if !in_same_slot {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+                )));
+                return reply_receiver.await;
+            }
         }
 
         let factory = CmdCtxFactory::default();
@@ -549,14 +552,17 @@ where
 
     async fn handle_mset(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
         let arg_len = cmd_ctx.get_cmd().get_command_len().unwrap_or(0);
-        let in_same_slot = same_slot(
-            (0..(arg_len / 2)).filter_map(|i| cmd_ctx.get_cmd().get_command_element(2 * i + 1)),
-        );
-        if !in_same_slot {
-            cmd_ctx.set_resp_result(Ok(Resp::Error(
-                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
-            )));
-            return reply_receiver.await;
+
+        if !self.config.active_redirection {
+            let in_same_slot = same_slot(
+                (0..(arg_len / 2)).filter_map(|i| cmd_ctx.get_cmd().get_command_element(2 * i + 1)),
+            );
+            if !in_same_slot {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+                )));
+                return reply_receiver.await;
+            }
         }
 
         let factory = CmdCtxFactory::default();
@@ -618,13 +624,16 @@ where
         cmd_name: &'static str,
     ) -> TaskResult {
         let arg_len = cmd_ctx.get_cmd().get_command_len().unwrap_or(0);
-        let in_same_slot =
-            same_slot((1..arg_len).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
-        if !in_same_slot {
-            cmd_ctx.set_resp_result(Ok(Resp::Error(
-                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
-            )));
-            return reply_receiver.await;
+
+        if !self.config.active_redirection {
+            let in_same_slot =
+                same_slot((1..arg_len).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
+            if !in_same_slot {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+                )));
+                return reply_receiver.await;
+            }
         }
 
         let factory = CmdCtxFactory::default();
@@ -743,13 +752,16 @@ where
             },
         };
 
-        let in_same_slot =
-            same_slot((1..(arg_len - 1)).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)));
-        if !in_same_slot {
-            cmd_ctx.set_resp_result(Ok(Resp::Error(
-                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
-            )));
-            return reply_receiver.await;
+        if !self.config.active_redirection {
+            let in_same_slot = same_slot(
+                (1..(arg_len - 1)).filter_map(|i| cmd_ctx.get_cmd().get_command_element(i)),
+            );
+            if !in_same_slot {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+                )));
+                return reply_receiver.await;
+            }
         }
 
         let factory = CmdCtxFactory::default();
@@ -850,6 +862,37 @@ where
         }
         self.manager.send(cmd_ctx);
     }
+
+    fn handle_umforward(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+    ) -> CmdReplyFuture {
+        let (mut cmd_ctx, redirection_times) = match Self::get_sub_command(cmd_ctx, 1) {
+            Some((cmd_ctx, sub_cmd)) => (cmd_ctx, sub_cmd.to_uppercase()),
+            None => return CmdReplyFuture::Left(reply_receiver),
+        };
+
+        let times = match str::parse::<usize>(redirection_times.as_str()) {
+            Ok(times) => times,
+            Err(_) => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(b"invalid redirection times".to_vec())));
+                return CmdReplyFuture::Left(reply_receiver);
+            }
+        };
+
+        // UMFORWARD <redirection times>
+        match cmd_ctx.extract_inner_cmd(2) {
+            Some(cmd_len) if cmd_len > 0 => (),
+            _ => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(b"missing forwarded command".to_vec())));
+                return CmdReplyFuture::Left(reply_receiver);
+            }
+        }
+
+        cmd_ctx.set_redirection_times(times);
+        self.handle_data_cmd(cmd_ctx, reply_receiver)
+    }
 }
 
 impl<F, C> CmdCtxHandler for ForwardHandler<F, C>
@@ -892,6 +935,7 @@ where
                 String::from("Invalid command").into_bytes(),
             ))),
             CmdType::UmCtl => self.handle_umctl(cmd_ctx),
+            CmdType::UmForward => return self.handle_umforward(cmd_ctx, reply_receiver),
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
             CmdType::Config => self.handle_config(cmd_ctx),
             CmdType::Command => {

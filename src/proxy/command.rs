@@ -1,6 +1,6 @@
 use super::slowlog::Slowlog;
 use crate::common::utils::byte_to_uppercase;
-use crate::protocol::{RespPacket, RespSlice, RespVec};
+use crate::protocol::{BinSafeStr, RespPacket, RespSlice, RespVec};
 use arrayvec::ArrayVec;
 use backtrace::Backtrace;
 use futures::channel::oneshot;
@@ -28,6 +28,7 @@ pub enum CmdType {
     Others,
     Invalid,
     UmCtl,
+    UmForward,
     Cluster,
     Config,
     Command,
@@ -53,6 +54,7 @@ impl CmdType {
             b"ECHO" => CmdType::Echo,
             b"SELECT" => CmdType::Select,
             b"UMCTL" => CmdType::UmCtl,
+            b"UMFORWARD" => CmdType::UmForward,
             b"CLUSTER" => CmdType::Cluster,
             b"CONFIG" => CmdType::Config,
             b"COMMAND" => CmdType::Command,
@@ -217,6 +219,22 @@ impl Command {
 
     pub fn change_element(&mut self, index: usize, data: Vec<u8>) -> bool {
         self.request.change_bulk_array_element(index, data)
+    }
+
+    pub fn extract_inner_cmd(&mut self, removed_num: usize) -> Option<usize> {
+        let remaining = self.request.left_trim_cmd(removed_num)?;
+        self.cmd_type = CmdType::from_packet(&self.request);
+        self.data_cmd_type = DataCmdType::from_packet(&self.request);
+        Some(remaining)
+    }
+
+    pub fn wrap_cmd(&mut self, preceding_elements: Vec<BinSafeStr>) -> bool {
+        if !self.request.wrap_cmd(preceding_elements) {
+            return false;
+        }
+        self.cmd_type = CmdType::from_packet(&self.request);
+        self.data_cmd_type = DataCmdType::from_packet(&self.request);
+        true
     }
 
     pub fn get_type(&self) -> CmdType {
@@ -391,6 +409,7 @@ impl Error for CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{Array, BulkStr, Resp};
 
     #[test]
     fn test_parse_cmd_type() {
@@ -404,5 +423,25 @@ mod tests {
         assert_eq!(DataCmdType::from_cmd_name(b"get"), DataCmdType::GET);
         assert_eq!(DataCmdType::from_cmd_name(b"eVaL"), DataCmdType::EVAL);
         assert_eq!(DataCmdType::from_cmd_name(b"HMGET"), DataCmdType::Others);
+    }
+
+    #[test]
+    fn test_umforward() {
+        let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![
+            Resp::Bulk(BulkStr::Str(b"GET".to_vec())),
+            Resp::Bulk(BulkStr::Str(b"somekey".to_vec())),
+        ])));
+        let mut cmd = Command::new(Box::new(request));
+        assert_eq!(cmd.get_type(), CmdType::Others);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::GET);
+
+        assert!(cmd.wrap_cmd(vec![b"UMFORWARD".to_vec(), b"233".to_vec()]));
+        assert_eq!(cmd.get_type(), CmdType::UmForward);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::Others);
+
+        let remaining = cmd.extract_inner_cmd(2).unwrap();
+        assert_eq!(remaining, 2);
+        assert_eq!(cmd.get_type(), CmdType::Others);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::GET);
     }
 }
