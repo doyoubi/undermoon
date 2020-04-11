@@ -7,6 +7,7 @@
 - Cluster management through HTTP API
 - Automatic failover for both master and replica
 - Fast scaling
+- Both cluster-mode clients and non-cluster-mode clients.
 - String value compression
 
 Any storage system implementing redis protocol could also somehow work with undermoon,
@@ -200,6 +201,7 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 - [Chunk](./docs/chunk.md)
 - [Slot Migration](./docs/slots_migration.md)
 - [Memory Broker Replica](./docs/mem_broker_replica.md)
+- [Configure to support non-cluster-mode clients](./docs/active_redirection.md)
 
 ## API
 - [Proxy UMCTL command](./docs/meta_command.md)
