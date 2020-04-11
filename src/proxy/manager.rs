@@ -322,7 +322,7 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
         Ok(()) => return,
         Err(e) => match e {
             ClusterSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
-            ClusterSendError::Moved {
+            ClusterSendError::ActiveRedirection {
                 task,
                 slot,
                 address,

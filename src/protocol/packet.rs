@@ -4,7 +4,8 @@ use super::fp::{RFunctor, VFunctor};
 use super::resp::{BinSafeStr, IndexedResp, Resp, RespSlice, RespVec};
 use super::stateless::{parse_indexed_resp, ParseError};
 use crate::common::utils::{
-    change_bulk_array_element, change_bulk_str, get_command_element, get_command_len, ThreadSafe,
+    change_bulk_array_element, change_bulk_str, get_command_element, get_command_len,
+    left_trim_array, ThreadSafe,
 };
 use crate::protocol::EncodeError;
 use bytes::BytesMut;
@@ -155,6 +156,18 @@ impl RespPacket {
             *self = Self::Data(resp);
         }
         success
+    }
+
+    pub fn left_trim_cmd(&mut self, removed_num: usize) -> Option<usize> {
+        match self {
+            Self::Indexed(index_resp) => {
+                let mut resp = index_resp.to_resp_vec();
+                let remaining= left_trim_array(&mut resp, removed_num)?;
+                *self = Self::Data(resp);
+                Some(remaining)
+            },
+            Self::Data(resp) => left_trim_array(resp, removed_num),
+        }
     }
 
     pub fn change_bulk_str(&mut self, data: Vec<u8>) -> bool {

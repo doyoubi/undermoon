@@ -635,7 +635,7 @@ fn handle_redirection<T: CmdTask>(
     if active_redirection {
         let cmd_task = BlockingHintTask::new(cmd_task, false);
         // Proceed the command inside this proxy.
-        Err(ClusterSendError::Moved {
+        Err(ClusterSendError::ActiveRedirection {
             task: cmd_task,
             slot,
             address: redirection_address,

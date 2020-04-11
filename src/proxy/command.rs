@@ -28,6 +28,7 @@ pub enum CmdType {
     Others,
     Invalid,
     UmCtl,
+    UmForward,
     Cluster,
     Config,
     Command,
@@ -53,6 +54,7 @@ impl CmdType {
             b"ECHO" => CmdType::Echo,
             b"SELECT" => CmdType::Select,
             b"UMCTL" => CmdType::UmCtl,
+            b"UMFORWARD" => CmdType::UmForward,
             b"CLUSTER" => CmdType::Cluster,
             b"CONFIG" => CmdType::Config,
             b"COMMAND" => CmdType::Command,
@@ -217,6 +219,10 @@ impl Command {
 
     pub fn change_element(&mut self, index: usize, data: Vec<u8>) -> bool {
         self.request.change_bulk_array_element(index, data)
+    }
+
+    pub fn left_trim_cmd(&mut self, removed_num: usize) -> Option<usize> {
+        self.request.left_trim_cmd(removed_num)
     }
 
     pub fn get_type(&self) -> CmdType {

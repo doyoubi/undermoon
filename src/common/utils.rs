@@ -3,6 +3,7 @@ use crate::protocol::RespVec;
 use crate::protocol::{Array, BulkStr, Resp};
 use crc16::{State, XMODEM};
 use futures::{stream, Stream};
+use std::cmp::min;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
 
@@ -93,6 +94,18 @@ pub fn change_bulk_array_element(resp: &mut RespVec, index: usize, data: Vec<u8>
             Some(true) == resps.get_mut(index).map(|resp| change_bulk_str(resp, data))
         }
         _ => false,
+    }
+}
+
+pub fn left_trim_array<T>(resp: &mut Resp<T>, removed_num: usize) -> Option<usize> {
+    match resp {
+        Resp::Arr(Array::Arr(ref mut resps)) => {
+            let start = min(removed_num, resps.len());
+            let new_resps = resps.drain(start..).collect();
+            *resps = new_resps;
+            Some(resps.len())
+        }
+        _ => None,
     }
 }
 

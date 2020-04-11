@@ -45,6 +45,7 @@ pub struct CmdCtx {
     cmd: Command,
     reply_sender: CmdReplySender,
     slowlog: Slowlog,
+    redirection_times: Option<usize>,
 }
 
 impl CmdCtx {
@@ -60,6 +61,7 @@ impl CmdCtx {
             cmd,
             reply_sender,
             slowlog,
+            redirection_times: None,
         }
     }
 
@@ -79,12 +81,21 @@ impl CmdCtx {
         self.cmd.change_element(index, data)
     }
 
+    // Returns remaining elements
+    pub fn left_trim_cmd(&mut self, removed_num: usize) -> Option<usize> {
+        self.cmd.left_trim_cmd(removed_num)
+    }
+
     pub fn get_cmd_type(&self) -> CmdType {
         self.cmd.get_type()
     }
 
     pub fn get_data_cmd_type(&self) -> DataCmdType {
         self.cmd.get_data_cmd_type()
+    }
+
+    pub fn set_redirection_times(&mut self, redirection_times: usize) {
+        self.redirection_times = Some(redirection_times)
     }
 }
 

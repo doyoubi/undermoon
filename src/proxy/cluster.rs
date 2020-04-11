@@ -534,7 +534,7 @@ pub enum ClusterSendError<T: CmdTask> {
     SlotNotCovered,
     Backend(BackendError),
     MigrationError,
-    Moved {
+    ActiveRedirection {
         task: T,
         slot: usize,
         address: String,
@@ -558,7 +558,7 @@ impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
             Self::SlotNotCovered => "ClusterSendError::SlotNotCovered".to_string(),
             Self::Backend(err) => format!("ClusterSendError::Backend({})", err),
             Self::MigrationError => "ClusterSendError::MigrationError".to_string(),
-            Self::Moved { slot, address, .. } => {
+            Self::ActiveRedirection { slot, address, .. } => {
                 format!("ClusterSendError::Moved({} {})", slot, address)
             }
         };
@@ -575,7 +575,7 @@ impl<T: CmdTask> Error for ClusterSendError<T> {
             Self::Backend(err) => Some(err),
             Self::SlotNotCovered => None,
             Self::MigrationError => None,
-            Self::Moved { .. } => None,
+            Self::ActiveRedirection { .. } => None,
         }
     }
 }
@@ -593,11 +593,11 @@ impl<T: CmdTask> ClusterSendError<T> {
             Self::Backend(err) => ClusterSendError::Backend(err),
             Self::SlotNotCovered => ClusterSendError::SlotNotCovered,
             Self::MigrationError => ClusterSendError::MigrationError,
-            Self::Moved {
+            Self::ActiveRedirection {
                 task,
                 slot,
                 address,
-            } => ClusterSendError::Moved {
+            } => ClusterSendError::ActiveRedirection {
                 task: f(task),
                 slot,
                 address,
