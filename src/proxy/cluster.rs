@@ -266,6 +266,11 @@ where
             .get(cluster_name)
             .map(|local_cluster| &local_cluster.config)
     }
+
+    pub fn cluster_exists(&self, cluster_name: &ClusterName) -> bool {
+        self.local_clusters.contains_key(cluster_name)
+            || self.remote_clusters.contains_key(cluster_name)
+    }
 }
 
 struct SenderMap<S: CmdTaskSender> {
