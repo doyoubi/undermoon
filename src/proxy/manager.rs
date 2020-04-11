@@ -6,9 +6,7 @@ use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
     BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
 };
-use super::cluster::{
-    ClusterBackendMap, ClusterMetaError, ClusterSendError, ClusterTag, DEFAULT_CLUSTER,
-};
+use super::cluster::{ClusterBackendMap, ClusterMetaError, ClusterSendError, ClusterTag};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
@@ -304,7 +302,12 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
-        if cmd_ctx.get_cluster_name().as_str() != DEFAULT_CLUSTER {
+        let exists = self
+            .meta_map
+            .lease()
+            .cluster_map
+            .cluster_exists(&cmd_ctx.get_cluster_name());
+        if exists {
             return cmd_ctx;
         }
 
