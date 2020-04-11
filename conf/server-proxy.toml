@@ -32,3 +32,7 @@ session_batch_buf = 10
 # all the server proxies will handle the redirection inside.
 # Clients don't need to be a Redis Cluster Client.
 active_redirection = false
+# This is only useful when active_redirection is true.
+# Use 0 to disable limitation.
+# Or it should be at least 4.
+max_redirections = 4

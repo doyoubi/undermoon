@@ -409,6 +409,7 @@ impl Error for CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{Array, BulkStr, Resp};
 
     #[test]
     fn test_parse_cmd_type() {
@@ -422,5 +423,25 @@ mod tests {
         assert_eq!(DataCmdType::from_cmd_name(b"get"), DataCmdType::GET);
         assert_eq!(DataCmdType::from_cmd_name(b"eVaL"), DataCmdType::EVAL);
         assert_eq!(DataCmdType::from_cmd_name(b"HMGET"), DataCmdType::Others);
+    }
+
+    #[test]
+    fn test_umforward() {
+        let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![
+            Resp::Bulk(BulkStr::Str(b"GET".to_vec())),
+            Resp::Bulk(BulkStr::Str(b"somekey".to_vec())),
+        ])));
+        let mut cmd = Command::new(Box::new(request));
+        assert_eq!(cmd.get_type(), CmdType::Others);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::GET);
+
+        assert!(cmd.wrap_cmd(vec![b"UMFORWARD".to_vec(), b"233".to_vec()]));
+        assert_eq!(cmd.get_type(), CmdType::UmForward);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::Others);
+
+        let remaining = cmd.extract_inner_cmd(2).unwrap();
+        assert_eq!(remaining, 2);
+        assert_eq!(cmd.get_type(), CmdType::Others);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::GET);
     }
 }

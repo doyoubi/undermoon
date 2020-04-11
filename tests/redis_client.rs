@@ -9,13 +9,16 @@ use undermoon::protocol::{
 };
 
 pub struct DummyRedisClient {
-    handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>,
+    handle_func: Arc<dyn Fn(Vec<String>) -> RespVec + Send + Sync + 'static>,
 }
 
 impl DummyRedisClient {
     fn gen_reply(&self, cmd: Vec<BinSafeStr>) -> RespVec {
-        let cmd_name = str::from_utf8(cmd[0].as_slice()).unwrap().to_uppercase();
-        (self.handle_func)(cmd_name.as_str())
+        let cmd = cmd
+            .into_iter()
+            .map(|s| str::from_utf8(s.as_slice()).unwrap().to_string())
+            .collect();
+        (self.handle_func)(cmd)
     }
 }
 
@@ -31,11 +34,11 @@ impl RedisClient for DummyRedisClient {
 }
 
 pub struct DummyClientFactory {
-    handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>,
+    handle_func: Arc<dyn Fn(Vec<String>) -> RespVec + Send + Sync + 'static>,
 }
 
 impl DummyClientFactory {
-    pub fn new(handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>) -> Self {
+    pub fn new(handle_func: Arc<dyn Fn(Vec<String>) -> RespVec + Send + Sync + 'static>) -> Self {
         Self { handle_func }
     }
 }

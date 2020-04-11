@@ -386,7 +386,7 @@ fn send_cmd_ctx_to_remote_directly<C: ConnFactory<Pkt = RespPacket>>(
 ) {
     let times = cmd_ctx
         .get_redirection_times()
-        .or_else(|| max_redirections.map(|n| n.get()));
+        .or_else(|| max_redirections.map(|n| n.get() - 1));
     if let Some(times) = times {
         let times = match times.checked_sub(1) {
             None => {

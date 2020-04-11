@@ -23,7 +23,8 @@ mod tests {
     };
     use undermoon::common::proto::ProxyClusterMeta;
     use undermoon::common::response::{
-        ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, OK_REPLY,
+        ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, ERR_TOO_MANY_REDIRECTIONS,
+        OK_REPLY,
     };
     use undermoon::common::track::TrackedFutureRegistry;
     use undermoon::common::utils::pretty_print_bytes;
@@ -64,9 +65,10 @@ mod tests {
     }
 
     fn gen_testing_manager(
-        handle_func: Arc<dyn Fn(&str) -> RespVec + Send + Sync + 'static>,
+        handle_func: Arc<dyn Fn(Vec<String>) -> RespVec + Send + Sync + 'static>,
+        config: ServerProxyConfig,
     ) -> TestMetaManager {
-        let config = Arc::new(gen_config());
+        let config = Arc::new(config);
         let client_factory = Arc::new(DummyClientFactory::new(handle_func.clone()));
         let conn_factory = Arc::new(DummyOkConnFactory::new(handle_func));
         let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::empty())));
@@ -103,9 +105,23 @@ mod tests {
         meta
     }
 
+    async fn assert_ok_reply(reply_receiver: CmdReplyReceiver) {
+        let result = reply_receiver.await;
+        let (_, response, _) = result.unwrap().into_inner();
+        let resp = response.into_resp_vec();
+        let s = match resp {
+            Resp::Simple(s) => s,
+            other => panic!(format!(
+                "unexpected pattern {:?}",
+                other.map(|b| pretty_print_bytes(b.as_slice()))
+            )),
+        };
+        assert_eq!(s, OK_REPLY.as_bytes());
+    }
+
     #[tokio::test]
     async fn test_cluster_not_found() {
-        let manager = gen_testing_manager(Arc::new(always_ok));
+        let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
         let (cmd_ctx, reply_receiver) = gen_set_command(b"key".to_vec());
 
         manager.send(cmd_ctx);
@@ -145,12 +161,13 @@ mod tests {
         }
     }
 
-    pub fn always_ok(_: &str) -> RespVec {
+    pub fn always_ok(_: Vec<String>) -> RespVec {
         Resp::Simple(b"OK".to_vec())
     }
 
-    pub fn handle_migration_command(cmd_name: &str) -> RespVec {
-        match cmd_name {
+    pub fn handle_migration_command(cmd: Vec<String>) -> RespVec {
+        let cmd_name = cmd[0].to_uppercase();
+        match cmd_name.as_str() {
             "EXISTS" => Resp::Integer(b"0".to_vec()),
             "DUMP" => Resp::Bulk(BulkStr::Str(b"binary_format_xxx".to_vec())),
             "RESTORE" => Resp::Simple(b"OK".to_vec()),
@@ -166,8 +183,9 @@ mod tests {
         }
     }
 
-    pub fn handle_command_for_finished_migration(cmd_name: &str) -> RespVec {
-        match cmd_name {
+    pub fn handle_command_for_finished_migration(cmd: Vec<String>) -> RespVec {
+        let cmd_name = cmd[0].to_uppercase();
+        match cmd_name.as_str() {
             "EXISTS" => Resp::Integer(b"1".to_vec()),
             "DUMP" => Resp::Bulk(BulkStr::Str(b"binary_format_xxx".to_vec())),
             "RESTORE" => Resp::Simple(b"OK".to_vec()),
@@ -184,7 +202,7 @@ mod tests {
     #[tokio::test]
     async fn test_data_command() {
         let meta = gen_proxy_cluster_meta();
-        let manager = gen_testing_manager(Arc::new(always_ok));
+        let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
 
         manager.set_meta(meta).unwrap();
         wait_backend_ready(&manager).await;
@@ -192,17 +210,7 @@ mod tests {
         let (cmd_ctx, reply_receiver) = gen_set_command(b"key".to_vec());
         manager.send(cmd_ctx);
 
-        let result = reply_receiver.await;
-        let (_, response, _) = result.unwrap().into_inner();
-        let resp = response.into_resp_vec();
-        let s = match resp {
-            Resp::Simple(s) => s,
-            other => panic!(format!(
-                "unexpected pattern {:?}",
-                other.map(|b| pretty_print_bytes(b.as_slice()))
-            )),
-        };
-        assert_eq!(s, OK_REPLY.as_bytes());
+        assert_ok_reply(reply_receiver).await;
     }
 
     fn gen_migration_cluster_meta(is_source_proxy: bool) -> ProxyClusterMeta {
@@ -393,8 +401,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_migration() {
-        let src_manager = gen_testing_manager(Arc::new(handle_migration_command));
-        let dst_manager = gen_testing_manager(Arc::new(handle_migration_command));
+        let src_manager = gen_testing_manager(Arc::new(handle_migration_command), gen_config());
+        let dst_manager = gen_testing_manager(Arc::new(handle_migration_command), gen_config());
 
         // dst proxy will be set first by coordinator.
         dst_manager
@@ -435,8 +443,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_migration_with_scanning_done() {
-        let src_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
-        let dst_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
+        let src_manager = gen_testing_manager(
+            Arc::new(handle_command_for_finished_migration),
+            gen_config(),
+        );
+        let dst_manager = gen_testing_manager(
+            Arc::new(handle_command_for_finished_migration),
+            gen_config(),
+        );
 
         // dst proxy will be set first by coordinator.
         dst_manager
@@ -495,8 +509,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_migration_with_src_failover() {
-        let src_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
-        let dst_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
+        let src_manager = gen_testing_manager(
+            Arc::new(handle_command_for_finished_migration),
+            gen_config(),
+        );
+        let dst_manager = gen_testing_manager(
+            Arc::new(handle_command_for_finished_migration),
+            gen_config(),
+        );
 
         // dst proxy will be set first by coordinator.
         dst_manager
@@ -577,8 +597,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_migration_with_dst_failover() {
-        let src_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
-        let dst_manager = gen_testing_manager(Arc::new(handle_command_for_finished_migration));
+        let src_manager = gen_testing_manager(
+            Arc::new(handle_command_for_finished_migration),
+            gen_config(),
+        );
+        let dst_manager = gen_testing_manager(
+            Arc::new(handle_command_for_finished_migration),
+            gen_config(),
+        );
 
         // dst proxy will be set first by coordinator.
         dst_manager
@@ -655,5 +681,108 @@ mod tests {
         check_dst_request(&dst_manager).await;
         assert!(src_manager.get_finished_migration_tasks().is_empty());
         assert!(dst_manager.get_finished_migration_tasks().is_empty());
+    }
+
+    pub fn handle_active_redirection(cmd: Vec<String>) -> RespVec {
+        let cmd_name = cmd[0].to_uppercase();
+        match cmd_name.as_str() {
+            "SET" => Resp::Simple(b"OK".to_vec()),
+            "UMFORWARD" => Resp::Simple(b"OK".to_vec()),
+            _ => Resp::Error(b"unexpected command".to_vec()),
+        }
+    }
+
+    fn gen_active_redirection_proxy1_cluster_meta() -> ProxyClusterMeta {
+        let mut iter = "1 NOFLAGS test_cluster 127.0.0.1:7001 1 0-8000 peer test_cluster 127.0.0.1:6002 1 8001-16383"
+            .split(' ')
+            .map(|s| s.to_string())
+            .peekable();
+        let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
+        assert!(extended_args.is_ok());
+        meta
+    }
+
+    fn gen_active_redirection_proxy2_cluster_meta() -> ProxyClusterMeta {
+        let mut iter = "1 NOFLAGS test_cluster 127.0.0.1:7002 1 8001-16383 peer test_cluster 127.0.0.1:6001 1 0-8000"
+            .split(' ')
+            .map(|s| s.to_string())
+            .peekable();
+        let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
+        assert!(extended_args.is_ok());
+        meta
+    }
+
+    async fn wait_peer_backend_ready(manager: &TestMetaManager) {
+        loop {
+            let (mut cmd_ctx, reply_receiver) = gen_set_command(b"key".to_vec());
+            assert!(cmd_ctx.wrap_cmd(vec![b"UMFORWARD".to_vec(), b"1".to_vec(),]));
+            manager.send(cmd_ctx);
+
+            let result = reply_receiver.await;
+            let (_, response, _) = result.unwrap().into_inner();
+            let resp = response.into_resp_vec();
+            match resp {
+                Resp::Error(err_str)
+                    if str::from_utf8(err_str.as_slice())
+                        .unwrap()
+                        .starts_with(ERR_BACKEND_CONNECTION) =>
+                {
+                    // The connection future is not ready.
+                    Delay::new(Duration::from_millis(1)).await;
+                    continue;
+                }
+                _ => break,
+            };
+        }
+    }
+
+    #[tokio::test]
+    async fn test_active_redirection() {
+        let mut config1 = gen_config();
+        config1.active_redirection = true;
+        let mut config2 = gen_config();
+        config2.active_redirection = true;
+        let manager1 = gen_testing_manager(Arc::new(handle_active_redirection), config1);
+        let manager2 = gen_testing_manager(Arc::new(handle_active_redirection), config2);
+
+        manager1
+            .set_meta(gen_active_redirection_proxy1_cluster_meta())
+            .unwrap();
+        manager2
+            .set_meta(gen_active_redirection_proxy2_cluster_meta())
+            .unwrap();
+        wait_backend_ready(&manager1).await;
+        wait_peer_backend_ready(&manager1).await;
+        wait_backend_ready(&manager2).await;
+        wait_peer_backend_ready(&manager2).await;
+
+        // key `a` belongs to manager2
+        let (cmd_ctx, reply_receiver) = gen_set_command(b"a".to_vec());
+        manager1.send(cmd_ctx);
+        assert_ok_reply(reply_receiver).await;
+
+        // at the same time send UMFORWARD to manager2
+        let (mut cmd_ctx, reply_receiver) = gen_set_command(b"a".to_vec());
+        assert!(cmd_ctx.wrap_cmd(vec![b"UMFORWARD".to_vec(), b"1".to_vec(),]));
+        manager2.send(cmd_ctx);
+        assert_ok_reply(reply_receiver).await;
+
+        // too many redirections
+        let (mut cmd_ctx, reply_receiver) = gen_set_command(b"a".to_vec());
+        assert!(cmd_ctx.wrap_cmd(vec![b"UMFORWARD".to_vec(), b"0".to_vec(),]));
+        cmd_ctx.set_redirection_times(0);
+
+        manager1.send(cmd_ctx);
+        let result = reply_receiver.await;
+        let (_, response, _) = result.unwrap().into_inner();
+        let resp = response.into_resp_vec();
+        let s = match resp {
+            Resp::Error(s) => s,
+            other => panic!(format!(
+                "unexpected pattern {:?}",
+                other.map(|b| pretty_print_bytes(b.as_slice()))
+            )),
+        };
+        assert_eq!(s, ERR_TOO_MANY_REDIRECTIONS.as_bytes());
     }
 }

@@ -58,7 +58,7 @@ impl ServerProxyConfig {
             "max_redirections" => Ok(self
                 .max_redirections
                 .map(|n| n.get().to_string())
-                .unwrap_or("none".to_string())),
+                .unwrap_or_else(|| "none".to_string())),
             _ => Err(ConfigError::FieldNotFound),
         }
     }
