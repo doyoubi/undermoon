@@ -7,7 +7,7 @@ use crate::common::utils::{resolve_first_address, ThreadSafe};
 use futures::{FutureExt, StreamExt};
 use std::error::Error;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use string_error::into_err;
 use tokio::net::TcpListener;
@@ -19,6 +19,7 @@ pub struct ServerProxyConfig {
     pub auto_select_cluster: bool,
     pub slowlog_len: NonZeroUsize,
     pub slowlog_log_slower_than: AtomicI64,
+    pub slowlog_coarse_time: AtomicBool,
     pub thread_number: NonZeroUsize,
     pub session_channel_size: usize,
     pub backend_channel_size: usize,
@@ -34,6 +35,25 @@ pub struct ServerProxyConfig {
 }
 
 impl ServerProxyConfig {
+    pub fn get_slowlog_log_slower_than(&self) -> i64 {
+        self.slowlog_log_slower_than.load(Ordering::Relaxed)
+    }
+
+    pub fn set_slowlog_log_slower_than(&self, n: i64) {
+        self.slowlog_log_slower_than.store(n, Ordering::Relaxed)
+    }
+
+    pub fn get_slowlog_coarse_time(&self) -> bool {
+        self.slowlog_coarse_time.load(Ordering::Relaxed)
+    }
+
+    pub fn set_slowlog_coarse_time(&self, enable_coarse_time: bool) {
+        self.slowlog_coarse_time
+            .store(enable_coarse_time, Ordering::Relaxed)
+    }
+}
+
+impl ServerProxyConfig {
     pub fn get_field(&self, field: &str) -> Result<String, ConfigError> {
         match field.to_lowercase().as_ref() {
             "address" => Ok(self.address.clone()),
@@ -44,10 +64,8 @@ impl ServerProxyConfig {
             "session_channel_size" => Ok(self.session_channel_size.to_string()),
             "backend_channel_size" => Ok(self.backend_channel_size.to_string()),
             "backend_conn_num" => Ok(self.backend_conn_num.to_string()),
-            "slowlog_log_slower_than" => Ok(self
-                .slowlog_log_slower_than
-                .load(Ordering::SeqCst)
-                .to_string()),
+            "slowlog_log_slower_than" => Ok(self.get_slowlog_log_slower_than().to_string()),
+            "slowlog_coarse_time" => Ok(self.get_slowlog_coarse_time().to_string()),
             "backend_batch_min_time" => Ok(self.backend_batch_min_time.to_string()),
             "backend_batch_max_time" => Ok(self.backend_batch_max_time.to_string()),
             "backend_batch_buf" => Ok(self.backend_batch_buf.to_string()),
@@ -77,8 +95,21 @@ impl ServerProxyConfig {
                 let int_value = value
                     .parse::<i64>()
                     .map_err(|_| ConfigError::InvalidValue)?;
-                self.slowlog_log_slower_than
-                    .store(int_value, Ordering::SeqCst);
+                self.set_slowlog_log_slower_than(int_value);
+                Ok(())
+            }
+            "slowlog_coarse_time" => {
+                let enable_coarse_time = match value.to_lowercase().as_str() {
+                    "true" => true,
+                    "false" => false,
+                    other => {
+                        let int_value = other
+                            .parse::<u64>()
+                            .map_err(|_| ConfigError::InvalidValue)?;
+                        int_value != 0
+                    }
+                };
+                self.set_slowlog_coarse_time(enable_coarse_time);
                 Ok(())
             }
             "backend_batch_max_time" => Err(ConfigError::ReadonlyField),
@@ -164,6 +195,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                     curr_session_id,
                     handle_clone,
                     slow_request_logger.clone(),
+                    config.clone(),
                 )),
                 sock,
                 config.session_channel_size,

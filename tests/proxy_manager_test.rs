@@ -14,7 +14,7 @@ mod tests {
     use std::convert::TryFrom;
     use std::num::NonZeroUsize;
     use std::str;
-    use std::sync::atomic::AtomicI64;
+    use std::sync::atomic::{AtomicBool, AtomicI64};
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
     use tokio;
@@ -47,6 +47,7 @@ mod tests {
             auto_select_cluster: true,
             slowlog_len: NonZeroUsize::new(1024).unwrap(),
             slowlog_log_slower_than: AtomicI64::new(0),
+            slowlog_coarse_time: AtomicBool::new(true),
             thread_number: NonZeroUsize::new(2).unwrap(),
             session_channel_size: 1024,
             backend_channel_size: 1024,
@@ -91,7 +92,7 @@ mod tests {
         ])));
         let command = Command::new(Box::new(resp));
         let (s, r) = new_command_pair(&command);
-        let cmd_ctx = CmdCtx::new(cluster_name, command, s, 233);
+        let cmd_ctx = CmdCtx::new(cluster_name, command, s, 233, true);
         (cmd_ctx, r)
     }
 

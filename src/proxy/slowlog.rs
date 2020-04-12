@@ -68,6 +68,7 @@ impl Default for RequestEventMap {
 pub struct Slowlog {
     event_map: RequestEventMap,
     session_id: usize,
+    coarse_time: bool,
 }
 
 #[derive(Debug)]
@@ -75,23 +76,36 @@ pub struct SlowlogRecord {
     event_map: RequestEventMap,
     command: Vec<String>,
     session_id: usize,
+    coarse_time: bool,
 }
 
 impl Slowlog {
-    pub fn new(session_id: usize) -> Self {
+    pub fn new(session_id: usize, coarse_time: bool) -> Self {
         Slowlog {
             event_map: RequestEventMap::default(),
             session_id,
+            coarse_time,
         }
     }
 
     pub fn log_event(&mut self, event: TaskEvent) {
-        self.event_map
-            .set_event_time(event, Utc::now().timestamp_nanos())
+        let t = if self.coarse_time {
+            match event {
+                TaskEvent::ReceivedFromBackend => CachedTime::now(),
+                _ => CachedTime::recent(),
+            }
+        } else {
+            Utc::now().timestamp_nanos()
+        };
+        self.event_map.set_event_time(event, t);
     }
 
     pub fn get_session_id(&self) -> usize {
         self.session_id
+    }
+
+    pub fn coarse_time_enabled(&self) -> bool {
+        self.coarse_time
     }
 }
 
@@ -100,12 +114,14 @@ impl SlowlogRecord {
         let Slowlog {
             event_map,
             session_id,
+            coarse_time,
         } = slowlog;
         let command = Self::get_brief_command(&request);
         Self {
             event_map,
             command,
             session_id,
+            coarse_time,
         }
     }
 
@@ -174,10 +190,7 @@ impl SlowRequestLogger {
 
     pub fn add_slow_log(&self, request: Box<RespPacket>, log: Slowlog) {
         let dt = log.event_map.get_used_time(TaskEvent::WaitDone);
-        let threshold = self
-            .config
-            .slowlog_log_slower_than
-            .load(atomic::Ordering::SeqCst);
+        let threshold = self.config.get_slowlog_log_slower_than();
         // ms to ns
         if dt > threshold * 1000 {
             self.add(request, log);
@@ -268,4 +281,34 @@ fn slowlog_to_report(log: &SlowlogRecord) -> RespVec {
             .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
             .collect(),
     ))
+}
+
+struct CachedTime {
+    time: atomic::AtomicI64,
+}
+
+lazy_static! {
+    static ref GLOBAL_CACHED_TIME: CachedTime = CachedTime::default();
+}
+
+impl Default for CachedTime {
+    fn default() -> Self {
+        Self {
+            time: atomic::AtomicI64::new(0),
+        }
+    }
+}
+
+impl CachedTime {
+    fn now() -> i64 {
+        GLOBAL_CACHED_TIME.time.load(atomic::Ordering::Relaxed)
+    }
+
+    fn recent() -> i64 {
+        let now = Utc::now().timestamp_nanos();
+        GLOBAL_CACHED_TIME
+            .time
+            .store(now, atomic::Ordering::Relaxed);
+        now
+    }
 }

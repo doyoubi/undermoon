@@ -11,6 +11,7 @@ slowlog_len = 1024
 
 # In microseconds like redis.
 slowlog_log_slower_than = 20000
+slowlog_coarse_time = true
 
 thread_number = 2
 
