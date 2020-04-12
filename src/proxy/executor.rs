@@ -158,10 +158,14 @@ where
         };
 
         if str_ascii_case_insensitive_eq(&sub_cmd, "nodes") {
-            let cluster_nodes = self.manager.gen_cluster_nodes(cmd_ctx.get_cluster_name());
+            let cluster_nodes = self
+                .manager
+                .gen_cluster_nodes(cmd_ctx.get_cluster_name().clone());
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else if str_ascii_case_insensitive_eq(&sub_cmd, "slots") {
-            let cluster_slots = self.manager.gen_cluster_slots(cmd_ctx.get_cluster_name());
+            let cluster_slots = self
+                .manager
+                .gen_cluster_slots(cmd_ctx.get_cluster_name().clone());
             match cluster_slots {
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
                 Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),

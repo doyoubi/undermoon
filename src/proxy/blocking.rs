@@ -417,7 +417,7 @@ impl<T: CmdTask> From<CounterTask<T>> for Wrapper<T> {
 }
 
 impl<T: CmdTask + ClusterTag> ClusterTag for CounterTask<T> {
-    fn get_cluster_name(&self) -> ClusterName {
+    fn get_cluster_name(&self) -> &ClusterName {
         self.inner.get_cluster_name()
     }
 
@@ -511,7 +511,7 @@ impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
 }
 
 impl<T: CmdTask + ClusterTag> ClusterTag for BlockingHintTask<T> {
-    fn get_cluster_name(&self) -> ClusterName {
+    fn get_cluster_name(&self) -> &ClusterName {
         self.inner.get_cluster_name()
     }
 

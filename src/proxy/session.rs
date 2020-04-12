@@ -49,6 +49,7 @@ pub struct CmdCtx {
     reply_sender: CmdReplySender,
     slowlog: Slowlog,
     redirection_times: Option<usize>,
+    cached_cluster_name: ClusterName,
 }
 
 impl CmdCtx {
@@ -60,12 +61,14 @@ impl CmdCtx {
         slowlog_sample_rate: u64,
     ) -> CmdCtx {
         let slowlog = Slowlog::new(session_id, slowlog_sample_rate);
+        let cached_cluster_name = cluster.read().expect("CmdCtx::new").clone();
         CmdCtx {
             cluster,
             cmd,
             reply_sender,
             slowlog,
             redirection_times: None,
+            cached_cluster_name,
         }
     }
 
@@ -154,15 +157,13 @@ impl CmdTask for CmdCtx {
 }
 
 impl ClusterTag for CmdCtx {
-    fn get_cluster_name(&self) -> ClusterName {
-        self.cluster
-            .read()
-            .expect("CmdCtx::get_cluster_name")
-            .clone()
+    fn get_cluster_name(&self) -> &ClusterName {
+        &self.cached_cluster_name
     }
 
     fn set_cluster_name(&mut self, cluster_name: ClusterName) {
-        *self.cluster.write().expect("CmdCtx::set_cluster_name") = cluster_name
+        self.cached_cluster_name = cluster_name.clone();
+        *self.cluster.write().expect("CmdCtx::set_cluster_name") = cluster_name;
     }
 }
 

@@ -25,7 +25,7 @@ where
     }
 
     pub fn try_compressing_cmd_ctx(&self, cmd_ctx: &mut CmdCtx) -> Result<(), CompressionError> {
-        let strategy = get_strategy(&cmd_ctx.get_cluster_name(), &self.meta_map);
+        let strategy = get_strategy(cmd_ctx.get_cluster_name(), &self.meta_map);
 
         if strategy == CompressionStrategy::Disabled {
             return Err(CompressionError::Disabled);
@@ -95,7 +95,7 @@ where
         cmd_ctx: &CmdCtx,
         packet: &mut RespPacket,
     ) -> Result<(), CompressionError> {
-        let strategy = get_strategy(&cmd_ctx.get_cluster_name(), &self.meta_map);
+        let strategy = get_strategy(cmd_ctx.get_cluster_name(), &self.meta_map);
 
         if strategy == CompressionStrategy::Disabled {
             return Err(CompressionError::Disabled);

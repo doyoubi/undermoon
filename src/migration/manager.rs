@@ -291,7 +291,7 @@ where
         cmd_task: T,
     ) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         let cluster_name = cmd_task.get_cluster_name();
-        match task_map.get(&cluster_name) {
+        match task_map.get(cluster_name) {
             Some(tasks) => {
                 let slot = match cmd_task.get_slot() {
                     Some(slot) => slot,

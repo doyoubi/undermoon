@@ -7,7 +7,7 @@ use crate::common::utils::{resolve_first_address, ThreadSafe};
 use futures::{FutureExt, StreamExt};
 use std::error::Error;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU64, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use string_error::into_err;
 use tokio::net::TcpListener;
