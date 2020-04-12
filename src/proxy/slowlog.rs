@@ -5,6 +5,7 @@ use chrono::{naive, DateTime, Utc};
 use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
+use std::cmp::max;
 
 // try letting the element and postfix fit into 128 bytes.
 const MAX_ELEMENT_LENGTH: usize = 100;
@@ -68,7 +69,8 @@ impl Default for RequestEventMap {
 pub struct Slowlog {
     event_map: RequestEventMap,
     session_id: usize,
-    coarse_time: bool,
+    slowlog_sample_rate: u64,
+    enabled: bool,
 }
 
 #[derive(Debug)]
@@ -76,36 +78,32 @@ pub struct SlowlogRecord {
     event_map: RequestEventMap,
     command: Vec<String>,
     session_id: usize,
-    coarse_time: bool,
 }
 
 impl Slowlog {
-    pub fn new(session_id: usize, coarse_time: bool) -> Self {
+    pub fn new(session_id: usize, slowlog_sample_rate: u64) -> Self {
+        let enabled = SlowLogRateLimiter::get_perm(slowlog_sample_rate);
         Slowlog {
             event_map: RequestEventMap::default(),
             session_id,
-            coarse_time,
+            slowlog_sample_rate,
+            enabled,
         }
     }
 
     pub fn log_event(&mut self, event: TaskEvent) {
-        let t = if self.coarse_time {
-            match event {
-                TaskEvent::Created => CachedTime::now(),
-                _ => CachedTime::recent(),
-            }
-        } else {
-            Utc::now().timestamp_nanos()
-        };
-        self.event_map.set_event_time(event, t);
+        if !self.enabled {
+            return;
+        }
+        self.event_map.set_event_time(event, Utc::now().timestamp_nanos());
     }
 
     pub fn get_session_id(&self) -> usize {
         self.session_id
     }
 
-    pub fn coarse_time_enabled(&self) -> bool {
-        self.coarse_time
+    pub fn get_slowlog_sample_rate(&self) -> u64 {
+        self.slowlog_sample_rate
     }
 }
 
@@ -114,14 +112,13 @@ impl SlowlogRecord {
         let Slowlog {
             event_map,
             session_id,
-            coarse_time,
+            ..
         } = slowlog;
         let command = Self::get_brief_command(&request);
         Self {
             event_map,
             command,
             session_id,
-            coarse_time,
         }
     }
 
@@ -284,43 +281,30 @@ fn slowlog_to_report(log: &SlowlogRecord) -> RespVec {
 }
 
 // Used to eliminate the calls of Utc::now()
-struct CachedTime {
-    time: atomic::AtomicI64,
-    count: atomic::AtomicUsize,
+struct SlowLogRateLimiter {
+    count: atomic::AtomicU64,
 }
-
-const CACHED_UPDATE_REQ: usize = 10;
 
 lazy_static! {
-    static ref GLOBAL_CACHED_TIME: CachedTime = CachedTime::default();
+    static ref GLOBAL_CACHED_TIME: SlowLogRateLimiter = SlowLogRateLimiter::default();
 }
 
-impl Default for CachedTime {
+impl Default for SlowLogRateLimiter {
     fn default() -> Self {
         Self {
-            time: atomic::AtomicI64::new(0),
-            count: atomic::AtomicUsize::new(0),
+            count: atomic::AtomicU64::new(0),
         }
     }
 }
 
-impl CachedTime {
-    fn recent() -> i64 {
-        GLOBAL_CACHED_TIME.time.load(atomic::Ordering::Relaxed)
+impl SlowLogRateLimiter {
+    fn get_perm(slowlog_sample_rate: u64) -> bool {
+        GLOBAL_CACHED_TIME.check_current_enabled(slowlog_sample_rate)
     }
 
-    fn now() -> i64 {
-        GLOBAL_CACHED_TIME.try_getting_now()
-    }
-
-    fn try_getting_now(&self) -> i64 {
-        let count = self.count.fetch_add(1, atomic::Ordering::Relaxed) % CACHED_UPDATE_REQ;
-        if count == 0 {
-            let now = Utc::now().timestamp_nanos();
-            self.time.store(now, atomic::Ordering::Relaxed);
-            now
-        } else {
-            self.time.load(atomic::Ordering::Relaxed)
-        }
+    fn check_current_enabled(&self, slowlog_sample_rate: u64) -> bool {
+        let slowlog_sample_rate = max(1, slowlog_sample_rate);
+        let count = self.count.fetch_add(1, atomic::Ordering::Relaxed) % slowlog_sample_rate;
+        count == 0
     }
 }

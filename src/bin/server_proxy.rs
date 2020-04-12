@@ -11,7 +11,7 @@ use std::cmp::min;
 use std::env;
 use std::error::Error;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, AtomicI64};
+use std::sync::atomic::{AtomicU64, AtomicI64};
 use std::sync::Arc;
 use std::time::Duration;
 use string_error::into_err;
@@ -74,9 +74,9 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
             s.get::<i64>("slowlog_log_slower_than")
                 .unwrap_or_else(|_| 50000),
         ),
-        slowlog_coarse_time: AtomicBool::new(
-            s.get::<bool>("slowlog_coarse_time")
-                .unwrap_or_else(|_| true),
+        slowlog_sample_rate: AtomicU64::new(
+            s.get::<u64>("slowlog_sample_rate")
+                .unwrap_or_else(|_| 1000),
         ),
         thread_number,
         session_channel_size: s

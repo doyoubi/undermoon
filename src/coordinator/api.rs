@@ -220,7 +220,7 @@ impl CmdHandler for CoordCmdHandler {
 
         let request = cmd.into_packet();
         let response = Box::new(RespPacket::Data(resp));
-        let slowlog = Slowlog::new(0, true); // not used
+        let slowlog = Slowlog::new(0, 1); // not used
 
         let res = reply_sender.send(Ok(Box::new(TaskReply::new(request, response, slowlog))));
         if let Err(err) = res {

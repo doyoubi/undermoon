@@ -602,7 +602,7 @@ mod tests {
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster, cmd, reply_sender, 0, true);
+        let cmd_ctx = CmdCtx::new(cluster, cmd, reply_sender, 0, 1);
         (cmd_ctx, reply_receiver)
     }
 

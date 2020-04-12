@@ -57,9 +57,9 @@ impl CmdCtx {
         cmd: Command,
         reply_sender: CmdReplySender,
         session_id: usize,
-        coarse_time: bool,
+        slowlog_sample_rate: u64,
     ) -> CmdCtx {
-        let slowlog = Slowlog::new(session_id, coarse_time);
+        let slowlog = Slowlog::new(session_id, slowlog_sample_rate);
         CmdCtx {
             cluster,
             cmd,
@@ -193,7 +193,7 @@ impl CmdTaskFactory for CmdCtxFactory {
             cmd,
             reply_sender,
             another_task.get_session_id(),
-            another_task.slowlog.coarse_time_enabled(),
+            another_task.slowlog.get_slowlog_sample_rate(),
         );
         let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
@@ -234,7 +234,7 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
             cmd,
             reply_sender,
             self.session_id,
-            self.config.get_slowlog_coarse_time(),
+            self.config.get_slowlog_sample_rate(),
         );
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
@@ -404,7 +404,7 @@ mod tests {
         let cluster_name = Arc::new(RwLock::new(ClusterName::try_from("mycluster").unwrap()));
         let cmd = Command::new(Box::new(request));
         let (sender, receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799, true);
+        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799, 1);
         drop(cmd_ctx);
         let err = match receiver.await {
             Ok(_) => panic!(),

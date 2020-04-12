@@ -11,13 +11,8 @@ slowlog_len = 1024
 
 # In microseconds like redis.
 slowlog_log_slower_than = 20000
-# When `slowlog_coarse_time` is true, the slowlog system will use cached time
-# for better performance, which is not correct and can only log some of the slow commands.
-# But when encountering high throughput, the cached time tends to become correct
-# since the cached time get updated frequently.
-# When accurate time of slowlog is needed for debugging,
-# you can turn it off at run time by `CONFIG SET slowlog_coarse_time false`
-slowlog_coarse_time = true
+# Execute `CONFIG SET slowlog_sample_rate 1` at runtime to record all commands.
+slowlog_sample_rate = 1000
 
 thread_number = 2
 
