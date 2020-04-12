@@ -14,7 +14,7 @@ mod tests {
     use std::convert::TryFrom;
     use std::num::NonZeroUsize;
     use std::str;
-    use std::sync::atomic::{AtomicU64, AtomicI64};
+    use std::sync::atomic::{AtomicI64, AtomicU64};
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
     use tokio;

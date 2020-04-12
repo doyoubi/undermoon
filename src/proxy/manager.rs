@@ -307,7 +307,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             .meta_map
             .lease()
             .cluster_map
-            .cluster_exists(&cmd_ctx.get_cluster_name());
+            .cluster_exists(cmd_ctx.get_cluster_name());
         if exists {
             return cmd_ctx;
         }

@@ -35,7 +35,7 @@ impl Error for ClusterMetaError {
 }
 
 pub trait ClusterTag {
-    fn get_cluster_name(&self) -> ClusterName;
+    fn get_cluster_name(&self) -> &ClusterName;
     fn set_cluster_name(&mut self, cluster_name: ClusterName);
 }
 
@@ -146,7 +146,7 @@ where
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
     ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
-        let (cmd_task, cluster_exists) = match self.local_clusters.get(&cmd_task.get_cluster_name())
+        let (cmd_task, cluster_exists) = match self.local_clusters.get(cmd_task.get_cluster_name())
         {
             Some(local_cluster) => match local_cluster.send(cmd_task) {
                 Err(ClusterSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
@@ -155,7 +155,7 @@ where
             None => (cmd_task, false),
         };
 
-        match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
+        match self.remote_clusters.get(cmd_task.get_cluster_name()) {
             Some(remote_cluster) => remote_cluster.send_remote(cmd_task),
             None => {
                 if cluster_exists {
@@ -183,7 +183,7 @@ where
         slot: usize,
         address: String,
     ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
-        match self.remote_clusters.get(&cmd_task.get_cluster_name()) {
+        match self.remote_clusters.get(cmd_task.get_cluster_name()) {
             Some(remote_cluster) => {
                 remote_cluster.send_remote_directly(cmd_task, slot, address.as_str())
             }

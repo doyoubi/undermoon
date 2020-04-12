@@ -2,10 +2,10 @@ use super::service::ServerProxyConfig;
 use crate::protocol::{Array, BulkStr, Resp, RespPacket, RespVec};
 use arc_swap::ArcSwapOption;
 use chrono::{naive, DateTime, Utc};
+use std::cmp::max;
 use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
-use std::cmp::max;
 
 // try letting the element and postfix fit into 128 bytes.
 const MAX_ELEMENT_LENGTH: usize = 100;
@@ -95,7 +95,8 @@ impl Slowlog {
         if !self.enabled {
             return;
         }
-        self.event_map.set_event_time(event, Utc::now().timestamp_nanos());
+        self.event_map
+            .set_event_time(event, Utc::now().timestamp_nanos());
     }
 
     pub fn get_session_id(&self) -> usize {
