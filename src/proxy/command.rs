@@ -1,5 +1,5 @@
 use super::slowlog::Slowlog;
-use crate::common::utils::byte_to_uppercase;
+use crate::common::utils::{byte_to_uppercase, generate_slot};
 use crate::protocol::{BinSafeStr, RespPacket, RespSlice, RespVec};
 use arrayvec::ArrayVec;
 use backtrace::Backtrace;
@@ -172,21 +172,42 @@ impl DataCmdType {
 }
 
 #[derive(Debug)]
-pub struct Command {
-    request: Box<RespPacket>,
+struct CommandInfo {
     cmd_type: CmdType,
     data_cmd_type: DataCmdType,
+    slot: Option<usize>,
+}
+
+impl CommandInfo {
+    fn new(packet: &RespPacket) -> Self {
+        let cmd_type = CmdType::from_packet(&packet);
+        let data_cmd_type = DataCmdType::from_packet(&packet);
+        let slot = Self::get_key(data_cmd_type, packet).map(generate_slot);
+        Self {
+            cmd_type,
+            data_cmd_type,
+            slot,
+        }
+    }
+
+    fn get_key(data_cmd_type: DataCmdType, packet: &RespPacket) -> Option<&[u8]> {
+        match data_cmd_type {
+            DataCmdType::EVAL | DataCmdType::EVALSHA => packet.get_array_element(3),
+            _ => packet.get_array_element(1),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Command {
+    request: Box<RespPacket>,
+    info: CommandInfo,
 }
 
 impl Command {
     pub fn new(request: Box<RespPacket>) -> Self {
-        let cmd_type = CmdType::from_packet(&request);
-        let data_cmd_type = DataCmdType::from_packet(&request);
-        Command {
-            request,
-            cmd_type,
-            data_cmd_type,
-        }
+        let info = CommandInfo::new(&request);
+        Self { request, info }
     }
 
     pub fn into_packet(self) -> Box<RespPacket> {
@@ -223,8 +244,7 @@ impl Command {
 
     pub fn extract_inner_cmd(&mut self, removed_num: usize) -> Option<usize> {
         let remaining = self.request.left_trim_cmd(removed_num)?;
-        self.cmd_type = CmdType::from_packet(&self.request);
-        self.data_cmd_type = DataCmdType::from_packet(&self.request);
+        self.info = CommandInfo::new(&self.request);
         Some(remaining)
     }
 
@@ -232,24 +252,24 @@ impl Command {
         if !self.request.wrap_cmd(preceding_elements) {
             return false;
         }
-        self.cmd_type = CmdType::from_packet(&self.request);
-        self.data_cmd_type = DataCmdType::from_packet(&self.request);
+        self.info = CommandInfo::new(&self.request);
         true
     }
 
     pub fn get_type(&self) -> CmdType {
-        self.cmd_type
+        self.info.cmd_type
     }
 
     pub fn get_data_cmd_type(&self) -> DataCmdType {
-        self.data_cmd_type
+        self.info.data_cmd_type
     }
 
     pub fn get_key(&self) -> Option<&[u8]> {
-        match self.data_cmd_type {
-            DataCmdType::EVAL | DataCmdType::EVALSHA => self.get_command_element(3),
-            _ => self.get_command_element(1),
-        }
+        CommandInfo::get_key(self.get_data_cmd_type(), &self.request)
+    }
+
+    pub fn get_slot(&self) -> Option<usize> {
+        self.info.slot
     }
 }
 

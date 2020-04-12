@@ -1,5 +1,5 @@
 use crate::common::cluster::{MigrationTaskMeta, Range, RangeList, RangeMap};
-use crate::common::utils::{get_resp_bytes, get_resp_strings, get_slot, ThreadSafe};
+use crate::common::utils::{generate_slot, get_resp_bytes, get_resp_strings, ThreadSafe};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientError, Resp, RespSlice, RespVec};
 use crate::proxy::backend::CmdTask;
 use crate::proxy::blocking::BlockingHintTask;
@@ -209,7 +209,7 @@ impl SlotRangeArray {
     }
 
     pub fn is_key_inside(&self, key: &[u8]) -> bool {
-        let slot = get_slot(key);
+        let slot = generate_slot(key);
         self.range_map.contains_slot(slot)
     }
 

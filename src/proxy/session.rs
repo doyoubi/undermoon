@@ -115,6 +115,10 @@ impl CmdTask for CmdCtx {
         self.get_cmd().get_key()
     }
 
+    fn get_slot(&self) -> Option<usize> {
+        self.get_cmd().get_slot()
+    }
+
     fn set_result(self, result: CommandResult<Self::Pkt>) {
         let Self {
             cmd,

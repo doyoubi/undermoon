@@ -156,17 +156,17 @@ pub fn get_hash_tag(key: &[u8]) -> &[u8] {
     key
 }
 
-pub fn get_slot(key: &[u8]) -> usize {
+pub fn generate_slot(key: &[u8]) -> usize {
     State::<XMODEM>::calculate(get_hash_tag(key)) as usize % SLOT_NUM
 }
 
 pub fn same_slot<'a, It: Iterator<Item = &'a [u8]>>(mut key_iter: It) -> bool {
     let slot = match key_iter.next() {
         None => return false,
-        Some(k) => get_slot(k),
+        Some(k) => generate_slot(k),
     };
     for k in key_iter {
-        if get_slot(k) != slot {
+        if generate_slot(k) != slot {
             return false;
         }
     }

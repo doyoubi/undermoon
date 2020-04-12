@@ -49,6 +49,7 @@ pub trait CmdTask: ThreadSafe {
     type Pkt: Packet + Send;
 
     fn get_key(&self) -> Option<&[u8]>;
+    fn get_slot(&self) -> Option<usize>;
     fn set_result(self, result: CommandResult<Self::Pkt>);
     fn get_packet(&self) -> Self::Pkt;
 
@@ -106,6 +107,21 @@ impl<T: CmdTask> CmdTask for ReqTask<T> {
             Self::Multi(v) => {
                 for t in v.iter() {
                     let opt = t.get_key();
+                    if opt.is_some() {
+                        return opt;
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    fn get_slot(&self) -> Option<usize> {
+        match self {
+            Self::Simple(t) => t.get_slot(),
+            Self::Multi(v) => {
+                for t in v.iter() {
+                    let opt = t.get_slot();
                     if opt.is_some() {
                         return opt;
                     }

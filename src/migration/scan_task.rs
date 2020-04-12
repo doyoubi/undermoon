@@ -10,7 +10,7 @@ use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
 use crate::common::response::NOT_READY_FOR_SWITCHING_REPLY;
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::{gen_moved, get_slot, pretty_print_bytes, ThreadSafe};
+use crate::common::utils::{gen_moved, pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::RespVec;
 use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
@@ -627,16 +627,14 @@ fn handle_redirection<T: CmdTask>(
     redirection_address: String,
     active_redirection: bool,
 ) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
-    let key = match cmd_task.get_key() {
-        Some(key) => key,
+    let slot = match cmd_task.get_slot() {
+        Some(slot) => slot,
         None => {
             let resp = Resp::Error("missing key".to_string().into_bytes());
             cmd_task.set_resp_result(Ok(resp));
             return Ok(());
         }
     };
-
-    let slot = get_slot(key);
 
     if active_redirection {
         let cmd_task = BlockingHintTask::new(cmd_task, false);
@@ -647,7 +645,7 @@ fn handle_redirection<T: CmdTask>(
             address: redirection_address,
         })
     } else {
-        let resp = Resp::Error(gen_moved(get_slot(key), redirection_address).into_bytes());
+        let resp = Resp::Error(gen_moved(slot, redirection_address).into_bytes());
         cmd_task.set_resp_result(Ok(resp));
         Ok(())
     }
