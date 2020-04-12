@@ -433,6 +433,10 @@ impl<T: CmdTask> CmdTask for CounterTask<T> {
         self.inner.get_key()
     }
 
+    fn get_slot(&self) -> Option<usize> {
+        self.inner.get_slot()
+    }
+
     fn set_result(self, result: CommandResult<Self::Pkt>) {
         self.into_inner().set_result(result)
     }
@@ -480,6 +484,10 @@ impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
 
     fn get_key(&self) -> Option<&[u8]> {
         self.inner.get_key()
+    }
+
+    fn get_slot(&self) -> Option<usize> {
+        self.inner.get_slot()
     }
 
     fn set_result(self, result: CommandResult<Self::Pkt>) {

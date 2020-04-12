@@ -1,5 +1,5 @@
 use crate::common::cluster::SlotRange;
-use crate::common::utils::{get_slot, SLOT_NUM};
+use crate::common::utils::SLOT_NUM;
 use std::collections::HashMap;
 
 pub struct SlotMap {
@@ -21,11 +21,6 @@ impl SlotMap {
         SlotMap {
             data: SlotMapData::new(map),
         }
-    }
-
-    pub fn get_by_key(&self, key: &[u8]) -> Option<&str> {
-        let slot = get_slot(key);
-        self.get(slot)
     }
 
     pub fn get(&self, slot: usize) -> Option<&str> {

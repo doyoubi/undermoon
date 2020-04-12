@@ -5,6 +5,7 @@ use chrono::{naive, DateTime, Utc};
 use std::str;
 use std::sync::atomic;
 use std::sync::Arc;
+use std::cmp::max;
 
 // try letting the element and postfix fit into 128 bytes.
 const MAX_ELEMENT_LENGTH: usize = 100;
@@ -68,6 +69,8 @@ impl Default for RequestEventMap {
 pub struct Slowlog {
     event_map: RequestEventMap,
     session_id: usize,
+    slowlog_sample_rate: u64,
+    enabled: bool,
 }
 
 #[derive(Debug)]
@@ -78,20 +81,29 @@ pub struct SlowlogRecord {
 }
 
 impl Slowlog {
-    pub fn new(session_id: usize) -> Self {
+    pub fn new(session_id: usize, slowlog_sample_rate: u64) -> Self {
+        let enabled = SlowLogRateLimiter::get_perm(slowlog_sample_rate);
         Slowlog {
             event_map: RequestEventMap::default(),
             session_id,
+            slowlog_sample_rate,
+            enabled,
         }
     }
 
     pub fn log_event(&mut self, event: TaskEvent) {
-        self.event_map
-            .set_event_time(event, Utc::now().timestamp_nanos())
+        if !self.enabled {
+            return;
+        }
+        self.event_map.set_event_time(event, Utc::now().timestamp_nanos());
     }
 
     pub fn get_session_id(&self) -> usize {
         self.session_id
+    }
+
+    pub fn get_slowlog_sample_rate(&self) -> u64 {
+        self.slowlog_sample_rate
     }
 }
 
@@ -100,6 +112,7 @@ impl SlowlogRecord {
         let Slowlog {
             event_map,
             session_id,
+            ..
         } = slowlog;
         let command = Self::get_brief_command(&request);
         Self {
@@ -174,10 +187,7 @@ impl SlowRequestLogger {
 
     pub fn add_slow_log(&self, request: Box<RespPacket>, log: Slowlog) {
         let dt = log.event_map.get_used_time(TaskEvent::WaitDone);
-        let threshold = self
-            .config
-            .slowlog_log_slower_than
-            .load(atomic::Ordering::SeqCst);
+        let threshold = self.config.get_slowlog_log_slower_than();
         // ms to ns
         if dt > threshold * 1000 {
             self.add(request, log);
@@ -268,4 +278,33 @@ fn slowlog_to_report(log: &SlowlogRecord) -> RespVec {
             .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
             .collect(),
     ))
+}
+
+// Used to eliminate the calls of Utc::now()
+struct SlowLogRateLimiter {
+    count: atomic::AtomicU64,
+}
+
+lazy_static! {
+    static ref GLOBAL_CACHED_TIME: SlowLogRateLimiter = SlowLogRateLimiter::default();
+}
+
+impl Default for SlowLogRateLimiter {
+    fn default() -> Self {
+        Self {
+            count: atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+impl SlowLogRateLimiter {
+    fn get_perm(slowlog_sample_rate: u64) -> bool {
+        GLOBAL_CACHED_TIME.check_current_enabled(slowlog_sample_rate)
+    }
+
+    fn check_current_enabled(&self, slowlog_sample_rate: u64) -> bool {
+        let slowlog_sample_rate = max(1, slowlog_sample_rate);
+        let count = self.count.fetch_add(1, atomic::Ordering::Relaxed) % slowlog_sample_rate;
+        count == 0
+    }
 }

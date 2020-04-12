@@ -56,6 +56,7 @@ arrayvec = "0.5.1"
 either = "1.5.3"
 mockall = "0.6.0"
 backtrace = "0.3"
+lazy_static = "1.4.0"
 
 [profile.release]
 debug = true

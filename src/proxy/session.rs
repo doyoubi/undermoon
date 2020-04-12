@@ -4,6 +4,7 @@ use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
     CommandResult, DataCmdType, TaskReply, TaskResult,
 };
+use super::service::ServerProxyConfig;
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
 use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::cluster::ClusterName;
@@ -23,6 +24,7 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
@@ -55,8 +57,9 @@ impl CmdCtx {
         cmd: Command,
         reply_sender: CmdReplySender,
         session_id: usize,
+        slowlog_sample_rate: u64,
     ) -> CmdCtx {
-        let slowlog = Slowlog::new(session_id);
+        let slowlog = Slowlog::new(session_id, slowlog_sample_rate);
         CmdCtx {
             cluster,
             cmd,
@@ -113,6 +116,10 @@ impl CmdTask for CmdCtx {
 
     fn get_key(&self) -> Option<&[u8]> {
         self.get_cmd().get_key()
+    }
+
+    fn get_slot(&self) -> Option<usize> {
+        self.get_cmd().get_slot()
     }
 
     fn set_result(self, result: CommandResult<Self::Pkt>) {
@@ -186,6 +193,7 @@ impl CmdTaskFactory for CmdCtxFactory {
             cmd,
             reply_sender,
             another_task.get_session_id(),
+            another_task.slowlog.get_slowlog_sample_rate(),
         );
         let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
@@ -197,6 +205,7 @@ pub struct Session<H: CmdCtxHandler> {
     cluster_name: sync::Arc<sync::RwLock<ClusterName>>,
     cmd_ctx_handler: H,
     slow_request_logger: sync::Arc<SlowRequestLogger>,
+    config: Arc<ServerProxyConfig>,
 }
 
 impl<H: CmdCtxHandler> Session<H> {
@@ -204,6 +213,7 @@ impl<H: CmdCtxHandler> Session<H> {
         session_id: usize,
         cmd_ctx_handler: H,
         slow_request_logger: sync::Arc<SlowRequestLogger>,
+        config: Arc<ServerProxyConfig>,
     ) -> Self {
         let cluster_name = ClusterName::try_from(DEFAULT_CLUSTER).expect("Session::new");
         Session {
@@ -211,6 +221,7 @@ impl<H: CmdCtxHandler> Session<H> {
             cluster_name: sync::Arc::new(sync::RwLock::new(cluster_name)),
             cmd_ctx_handler,
             slow_request_logger,
+            config,
         }
     }
 }
@@ -223,6 +234,7 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
             cmd,
             reply_sender,
             self.session_id,
+            self.config.get_slowlog_sample_rate(),
         );
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
@@ -392,7 +404,7 @@ mod tests {
         let cluster_name = Arc::new(RwLock::new(ClusterName::try_from("mycluster").unwrap()));
         let cmd = Command::new(Box::new(request));
         let (sender, receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799);
+        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799, 1);
         drop(cmd_ctx);
         let err = match receiver.await {
             Ok(_) => panic!(),

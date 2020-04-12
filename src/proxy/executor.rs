@@ -11,7 +11,7 @@ use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{
-    change_bulk_array_element, get_slot, same_slot, str_ascii_case_insensitive_eq,
+    change_bulk_array_element, generate_slot, same_slot, str_ascii_case_insensitive_eq,
 };
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
@@ -169,7 +169,7 @@ where
         } else if str_ascii_case_insensitive_eq(&sub_cmd, "keyslot") {
             match cmd_ctx.get_cmd().get_command_element(2) {
                 Some(key) => {
-                    let slot = get_slot(key);
+                    let slot = generate_slot(key);
                     cmd_ctx.set_resp_result(Ok(Resp::Integer(slot.to_string().into_bytes())));
                 }
                 None => {

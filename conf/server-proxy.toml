@@ -11,6 +11,8 @@ slowlog_len = 1024
 
 # In microseconds like redis.
 slowlog_log_slower_than = 20000
+# Execute `CONFIG SET slowlog_sample_rate 1` at runtime to record all commands.
+slowlog_sample_rate = 1000
 
 thread_number = 2
 

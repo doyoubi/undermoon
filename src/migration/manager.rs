@@ -4,7 +4,7 @@ use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRang
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::proto::ProxyClusterMap;
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::{get_slot, ThreadSafe};
+use crate::common::utils::ThreadSafe;
 use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
 use crate::protocol::Resp;
@@ -293,16 +293,14 @@ where
         let cluster_name = cmd_task.get_cluster_name();
         match task_map.get(&cluster_name) {
             Some(tasks) => {
-                let key = match cmd_task.get_key() {
-                    Some(key) => key,
+                let slot = match cmd_task.get_slot() {
+                    Some(slot) => slot,
                     None => {
                         let resp = Resp::Error("missing key".to_string().into_bytes());
                         cmd_task.set_resp_result(Ok(resp));
                         return Err(ClusterSendError::MissingKey);
                     }
                 };
-
-                let slot = get_slot(key);
 
                 for mgr_task in tasks.values() {
                     match &mgr_task.task {

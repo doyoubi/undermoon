@@ -4,6 +4,8 @@ extern crate serde_derive;
 extern crate log;
 #[macro_use(defer)]
 extern crate scopeguard;
+#[macro_use]
+extern crate lazy_static;
 
 pub mod broker;
 pub mod common;

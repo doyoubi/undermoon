@@ -5,7 +5,7 @@ use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response::ERR_CLUSTER_NOT_FOUND;
-use crate::common::utils::{gen_moved, get_slot};
+use crate::common::utils::gen_moved;
 use crate::migration::task::MigrationState;
 use crate::protocol::{Array, BulkStr, Resp, RespVec};
 use crc64::crc64;
@@ -339,8 +339,8 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
     ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
-        let key = match cmd_task.get_key() {
-            Some(key) => key,
+        let slot = match cmd_task.get_slot() {
+            Some(slot) => slot,
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
@@ -348,7 +348,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
             }
         };
 
-        match self.local_backend.slot_map.get_by_key(key) {
+        match self.local_backend.slot_map.get(slot) {
             Some(addr) => match self.local_backend.nodes.get(addr) {
                 Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::Backend),
                 None => {
@@ -434,16 +434,14 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
     }
 
     pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), ClusterSendError<T>> {
-        let key = match cmd_task.get_key() {
-            Some(key) => key,
+        let slot = match cmd_task.get_slot() {
+            Some(slot) => slot,
             None => {
                 let resp = Resp::Error("missing key".to_string().into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
                 return Err(ClusterSendError::MissingKey);
             }
         };
-
-        let slot = get_slot(key);
 
         match self.slot_map.get(slot) {
             Some(addr) => {
@@ -460,7 +458,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
                 }
             }
             None => {
-                let resp = Resp::Error(format!("slot not covered {:?}", key).into_bytes());
+                let resp = Resp::Error(format!("slot not covered {}", slot).into_bytes());
                 cmd_task.set_resp_result(Ok(resp));
                 Err(ClusterSendError::SlotNotCovered)
             }
