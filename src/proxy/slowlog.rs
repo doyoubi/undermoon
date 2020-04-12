@@ -91,7 +91,7 @@ impl Slowlog {
     pub fn log_event(&mut self, event: TaskEvent) {
         let t = if self.coarse_time {
             match event {
-                TaskEvent::ReceivedFromBackend => CachedTime::now(),
+                TaskEvent::Created | TaskEvent::ReceivedFromBackend => CachedTime::now(),
                 _ => CachedTime::recent(),
             }
         } else {
@@ -300,11 +300,11 @@ impl Default for CachedTime {
 }
 
 impl CachedTime {
-    fn now() -> i64 {
+    fn recent() -> i64 {
         GLOBAL_CACHED_TIME.time.load(atomic::Ordering::Relaxed)
     }
 
-    fn recent() -> i64 {
+    fn now() -> i64 {
         let now = Utc::now().timestamp_nanos();
         GLOBAL_CACHED_TIME
             .time
