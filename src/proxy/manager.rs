@@ -1,13 +1,14 @@
-use super::backend::{
-    gen_migration_sender_factory, gen_sender_factory, BackendError, BackendSenderFactory, CmdTask,
-    CmdTaskSender, CmdTaskSenderFactory, ConnFactory, IntoTask, MigrationBackendSenderFactory,
-};
+use super::backend::{BackendError, CmdTask, ConnFactory, IntoTask};
 use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
     BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
 };
 use super::cluster::{ClusterBackendMap, ClusterMetaError, ClusterSendError, ClusterTag};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
+use super::sender::{
+    gen_migration_sender_factory, gen_sender_factory, BackendSenderFactory, CmdTaskSender,
+    CmdTaskSenderFactory, MigrationBackendSenderFactory,
+};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;

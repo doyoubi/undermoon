@@ -1,10 +1,12 @@
 use super::backend::{
-    BackendError, CachedSenderFactory, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory,
-    CmdTaskSender, CmdTaskSenderFactory, ConnFactory, IntoTask, RRSenderGroupFactory,
-    RecoverableBackendNodeFactory,
+    BackendError, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory, IntoTask,
 };
 use super::cluster::ClusterTag;
 use super::command::{CommandError, CommandResult};
+use super::sender::{
+    CachedSenderFactory, CmdTaskSender, CmdTaskSenderFactory, RRSenderGroupFactory,
+    RecoverableBackendNodeFactory,
+};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::cluster::ClusterName;

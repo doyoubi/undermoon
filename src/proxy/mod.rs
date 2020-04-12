@@ -7,6 +7,7 @@ pub mod executor;
 pub mod manager;
 pub mod migration_backend;
 pub mod reply;
+pub mod sender;
 pub mod service;
 pub mod session;
 mod slot;

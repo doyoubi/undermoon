@@ -1,8 +1,7 @@
-use super::backend::{
-    BackendSenderFactory, CmdTask, CmdTaskFactory, CmdTaskSender, DefaultConnFactory, ReqTask,
-};
+use super::backend::{CmdTask, CmdTaskFactory, DefaultConnFactory, ReqTask};
 use super::command::CommandError;
 use super::reply::ReplyCommitHandlerFactory;
+use super::sender::{BackendSenderFactory, CmdTaskSender};
 use crate::common::utils::pretty_print_bytes;
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespPacket, RespVec, VFunctor};

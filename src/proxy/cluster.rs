@@ -1,4 +1,5 @@
-use super::backend::{BackendError, CmdTask, CmdTaskSender, CmdTaskSenderFactory, IntoTask};
+use super::backend::{BackendError, CmdTask, IntoTask};
+use super::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
 use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
