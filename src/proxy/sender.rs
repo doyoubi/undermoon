@@ -28,6 +28,21 @@ pub struct RecoverableBackendNode<F: CmdTaskResultHandlerFactory> {
     node: BackendNode<<F as CmdTaskResultHandlerFactory>::Handler>,
 }
 
+impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F> {
+    type Task = <<F as CmdTaskResultHandlerFactory>::Handler as CmdTaskResultHandler>::Task;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+        self.node.send(cmd_task).map_err(|e| {
+            let cmd_task = e.into_inner();
+            cmd_task.set_resp_result(Ok(Resp::Error(
+                format!("{}: {}", ERR_BACKEND_CONNECTION, self.address).into_bytes(),
+            )));
+            error!("backend node is closed");
+            BackendError::Canceled
+        })
+    }
+}
+
 pub struct RecoverableBackendNodeFactory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>
 where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
@@ -81,33 +96,8 @@ where
     }
 }
 
-impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F> {
-    type Task = <<F as CmdTaskResultHandlerFactory>::Handler as CmdTaskResultHandler>::Task;
-
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        self.node.send(cmd_task).map_err(|e| {
-            let cmd_task = e.into_inner();
-            cmd_task.set_resp_result(Ok(Resp::Error(
-                format!("{}: {}", ERR_BACKEND_CONNECTION, self.address).into_bytes(),
-            )));
-            error!("backend node is closed");
-            BackendError::Canceled
-        })
-    }
-}
-
 pub struct ReqAdaptorSender<S: CmdTaskSender> {
     sender: S,
-}
-
-pub struct ReqAdaptorSenderFactory<F: CmdTaskSenderFactory> {
-    inner_factory: F,
-}
-
-impl<F: CmdTaskSenderFactory> ReqAdaptorSenderFactory<F> {
-    pub fn new(inner_factory: F) -> Self {
-        Self { inner_factory }
-    }
 }
 
 impl<S: CmdTaskSender> ReqAdaptorSender<S> {
@@ -136,6 +126,16 @@ impl<S: CmdTaskSender> CmdTaskSender for ReqAdaptorSender<S> {
     }
 }
 
+pub struct ReqAdaptorSenderFactory<F: CmdTaskSenderFactory> {
+    inner_factory: F,
+}
+
+impl<F: CmdTaskSenderFactory> ReqAdaptorSenderFactory<F> {
+    pub fn new(inner_factory: F) -> Self {
+        Self { inner_factory }
+    }
+}
+
 impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for ReqAdaptorSenderFactory<F> {
     type Sender = ReqAdaptorSender<F::Sender>;
 
@@ -149,6 +149,19 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for ReqAdaptorSenderFactory<F
 pub struct RRSenderGroup<S: CmdTaskSender> {
     senders: Vec<S>,
     cursor: AtomicUsize,
+}
+
+impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
+    type Task = S::Task;
+
+    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+        let index = self.cursor.fetch_add(1, Ordering::SeqCst);
+        let sender = match self.senders.get(index % self.senders.len()) {
+            Some(s) => s,
+            None => return Err(BackendError::NodeNotFound),
+        };
+        sender.send(cmd_task)
+    }
 }
 
 pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
@@ -180,21 +193,16 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for RRSenderGroupFactory<F> {
     }
 }
 
-impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
+pub struct CachedSender<S: CmdTaskSender> {
+    inner_sender: Arc<S>,
+}
+
+impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
     type Task = S::Task;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        let index = self.cursor.fetch_add(1, Ordering::SeqCst);
-        let sender = match self.senders.get(index % self.senders.len()) {
-            Some(s) => s,
-            None => return Err(BackendError::NodeNotFound),
-        };
-        sender.send(cmd_task)
+        self.inner_sender.send(cmd_task)
     }
-}
-
-pub struct CachedSender<S: CmdTaskSender> {
-    inner_sender: Arc<S>,
 }
 
 // TODO: support cleanup here to avoid memory leak.
@@ -243,14 +251,6 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
         CachedSender {
             inner_sender: inner_sender_clone,
         }
-    }
-}
-
-impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
-    type Task = S::Task;
-
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        self.inner_sender.send(cmd_task)
     }
 }
 
