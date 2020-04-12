@@ -91,7 +91,7 @@ impl Slowlog {
     pub fn log_event(&mut self, event: TaskEvent) {
         let t = if self.coarse_time {
             match event {
-                TaskEvent::Created | TaskEvent::ReceivedFromBackend => CachedTime::now(),
+                TaskEvent::Created => CachedTime::now(),
                 _ => CachedTime::recent(),
             }
         } else {
@@ -283,9 +283,13 @@ fn slowlog_to_report(log: &SlowlogRecord) -> RespVec {
     ))
 }
 
+// Used to eliminate the calls of Utc::now()
 struct CachedTime {
     time: atomic::AtomicI64,
+    count: atomic::AtomicUsize,
 }
+
+const CACHED_UPDATE_REQ: usize = 10;
 
 lazy_static! {
     static ref GLOBAL_CACHED_TIME: CachedTime = CachedTime::default();
@@ -295,6 +299,7 @@ impl Default for CachedTime {
     fn default() -> Self {
         Self {
             time: atomic::AtomicI64::new(0),
+            count: atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -305,10 +310,17 @@ impl CachedTime {
     }
 
     fn now() -> i64 {
-        let now = Utc::now().timestamp_nanos();
-        GLOBAL_CACHED_TIME
-            .time
-            .store(now, atomic::Ordering::Relaxed);
-        now
+        GLOBAL_CACHED_TIME.try_getting_now()
+    }
+
+    fn try_getting_now(&self) -> i64 {
+        let count = self.count.fetch_add(1, atomic::Ordering::Relaxed) % CACHED_UPDATE_REQ;
+        if count == 0 {
+            let now = Utc::now().timestamp_nanos();
+            self.time.store(now, atomic::Ordering::Relaxed);
+            now
+        } else {
+            self.time.load(atomic::Ordering::Relaxed)
+        }
     }
 }
