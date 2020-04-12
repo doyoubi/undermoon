@@ -14,12 +14,11 @@ use crate::common::utils::{gen_moved, get_slot, pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::RespVec;
 use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
-use crate::proxy::backend::{
-    CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, ReqTask,
-};
+use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
 use crate::proxy::cluster::ClusterSendError;
 use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
+use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;

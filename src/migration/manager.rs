@@ -9,11 +9,10 @@ use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
 use crate::protocol::Resp;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, RespVec};
-use crate::proxy::backend::{
-    CmdTask, CmdTaskFactory, CmdTaskSender, CmdTaskSenderFactory, ReqTask,
-};
+use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHintTask, TaskBlockingControllerFactory};
 use crate::proxy::cluster::{ClusterSendError, ClusterTag};
+use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
 use futures::TryFutureExt;
