@@ -15,7 +15,7 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::str;
     use std::sync::atomic::{AtomicI64, AtomicU64};
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio;
     use undermoon::common::cluster::{
@@ -84,7 +84,7 @@ mod tests {
     }
 
     fn gen_set_command(key: BinSafeStr) -> (CmdCtx, CmdReplyReceiver) {
-        let cluster_name = Arc::new(RwLock::new(ClusterName::try_from(TEST_CLUSTER).unwrap()));
+        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
         let resp = RespPacket::Data(Resp::Arr(Array::Arr(vec![
             Resp::Bulk(BulkStr::Str(b"SET".to_vec())),
             Resp::Bulk(BulkStr::Str(key)),
@@ -92,7 +92,7 @@ mod tests {
         ])));
         let command = Command::new(Box::new(resp));
         let (s, r) = new_command_pair(&command);
-        let cmd_ctx = CmdCtx::new(cluster_name, command, s, 233, 1);
+        let cmd_ctx = CmdCtx::new(cluster_name, command, s, 233, true);
         (cmd_ctx, r)
     }
 

@@ -75,8 +75,14 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
-    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
-        self.handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
+    fn handle_cmd_ctx(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+        session_cluster_name: &sync::RwLock<ClusterName>,
+    ) -> CmdReplyFuture {
+        self.handler
+            .handle_cmd_ctx(cmd_ctx, reply_receiver, session_cluster_name)
     }
 }
 
@@ -122,7 +128,7 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
-    fn handle_auth(&self, mut cmd_ctx: CmdCtx) {
+    fn handle_auth(&self, mut cmd_ctx: CmdCtx, session_cluster_name: &sync::RwLock<ClusterName>) {
         let key = cmd_ctx.get_key();
         let cluster = match key {
             None => {
@@ -147,6 +153,10 @@ where
                 )))
             }
         };
+
+        *session_cluster_name
+            .write()
+            .expect("ForwardHandler::handle_auth") = cluster_name.clone();
         cmd_ctx.set_cluster_name(cluster_name);
         cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
     }
@@ -904,7 +914,12 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
-    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
+    fn handle_cmd_ctx(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+        session_cluster_name: &sync::RwLock<ClusterName>,
+    ) -> CmdReplyFuture {
         let mut cmd_ctx = cmd_ctx;
         if self.config.auto_select_cluster {
             cmd_ctx = self.manager.try_select_cluster(cmd_ctx);
@@ -918,7 +933,7 @@ where
             CmdType::Info => cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(
                 format!("version:{}\r\n", UNDERMOON_VERSION,).into_bytes(),
             )))),
-            CmdType::Auth => self.handle_auth(cmd_ctx),
+            CmdType::Auth => self.handle_auth(cmd_ctx, session_cluster_name),
             CmdType::Quit => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }

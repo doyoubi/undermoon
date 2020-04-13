@@ -69,7 +69,6 @@ impl Default for RequestEventMap {
 pub struct Slowlog {
     event_map: RequestEventMap,
     session_id: usize,
-    slowlog_sample_rate: u64,
     enabled: bool,
 }
 
@@ -81,12 +80,10 @@ pub struct SlowlogRecord {
 }
 
 impl Slowlog {
-    pub fn new(session_id: usize, slowlog_sample_rate: u64) -> Self {
-        let enabled = SlowLogRateLimiter::get_perm(slowlog_sample_rate);
+    pub fn new(session_id: usize, enabled: bool) -> Self {
         Slowlog {
             event_map: RequestEventMap::default(),
             session_id,
-            slowlog_sample_rate,
             enabled,
         }
     }
@@ -103,8 +100,8 @@ impl Slowlog {
         self.session_id
     }
 
-    pub fn get_slowlog_sample_rate(&self) -> u64 {
-        self.slowlog_sample_rate
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
     }
 }
 
@@ -170,6 +167,7 @@ impl SlowlogRecord {
 pub struct SlowRequestLogger {
     slowlogs: Vec<ArcSwapOption<SlowlogRecord>>,
     curr_index: atomic::AtomicUsize,
+    rate_limiter: SlowLogRateLimiter,
     config: Arc<ServerProxyConfig>,
 }
 
@@ -182,6 +180,7 @@ impl SlowRequestLogger {
         Self {
             slowlogs,
             curr_index: atomic::AtomicUsize::new(0),
+            rate_limiter: SlowLogRateLimiter::default(),
             config,
         }
     }
@@ -216,6 +215,11 @@ impl SlowRequestLogger {
         for log_slot in self.slowlogs.iter() {
             log_slot.store(None)
         }
+    }
+
+    // Returns whether this current log should be enabled.
+    pub fn limit_rate(&self, slowlog_sample_rate: u64) -> bool {
+        self.rate_limiter.check_current_enabled(slowlog_sample_rate)
     }
 }
 
@@ -286,10 +290,6 @@ struct SlowLogRateLimiter {
     count: atomic::AtomicU64,
 }
 
-lazy_static! {
-    static ref GLOBAL_CACHED_TIME: SlowLogRateLimiter = SlowLogRateLimiter::default();
-}
-
 impl Default for SlowLogRateLimiter {
     fn default() -> Self {
         Self {
@@ -299,11 +299,7 @@ impl Default for SlowLogRateLimiter {
 }
 
 impl SlowLogRateLimiter {
-    fn get_perm(slowlog_sample_rate: u64) -> bool {
-        GLOBAL_CACHED_TIME.check_current_enabled(slowlog_sample_rate)
-    }
-
-    fn check_current_enabled(&self, slowlog_sample_rate: u64) -> bool {
+    pub fn check_current_enabled(&self, slowlog_sample_rate: u64) -> bool {
         let slowlog_sample_rate = max(1, slowlog_sample_rate);
         let count = self.count.fetch_add(1, atomic::Ordering::Relaxed) % slowlog_sample_rate;
         count == 0
