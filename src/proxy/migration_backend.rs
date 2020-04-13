@@ -458,7 +458,6 @@ mod tests {
     use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::RwLock;
     use tokio;
 
     #[derive(Debug, Clone, Copy)]
@@ -598,11 +597,11 @@ mod tests {
             Resp::Bulk(BulkStr::Str("GET".to_string().into())),
             Resp::Bulk(BulkStr::Str("somekey".to_string().into())),
         ]));
-        let cluster = Arc::new(RwLock::new(ClusterName::try_from("mycluster").unwrap()));
+        let cluster = ClusterName::try_from("mycluster").unwrap();
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster, cmd, reply_sender, 0, 1);
+        let cmd_ctx = CmdCtx::new(cluster, cmd, reply_sender, 0, true);
         (cmd_ctx, reply_receiver)
     }
 

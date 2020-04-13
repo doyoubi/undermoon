@@ -39,36 +39,38 @@ pub trait CmdHandler {
 }
 
 pub trait CmdCtxHandler {
-    fn handle_cmd_ctx(&self, cmd_ctx: CmdCtx, result_receiver: CmdReplyReceiver) -> CmdReplyFuture;
+    fn handle_cmd_ctx(
+        &self,
+        cmd_ctx: CmdCtx,
+        result_receiver: CmdReplyReceiver,
+        session_cluster_name: &sync::RwLock<ClusterName>,
+    ) -> CmdReplyFuture;
 }
 
 #[derive(Debug)]
 pub struct CmdCtx {
-    cluster: sync::Arc<sync::RwLock<ClusterName>>,
     cmd: Command,
     reply_sender: CmdReplySender,
     slowlog: Slowlog,
+    cluster_name: ClusterName,
     redirection_times: Option<usize>,
-    cached_cluster_name: ClusterName,
 }
 
 impl CmdCtx {
     pub fn new(
-        cluster: sync::Arc<sync::RwLock<ClusterName>>,
+        cluster_name: ClusterName,
         cmd: Command,
         reply_sender: CmdReplySender,
         session_id: usize,
-        slowlog_sample_rate: u64,
+        slowlog_enabled: bool,
     ) -> CmdCtx {
-        let slowlog = Slowlog::new(session_id, slowlog_sample_rate);
-        let cached_cluster_name = cluster.read().expect("CmdCtx::new").clone();
+        let slowlog = Slowlog::new(session_id, slowlog_enabled);
         CmdCtx {
-            cluster,
             cmd,
             reply_sender,
             slowlog,
+            cluster_name,
             redirection_times: None,
-            cached_cluster_name,
         }
     }
 
@@ -76,8 +78,8 @@ impl CmdCtx {
         &self.cmd
     }
 
-    pub fn get_cluster(&self) -> sync::Arc<sync::RwLock<ClusterName>> {
-        self.cluster.clone()
+    pub fn get_cluster(&self) -> ClusterName {
+        self.cluster_name.clone()
     }
 
     pub fn get_session_id(&self) -> usize {
@@ -158,12 +160,11 @@ impl CmdTask for CmdCtx {
 
 impl ClusterTag for CmdCtx {
     fn get_cluster_name(&self) -> &ClusterName {
-        &self.cached_cluster_name
+        &self.cluster_name
     }
 
     fn set_cluster_name(&mut self, cluster_name: ClusterName) {
-        self.cached_cluster_name = cluster_name.clone();
-        *self.cluster.write().expect("CmdCtx::set_cluster_name") = cluster_name;
+        self.cluster_name = cluster_name;
     }
 }
 
@@ -194,7 +195,7 @@ impl CmdTaskFactory for CmdCtxFactory {
             cmd,
             reply_sender,
             another_task.get_session_id(),
-            another_task.slowlog.get_slowlog_sample_rate(),
+            another_task.slowlog.is_enabled(),
         );
         let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
@@ -230,15 +231,25 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
+        let cluster_name = self
+            .cluster_name
+            .read()
+            .expect("Session::handle_cmd")
+            .clone();
+
+        let slowlog_enabled = self
+            .slow_request_logger
+            .limit_rate(self.config.get_slowlog_sample_rate());
         let mut cmd_ctx = CmdCtx::new(
-            self.cluster_name.clone(),
+            cluster_name,
             cmd,
             reply_sender,
             self.session_id,
-            self.config.get_slowlog_sample_rate(),
+            slowlog_enabled,
         );
         cmd_ctx.log_event(TaskEvent::Created);
-        self.cmd_ctx_handler.handle_cmd_ctx(cmd_ctx, reply_receiver)
+        self.cmd_ctx_handler
+            .handle_cmd_ctx(cmd_ctx, reply_receiver, &(*self.cluster_name))
     }
 
     fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog) {
@@ -394,7 +405,6 @@ mod tests {
     use crate::protocol::{Array, BulkStr, Resp};
     use matches::assert_matches;
     use std::convert::TryFrom;
-    use std::sync::{Arc, RwLock};
     use tokio;
 
     #[tokio::test]
@@ -402,10 +412,10 @@ mod tests {
         let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(
             b"PING".to_vec(),
         ))])));
-        let cluster_name = Arc::new(RwLock::new(ClusterName::try_from("mycluster").unwrap()));
+        let cluster_name = ClusterName::try_from("mycluster").unwrap();
         let cmd = Command::new(Box::new(request));
         let (sender, receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799, 1);
+        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799, true);
         drop(cmd_ctx);
         let err = match receiver.await {
             Ok(_) => panic!(),
