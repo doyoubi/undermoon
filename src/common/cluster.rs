@@ -194,7 +194,7 @@ impl RangeList {
         strs
     }
 
-    fn compact(&mut self) {
+    pub fn compact(&mut self) {
         // Goal: for any i < j, i.start <= i.end < j.start <= j.end
         for range in self.0.iter_mut() {
             if range.start() > range.end() {
