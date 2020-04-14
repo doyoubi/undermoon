@@ -211,7 +211,7 @@ impl RangeList {
         while let Some(e) = self.0.get(b).cloned() {
             {
                 let s = self.0.get_mut(a).expect("RangeList::compact");
-                if s.end() >= e.start() {
+                if s.end() + 1 >= e.start() {
                     s.1 = max(s.end(), e.end());
                     b += 1;
                     continue;
@@ -1024,6 +1024,26 @@ mod tests {
         assert_eq!(range_list.get_ranges().len(), 1);
         assert_eq!(range_list.get_ranges()[0].start(), 0);
         assert_eq!(range_list.get_ranges()[0].end(), 7799);
+
+        let s: Vec<String> = vec!["3", "0-1365", "1366-1638", "1639-2047"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 1);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 2047);
+
+        let s: Vec<String> = vec!["2", "0-997", "999-1000"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 2);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 997);
+        assert_eq!(range_list.get_ranges()[1].start(), 999);
+        assert_eq!(range_list.get_ranges()[1].end(), 1000);
     }
 
     #[test]

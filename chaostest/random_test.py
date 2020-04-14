@@ -181,7 +181,7 @@ class RandomTester:
                 node_number = random.randint(0, 40)
                 self.overmoon_client.create_cluster(self.gen_cluster_name(), node_number)
 
-            if names and random.randint(0, 10) < 4:
+            if names and random.randint(0, 10) < 8:
                 cluster_name = random.choice(names)
                 cluster = self.overmoon_client.get_cluster(cluster_name)
                 existing_node_num = len(cluster['nodes'])
