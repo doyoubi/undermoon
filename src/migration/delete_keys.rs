@@ -27,6 +27,17 @@ impl DeleteKeysTaskMap {
         }
     }
 
+    pub fn contains_running_tasks(&self) -> bool {
+        for cluster_tasks in self.task_map.values() {
+            for task in cluster_tasks.values() {
+                if !task.is_finished() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn info(&self) -> RespVec {
         let tasks: Vec<RespVec> = self
             .task_map

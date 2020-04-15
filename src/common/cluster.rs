@@ -134,6 +134,23 @@ impl TryFrom<&str> for RangeList {
     }
 }
 
+impl fmt::Display for RangeList {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[")?;
+        for (i, range) in self.0.iter().enumerate() {
+            if range.start() == range.end() {
+                write!(f, "{}", range.start())?;
+            } else {
+                write!(f, "{}-{}", range.start(), range.end())?;
+            }
+            if i + 1 != self.0.len() {
+                write!(f, ", ")?;
+            }
+        }
+        write!(f, "]")
+    }
+}
+
 impl RangeList {
     pub fn new(ranges: Vec<Range>) -> Self {
         Self(ranges)
@@ -1097,6 +1114,17 @@ mod tests {
         assert!(!range_map.contains_slot(0));
         assert!(!range_map.contains_slot(5299));
         assert!(!range_map.contains_slot(SLOT_NUM - 1));
+        assert!(!range_map.contains_slot(SLOT_NUM));
+        assert!(!range_map.contains_slot(20000000));
+
+        let range_list = RangeList::try_from(format!("2 1366-2729 16383-16383").as_str()).unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(!range_map.contains_slot(0));
+        assert!(!range_map.contains_slot(1365));
+        assert!(range_map.contains_slot(1366));
+        assert!(range_map.contains_slot(2729));
+        assert!(!range_map.contains_slot(2730));
+        assert!(range_map.contains_slot(SLOT_NUM - 1));
         assert!(!range_map.contains_slot(SLOT_NUM));
         assert!(!range_map.contains_slot(20000000));
     }

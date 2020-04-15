@@ -189,49 +189,59 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let peer_sender_factory = &self.peer_sender_factory;
         let migration_manager = &self.migration_manager;
 
-        let _guard = self.lock.lock().expect("MetaManager::set_meta");
+        let run_new_migration_task_while_deleting_key = {
+            let _guard = self.lock.lock().expect("MetaManager::set_meta");
 
-        if cluster_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst)
-            && !cluster_meta.get_flags().force
-        {
-            return Err(ClusterMetaError::OldEpoch);
-        }
+            if cluster_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst)
+                && !cluster_meta.get_flags().force
+            {
+                return Err(ClusterMetaError::OldEpoch);
+            }
 
-        let old_meta_map = self.meta_map.load();
-        let cluster_map = ClusterBackendMap::from_cluster_map(
-            &cluster_meta,
-            sender_factory,
-            peer_sender_factory,
-            active_redirection,
-        );
-        let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
-            &old_meta_map.migration_map,
-            cluster_meta.get_local(),
-            self.blocking_map.clone(),
-        );
-
-        let left_slots_after_change = old_meta_map
-            .migration_map
-            .get_left_slots_after_change(&migration_map, cluster_meta.get_local());
-        let (deleting_task_map, new_deleting_tasks) = migration_manager
-            .create_new_deleting_task_map(
-                &old_meta_map.deleting_task_map,
+            let old_meta_map = self.meta_map.load();
+            let cluster_map = ClusterBackendMap::from_cluster_map(
+                &cluster_meta,
+                sender_factory,
+                peer_sender_factory,
+                active_redirection,
+            );
+            let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
+                &old_meta_map.migration_map,
                 cluster_meta.get_local(),
-                left_slots_after_change,
+                self.blocking_map.clone(),
             );
 
-        self.meta_map.store(Arc::new(MetaMap {
-            cluster_map,
-            migration_map,
-            deleting_task_map,
-        }));
-        // Should go after the meta_map.store above
-        self.epoch.store(cluster_meta.get_epoch(), Ordering::SeqCst);
+            let run_new_migration_task_while_deleting_key =
+                !new_tasks.is_empty() && old_meta_map.deleting_task_map.contains_running_tasks();
 
-        self.migration_manager.run_tasks(new_tasks);
-        self.migration_manager
-            .run_deleting_tasks(new_deleting_tasks);
+            let left_slots_after_change = old_meta_map
+                .migration_map
+                .get_left_slots_after_change(&migration_map, cluster_meta.get_local());
+            let (deleting_task_map, new_deleting_tasks) = migration_manager
+                .create_new_deleting_task_map(
+                    &old_meta_map.deleting_task_map,
+                    cluster_meta.get_local(),
+                    left_slots_after_change,
+                );
 
+            self.meta_map.store(Arc::new(MetaMap {
+                cluster_map,
+                migration_map,
+                deleting_task_map,
+            }));
+            // Should go after the meta_map.store above
+            self.epoch.store(cluster_meta.get_epoch(), Ordering::SeqCst);
+
+            self.migration_manager.run_tasks(new_tasks);
+            self.migration_manager
+                .run_deleting_tasks(new_deleting_tasks);
+
+            run_new_migration_task_while_deleting_key
+        };
+
+        if run_new_migration_task_while_deleting_key {
+            error!("New migration starts while deleting keys is still running for the last task. May lose some keys.");
+        }
         Ok(())
     }
 

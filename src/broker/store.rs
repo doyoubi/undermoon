@@ -244,7 +244,7 @@ impl ClusterStore {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MigrationSlots {
     ranges: Vec<Range>,
     meta: MigrationMetaStore,
@@ -866,15 +866,16 @@ impl MetaStore {
         let running_migration = cluster
             .chunks
             .iter()
-            .any(|chunk| !chunk.migrating_slots.iter().any(|slots| slots.is_empty()));
+            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()));
         if running_migration {
             return Err(MetaStoreError::MigrationRunning);
         }
 
         let migration_slots = Self::remove_slots_from_src(cluster, new_epoch);
-        Self::assign_dst_slots(cluster, migration_slots);
+        Self::assign_dst_slots(cluster, migration_slots.clone());
         cluster.set_epoch(new_epoch);
 
+        Self::print_migration_slot(cluster, &migration_slots);
         Ok(())
     }
 
@@ -974,6 +975,92 @@ impl MetaStore {
         migration_slots
     }
 
+    fn print_migration_slot(cluster: &ClusterStore, mgr_slots: &[MigrationSlots]) {
+        info!("cluster {} start migration", cluster.name);
+        for slots in mgr_slots.iter() {
+            let meta = &slots.meta;
+            info!(
+                "{} {} {} => {} {}: {:?}",
+                meta.epoch,
+                meta.src_chunk_index,
+                meta.src_chunk_part,
+                meta.dst_chunk_index,
+                meta.dst_chunk_part,
+                slots.ranges
+            );
+        }
+        for chunk in cluster.chunks.iter() {
+            for mgr_slots in chunk.migrating_slots.iter() {
+                for slots in mgr_slots.iter() {
+                    let slot_range = slots.to_slot_range(&cluster.chunks);
+                    let tag = &slot_range.tag;
+                    if !tag.is_migrating() {
+                        continue;
+                    }
+                    if let Some(meta) = tag.get_migration_meta() {
+                        info!(
+                            "{} {} {} => {} {}: {}",
+                            meta.epoch,
+                            meta.src_proxy_address,
+                            meta.src_node_address,
+                            meta.dst_proxy_address,
+                            meta.dst_node_address,
+                            slot_range.range_list
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_slots_balance(cluster: &ClusterStore) {
+        for chunk in cluster.chunks.iter() {
+            if !chunk.migrating_slots[0].is_empty() || !chunk.migrating_slots[1].is_empty() {
+                return;
+            }
+        }
+
+        let mut slot_num = vec![];
+        for chunk in cluster.chunks.iter() {
+            let mut start_empty = false;
+            for slots in chunk.stable_slots.iter() {
+                match slots.as_ref() {
+                    Some(slots) => {
+                        slot_num.push(slots.range_list.get_slots_num());
+                        if start_empty {
+                            error!("Invalid metadata: Scattered slots distribution");
+                        }
+                    }
+                    None => {
+                        slot_num.push(0);
+                        start_empty = true;
+                    }
+                }
+            }
+        }
+
+        let slot_num_without_zeros: Vec<usize> =
+            slot_num.iter().filter(|n| **n > 0).cloned().collect();
+
+        let (max, min) = match (
+            slot_num_without_zeros.iter().max(),
+            slot_num_without_zeros.iter().min(),
+        ) {
+            (Some(max), Some(min)) => (max, min),
+            _ => {
+                error!(
+                    "Invalid metadata: cluster without any slot {}",
+                    cluster.name
+                );
+                return;
+            }
+        };
+
+        if max - min > 1 {
+            error!("Unbalanced slots: {:?}", slot_num);
+        }
+    }
+
     fn assign_dst_slots(cluster: &mut ClusterStore, migration_slots: Vec<MigrationSlots>) {
         for migration_slot_range in migration_slots.into_iter() {
             let MigrationSlots { ranges, meta } = migration_slot_range;
@@ -1055,7 +1142,7 @@ impl MetaStore {
         let running_migration = cluster
             .chunks
             .iter()
-            .any(|chunk| !chunk.migrating_slots.iter().any(|slots| slots.is_empty()));
+            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()));
         if running_migration {
             return Err(MetaStoreError::MigrationRunning);
         }
@@ -1070,9 +1157,10 @@ impl MetaStore {
         let new_chunk_num = new_node_num / 4;
         let migration_slots =
             Self::remove_slots_from_src_to_scale_down(cluster, new_epoch, new_chunk_num);
-        Self::assign_dst_slots(cluster, migration_slots);
+        Self::assign_dst_slots(cluster, migration_slots.clone());
         cluster.set_epoch(new_epoch);
 
+        Self::print_migration_slot(cluster, &migration_slots);
         Ok(())
     }
 
@@ -1102,6 +1190,7 @@ impl MetaStore {
                 None => 0,
             })
             .collect();
+        info!("dst_existing_slots_num: {:?}", dst_existing_slots_num);
 
         for (src_chunk_index, src_chunk) in
             cluster.chunks.iter_mut().enumerate().skip(dst_chunk_num)
@@ -1253,7 +1342,7 @@ impl MetaStore {
             dst_chunk_part,
         };
 
-        for chunk in &mut cluster.chunks {
+        for chunk in cluster.chunks.iter_mut() {
             for migrating_slots in chunk.migrating_slots.iter_mut() {
                 migrating_slots.retain(|slot_range_store| {
                     !(slot_range_store.is_migrating
@@ -1299,8 +1388,9 @@ impl MetaStore {
         }
 
         Self::compact_slots(cluster);
-
         cluster.set_epoch(new_epoch);
+
+        Self::check_slots_balance(cluster);
         Ok(())
     }
 
@@ -2963,12 +3053,9 @@ mod tests {
 
     #[test]
     fn test_failure_on_scaling_down() {
-        const MAX_HOST_NUM: usize = 6;
-        const MAX_PROXY_PER_HOST: usize = 6;
-
         let host_num = 6;
         let proxy_per_host = 6;
-        assert_eq!(MAX_HOST_NUM * MAX_PROXY_PER_HOST % 2, 0);
+        assert_eq!(host_num * proxy_per_host % 2, 0);
         let migration_limit = 0;
         let start_node_num = 12;
 
@@ -2981,6 +3068,49 @@ mod tests {
             removed_node_num,
             migration_limit,
             add_failure_and_replace_proxy,
+        );
+    }
+
+    #[test]
+    fn test_scaling_up_and_down() {
+        let host_num = 12;
+        let proxy_per_host = 1;
+        let migration_limit = 0;
+        let start_node_num = 24;
+
+        let mut store =
+            init_migration_test_store(host_num, proxy_per_host, start_node_num, migration_limit);
+
+        test_scaling_down_helper(
+            &mut store,
+            host_num * proxy_per_host,
+            12,
+            migration_limit,
+            no_op,
+        );
+
+        test_scaling_helper(
+            &mut store,
+            host_num * proxy_per_host,
+            8,
+            migration_limit,
+            no_op,
+        );
+
+        test_scaling_helper(
+            &mut store,
+            host_num * proxy_per_host,
+            4,
+            migration_limit,
+            no_op,
+        );
+
+        test_scaling_down_helper(
+            &mut store,
+            host_num * proxy_per_host,
+            12,
+            migration_limit,
+            no_op,
         );
     }
 
@@ -3075,11 +3205,12 @@ mod tests {
 
     // Docs examples:
     #[test]
-    fn test_flatten_machines() {
+    fn test_one_proxy_per_host() {
         let host_num = 6;
         let proxy_per_host = 1;
         let migration_limit = 2;
         let added_node_num = 4;
+        let removed_node_num = 4;
 
         let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
         test_scaling(
@@ -3095,6 +3226,21 @@ mod tests {
                 .get_nodes()
                 .len(),
             8
+        );
+        test_scaling_down_helper(
+            &mut store,
+            host_num * proxy_per_host,
+            removed_node_num,
+            migration_limit,
+            no_op,
+        );
+        assert_eq!(
+            store
+                .get_cluster_by_name(CLUSTER_NAME, 1)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            4
         );
         assert!(!store.get_free_proxies().is_empty());
         add_failure_and_replace_proxy(&mut store, migration_limit);

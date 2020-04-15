@@ -77,10 +77,10 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             )
             .route("/clusters/free_nodes/{cluster_name}", web::delete().to(audo_delete_free_nodes))
             .route(
-                "/clusters/migrations/down/{cluster_name}/{node_number}",
+                "/clusters/migrations/shrink/{cluster_name}/{node_number}",
                 web::post().to(migrate_slots_to_scale_down),
             )
-            .route("/clusters/migrations/{cluster_name}", web::post().to(migrate_slots))
+            .route("/clusters/migrations/expand/{cluster_name}", web::post().to(migrate_slots))
             .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
             .route("/clusters/balance/{cluster_name}", web::put().to(balance_masters))
 
