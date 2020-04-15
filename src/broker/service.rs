@@ -77,9 +77,10 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             )
             .route("/clusters/free_nodes/{cluster_name}", web::delete().to(audo_delete_free_nodes))
             .route(
-                "/clusters/migrations/{cluster_name}",
-                web::post().to(migrate_slots),
+                "/clusters/migrations/shrink/{cluster_name}/{node_number}",
+                web::post().to(migrate_slots_to_scale_down),
             )
+            .route("/clusters/migrations/expand/{cluster_name}", web::post().to(migrate_slots))
             .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
             .route("/clusters/balance/{cluster_name}", web::put().to(balance_masters))
 
@@ -280,6 +281,17 @@ impl MemBrokerService {
             .write()
             .expect("MemBrokerService::migrate_slots")
             .migrate_slots(cluster_name)
+    }
+
+    pub fn migrate_slots_to_scale_down(
+        &self,
+        cluster_name: String,
+        new_node_num: usize,
+    ) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::migrate_slots_to_scale_down")
+            .migrate_slots_to_scale_down(cluster_name, new_node_num)
     }
 
     pub fn get_failures(&self) -> Vec<String> {
@@ -536,6 +548,17 @@ async fn migrate_slots(
     Ok(res)
 }
 
+async fn migrate_slots_to_scale_down(
+    (path, state): (web::Path<(String, usize)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    let (cluster_name, new_node_num) = path.into_inner();
+    let res = state
+        .migrate_slots_to_scale_down(cluster_name, new_node_num)
+        .map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
+}
+
 async fn add_failure(
     (path, state): (web::Path<(String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
@@ -595,6 +618,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::AlreadyExisted => http::StatusCode::CONFLICT,
             MetaStoreError::ClusterNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::FreeNodeNotFound => http::StatusCode::NOT_FOUND,
+            MetaStoreError::FreeNodeFound => http::StatusCode::CONFLICT,
             MetaStoreError::ProxyNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::InvalidNodeNum => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidClusterName => http::StatusCode::BAD_REQUEST,

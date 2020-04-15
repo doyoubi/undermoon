@@ -50,7 +50,7 @@ def get_cluster(cluster_name):
 
 
 def migrate_slots(cluster_name):
-    res = requests.post('http://localhost:7799/api/{}/clusters/migrations/{}'.format(BROKER_API_VERSION, cluster_name))
+    res = requests.post('http://localhost:7799/api/{}/clusters/migrations/expand/{}'.format(BROKER_API_VERSION, cluster_name))
     print(res.status_code, res.text)
     res.raise_for_status()
 

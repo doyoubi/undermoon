@@ -169,7 +169,7 @@ class OvermoonClient:
         return False
 
     def scale_cluster(self, cluster_name):
-        r = self.client.post('/api/{}/clusters/migrations/{}'.format(BROKER_API_VERSION, cluster_name))
+        r = self.client.post('/api/{}/clusters/migrations/expand/{}'.format(BROKER_API_VERSION, cluster_name))
         if r.status_code == 200:
             logger.warning('start migration: {}', cluster_name)
             return
@@ -177,6 +177,16 @@ class OvermoonClient:
             return
 
         logger.error('OVERMOON_ERROR: failed to start migration: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))
+
+    def scale_down_cluster(self, cluster_name, new_node_num):
+        r = self.client.post('/api/{}/clusters/migrations/shrink/{}/{}'.format(BROKER_API_VERSION, cluster_name, new_node_num))
+        if r.status_code == 200:
+            logger.warning('start migration to scale down: {} {}', cluster_name, new_node_num)
+            return
+        if r.status_code in (400, 404, 409):
+            return
+
+        logger.error('OVERMOON_ERROR: failed to start migration to scale down: {} {} {}: {}', cluster_name, r.status_code, r.text, self.get_cluster(cluster_name))
 
     def get_proxy_addresses(self):
         r = self.client.get('/api/{}/proxies/addresses'.format(BROKER_API_VERSION))
@@ -238,7 +248,7 @@ class RedisClusterClient:
 
     def get_helper(self, client, key):
         v = client.get(key)
-        if v:
+        if v is not None:
             v = v.decode('utf-8')
         return v
 
@@ -259,7 +269,7 @@ class RedisClusterClient:
         for i in range(0, RETRY_TIMES):
             try:
                 addr = self.fmt_addr(proxy)
-                return (send_func(client), addr)
+                return send_func(client), addr
             except Exception as e:
                 if 'MOVED' not in str(e):
                     raise Exception('{}: {}'.format(addr, e))

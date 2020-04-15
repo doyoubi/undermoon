@@ -134,6 +134,23 @@ impl TryFrom<&str> for RangeList {
     }
 }
 
+impl fmt::Display for RangeList {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[")?;
+        for (i, range) in self.0.iter().enumerate() {
+            if range.start() == range.end() {
+                write!(f, "{}", range.start())?;
+            } else {
+                write!(f, "{}-{}", range.start(), range.end())?;
+            }
+            if i + 1 != self.0.len() {
+                write!(f, ", ")?;
+            }
+        }
+        write!(f, "]")
+    }
+}
+
 impl RangeList {
     pub fn new(ranges: Vec<Range>) -> Self {
         Self(ranges)
@@ -194,7 +211,7 @@ impl RangeList {
         strs
     }
 
-    fn compact(&mut self) {
+    pub fn compact(&mut self) {
         // Goal: for any i < j, i.start <= i.end < j.start <= j.end
         for range in self.0.iter_mut() {
             if range.start() > range.end() {
@@ -211,7 +228,7 @@ impl RangeList {
         while let Some(e) = self.0.get(b).cloned() {
             {
                 let s = self.0.get_mut(a).expect("RangeList::compact");
-                if s.end() >= e.start() {
+                if s.end() + 1 >= e.start() {
                     s.1 = max(s.end(), e.end());
                     b += 1;
                     continue;
@@ -1024,6 +1041,26 @@ mod tests {
         assert_eq!(range_list.get_ranges().len(), 1);
         assert_eq!(range_list.get_ranges()[0].start(), 0);
         assert_eq!(range_list.get_ranges()[0].end(), 7799);
+
+        let s: Vec<String> = vec!["3", "0-1365", "1366-1638", "1639-2047"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 1);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 2047);
+
+        let s: Vec<String> = vec!["2", "0-997", "999-1000"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let range_list = RangeList::parse(&mut s.into_iter()).unwrap();
+        assert_eq!(range_list.get_ranges().len(), 2);
+        assert_eq!(range_list.get_ranges()[0].start(), 0);
+        assert_eq!(range_list.get_ranges()[0].end(), 997);
+        assert_eq!(range_list.get_ranges()[1].start(), 999);
+        assert_eq!(range_list.get_ranges()[1].end(), 1000);
     }
 
     #[test]
@@ -1077,6 +1114,17 @@ mod tests {
         assert!(!range_map.contains_slot(0));
         assert!(!range_map.contains_slot(5299));
         assert!(!range_map.contains_slot(SLOT_NUM - 1));
+        assert!(!range_map.contains_slot(SLOT_NUM));
+        assert!(!range_map.contains_slot(20000000));
+
+        let range_list = RangeList::try_from(format!("2 1366-2729 16383-16383").as_str()).unwrap();
+        let range_map = RangeMap::from(&range_list);
+        assert!(!range_map.contains_slot(0));
+        assert!(!range_map.contains_slot(1365));
+        assert!(range_map.contains_slot(1366));
+        assert!(range_map.contains_slot(2729));
+        assert!(!range_map.contains_slot(2730));
+        assert!(range_map.contains_slot(SLOT_NUM - 1));
         assert!(!range_map.contains_slot(SLOT_NUM));
         assert!(!range_map.contains_slot(20000000));
     }

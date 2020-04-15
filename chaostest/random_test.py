@@ -181,7 +181,7 @@ class RandomTester:
                 node_number = random.randint(0, 40)
                 self.overmoon_client.create_cluster(self.gen_cluster_name(), node_number)
 
-            if names and random.randint(0, 10) < 4:
+            if names and random.randint(0, 10) < 8:
                 cluster_name = random.choice(names)
                 cluster = self.overmoon_client.get_cluster(cluster_name)
                 existing_node_num = len(cluster['nodes'])
@@ -189,7 +189,11 @@ class RandomTester:
                 node_number = random.randint(0, max_chunk_num + 1) * 4
                 self.overmoon_client.add_nodes(cluster_name, node_number)
                 if random.randint(0, 10) < 7:
-                    self.overmoon_client.scale_cluster(cluster_name)
+                    if random.randint(0, 10) % 2 == 0:
+                        self.overmoon_client.scale_cluster(cluster_name)
+                    else:
+                        new_node_num = random.randint(0, existing_node_num / 4 + 1) * 4
+                        self.overmoon_client.scale_down_cluster(cluster_name, new_node_num)
 
             if names and random.randint(0, 10) < 6:
                 if self.overmoon_client.remove_unused_nodes(random.choice(names)):
@@ -203,7 +207,7 @@ class RandomTester:
             if self.stopped:
                 break
 
-            if names and random.randint(0, 30) < 1:
+            if names and random.randint(0, 300) < 1:
                 cluster_name = random.choice(names)
                 self.overmoon_client.delete_cluster(cluster_name)
                 self.kvs_tester.pop(cluster_name, None)

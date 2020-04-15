@@ -135,7 +135,7 @@ Let's scale up to 8 nodes:
 # Add 4 nodes
 $ curl -XPATCH -H 'Content-Type: application/json' http://localhost:7799/api/v2/clusters/nodes/mycluster -d '{"node_number": 4}'
 # Start migrating the data
-$ curl -XPOST http://localhost:7799/api/v2/clusters/migrations/mycluster
+$ curl -XPOST http://localhost:7799/api/v2/clusters/migrations/expand/mycluster
 ```
 
 Now we have 4 server proxies:
