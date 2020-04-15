@@ -139,8 +139,29 @@ HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
-#### Start migration
-`POST` /api/v2/clusters/migrations/<cluster_name>
+#### Start migration for scaling out
+Note that you need to call `Add nodes to cluster` beforehand.
+
+`POST` /api/v2/clusters/migrations/expand/<cluster_name>
+
+##### Success
+```
+HTTP 200
+```
+
+##### Error
+```
+HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
+HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
+HTTP 409 { "error": "FreeNodeFound" }
+HTTP 409 { "error": "MIGRATION_RUNNING" }
+```
+
+#### Start migration for scaling down
+Note that this will not delete the nodes.
+You still need to call the `Delete Unused nodes in a cluster` API after migration is done.
+
+`POST` /api/v2/clusters/migrations/shrink/<cluster_name>/<new_cluster_nodes_number>
   
 ##### Success
 ```
@@ -154,6 +175,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "SLOTS_ALREADY_EVEN" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
+
 
 #### Change cluster config
 `PATCH` /api/v2/clusters/config/<cluster_name>
