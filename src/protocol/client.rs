@@ -233,10 +233,6 @@ impl PooledRedisClient {
         &mut self,
         command: OptionalMulti<Vec<BinSafeStr>>,
     ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
-        if self.err {
-            return Err(RedisClientError::StaleClient);
-        }
-
         let simple_client = match &mut self.simple_client {
             Some(client) => client,
             None => {
@@ -252,6 +248,9 @@ impl PooledRedisClient {
         &mut self,
         command: OptionalMulti<Vec<BinSafeStr>>,
     ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
+        if self.err {
+            return Err(RedisClientError::StaleClient);
+        }
         // If we only set this error later,
         // there's a corner case which could result in getting an old response from the last `execute`:
         // - The client send the request successfully.
@@ -291,8 +290,13 @@ impl RedisClient for PooledRedisClient {
         command: Vec<BinSafeStr>,
     ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
         let fut = async move {
+            if self.err {
+                return Err(RedisClientError::StaleClient);
+            }
             self.err = true;
-            let r = self.execute(OptionalMulti::Single(command)).await;
+            let r = self
+                .execute_cmd_with_timeout(OptionalMulti::Single(command))
+                .await;
             let r = process_single_cmd_result(r);
             self.err = r.is_err();
             r
@@ -305,9 +309,14 @@ impl RedisClient for PooledRedisClient {
         commands: Vec<Vec<BinSafeStr>>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>> {
         let fut = async move {
+            if self.err {
+                return Err(RedisClientError::StaleClient);
+            }
             let commands_num = commands.len();
             self.err = true;
-            let r = self.execute(OptionalMulti::Multi(commands)).await;
+            let r = self
+                .execute_cmd_with_timeout(OptionalMulti::Multi(commands))
+                .await;
             let r = process_multi_cmd_result(r, commands_num);
             self.err = r.is_err();
             r
