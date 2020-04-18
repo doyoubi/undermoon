@@ -83,8 +83,11 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
         let cmd = match Self::gen_cmd(&meta) {
             Ok(cmd) => cmd,
             Err(err) => {
-                error!("FATAL ERROR: invalid meta {:?}, keep going with just PING. Migration will get stuck.", err);
-                vec!["PING".to_string()]
+                error!(
+                    "FATAL ERROR: invalid meta {:?}, will see it as master.",
+                    err
+                );
+                vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()]
             }
         };
         let address = meta.replica_node_address.clone();

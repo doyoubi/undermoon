@@ -220,7 +220,10 @@ impl<F: RedisClientFactory> PingFailureDetector<F> {
         let mut client = match self.client_factory.create_client(address.clone()).await {
             Ok(client) => client,
             Err(err) => {
-                error!("PingFailureDetector::check failed to connect: {:?}", err);
+                error!(
+                    "PingFailureDetector::check failed to connect: {} {:?}",
+                    address, err
+                );
                 return Ok(Some(address));
             }
         };
@@ -231,7 +234,10 @@ impl<F: RedisClientFactory> PingFailureDetector<F> {
         match client.execute_single(ping_command).await {
             Ok(_) => Ok(None),
             Err(err) => {
-                error!("PingFailureDetector::check failed to send PING: {:?}", err);
+                error!(
+                    "PingFailureDetector::check failed to send PING: {} {:?}",
+                    address, err
+                );
                 Err(CoordinateError::Redis(err))
             }
         }

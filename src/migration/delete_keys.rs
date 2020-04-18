@@ -217,7 +217,10 @@ impl DeleteKeysTask {
 
         let resp = client.execute_single(byte_cmd).await?;
         let ScanResponse { next_index, keys } =
-            ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
+            ScanResponse::parse_scan(&resp).ok_or_else(|| {
+                error!("Invalid scan reply for deleting keys: {:?}", resp);
+                RedisClientError::InvalidReply
+            })?;
 
         let keys: Vec<Vec<u8>> = keys
             .into_iter()

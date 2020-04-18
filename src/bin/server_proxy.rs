@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use string_error::into_err;
 use undermoon::common::track::TrackedFutureRegistry;
-use undermoon::protocol::PooledRedisClientFactory;
+use undermoon::protocol::SimpleRedisClientFactory;
 use undermoon::proxy::backend::DefaultConnFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::manager::MetaMap;
@@ -117,8 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config = Arc::new(conf);
 
     let timeout = Duration::new(1, 0);
-    let pool_size = 4;
-    let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
+    let client_factory = SimpleRedisClientFactory::new(timeout);
 
     let slow_request_logger = Arc::new(SlowRequestLogger::new(config.clone()));
     let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::empty())));

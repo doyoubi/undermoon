@@ -294,7 +294,10 @@ impl ScanMigrationTask {
 
         let resp = client.execute_single(byte_cmd).await?;
         let ScanResponse { next_index, keys } =
-            ScanResponse::parse_scan(resp).ok_or_else(|| RedisClientError::InvalidReply)?;
+            ScanResponse::parse_scan(&resp).ok_or_else(|| {
+                error!("Invalid scan reply: {:?}", resp);
+                RedisClientError::InvalidReply
+            })?;
 
         let (slot_ranges, entries) = Self::produce_entries(slot_ranges, keys, client).await?;
 

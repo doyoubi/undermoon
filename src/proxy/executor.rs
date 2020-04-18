@@ -353,7 +353,7 @@ where
             Err(err) => {
                 let err_str = match err {
                     SwitchError::InvalidArg => "Invalid Arg".to_string(),
-                    SwitchError::TaskNotFound => "No Corresponding Task Found".to_string(),
+                    SwitchError::TaskNotFound => response::TASK_NOT_FOUND.to_string(),
                     SwitchError::PeerMigrating => "Peer Not Migrating".to_string(),
                     SwitchError::NotReady => response::NOT_READY_FOR_SWITCHING_REPLY.to_string(),
                     SwitchError::MgrErr(err) => format!("switch failed: {:?}", err),
