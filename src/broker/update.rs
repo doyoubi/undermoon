@@ -1,7 +1,7 @@
 use super::query::MetaStoreQuery;
 use super::store::{
     ChunkRolePosition, ChunkStore, ClusterStore, HostProxy, MetaStore, MetaStoreError,
-    ProxyResource, CHUNK_HALF_NODE_NUM, CHUNK_NODE_NUM, NODES_PER_PROXY,
+    ProxyResource, CHUNK_HALF_NODE_NUM, CHUNK_NODE_NUM, CHUNK_PARTS, NODES_PER_PROXY,
 };
 use crate::common::cluster::{
     Cluster, Node, Proxy, Range, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
@@ -895,5 +895,67 @@ impl<'a> MetaStoreUpdate<'a> {
             .expect("second_host_cmp: get back host");
         // Need to reverse it as we want the host with maximum proxies.
         host2_free.cmp(&host1_free)
+    }
+
+    pub fn balance_masters(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let new_epoch = self.store.bump_global_epoch();
+
+        let failed_proxies = &self.store.failed_proxies;
+        let failures = &self.store.failures;
+
+        let failed_proxy_exists = |addresses: &[String; CHUNK_PARTS]| -> bool {
+            for address in addresses.iter() {
+                if failed_proxies.contains(address) || failures.contains_key(address) {
+                    return true;
+                }
+            }
+            false
+        };
+
+        match self.store.clusters.get_mut(&cluster_name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(ref mut cluster) => {
+                for chunk in cluster.chunks.iter_mut() {
+                    if failed_proxy_exists(&chunk.proxy_addresses) {
+                        continue;
+                    }
+                    chunk.role_position = ChunkRolePosition::Normal;
+                }
+                cluster.set_epoch(new_epoch);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn change_config(
+        &mut self,
+        cluster_name: String,
+        config: HashMap<String, String>,
+    ) -> Result<(), MetaStoreError> {
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let new_epoch = self.store.bump_global_epoch();
+        match self.store.clusters.get_mut(&cluster_name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(ref mut cluster) => {
+                let mut cluster_config = cluster.config.clone();
+                for (k, v) in config.iter() {
+                    cluster_config.set_field(k, v).map_err(|err| {
+                        MetaStoreError::InvalidConfig {
+                            key: k.clone(),
+                            value: v.clone(),
+                            error: err.to_string(),
+                        }
+                    })?;
+                }
+                cluster.config = cluster_config;
+                cluster.set_epoch(new_epoch);
+            }
+        }
+
+        Ok(())
     }
 }

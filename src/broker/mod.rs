@@ -1,3 +1,4 @@
+mod migrate;
 mod persistence;
 mod query;
 mod recovery;
