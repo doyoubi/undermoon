@@ -75,6 +75,7 @@ pub use self::trait_mod::{
 #[derive(Debug)]
 pub enum MetaDataBrokerError {
     Io(io::Error),
+    RequestFailed,
     InvalidReply,
     NoBroker,
 }
@@ -101,6 +102,7 @@ impl Error for MetaDataBrokerError {
 #[derive(Debug)]
 pub enum MetaManipulationBrokerError {
     Io(io::Error),
+    RequestFailed,
     ResourceNotAvailable,
     InvalidReply,
     NoBroker,

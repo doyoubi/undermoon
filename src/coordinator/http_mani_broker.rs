@@ -42,7 +42,7 @@ impl HttpMetaManipulationBroker {
             .ok_or_else(|| MetaManipulationBrokerError::NoBroker)?;
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("Failed to replace proxy {:?}", e);
-            MetaManipulationBrokerError::InvalidReply
+            MetaManipulationBrokerError::RequestFailed
         })?;
 
         let status = response.status();
@@ -88,7 +88,7 @@ impl HttpMetaManipulationBroker {
             .await
             .map_err(|e| {
                 error!("Failed to commit migration {:?}", e);
-                MetaManipulationBrokerError::InvalidReply
+                MetaManipulationBrokerError::RequestFailed
             })?;
 
         let status = response.status();

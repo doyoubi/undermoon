@@ -48,7 +48,7 @@ impl HttpMetaBroker {
         let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
-            MetaDataBrokerError::InvalidReply
+            MetaDataBrokerError::RequestFailed
         })?;
         let ClusterNamesPayload { names } = response.json().await.map_err(|e| {
             error!("failed to get cluster names from json {:?}", e);
@@ -66,7 +66,7 @@ impl HttpMetaBroker {
             .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster {:?}", e);
-            MetaDataBrokerError::InvalidReply
+            MetaDataBrokerError::RequestFailed
         })?;
         let ClusterPayload { cluster } = response.json().await.map_err(|e| {
             error!("failed to get cluster from json {:?}", e);
@@ -86,7 +86,7 @@ impl HttpMetaBroker {
         let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get proxy addresses {:?}", e);
-            MetaDataBrokerError::InvalidReply
+            MetaDataBrokerError::RequestFailed
         })?;
         let ProxyAddressesPayload { addresses } = response.json().await.map_err(|e| {
             error!("failed to get proxy adddresses from json {:?}", e);
@@ -101,7 +101,7 @@ impl HttpMetaBroker {
             .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get proxy {:?}", e);
-            MetaDataBrokerError::InvalidReply
+            MetaDataBrokerError::RequestFailed
         })?;
         let ProxyPayload { proxy } = response.json().await.map_err(move |e| {
             error!("failed to get proxy {} from json {:?}", address, e);
@@ -120,7 +120,7 @@ impl HttpMetaBroker {
             .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("failed to add failures {:?}", e);
-            MetaDataBrokerError::InvalidReply
+            MetaDataBrokerError::RequestFailed
         })?;
         let status = response.status();
         if status.is_success() {
@@ -146,7 +146,7 @@ impl HttpMetaBroker {
             .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("Failed to get failures {:?}", e);
-            MetaDataBrokerError::InvalidReply
+            MetaDataBrokerError::RequestFailed
         })?;
         let FailuresPayload { addresses } = response.json().await.map_err(|e| {
             error!("Failed to get failures from json {:?}", e);
@@ -161,7 +161,7 @@ impl HttpMetaBroker {
             .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("Failed to get failed proxies {:?}", e);
-            MetaDataBrokerError::InvalidReply
+            MetaDataBrokerError::RequestFailed
         })?;
         let FailedProxiesPayload { addresses } = response.json().await.map_err(|e| {
             error!("Failed to get failed proxies from json {:?}", e);

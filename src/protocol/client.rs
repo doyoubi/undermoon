@@ -527,6 +527,45 @@ impl RedisClientFactory for SimpleRedisClientFactory {
     }
 }
 
+pub struct PreCheckRedisClientFactory<F: RedisClientFactory> {
+    inner_factory: Arc<F>,
+    retry_times: usize,
+}
+
+impl<F: RedisClientFactory> PreCheckRedisClientFactory<F> {
+    pub fn new(inner_factory: Arc<F>, retry_times: usize) -> Self {
+        Self {
+            inner_factory,
+            retry_times,
+        }
+    }
+
+    async fn create_client_impl(&self, address: String) -> Result<F::Client, RedisClientError> {
+        let mut err_res = Err(RedisClientError::InitError);
+        for _ in 0..=self.retry_times {
+            let mut client = self.inner_factory.create_client(address.clone()).await?;
+            match client.execute_single(vec![b"PING".to_vec()]).await {
+                Err(err) => {
+                    err_res = Err(err);
+                }
+                Ok(_) => return Ok(client),
+            }
+        }
+        err_res
+    }
+}
+
+impl<F: RedisClientFactory> RedisClientFactory for PreCheckRedisClientFactory<F> {
+    type Client = F::Client;
+
+    fn create_client<'s>(
+        &'s self,
+        address: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>> {
+        Box::pin(self.create_client_impl(address))
+    }
+}
+
 #[derive(Debug)]
 pub enum RedisClientError {
     Io(io::Error),
