@@ -1,26 +1,24 @@
+use super::migrate::MetaStoreMigrate;
 use super::persistence::MetaSyncError;
+use super::query::MetaStoreQuery;
+use super::update::MetaStoreUpdate;
+use crate::common::cluster::ClusterName;
 use crate::common::cluster::{
-    Cluster, MigrationMeta, MigrationTaskMeta, Node, PeerProxy, Proxy, Range, RangeList, ReplMeta,
-    ReplPeer, SlotRange, SlotRangeTag,
+    Cluster, MigrationMeta, MigrationTaskMeta, Node, Proxy, Range, RangeList, SlotRange,
+    SlotRangeTag,
 };
-use crate::common::cluster::{ClusterName, Role};
 use crate::common::config::ClusterConfig;
-use crate::common::utils::SLOT_NUM;
 use crate::common::version::UNDERMOON_MEM_BROKER_META_VERSION;
-use chrono::{DateTime, NaiveDateTime, Utc};
-use itertools::Itertools;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use std::cmp::{max, min, Ordering};
+use std::cmp::max;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
-use std::num::NonZeroUsize;
 
-const NODES_PER_PROXY: usize = 2;
-const CHUNK_PARTS: usize = 2;
+pub const NODES_PER_PROXY: usize = 2;
+pub const CHUNK_PARTS: usize = 2;
 pub const CHUNK_HALF_NODE_NUM: usize = 2;
-const CHUNK_NODE_NUM: usize = 4;
+pub const CHUNK_NODE_NUM: usize = 4;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProxyResource {
@@ -30,29 +28,27 @@ pub struct ProxyResource {
     pub cluster: Option<ClusterName>,
 }
 
-struct HostProxy {
+pub struct HostProxy {
     pub host: String,
     pub proxy_address: String,
 }
 
-type ProxySlot = String;
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
-enum ChunkRolePosition {
+pub enum ChunkRolePosition {
     Normal,
     FirstChunkMaster,
     SecondChunkMaster,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-struct MigrationSlotRangeStore {
-    range_list: RangeList,
-    is_migrating: bool, // migrating or importing
-    meta: MigrationMetaStore,
+pub struct MigrationSlotRangeStore {
+    pub range_list: RangeList,
+    pub is_migrating: bool, // migrating or importing
+    pub meta: MigrationMetaStore,
 }
 
 impl MigrationSlotRangeStore {
-    fn to_slot_range(&self, chunks: &[ChunkStore]) -> SlotRange {
+    pub fn to_slot_range(&self, chunks: &[ChunkStore]) -> SlotRange {
         let src_chunk = chunks.get(self.meta.src_chunk_index).expect("get_cluster");
         let src_proxy_index =
             Self::chunk_part_to_proxy_index(self.meta.src_chunk_part, src_chunk.role_position);
@@ -123,34 +119,34 @@ impl MigrationSlotRangeStore {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-struct MigrationMetaStore {
-    epoch: u64,
-    src_chunk_index: usize,
-    src_chunk_part: usize,
-    dst_chunk_index: usize,
-    dst_chunk_part: usize,
+pub struct MigrationMetaStore {
+    pub epoch: u64,
+    pub src_chunk_index: usize,
+    pub src_chunk_part: usize,
+    pub dst_chunk_index: usize,
+    pub dst_chunk_part: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct ChunkStore {
-    role_position: ChunkRolePosition,
-    stable_slots: [Option<SlotRange>; CHUNK_PARTS],
-    migrating_slots: [Vec<MigrationSlotRangeStore>; CHUNK_PARTS],
-    proxy_addresses: [String; CHUNK_PARTS],
-    hosts: [String; CHUNK_PARTS],
-    node_addresses: [String; CHUNK_NODE_NUM],
+pub struct ChunkStore {
+    pub role_position: ChunkRolePosition,
+    pub stable_slots: [Option<SlotRange>; CHUNK_PARTS],
+    pub migrating_slots: [Vec<MigrationSlotRangeStore>; CHUNK_PARTS],
+    pub proxy_addresses: [String; CHUNK_PARTS],
+    pub hosts: [String; CHUNK_PARTS],
+    pub node_addresses: [String; CHUNK_NODE_NUM],
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct ClusterStore {
-    epoch: u64,
-    name: ClusterName,
-    chunks: Vec<ChunkStore>,
-    config: ClusterConfig,
+pub struct ClusterStore {
+    pub epoch: u64,
+    pub name: ClusterName,
+    pub chunks: Vec<ChunkStore>,
+    pub config: ClusterConfig,
 }
 
 impl ClusterStore {
-    fn set_epoch(&mut self, new_epoch: u64) {
+    pub fn set_epoch(&mut self, new_epoch: u64) {
         self.epoch = new_epoch;
     }
 
@@ -163,7 +159,7 @@ impl ClusterStore {
     // the later ones will not stop until they are done.
     // (3) The later migration flags will be updated to server proxies with new epoch
     // bumped by the committing of former ones.
-    fn limit_migration(&self, migration_limit: u64) -> ClusterStore {
+    pub fn limit_migration(&self, migration_limit: u64) -> ClusterStore {
         if migration_limit == 0 {
             return self.clone();
         }
@@ -245,22 +241,22 @@ impl ClusterStore {
 }
 
 #[derive(Debug, Clone)]
-struct MigrationSlots {
-    ranges: Vec<Range>,
-    meta: MigrationMetaStore,
+pub struct MigrationSlots {
+    pub ranges: Vec<Range>,
+    pub meta: MigrationMetaStore,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct MetaStore {
-    version: String,
-    global_epoch: u64,
-    clusters: HashMap<ClusterName, ClusterStore>,
+    pub version: String,
+    pub global_epoch: u64,
+    pub clusters: HashMap<ClusterName, ClusterStore>,
     // proxy_address => nodes and cluster_name
-    all_proxies: HashMap<String, ProxyResource>,
+    pub all_proxies: HashMap<String, ProxyResource>,
     // proxy addresses
-    failed_proxies: HashSet<String>,
+    pub failed_proxies: HashSet<String>,
     // failed_proxy_address => reporter_id => time,
-    failures: HashMap<String, HashMap<String, i64>>,
+    pub failures: HashMap<String, HashMap<String, i64>>,
 }
 
 impl Default for MetaStore {
@@ -295,7 +291,7 @@ impl MetaStore {
     }
 
     pub fn get_proxies(&self) -> Vec<String> {
-        self.all_proxies.keys().cloned().collect()
+        MetaStoreQuery::new(self).get_proxies()
     }
 
     pub fn get_proxies_with_pagination(
@@ -303,96 +299,15 @@ impl MetaStore {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> Vec<String> {
-        let offset = offset.unwrap_or(0);
-        let it = self.all_proxies.keys().skip(offset);
-        match limit {
-            None => it.cloned().collect(),
-            Some(limit) => it.take(limit).cloned().collect(),
-        }
-    }
-
-    fn get_cluster_store(
-        clusters: &HashMap<ClusterName, ClusterStore>,
-        cluster_name: &ClusterName,
-        migration_limit: u64,
-    ) -> Option<ClusterStore> {
-        clusters
-            .get(cluster_name)
-            .map(|c| c.limit_migration(migration_limit))
+        MetaStoreQuery::new(self).get_proxies_with_pagination(offset, limit)
     }
 
     pub fn get_proxy_by_address(&self, address: &str, migration_limit: u64) -> Option<Proxy> {
-        let all_proxies = &self.all_proxies;
-        let clusters = &self.clusters;
-
-        let proxy_resource = all_proxies.get(address)?;
-        let cluster_opt = proxy_resource
-            .cluster
-            .as_ref()
-            .and_then(|name| Self::get_cluster_store(clusters, name, migration_limit));
-
-        let cluster = match cluster_opt {
-            Some(cluster_store) => Self::cluster_store_to_cluster(&cluster_store),
-            None => {
-                return Some(Proxy::new(
-                    address.to_string(),
-                    self.global_epoch,
-                    vec![],
-                    proxy_resource.node_addresses.to_vec(),
-                    vec![],
-                    HashMap::new(),
-                ));
-            }
-        };
-
-        let cluster_name = cluster.get_name().clone();
-        // Both global epoch and cluster epoch should work.
-        // But cluster epoch avoid updating the meta of this proxy
-        // if only other clusters are changing.
-        let epoch = cluster.get_epoch();
-        let nodes: Vec<Node> = cluster
-            .get_nodes()
-            .iter()
-            .filter(|node| node.get_proxy_address() == address)
-            .cloned()
-            .collect();
-
-        let (peers, free_nodes) = if nodes.is_empty() {
-            let free_nodes = proxy_resource.node_addresses.to_vec();
-            (vec![], free_nodes)
-        } else {
-            let peers = cluster
-                .get_nodes()
-                .iter()
-                .filter(|n| n.get_role() == Role::Master && n.get_proxy_address() != address)
-                .cloned()
-                .group_by(|node| node.get_proxy_address().to_string())
-                .into_iter()
-                .map(|(proxy_address, nodes)| {
-                    // Collect all slots from masters.
-                    let slots = nodes.map(Node::into_slots).flatten().collect();
-                    PeerProxy {
-                        proxy_address,
-                        cluster_name: cluster_name.clone(),
-                        slots,
-                    }
-                })
-                .collect();
-            (peers, vec![])
-        };
-        let proxy = Proxy::new(
-            address.to_string(),
-            epoch,
-            nodes,
-            free_nodes,
-            peers,
-            HashMap::new(),
-        );
-        Some(proxy)
+        MetaStoreQuery::new(self).get_proxy_by_address(address, migration_limit)
     }
 
     pub fn get_cluster_names(&self) -> Vec<ClusterName> {
-        self.clusters.keys().cloned().collect()
+        MetaStoreQuery::new(self).get_cluster_names()
     }
 
     pub fn get_cluster_names_with_pagination(
@@ -400,134 +315,15 @@ impl MetaStore {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> Vec<ClusterName> {
-        let offset = offset.unwrap_or(0);
-        let it = self.clusters.keys().skip(offset);
-        match limit {
-            None => it.cloned().collect(),
-            Some(limit) => it.take(limit).cloned().collect(),
-        }
+        MetaStoreQuery::new(self).get_cluster_names_with_pagination(offset, limit)
     }
 
     pub fn get_cluster_by_name(&self, cluster_name: &str, migration_limit: u64) -> Option<Cluster> {
-        let cluster_name = ClusterName::try_from(cluster_name).ok()?;
-
-        let cluster_store =
-            Self::get_cluster_store(&self.clusters, &cluster_name, migration_limit)?;
-        Some(Self::cluster_store_to_cluster(&cluster_store))
-    }
-
-    fn cluster_store_to_cluster(cluster_store: &ClusterStore) -> Cluster {
-        let cluster_name = cluster_store.name.clone();
-
-        let nodes = cluster_store
-            .chunks
-            .iter()
-            .map(|chunk| {
-                let mut nodes = vec![];
-                for i in 0..CHUNK_NODE_NUM {
-                    let address = chunk
-                        .node_addresses
-                        .get(i)
-                        .expect("MetaStore::get_cluster_by_name: failed to get node")
-                        .clone();
-                    let proxy_address = chunk
-                        .proxy_addresses
-                        .get(i / 2)
-                        .expect("MetaStore::get_cluster_by_name: failed to get proxy")
-                        .clone();
-
-                    // get slots
-                    let mut slots = vec![];
-                    let (first_slot_index, second_slot_index) = match chunk.role_position {
-                        ChunkRolePosition::Normal => (0, 2),
-                        ChunkRolePosition::FirstChunkMaster => (0, 1),
-                        ChunkRolePosition::SecondChunkMaster => (2, 3),
-                    };
-                    if i == first_slot_index {
-                        let mut first_slots = vec![];
-                        if let Some(stable_slots) = &chunk.stable_slots[0] {
-                            first_slots.push(stable_slots.clone());
-                        }
-                        slots.append(&mut first_slots);
-                        let slot_ranges: Vec<_> = chunk.migrating_slots[0]
-                            .iter()
-                            .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(&cluster_store.chunks)
-                            })
-                            .collect();
-                        slots.extend(slot_ranges);
-                    }
-                    if i == second_slot_index {
-                        let mut second_slots = vec![];
-                        if let Some(stable_slots) = &chunk.stable_slots[1] {
-                            second_slots.push(stable_slots.clone());
-                        }
-                        slots.append(&mut second_slots);
-                        let slot_ranges: Vec<_> = chunk.migrating_slots[1]
-                            .iter()
-                            .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(&cluster_store.chunks)
-                            })
-                            .collect();
-                        slots.extend(slot_ranges);
-                    }
-
-                    // get repl
-                    let mut role = Role::Master;
-                    match chunk.role_position {
-                        ChunkRolePosition::Normal if i % 2 == 1 => role = Role::Replica,
-                        ChunkRolePosition::FirstChunkMaster if i >= CHUNK_HALF_NODE_NUM => {
-                            role = Role::Replica
-                        }
-                        ChunkRolePosition::SecondChunkMaster if i < CHUNK_HALF_NODE_NUM => {
-                            role = Role::Replica
-                        }
-                        _ => (),
-                    }
-
-                    let peer_index = match i {
-                        0 => 3,
-                        1 => 2,
-                        2 => 1,
-                        _ => 0,
-                    };
-                    let peer = ReplPeer {
-                        node_address: chunk
-                            .node_addresses
-                            .get(peer_index)
-                            .expect("MetaStore::get_cluster_by_name: failed to get peer node")
-                            .clone(),
-                        proxy_address: chunk
-                            .proxy_addresses
-                            .get(peer_index / 2)
-                            .expect("MetaStore::get_cluster_by_name: failed to get peer proxy")
-                            .clone(),
-                    };
-                    let repl = ReplMeta::new(role, vec![peer]);
-
-                    let node = Node::new(address, proxy_address, cluster_name.clone(), slots, repl);
-                    nodes.push(node);
-                }
-                nodes
-            })
-            .flatten()
-            .collect();
-
-        Cluster::new(
-            cluster_store.name.clone(),
-            cluster_store.epoch,
-            nodes,
-            cluster_store.config.clone(),
-        )
+        MetaStoreQuery::new(self).get_cluster_by_name(cluster_name, migration_limit)
     }
 
     pub fn add_failure(&mut self, address: String, reporter_id: String) {
-        let now = Utc::now();
-        self.bump_global_epoch();
-        self.failures
-            .entry(address)
-            .or_insert_with(HashMap::new)
-            .insert(reporter_id, now.timestamp());
+        MetaStoreUpdate::new(self).add_failure(address, reporter_id)
     }
 
     pub fn get_failures(
@@ -535,29 +331,7 @@ impl MetaStore {
         falure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Vec<String> {
-        let now = Utc::now();
-        for reporter_map in self.failures.values_mut() {
-            reporter_map.retain(|_, report_time| {
-                let report_datetime =
-                    DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(*report_time, 0), Utc);
-                now - report_datetime < falure_ttl
-            });
-        }
-        self.failures
-            .retain(|_, proxy_failure_map| !proxy_failure_map.is_empty());
-
-        let all_proxies = &self.all_proxies;
-        self.failures
-            .iter()
-            .filter(|(_, v)| v.len() >= failure_quorum as usize)
-            .filter_map(|(address, _)| {
-                if all_proxies.contains_key(address) {
-                    Some(address.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
+        MetaStoreUpdate::new(self).get_failures(falure_ttl, failure_quorum)
     }
 
     pub fn add_proxy(
@@ -566,36 +340,7 @@ impl MetaStore {
         nodes: [String; NODES_PER_PROXY],
         host: Option<String>,
     ) -> Result<(), MetaStoreError> {
-        if proxy_address.split(':').count() != 2 {
-            return Err(MetaStoreError::InvalidProxyAddress);
-        }
-        let host = match (host, proxy_address.split(':').next()) {
-            (Some(h), _) => h,
-            (None, Some(h)) => h.to_string(),
-            (None, None) => return Err(MetaStoreError::InvalidProxyAddress),
-        };
-
-        self.bump_global_epoch();
-
-        let exists = self.all_proxies.contains_key(&proxy_address);
-
-        self.all_proxies
-            .entry(proxy_address.clone())
-            .or_insert_with(|| ProxyResource {
-                proxy_address: proxy_address.clone(),
-                node_addresses: nodes,
-                host,
-                cluster: None,
-            });
-
-        self.failed_proxies.remove(&proxy_address);
-        self.failures.remove(&proxy_address);
-
-        if !exists {
-            Ok(())
-        } else {
-            Err(MetaStoreError::AlreadyExisted)
-        }
+        MetaStoreUpdate::new(self).add_proxy(proxy_address, nodes, host)
     }
 
     pub fn add_cluster(
@@ -603,118 +348,11 @@ impl MetaStore {
         cluster_name: String,
         node_num: usize,
     ) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        if self.clusters.contains_key(&cluster_name) {
-            return Err(MetaStoreError::AlreadyExisted);
-        }
-
-        if node_num % 4 != 0 {
-            return Err(MetaStoreError::InvalidNodeNum);
-        }
-        let proxy_num =
-            NonZeroUsize::new(node_num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
-
-        let proxy_resource_arr = self.generate_free_chunks(proxy_num)?;
-        let chunk_stores = Self::proxy_resource_to_chunk_store(proxy_resource_arr, true);
-
-        let epoch = self.bump_global_epoch();
-
-        let cluster_store = ClusterStore {
-            epoch,
-            name: cluster_name.clone(),
-            chunks: chunk_stores,
-            config: ClusterConfig::default(),
-        };
-
-        // Tag the proxies as occupied
-        for chunk in cluster_store.chunks.iter() {
-            for proxy_address in chunk.proxy_addresses.iter() {
-                let proxy = self
-                    .all_proxies
-                    .get_mut(proxy_address)
-                    .expect("add_cluster: failed to get back proxy");
-                proxy.cluster = Some(cluster_name.clone());
-            }
-        }
-
-        self.clusters.insert(cluster_name, cluster_store);
-        Ok(())
-    }
-
-    fn proxy_resource_to_chunk_store(
-        proxy_resource_arr: Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>,
-        with_slots: bool,
-    ) -> Vec<ChunkStore> {
-        let master_num = proxy_resource_arr.len() * 2;
-        let average = SLOT_NUM / master_num;
-        let remainder = SLOT_NUM - average * master_num;
-        let mut chunk_stores = vec![];
-        let mut curr_slot = 0;
-        for (i, chunk) in proxy_resource_arr.into_iter().enumerate() {
-            let a = 2 * i;
-            let b = a + 1;
-
-            let mut create_slots = |index| {
-                let r = (index < remainder) as usize;
-                let start = curr_slot;
-                let end = curr_slot + average + r;
-                curr_slot = end;
-                SlotRange {
-                    range_list: RangeList::from_single_range(Range(start, end - 1)),
-                    tag: SlotRangeTag::None,
-                }
-            };
-
-            let stable_slots = if with_slots {
-                [Some(create_slots(a)), Some(create_slots(b))]
-            } else {
-                [None, None]
-            };
-
-            let first_proxy = chunk[0].clone();
-            let second_proxy = chunk[1].clone();
-            let chunk_store = ChunkStore {
-                role_position: ChunkRolePosition::Normal,
-                stable_slots,
-                migrating_slots: [vec![], vec![]],
-                proxy_addresses: [
-                    first_proxy.proxy_address.clone(),
-                    second_proxy.proxy_address.clone(),
-                ],
-                hosts: [first_proxy.host.clone(), second_proxy.host.clone()],
-                node_addresses: [
-                    first_proxy.node_addresses[0].clone(),
-                    first_proxy.node_addresses[1].clone(),
-                    second_proxy.node_addresses[0].clone(),
-                    second_proxy.node_addresses[1].clone(),
-                ],
-            };
-            chunk_stores.push(chunk_store);
-        }
-        chunk_stores
+        MetaStoreUpdate::new(self).add_cluster(cluster_name, node_num)
     }
 
     pub fn remove_cluster(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-
-        let cluster_store = match self.clusters.remove(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster_store) => cluster_store,
-        };
-
-        // Set proxies free.
-        for chunk in cluster_store.chunks.iter() {
-            for proxy_address in chunk.proxy_addresses.iter() {
-                if let Some(proxy) = self.all_proxies.get_mut(proxy_address) {
-                    proxy.cluster = None;
-                }
-            }
-        }
-
-        self.bump_global_epoch();
-        Ok(())
+        MetaStoreUpdate::new(self).remove_cluster(cluster_name)
     }
 
     pub fn auto_add_nodes(
@@ -722,399 +360,19 @@ impl MetaStore {
         cluster_name: String,
         num: usize,
     ) -> Result<Vec<Node>, MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-
-        match self.clusters.get(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => {
-                if cluster
-                    .chunks
-                    .iter()
-                    .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()))
-                {
-                    return Err(MetaStoreError::MigrationRunning);
-                }
-            }
-        };
-
-        if num % 4 != 0 {
-            return Err(MetaStoreError::InvalidNodeNum);
-        }
-        let proxy_num = NonZeroUsize::new(num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
-
-        let proxy_resource_arr = self.generate_free_chunks(proxy_num)?;
-        let mut chunks = Self::proxy_resource_to_chunk_store(proxy_resource_arr, false);
-
-        let new_epoch = self.bump_global_epoch();
-
-        let cluster = match self.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster_store) => {
-                cluster_store.chunks.append(&mut chunks);
-                cluster_store.epoch = new_epoch;
-                Self::cluster_store_to_cluster(&cluster_store)
-            }
-        };
-
-        // Tag the proxies as occupied
-        for node in cluster.get_nodes().iter() {
-            let proxy_address = node.get_proxy_address();
-            let proxy = self
-                .all_proxies
-                .get_mut(proxy_address)
-                .expect("add_cluster: failed to get back proxy");
-            proxy.cluster = Some(cluster_name.clone());
-        }
-
-        let nodes = cluster.get_nodes();
-        let new_nodes = nodes
-            .get((nodes.len() - num)..)
-            .expect("auto_add_nodes: get nodes")
-            .to_vec();
-
-        Ok(new_nodes)
+        MetaStoreUpdate::new(self).auto_add_nodes(cluster_name, num)
     }
 
     pub fn audo_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.bump_global_epoch();
-
-        let removed_chunks = match self.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => {
-                if cluster
-                    .chunks
-                    .iter()
-                    .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()))
-                {
-                    return Err(MetaStoreError::MigrationRunning);
-                }
-
-                let mut removed_chunks = vec![];
-                cluster.chunks.retain(|chunk| {
-                    for slots in chunk.stable_slots.iter() {
-                        if slots.is_some() {
-                            return true;
-                        }
-                    }
-                    for slots in chunk.migrating_slots.iter() {
-                        if !slots.is_empty() {
-                            return true;
-                        }
-                    }
-                    removed_chunks.push(chunk.clone());
-                    false
-                });
-                if removed_chunks.is_empty() {
-                    return Err(MetaStoreError::FreeNodeNotFound);
-                }
-
-                cluster.set_epoch(new_epoch);
-                removed_chunks
-            }
-        };
-
-        // Set proxies free
-        for chunk in removed_chunks.into_iter() {
-            for proxy_address in chunk.proxy_addresses.iter() {
-                if let Some(proxy) = self.all_proxies.get_mut(proxy_address) {
-                    proxy.cluster = None;
-                }
-            }
-        }
-
-        Ok(())
+        MetaStoreUpdate::new(self).audo_delete_free_nodes(cluster_name)
     }
 
     pub fn remove_proxy(&mut self, proxy_address: String) -> Result<(), MetaStoreError> {
-        match self.all_proxies.get(&proxy_address) {
-            None => return Err(MetaStoreError::ProxyNotFound),
-            Some(proxy) => {
-                if proxy.cluster.is_some() {
-                    return Err(MetaStoreError::InUse);
-                }
-            }
-        }
-
-        self.all_proxies.remove(&proxy_address);
-        self.failed_proxies.remove(&proxy_address);
-        self.failures.remove(&proxy_address);
-        self.bump_global_epoch();
-        Ok(())
+        MetaStoreUpdate::new(self).remove_proxy(proxy_address)
     }
 
     pub fn migrate_slots(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.bump_global_epoch();
-
-        let cluster = match self.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => cluster,
-        };
-
-        let empty_exists = cluster
-            .chunks
-            .iter()
-            .any(|chunk| chunk.stable_slots.iter().any(|slots| slots.is_none()));
-        if !empty_exists {
-            return Err(MetaStoreError::SlotsAlreadyEven);
-        }
-
-        let running_migration = cluster
-            .chunks
-            .iter()
-            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()));
-        if running_migration {
-            return Err(MetaStoreError::MigrationRunning);
-        }
-
-        let migration_slots = Self::remove_slots_from_src(cluster, new_epoch);
-        Self::assign_dst_slots(cluster, migration_slots.clone());
-        cluster.set_epoch(new_epoch);
-
-        Self::print_migration_slot(cluster, &migration_slots);
-        Ok(())
-    }
-
-    fn remove_slots_from_src(cluster: &mut ClusterStore, epoch: u64) -> Vec<MigrationSlots> {
-        let dst_chunk_num = cluster
-            .chunks
-            .iter()
-            .filter(|chunk| chunk.stable_slots[0].is_none() && chunk.stable_slots[1].is_none())
-            .count();
-        let dst_master_num = dst_chunk_num * 2;
-        let master_num = cluster.chunks.len() * 2;
-        let src_chunk_num = cluster.chunks.len() - dst_chunk_num;
-        let src_master_num = src_chunk_num * 2;
-        let average = SLOT_NUM / master_num;
-        let remainder = SLOT_NUM - average * master_num;
-
-        let mut curr_dst_master_index = 0;
-        let mut migration_slots = vec![];
-        let mut curr_dst_slots = vec![];
-        let mut curr_slots_num = 0;
-
-        for (src_chunk_index, src_chunk) in cluster.chunks.iter_mut().enumerate() {
-            for (src_chunk_part, slot_range) in src_chunk.stable_slots.iter_mut().enumerate() {
-                if let Some(slot_range) = slot_range {
-                    while curr_dst_master_index != dst_master_num {
-                        let src_master_index = src_chunk_index * 2 + src_chunk_part;
-                        let src_r = (src_master_index < remainder) as usize; // true will be 1, false will be 0
-                        let dst_master_index = src_master_num + curr_dst_master_index;
-                        let dst_r = (dst_master_index < remainder) as usize; // true will be 1, false will be 0
-                        let src_final_num = average + src_r;
-                        let dst_final_num = average + dst_r;
-
-                        if slot_range.get_range_list().get_slots_num() <= src_final_num {
-                            break;
-                        }
-
-                        let need_num = dst_final_num - curr_slots_num;
-                        let available_num =
-                            slot_range.get_range_list().get_slots_num() - src_final_num;
-                        let remove_num = min(need_num, available_num);
-                        let num = slot_range
-                            .get_range_list()
-                            .get_ranges()
-                            .last()
-                            .map(|r| r.end() - r.start() + 1)
-                            .expect("remove_slots_from_src: slots > average + src_r >= 0");
-
-                        if remove_num >= num {
-                            let range = slot_range
-                                .get_mut_range_list()
-                                .get_mut_ranges()
-                                .pop()
-                                .expect("remove_slots_from_src: need_num >= num");
-                            curr_dst_slots.push(range);
-                            curr_slots_num += num;
-                        } else {
-                            let range = slot_range
-                                .get_mut_range_list()
-                                .get_mut_ranges()
-                                .last_mut()
-                                .expect("remove_slots_from_src");
-                            let end = range.end();
-                            let start = end - remove_num + 1;
-                            *range.end_mut() -= remove_num;
-                            curr_dst_slots.push(Range(start, end));
-                            curr_slots_num += remove_num;
-                        }
-
-                        // reset current state
-                        if curr_slots_num >= dst_final_num
-                            || slot_range.get_range_list().get_slots_num() <= src_final_num
-                        {
-                            // assert curr_dst_slots.is_not_empty()
-                            migration_slots.push(MigrationSlots {
-                                meta: MigrationMetaStore {
-                                    epoch,
-                                    src_chunk_index,
-                                    src_chunk_part,
-                                    dst_chunk_index: src_chunk_num + (curr_dst_master_index / 2),
-                                    dst_chunk_part: curr_dst_master_index % 2,
-                                },
-                                ranges: curr_dst_slots.drain(..).collect(),
-                            });
-                            if curr_slots_num >= dst_final_num {
-                                curr_dst_master_index += 1;
-                                curr_slots_num = 0;
-                            }
-                            if slot_range.get_range_list().get_slots_num() <= src_final_num {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        migration_slots
-    }
-
-    fn print_migration_slot(cluster: &ClusterStore, mgr_slots: &[MigrationSlots]) {
-        info!("cluster {} start migration", cluster.name);
-        for slots in mgr_slots.iter() {
-            let meta = &slots.meta;
-            info!(
-                "{} {} {} => {} {}: {:?}",
-                meta.epoch,
-                meta.src_chunk_index,
-                meta.src_chunk_part,
-                meta.dst_chunk_index,
-                meta.dst_chunk_part,
-                slots.ranges
-            );
-        }
-        for chunk in cluster.chunks.iter() {
-            for mgr_slots in chunk.migrating_slots.iter() {
-                for slots in mgr_slots.iter() {
-                    let slot_range = slots.to_slot_range(&cluster.chunks);
-                    let tag = &slot_range.tag;
-                    if !tag.is_migrating() {
-                        continue;
-                    }
-                    if let Some(meta) = tag.get_migration_meta() {
-                        info!(
-                            "{} {} {} => {} {}: {}",
-                            meta.epoch,
-                            meta.src_proxy_address,
-                            meta.src_node_address,
-                            meta.dst_proxy_address,
-                            meta.dst_node_address,
-                            slot_range.range_list
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    fn check_slots_balance(cluster: &ClusterStore) {
-        for chunk in cluster.chunks.iter() {
-            if !chunk.migrating_slots[0].is_empty() || !chunk.migrating_slots[1].is_empty() {
-                return;
-            }
-        }
-
-        let mut slot_num = vec![];
-        for chunk in cluster.chunks.iter() {
-            let mut start_empty = false;
-            for slots in chunk.stable_slots.iter() {
-                match slots.as_ref() {
-                    Some(slots) => {
-                        slot_num.push(slots.range_list.get_slots_num());
-                        if start_empty {
-                            error!("Invalid metadata: Scattered slots distribution");
-                        }
-                    }
-                    None => {
-                        slot_num.push(0);
-                        start_empty = true;
-                    }
-                }
-            }
-        }
-
-        let slot_num_without_zeros: Vec<usize> =
-            slot_num.iter().filter(|n| **n > 0).cloned().collect();
-
-        let (max, min) = match (
-            slot_num_without_zeros.iter().max(),
-            slot_num_without_zeros.iter().min(),
-        ) {
-            (Some(max), Some(min)) => (max, min),
-            _ => {
-                error!(
-                    "Invalid metadata: cluster without any slot {}",
-                    cluster.name
-                );
-                return;
-            }
-        };
-
-        if max - min > 1 {
-            error!("Unbalanced slots: {:?}", slot_num);
-        }
-    }
-
-    fn assign_dst_slots(cluster: &mut ClusterStore, migration_slots: Vec<MigrationSlots>) {
-        for migration_slot_range in migration_slots.into_iter() {
-            let MigrationSlots { ranges, meta } = migration_slot_range;
-
-            {
-                let src_chunk = cluster
-                    .chunks
-                    .get_mut(meta.src_chunk_index)
-                    .expect("assign_dst_slots");
-                let migrating_slots = src_chunk
-                    .migrating_slots
-                    .get_mut(meta.src_chunk_part)
-                    .expect("assign_dst_slots");
-                let slot_range = MigrationSlotRangeStore {
-                    range_list: RangeList::new(ranges.clone()),
-                    is_migrating: true,
-                    meta: meta.clone(),
-                };
-                migrating_slots.push(slot_range);
-            }
-            {
-                let dst_chunk = cluster
-                    .chunks
-                    .get_mut(meta.dst_chunk_index)
-                    .expect("assign_dst_slots");
-                let migrating_slots = dst_chunk
-                    .migrating_slots
-                    .get_mut(meta.dst_chunk_part)
-                    .expect("assign_dst_slots");
-                let slot_range = MigrationSlotRangeStore {
-                    range_list: RangeList::new(ranges.clone()),
-                    is_migrating: false,
-                    meta,
-                };
-                migrating_slots.push(slot_range);
-            }
-        }
-
-        Self::compact_slots(cluster);
-    }
-
-    fn compact_slots(cluster: &mut ClusterStore) {
-        for chunk in cluster.chunks.iter_mut() {
-            for slots in chunk.stable_slots.iter_mut() {
-                if let Some(slots) = slots {
-                    slots.get_mut_range_list().compact();
-                }
-            }
-            for slots in chunk.migrating_slots.iter_mut() {
-                for store in slots.iter_mut() {
-                    store.range_list.compact();
-                }
-            }
-        }
+        MetaStoreMigrate::new(self).migrate_slots(cluster_name)
     }
 
     pub fn migrate_slots_to_scale_down(
@@ -1122,541 +380,15 @@ impl MetaStore {
         cluster_name: String,
         new_node_num: usize,
     ) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.bump_global_epoch();
-
-        let cluster = match self.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => cluster,
-        };
-
-        let empty_exists = cluster
-            .chunks
-            .iter()
-            .any(|chunk| chunk.stable_slots.iter().any(|slots| slots.is_none()));
-        if empty_exists {
-            return Err(MetaStoreError::FreeNodeFound);
-        }
-
-        let running_migration = cluster
-            .chunks
-            .iter()
-            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()));
-        if running_migration {
-            return Err(MetaStoreError::MigrationRunning);
-        }
-
-        if new_node_num == 0
-            || new_node_num % CHUNK_NODE_NUM != 0
-            || new_node_num >= cluster.chunks.len() * CHUNK_NODE_NUM
-        {
-            return Err(MetaStoreError::InvalidNodeNum);
-        }
-
-        let new_chunk_num = new_node_num / 4;
-        let migration_slots =
-            Self::remove_slots_from_src_to_scale_down(cluster, new_epoch, new_chunk_num);
-        Self::assign_dst_slots(cluster, migration_slots.clone());
-        cluster.set_epoch(new_epoch);
-
-        Self::print_migration_slot(cluster, &migration_slots);
-        Ok(())
-    }
-
-    fn remove_slots_from_src_to_scale_down(
-        cluster: &mut ClusterStore,
-        epoch: u64,
-        new_chunk_num: usize,
-    ) -> Vec<MigrationSlots> {
-        let dst_chunk_num = new_chunk_num;
-
-        let dst_master_num = dst_chunk_num * 2;
-        let average = SLOT_NUM / dst_master_num;
-        let remainder = SLOT_NUM - average * dst_master_num;
-
-        let mut curr_dst_master_index = 0;
-        let mut migration_slots = vec![];
-        let mut curr_dst_slots = vec![];
-        let mut curr_slots_num = 0;
-
-        let dst_existing_slots_num: Vec<usize> = cluster
-            .chunks
-            .iter()
-            .take(dst_chunk_num)
-            .flat_map(|chunk| chunk.stable_slots.iter())
-            .map(|slot_range| match slot_range {
-                Some(slot_range) => slot_range.get_range_list().get_slots_num(),
-                None => 0,
-            })
-            .collect();
-        info!("dst_existing_slots_num: {:?}", dst_existing_slots_num);
-
-        for (src_chunk_index, src_chunk) in
-            cluster.chunks.iter_mut().enumerate().skip(dst_chunk_num)
-        {
-            for (src_chunk_part, slot_range) in src_chunk.stable_slots.iter_mut().enumerate() {
-                if let Some(slot_range) = slot_range {
-                    while curr_dst_master_index != dst_master_num {
-                        let dst_r = (curr_dst_master_index < remainder) as usize; // true will be 1, false will be 0
-                        let dst_final_num = average + dst_r;
-
-                        let dst_existing = *dst_existing_slots_num
-                            .get(curr_dst_master_index)
-                            .expect(
-                            "remove_slots_from_src_to_scale_down: get dst existing slots number",
-                        );
-                        let need_num = dst_final_num - curr_slots_num - dst_existing;
-                        let available_num = slot_range.get_range_list().get_slots_num();
-
-                        if available_num == 0 {
-                            break;
-                        }
-
-                        let remove_num = min(need_num, available_num);
-                        let num = slot_range
-                            .get_range_list()
-                            .get_ranges()
-                            .get(0)
-                            .map(|r| r.end() - r.start() + 1)
-                            .expect("remove_slots_from_src_to_scale_down: available_num > 0");
-
-                        if remove_num >= num {
-                            let range = slot_range.get_mut_range_list().get_mut_ranges().remove(0);
-                            curr_dst_slots.push(range);
-                            curr_slots_num += num;
-                        } else {
-                            let range = slot_range
-                                .get_mut_range_list()
-                                .get_mut_ranges()
-                                .get_mut(0)
-                                .expect("remove_slots_from_src_to_scale_down: available_num > 0");
-                            // end - start + 1 == remove_num
-                            // end == remove_num + start - 1
-                            let start = range.start();
-                            let end = remove_num + start - 1;
-                            *range.start_mut() += remove_num;
-                            curr_dst_slots.push(Range(start, end));
-                            curr_slots_num += remove_num;
-                        }
-
-                        // reset current state
-                        if curr_slots_num + dst_existing >= dst_final_num
-                            || slot_range.get_range_list().get_slots_num() == 0
-                        {
-                            // assert curr_dst_slots.is_not_empty()
-                            migration_slots.push(MigrationSlots {
-                                meta: MigrationMetaStore {
-                                    epoch,
-                                    src_chunk_index,
-                                    src_chunk_part,
-                                    dst_chunk_index: curr_dst_master_index / 2,
-                                    dst_chunk_part: curr_dst_master_index % 2,
-                                },
-                                ranges: curr_dst_slots.drain(..).collect(),
-                            });
-                            if curr_slots_num + dst_existing >= dst_final_num {
-                                curr_dst_master_index += 1;
-                                curr_slots_num = 0;
-                            }
-                            if slot_range.get_range_list().get_slots_num() == 0 {
-                                break;
-                            }
-                        }
-                    }
-                }
-                *slot_range = None;
-            }
-        }
-
-        migration_slots
+        MetaStoreMigrate::new(self).migrate_slots_to_scale_down(cluster_name, new_node_num)
     }
 
     pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
-        let new_epoch = self.bump_global_epoch();
-
-        let cluster_name = task.cluster_name.clone();
-        let cluster = self
-            .clusters
-            .get_mut(&cluster_name)
-            .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
-        let task_epoch = match &task.slot_range.tag {
-            SlotRangeTag::None => return Err(MetaStoreError::InvalidMigrationTask),
-            SlotRangeTag::Migrating(meta) => meta.epoch,
-            SlotRangeTag::Importing(meta) => meta.epoch,
-        };
-
-        let (src_chunk_index, src_chunk_part) = cluster
-            .chunks
-            .iter()
-            .enumerate()
-            .flat_map(|(i, chunk)| {
-                chunk
-                    .migrating_slots
-                    .iter()
-                    .enumerate()
-                    .map(move |(j, slot_range_stores)| (i, j, slot_range_stores))
-            })
-            .flat_map(|(i, j, slot_range_stores)| {
-                slot_range_stores
-                    .iter()
-                    .map(move |slot_range_store| (i, j, slot_range_store))
-            })
-            .find(|(_, _, slot_range_store)| {
-                slot_range_store.range_list == task.slot_range.range_list
-                    && slot_range_store.meta.epoch == task_epoch
-                    && slot_range_store.is_migrating
-            })
-            .map(|(i, j, _)| (i, j))
-            .ok_or_else(|| MetaStoreError::MigrationTaskNotFound)?;
-
-        let (dst_chunk_index, dst_chunk_part) = cluster
-            .chunks
-            .iter()
-            .enumerate()
-            .flat_map(|(i, chunk)| {
-                chunk
-                    .migrating_slots
-                    .iter()
-                    .enumerate()
-                    .map(move |(j, slot_range_stores)| (i, j, slot_range_stores))
-            })
-            .flat_map(|(i, j, slot_range_stores)| {
-                slot_range_stores
-                    .iter()
-                    .map(move |slot_range_store| (i, j, slot_range_store))
-            })
-            .find(|(_, _, slot_range_store)| {
-                slot_range_store.range_list == task.slot_range.range_list
-                    && slot_range_store.meta.epoch == task_epoch
-                    && !slot_range_store.is_migrating
-            })
-            .map(|(i, j, _)| (i, j))
-            .ok_or_else(|| MetaStoreError::MigrationTaskNotFound)?;
-
-        let meta = MigrationMetaStore {
-            epoch: task_epoch,
-            src_chunk_index,
-            src_chunk_part,
-            dst_chunk_index,
-            dst_chunk_part,
-        };
-
-        for chunk in cluster.chunks.iter_mut() {
-            for migrating_slots in chunk.migrating_slots.iter_mut() {
-                migrating_slots.retain(|slot_range_store| {
-                    !(slot_range_store.is_migrating
-                        && slot_range_store.range_list == task.slot_range.range_list
-                        && slot_range_store.meta == meta)
-                })
-            }
-        }
-
-        for chunk in &mut cluster.chunks {
-            let removed_slots =
-                chunk
-                    .migrating_slots
-                    .iter_mut()
-                    .enumerate()
-                    .find_map(|(j, migrating_slots)| {
-                        migrating_slots
-                            .iter()
-                            .position(|slot_range_store| {
-                                !slot_range_store.is_migrating
-                                    && slot_range_store.meta == meta
-                                    && slot_range_store.range_list == task.slot_range.range_list
-                            })
-                            .map(|index| (j, migrating_slots.remove(index).range_list))
-                    });
-            if let Some((j, mut range_list)) = removed_slots {
-                match chunk.stable_slots.get_mut(j).expect("commit_migration") {
-                    Some(stable_slots) => {
-                        stable_slots
-                            .get_mut_range_list()
-                            .merge_another(&mut range_list);
-                    }
-                    stable_slots => {
-                        let slot_range = SlotRange {
-                            range_list,
-                            tag: SlotRangeTag::None,
-                        };
-                        *stable_slots = Some(slot_range);
-                    }
-                }
-                break;
-            }
-        }
-
-        Self::compact_slots(cluster);
-        cluster.set_epoch(new_epoch);
-
-        Self::check_slots_balance(cluster);
-        Ok(())
+        MetaStoreMigrate::new(self).commit_migration(task)
     }
 
-    fn get_free_proxies(&self) -> Vec<HostProxy> {
-        let failed_proxies = self.failed_proxies.clone();
-        let failures = self.failures.clone();
-
-        let mut free_proxies = vec![];
-        for proxy_resource in self.all_proxies.values() {
-            if proxy_resource.cluster.is_some() {
-                continue;
-            }
-            let proxy_address = &proxy_resource.proxy_address;
-            if failed_proxies.contains(proxy_address) {
-                continue;
-            }
-            if failures.contains_key(proxy_address) {
-                continue;
-            }
-            free_proxies.push(HostProxy {
-                host: proxy_resource.host.clone(),
-                proxy_address: proxy_address.clone(),
-            });
-        }
-        free_proxies
-    }
-
-    fn build_link_table(&self) -> HashMap<String, HashMap<String, usize>> {
-        // Remove the fully occupied hosts or it will be severe performance problems.
-        let free_hosts: HashSet<String> = self
-            .all_proxies
-            .values()
-            .filter_map(|proxy| {
-                if proxy.cluster.is_none() {
-                    Some(proxy.host.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let mut link_table: HashMap<String, HashMap<String, usize>> = HashMap::new();
-        for proxy_resource in self.all_proxies.values() {
-            let first_host = proxy_resource.host.clone();
-
-            for proxy_resource in self.all_proxies.values() {
-                let second_host = proxy_resource.host.clone();
-                if first_host == second_host {
-                    continue;
-                }
-                if !free_hosts.contains(&first_host) && !free_hosts.contains(&second_host) {
-                    continue;
-                }
-
-                link_table
-                    .entry(first_host.clone())
-                    .or_insert_with(HashMap::new)
-                    .entry(second_host.clone())
-                    .or_insert(0);
-                link_table
-                    .entry(second_host.clone())
-                    .or_insert_with(HashMap::new)
-                    .entry(first_host.clone())
-                    .or_insert(0);
-            }
-        }
-
-        for cluster in self.clusters.values() {
-            for chunk in cluster.chunks.iter() {
-                let first_host = chunk.hosts[0].clone();
-                let second_host = chunk.hosts[1].clone();
-                let linked_num = link_table
-                    .entry(first_host.clone())
-                    .or_insert_with(HashMap::new)
-                    .entry(second_host.clone())
-                    .or_insert(0);
-                *linked_num += 1;
-                let linked_num = link_table
-                    .entry(second_host)
-                    .or_insert_with(HashMap::new)
-                    .entry(first_host)
-                    .or_insert(0);
-                *linked_num += 1;
-            }
-        }
-        link_table
-    }
-
-    fn generate_free_host_proxies(&self) -> HashMap<String, Vec<ProxySlot>> {
-        // host => proxies
-        let mut host_proxies: HashMap<String, Vec<ProxySlot>> = HashMap::new();
-        for host_proxy in self.get_free_proxies().into_iter() {
-            let HostProxy {
-                host,
-                proxy_address,
-            } = host_proxy;
-            host_proxies
-                .entry(host)
-                .or_insert_with(Vec::new)
-                .push(proxy_address);
-        }
-        host_proxies
-    }
-
-    fn generate_free_chunks(
-        &self,
-        proxy_num: NonZeroUsize,
-    ) -> Result<Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>, MetaStoreError> {
-        let mut host_proxies = self.generate_free_host_proxies();
-
-        host_proxies = Self::remove_redundant_chunks(host_proxies, proxy_num)?;
-
-        let link_table = self.build_link_table();
-
-        let new_added_proxy_resource = Self::allocate_chunk(host_proxies, link_table, proxy_num)?;
-        let new_proxies = new_added_proxy_resource
-            .into_iter()
-            .map(|[a, b]| {
-                [
-                    self.all_proxies
-                        .get(&a)
-                        .expect("consume_proxy: get proxy resource")
-                        .clone(),
-                    self.all_proxies
-                        .get(&b)
-                        .expect("consume_proxy: get proxy resource")
-                        .clone(),
-                ]
-            })
-            .collect();
-        Ok(new_proxies)
-    }
-
-    fn remove_redundant_chunks(
-        mut host_proxies: HashMap<String, Vec<ProxySlot>>,
-        expected_num: NonZeroUsize,
-    ) -> Result<HashMap<String, Vec<ProxySlot>>, MetaStoreError> {
-        let mut free_proxy_num: usize = host_proxies.values().map(|proxies| proxies.len()).sum();
-        let mut max_proxy_num = host_proxies
-            .values()
-            .map(|proxies| proxies.len())
-            .max()
-            .unwrap_or(0);
-
-        for proxies in host_proxies.values_mut() {
-            if proxies.len() == max_proxy_num {
-                // Only remove proxies in the host which as too many proxies.
-                while max_proxy_num * 2 > free_proxy_num {
-                    proxies.pop();
-                    free_proxy_num -= 1;
-                    max_proxy_num -= 1;
-                }
-                break;
-            }
-        }
-
-        if free_proxy_num < expected_num.get() {
-            return Err(MetaStoreError::NoAvailableResource);
-        }
-        Ok(host_proxies)
-    }
-
-    fn allocate_chunk(
-        mut host_proxies: HashMap<String, Vec<ProxySlot>>,
-        mut link_table: HashMap<String, HashMap<String, usize>>,
-        expected_num: NonZeroUsize,
-    ) -> Result<Vec<[String; CHUNK_HALF_NODE_NUM]>, MetaStoreError> {
-        let max_proxy_num = host_proxies
-            .values()
-            .map(|proxies| proxies.len())
-            .max()
-            .unwrap_or(0);
-        let sum_proxy_num = host_proxies.values().map(|proxies| proxies.len()).sum();
-
-        if sum_proxy_num < expected_num.get() {
-            return Err(MetaStoreError::NoAvailableResource);
-        }
-
-        if max_proxy_num * 2 > sum_proxy_num {
-            return Err(MetaStoreError::ResourceNotBalance);
-        }
-
-        let mut new_proxy_pairs = vec![];
-        while new_proxy_pairs.len() * 2 < expected_num.get() {
-            let (first_host, first_address) = {
-                let (max_host, max_proxy_host) = host_proxies
-                    .iter_mut()
-                    .max_by_key(|(_host, proxies)| proxies.len())
-                    .expect("allocate_chunk: invalid state. cannot find any host");
-                (
-                    max_host.clone(),
-                    max_proxy_host
-                        .pop()
-                        .expect("allocate_chunk: cannot find free proxy"),
-                )
-            };
-
-            let (second_host, second_address) = {
-                let peers = link_table
-                    .get(&first_host)
-                    .expect("allocate_chunk: invalid state, cannot get link table entry");
-
-                let second_host = peers
-                    .iter()
-                    .filter(|(host, _)| {
-                        let free_count = host_proxies.get(*host).map(|proxies| proxies.len());
-                        **host != first_host && free_count != None && free_count != Some(0)
-                    })
-                    .min_by(|(host1, count1), (host2, count2)| {
-                        Self::second_host_cmp(
-                            host1.as_str(),
-                            **count1,
-                            host2.as_str(),
-                            **count2,
-                            &host_proxies,
-                        )
-                    })
-                    .map(|t| t.0.clone())
-                    .expect("allocate_chunk: invalid state, cannot get free proxy");
-
-                let second_address = host_proxies
-                    .get_mut(&second_host)
-                    .expect("allocate_chunk: get second host")
-                    .pop()
-                    .expect("allocate_chunk: get second address");
-                (second_host, second_address)
-            };
-
-            *link_table
-                .get_mut(&first_host)
-                .expect("allocate_chunk: link table")
-                .get_mut(&second_host)
-                .expect("allocate_chunk: link table") += 1;
-            *link_table
-                .get_mut(&second_host)
-                .expect("allocate_chunk: link table")
-                .get_mut(&first_host)
-                .expect("allocate_chunk: link table") += 1;
-
-            new_proxy_pairs.push([first_address, second_address]);
-        }
-
-        Ok(new_proxy_pairs)
-    }
-
-    fn second_host_cmp(
-        host1: &str,
-        count1: usize,
-        host2: &str,
-        count2: usize,
-        free_host_proxies: &HashMap<String, Vec<ProxySlot>>,
-    ) -> Ordering {
-        let r = count1.cmp(&count2);
-        if r != Ordering::Equal {
-            return r;
-        }
-        let host1_free = free_host_proxies
-            .get(host1)
-            .map(|proxies| proxies.len())
-            .expect("second_host_cmp: get back host");
-        let host2_free = free_host_proxies
-            .get(host2)
-            .map(|proxies| proxies.len())
-            .expect("second_host_cmp: get back host");
-        // Need to reverse it as we want the host with maximum proxies.
-        host2_free.cmp(&host1_free)
+    pub fn get_free_proxies(&self) -> Vec<HostProxy> {
+        MetaStoreQuery::new(&self).get_free_proxies()
     }
 
     pub fn replace_failed_proxy(
@@ -1664,180 +396,7 @@ impl MetaStore {
         failed_proxy_address: String,
         migration_limit: u64,
     ) -> Result<Option<Proxy>, MetaStoreError> {
-        let cluster_name = match self.all_proxies.get(&failed_proxy_address) {
-            None => return Err(MetaStoreError::ProxyNotFound),
-            Some(proxy) => proxy.cluster.clone(),
-        };
-
-        let cluster_name = match cluster_name {
-            None => {
-                self.failures.remove(&failed_proxy_address);
-                self.failed_proxies.insert(failed_proxy_address);
-                return Ok(None);
-            }
-            Some(cluster_name) => cluster_name,
-        };
-
-        self.takeover_master(&cluster_name, failed_proxy_address.clone())?;
-
-        self.failed_proxies.insert(failed_proxy_address.clone());
-
-        let proxy_resource = self.generate_new_free_proxy(failed_proxy_address.clone())?;
-        let new_epoch = self.bump_global_epoch();
-        {
-            let cluster = self
-                .clusters
-                .get_mut(&cluster_name)
-                .expect("replace_failed_proxy: get cluster");
-            for chunk in cluster.chunks.iter_mut() {
-                if chunk.proxy_addresses[0] == failed_proxy_address {
-                    chunk.proxy_addresses[0] = proxy_resource.proxy_address.clone();
-                    chunk.node_addresses[0] = proxy_resource.node_addresses[0].clone();
-                    chunk.node_addresses[1] = proxy_resource.node_addresses[1].clone();
-                    break;
-                } else if chunk.proxy_addresses[1] == failed_proxy_address {
-                    chunk.proxy_addresses[1] = proxy_resource.proxy_address.clone();
-                    chunk.node_addresses[2] = proxy_resource.node_addresses[0].clone();
-                    chunk.node_addresses[3] = proxy_resource.node_addresses[1].clone();
-                    break;
-                }
-            }
-            cluster.set_epoch(new_epoch);
-        }
-
-        // Set this proxy free
-        if let Some(proxy) = self.all_proxies.get_mut(&failed_proxy_address) {
-            proxy.cluster = None;
-        }
-        // Tag the new proxy as occupied
-        if let Some(proxy) = self.all_proxies.get_mut(&proxy_resource.proxy_address) {
-            proxy.cluster = Some(cluster_name);
-        }
-
-        let proxy = self
-            .get_proxy_by_address(&proxy_resource.proxy_address, migration_limit)
-            .expect("replace_failed_proxy");
-        Ok(Some(proxy))
-    }
-
-    fn takeover_master(
-        &mut self,
-        cluster_name: &ClusterName,
-        failed_proxy_address: String,
-    ) -> Result<(), MetaStoreError> {
-        let new_epoch = self.bump_global_epoch();
-
-        let cluster = self
-            .clusters
-            .get_mut(cluster_name)
-            .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
-
-        let mut peer_position = HashSet::new();
-
-        for chunk in cluster.chunks.iter_mut() {
-            if chunk.proxy_addresses[0] == failed_proxy_address {
-                chunk.role_position = ChunkRolePosition::SecondChunkMaster;
-
-                for migrating_slot_range in chunk.migrating_slots[0].iter_mut() {
-                    migrating_slot_range.meta.epoch = new_epoch;
-                    peer_position.insert((
-                        migrating_slot_range.meta.src_chunk_index,
-                        migrating_slot_range.meta.src_chunk_part,
-                    ));
-                    peer_position.insert((
-                        migrating_slot_range.meta.dst_chunk_index,
-                        migrating_slot_range.meta.dst_chunk_part,
-                    ));
-                }
-                break;
-            } else if chunk.proxy_addresses[1] == failed_proxy_address {
-                chunk.role_position = ChunkRolePosition::FirstChunkMaster;
-
-                for migrating_slot_range in chunk.migrating_slots[1].iter_mut() {
-                    migrating_slot_range.meta.epoch = new_epoch;
-                    peer_position.insert((
-                        migrating_slot_range.meta.src_chunk_index,
-                        migrating_slot_range.meta.src_chunk_part,
-                    ));
-                    peer_position.insert((
-                        migrating_slot_range.meta.dst_chunk_index,
-                        migrating_slot_range.meta.dst_chunk_part,
-                    ));
-                }
-                break;
-            }
-        }
-
-        for chunk in cluster.chunks.iter_mut() {
-            for migrating_slots in chunk.migrating_slots.iter_mut() {
-                for migrating_slot_range in migrating_slots.iter_mut() {
-                    let src_index = migrating_slot_range.meta.src_chunk_index;
-                    let src_part = migrating_slot_range.meta.src_chunk_part;
-                    let dst_index = migrating_slot_range.meta.dst_chunk_index;
-                    let dst_part = migrating_slot_range.meta.dst_chunk_part;
-                    if peer_position.contains(&(src_index, src_part))
-                        || peer_position.contains(&(dst_index, dst_part))
-                    {
-                        migrating_slot_range.meta.epoch = new_epoch;
-                    }
-                }
-            }
-        }
-        cluster.epoch = new_epoch;
-        Ok(())
-    }
-
-    fn generate_new_free_proxy(
-        &self,
-        failed_proxy_address: String,
-    ) -> Result<ProxyResource, MetaStoreError> {
-        let free_host_proxies = self.generate_free_host_proxies();
-        info!(
-            "generate_new_free_proxy: free host proxies {:?}",
-            free_host_proxies
-        );
-        let link_table = self.build_link_table();
-        info!("generate_new_free_proxy: link table {:?}", link_table);
-
-        let failed_proxy_host = self
-            .all_proxies
-            .get(&failed_proxy_address)
-            .ok_or_else(|| MetaStoreError::ProxyNotFound)?
-            .host
-            .clone();
-
-        let link_count_table = link_table
-            .get(&failed_proxy_host)
-            .expect("consume_new_proxy: cannot find failed proxy");
-        let peer_host = link_count_table
-            .iter()
-            .filter(|(peer_host, _)| free_host_proxies.contains_key(*peer_host))
-            .min_by(|(host1, count1), (host2, count2)| {
-                Self::second_host_cmp(
-                    host1.as_str(),
-                    **count1,
-                    host2.as_str(),
-                    **count2,
-                    &free_host_proxies,
-                )
-            })
-            .map(|(peer_address, _)| peer_address)
-            .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
-
-        let peer_proxy = self
-            .get_free_proxies()
-            .iter()
-            .find(|host_proxy| peer_host == &host_proxy.host)
-            .expect("consume_new_proxy: get peer address")
-            .proxy_address
-            .clone();
-
-        let new_proxy = self
-            .all_proxies
-            .get(&peer_proxy)
-            .expect("consume_new_proxy: cannot find peer proxy")
-            .clone();
-        Ok(new_proxy)
+        MetaStoreUpdate::new(self).replace_failed_proxy(failed_proxy_address, migration_limit)
     }
 
     pub fn change_config(
@@ -1845,61 +404,11 @@ impl MetaStore {
         cluster_name: String,
         config: HashMap<String, String>,
     ) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.bump_global_epoch();
-        match self.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(ref mut cluster) => {
-                let mut cluster_config = cluster.config.clone();
-                for (k, v) in config.iter() {
-                    cluster_config.set_field(k, v).map_err(|err| {
-                        MetaStoreError::InvalidConfig {
-                            key: k.clone(),
-                            value: v.clone(),
-                            error: err.to_string(),
-                        }
-                    })?;
-                }
-                cluster.config = cluster_config;
-                cluster.set_epoch(new_epoch);
-            }
-        }
-
-        Ok(())
+        MetaStoreUpdate::new(self).change_config(cluster_name, config)
     }
 
     pub fn balance_masters(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.bump_global_epoch();
-
-        let failed_proxies = &self.failed_proxies;
-        let failures = &self.failures;
-
-        let failed_proxy_exists = |addresses: &[String; CHUNK_PARTS]| -> bool {
-            for address in addresses.iter() {
-                if failed_proxies.contains(address) || failures.contains_key(address) {
-                    return true;
-                }
-            }
-            false
-        };
-
-        match self.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(ref mut cluster) => {
-                for chunk in cluster.chunks.iter_mut() {
-                    if failed_proxy_exists(&chunk.proxy_addresses) {
-                        continue;
-                    }
-                    chunk.role_position = ChunkRolePosition::Normal;
-                }
-                cluster.set_epoch(new_epoch);
-            }
-        }
-
-        Ok(())
+        MetaStoreUpdate::new(self).balance_masters(cluster_name)
     }
 
     pub fn get_failed_proxies(&self) -> Vec<String> {
@@ -2028,7 +537,10 @@ impl Serialize for MetaStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::cluster::Role;
     use crate::common::config::CompressionStrategy;
+    use crate::common::utils::SLOT_NUM;
+    use std::convert::TryFrom;
 
     fn add_testing_proxies(store: &mut MetaStore, host_num: usize, proxy_per_host: usize) {
         for host_index in 1..=host_num {

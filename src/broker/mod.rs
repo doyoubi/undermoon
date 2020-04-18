@@ -1,8 +1,11 @@
+mod migrate;
 mod persistence;
+mod query;
 mod recovery;
 mod replication;
 mod service;
 mod store;
+mod update;
 
 pub use self::persistence::{JsonFileStorage, MetaStorage, MetaSyncError};
 pub use self::replication::{JsonMetaReplicator, MetaReplicator};
