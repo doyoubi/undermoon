@@ -245,10 +245,23 @@ impl PooledRedisClient {
             }
         };
 
-        let res = simple_client.execute_cmd_with_timeout(command).await;
-        if res.is_err() {
-            self.err = true;
-        }
+        simple_client.execute_cmd_with_timeout(command).await
+    }
+
+    async fn execute_cmd_with_err_guard(
+        &mut self,
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
+        // If we only set this error later,
+        // there's a corner case which could result in getting an old response from the last `execute`:
+        // - The client send the request successfully.
+        // - Before receiving the reply, the whole future is canceled.
+        // - the error is not set and there's no error log.
+        // - The `frame` with the unconsumed response get reclaimed.
+        // - The next `execute` will get this old response.
+        self.err = true;
+        let res = self.execute_cmd_with_timeout(command).await;
+        self.err = res.is_err();
         res
     }
 }
@@ -278,11 +291,10 @@ impl RedisClient for PooledRedisClient {
         command: Vec<BinSafeStr>,
     ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
         let fut = async move {
+            self.err = true;
             let r = self.execute(OptionalMulti::Single(command)).await;
             let r = process_single_cmd_result(r);
-            if r.is_err() {
-                self.err = true;
-            }
+            self.err = r.is_err();
             r
         };
         Box::pin(fut)
@@ -294,11 +306,10 @@ impl RedisClient for PooledRedisClient {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>> {
         let fut = async move {
             let commands_num = commands.len();
+            self.err = true;
             let r = self.execute(OptionalMulti::Multi(commands)).await;
             let r = process_multi_cmd_result(r, commands_num);
-            if r.is_err() {
-                self.err = true;
-            }
+            self.err = r.is_err();
             r
         };
         Box::pin(fut)
@@ -309,7 +320,7 @@ impl RedisClient for PooledRedisClient {
         command: OptionalMulti<Vec<BinSafeStr>>,
     ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>
     {
-        Box::pin(self.execute_cmd_with_timeout(command))
+        Box::pin(self.execute_cmd_with_err_guard(command))
     }
 }
 
@@ -417,7 +428,7 @@ impl SimpleRedisClient {
         match self.frame.next().await {
             Some(Ok(resp)) => Ok(resp),
             Some(Err(err)) => {
-                warn!("redis client failed to get reply: {:?}", err);
+                error!("redis client failed to get reply: {:?}", err);
                 Err(RedisClientError::InvalidReply)
             }
             None => Err(RedisClientError::Closed),
