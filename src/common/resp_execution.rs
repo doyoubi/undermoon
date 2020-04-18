@@ -37,6 +37,7 @@ where
                 }
             }
         };
+
         match keep_sending_cmd(
             &mut c,
             opt_multi_cmd.clone(),

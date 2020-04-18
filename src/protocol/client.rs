@@ -25,6 +25,7 @@ use tokio_util::codec::{Decoder, Framed};
 #[allow(clippy::indexing_slicing)]
 mod client_trait {
     use super::*;
+    use futures::FutureExt;
 
     #[automock]
     pub trait RedisClient: Send {
@@ -32,19 +33,10 @@ mod client_trait {
             &'s mut self,
             command: Vec<BinSafeStr>,
         ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
-            let fut = async move {
-                match self.execute(OptionalMulti::Single(command)).await {
-                    Ok(opt_mul_resp) => match opt_mul_resp {
-                        OptionalMulti::Single(t) => Ok(t),
-                        OptionalMulti::Multi(v) => {
-                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", v);
-                            Err(RedisClientError::InvalidState)
-                        }
-                    },
-                    Err(err) => Err(err),
-                }
-            };
-            Box::pin(fut)
+            Box::pin(
+                self.execute(OptionalMulti::Single(command))
+                    .map(process_single_cmd_result),
+            )
         }
 
         fn execute_multi<'s>(
@@ -52,19 +44,11 @@ mod client_trait {
             commands: Vec<Vec<BinSafeStr>>,
         ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>>
         {
-            let fut = async move {
-                match self.execute(OptionalMulti::Multi(commands)).await {
-                    Ok(opt_mul_resp) => match opt_mul_resp {
-                        OptionalMulti::Single(t) => {
-                            error!("PooledRedisClient::execute expected single result, found multi: {:?}", t);
-                            Err(RedisClientError::InvalidState)
-                        }
-                        OptionalMulti::Multi(v) => Ok(v),
-                    },
-                    Err(err) => Err(err),
-                }
-            };
-            Box::pin(fut)
+            let commands_num = commands.len();
+            Box::pin(
+                self.execute(OptionalMulti::Multi(commands))
+                    .map(move |r| process_multi_cmd_result(r, commands_num)),
+            )
         }
 
         fn execute<'s>(
@@ -77,6 +61,53 @@ mod client_trait {
 }
 
 pub use client_trait::{MockRedisClient, RedisClient};
+
+fn process_single_cmd_result(
+    result: Result<OptionalMulti<RespVec>, RedisClientError>,
+) -> Result<RespVec, RedisClientError> {
+    match result {
+        Ok(opt_mul_resp) => match opt_mul_resp {
+            OptionalMulti::Single(t) => Ok(t),
+            OptionalMulti::Multi(v) => {
+                error!(
+                    "PooledRedisClient::execute expected single result, found multi: {:?}",
+                    v
+                );
+                Err(RedisClientError::InvalidState)
+            }
+        },
+        Err(err) => Err(err),
+    }
+}
+
+fn process_multi_cmd_result(
+    result: Result<OptionalMulti<RespVec>, RedisClientError>,
+    commands_num: usize,
+) -> Result<Vec<RespVec>, RedisClientError> {
+    match result {
+        Ok(opt_mul_resp) => match opt_mul_resp {
+            OptionalMulti::Single(t) => {
+                error!(
+                    "PooledRedisClient::execute expected single result, found multi: {:?}",
+                    t
+                );
+                Err(RedisClientError::InvalidState)
+            }
+            OptionalMulti::Multi(v) => {
+                if v.len() != commands_num {
+                    error!(
+                        "PooledRedisClient::execute reply number {}, found {} {:?}",
+                        commands_num,
+                        v.len(),
+                        v
+                    );
+                }
+                Ok(v)
+            }
+        },
+        Err(err) => Err(err),
+    }
+}
 
 pub trait RedisClientFactory: ThreadSafe {
     type Client: RedisClient;
@@ -179,43 +210,22 @@ struct RedisClientConnectionHandle {
 }
 
 pub struct PooledRedisClient {
-    conn_handle: Option<RedisClientConnectionHandle>,
-    timeout: Duration,
+    simple_client: Option<SimpleRedisClient>,
+    reclaim_sender: Arc<crossbeam_channel::Sender<RedisClientConnection>>,
     err: bool,
 }
 
 impl PooledRedisClient {
     fn new(conn_handle: RedisClientConnectionHandle, timeout: Duration) -> Self {
+        let RedisClientConnectionHandle {
+            frame,
+            reclaim_sender,
+        } = conn_handle;
+        let simple_client = SimpleRedisClient::new(frame, timeout);
         Self {
-            conn_handle: Some(conn_handle),
-            timeout,
+            simple_client: Some(simple_client),
+            reclaim_sender,
             err: false,
-        }
-    }
-
-    async fn execute_cmd(
-        &mut self,
-        command: OptionalMulti<Vec<BinSafeStr>>,
-    ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
-        let frame = match &mut self.conn_handle {
-            Some(RedisClientConnectionHandle { frame, .. }) => frame,
-            None => {
-                // Should not reach here. self.conn should only get taken in drop.
-                return Err(RedisClientError::Closed);
-            }
-        };
-
-        frame.send(command).await.map_err(|err| match err {
-            EncodeError::Io(err) => RedisClientError::Io(err),
-            EncodeError::NotReady(_) => RedisClientError::InvalidState,
-        })?;
-        match frame.next().await {
-            Some(Ok(resp)) => Ok(resp),
-            Some(Err(err)) => {
-                warn!("redis client failed to get reply: {:?}", err);
-                Err(RedisClientError::InvalidReply)
-            }
-            None => Err(RedisClientError::Closed),
         }
     }
 
@@ -223,20 +233,23 @@ impl PooledRedisClient {
         &mut self,
         command: OptionalMulti<Vec<BinSafeStr>>,
     ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
-        let timeout = self.timeout;
-        let exec_cut = self.execute_cmd(command);
-        let r = match time::timeout(timeout, exec_cut).await {
-            Err(err) => {
-                warn!("redis client timeout: {:?}", err);
-                Err(RedisClientError::Timeout)
+        if self.err {
+            return Err(RedisClientError::StaleClient);
+        }
+
+        let simple_client = match &mut self.simple_client {
+            Some(client) => client,
+            None => {
+                error!("Invalid state, conn should be taken in drop function");
+                return Err(RedisClientError::Closed);
             }
-            Ok(Err(err)) => Err(err),
-            Ok(Ok(resp)) => Ok(resp),
         };
-        if r.is_err() {
+
+        let res = simple_client.execute_cmd_with_timeout(command).await;
+        if res.is_err() {
             self.err = true;
         }
-        r
+        res
     }
 }
 
@@ -245,15 +258,12 @@ impl Drop for PooledRedisClient {
         if self.err {
             return;
         }
-        if let Some(conn_handle) = self.conn_handle.take() {
-            let RedisClientConnectionHandle {
-                frame,
-                reclaim_sender,
-            } = conn_handle;
+        if let Some(client) = self.simple_client.take() {
+            let SimpleRedisClient { frame, .. } = client;
             let conn = RedisClientConnection {
                 sock: frame.into_inner(),
             };
-            match reclaim_sender.try_send(conn) {
+            match self.reclaim_sender.try_send(conn) {
                 Ok(()) => (),
                 Err(crossbeam_channel::TrySendError::Full(_)) => debug!("pool is full"),
                 Err(crossbeam_channel::TrySendError::Disconnected(_)) => debug!("pool is down"),
@@ -263,6 +273,37 @@ impl Drop for PooledRedisClient {
 }
 
 impl RedisClient for PooledRedisClient {
+    fn execute_single<'s>(
+        &'s mut self,
+        command: Vec<BinSafeStr>,
+    ) -> Pin<Box<dyn Future<Output = Result<RespVec, RedisClientError>> + Send + 's>> {
+        let fut = async move {
+            let r = self.execute(OptionalMulti::Single(command)).await;
+            let r = process_single_cmd_result(r);
+            if r.is_err() {
+                self.err = true;
+            }
+            r
+        };
+        Box::pin(fut)
+    }
+
+    fn execute_multi<'s>(
+        &'s mut self,
+        commands: Vec<Vec<BinSafeStr>>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<RespVec>, RedisClientError>> + Send + 's>> {
+        let fut = async move {
+            let commands_num = commands.len();
+            let r = self.execute(OptionalMulti::Multi(commands)).await;
+            let r = process_multi_cmd_result(r, commands_num);
+            if r.is_err() {
+                self.err = true;
+            }
+            r
+        };
+        Box::pin(fut)
+    }
+
     fn execute<'s>(
         &'s mut self,
         command: OptionalMulti<Vec<BinSafeStr>>,
@@ -277,6 +318,7 @@ pub struct PooledRedisClientFactory {
     // TODO: need to cleanup unused pools.
     pool_map: DashMap<String, Pool<RedisClientConnection>>,
     timeout: Duration,
+    simple_factory: SimpleRedisClientFactory,
 }
 
 impl PooledRedisClientFactory {
@@ -285,22 +327,8 @@ impl PooledRedisClientFactory {
             capacity,
             pool_map: DashMap::new(),
             timeout,
+            simple_factory: SimpleRedisClientFactory::new(timeout),
         }
-    }
-
-    async fn create_conn(
-        &self,
-        address: String,
-    ) -> Result<RedisClientConnection, RedisClientError> {
-        let sock_address = match resolve_first_address(&address) {
-            Some(address) => address,
-            None => return Err(RedisClientError::InvalidAddress),
-        };
-        let sock = match TcpStream::connect(&sock_address).await {
-            Ok(conn) => conn,
-            Err(io_err) => return Err(RedisClientError::Io(io_err)),
-        };
-        Ok(RedisClientConnection { sock })
     }
 
     async fn create_client_impl(
@@ -343,8 +371,112 @@ impl PooledRedisClientFactory {
             Either::Right(reclaim_sender) => reclaim_sender,
         };
 
-        let timeout = self.timeout;
+        let SimpleRedisClient { frame, timeout } =
+            self.simple_factory.create_client_impl(address).await?;
+        let conn_handle = RedisClientConnectionHandle {
+            frame,
+            reclaim_sender,
+        };
+        Ok(PooledRedisClient::new(conn_handle, timeout))
+    }
+}
 
+impl RedisClientFactory for PooledRedisClientFactory {
+    type Client = PooledRedisClient;
+
+    fn create_client<'s>(
+        &'s self,
+        address: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>> {
+        Box::pin(self.create_client_impl(address))
+    }
+}
+
+pub struct SimpleRedisClient {
+    frame: Framed<TcpStream, ClientCodec>,
+    timeout: Duration,
+}
+
+impl SimpleRedisClient {
+    pub fn new(frame: Framed<TcpStream, ClientCodec>, timeout: Duration) -> Self {
+        Self { frame, timeout }
+    }
+
+    async fn execute_cmd(
+        &mut self,
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
+        self.frame.send(command).await.map_err(|err| match err {
+            EncodeError::Io(err) => RedisClientError::Io(err),
+            EncodeError::NotReady(_) => {
+                error!("Invalid Encoder state");
+                RedisClientError::InvalidState
+            }
+        })?;
+
+        match self.frame.next().await {
+            Some(Ok(resp)) => Ok(resp),
+            Some(Err(err)) => {
+                warn!("redis client failed to get reply: {:?}", err);
+                Err(RedisClientError::InvalidReply)
+            }
+            None => Err(RedisClientError::Closed),
+        }
+    }
+
+    async fn execute_cmd_with_timeout(
+        &mut self,
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Result<OptionalMulti<RespVec>, RedisClientError> {
+        let timeout = self.timeout;
+        let exec_fut = self.execute_cmd(command);
+        match time::timeout(timeout, exec_fut).await {
+            Err(err) => {
+                warn!("redis client timeout: {:?}", err);
+                Err(RedisClientError::Timeout)
+            }
+            Ok(Err(err)) => Err(err),
+            Ok(Ok(resp)) => Ok(resp),
+        }
+    }
+}
+
+impl RedisClient for SimpleRedisClient {
+    fn execute<'s>(
+        &'s mut self,
+        command: OptionalMulti<Vec<BinSafeStr>>,
+    ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>
+    {
+        Box::pin(self.execute_cmd_with_timeout(command))
+    }
+}
+
+pub struct SimpleRedisClientFactory {
+    timeout: Duration,
+}
+
+impl SimpleRedisClientFactory {
+    pub fn new(timeout: Duration) -> Self {
+        Self { timeout }
+    }
+
+    async fn create_conn(&self, address: String) -> Result<TcpStream, RedisClientError> {
+        let sock_address = match resolve_first_address(&address) {
+            Some(address) => address,
+            None => return Err(RedisClientError::InvalidAddress),
+        };
+        let sock = match TcpStream::connect(&sock_address).await {
+            Ok(conn) => conn,
+            Err(io_err) => return Err(RedisClientError::Io(io_err)),
+        };
+        Ok(sock)
+    }
+
+    async fn create_client_impl(
+        &self,
+        address: String,
+    ) -> Result<SimpleRedisClient, RedisClientError> {
+        let timeout = self.timeout;
         let conn_fut = self.create_conn(address);
         match time::timeout(timeout, conn_fut).await {
             Err(err) => {
@@ -357,18 +489,15 @@ impl PooledRedisClientFactory {
             }
             Ok(Ok(conn)) => {
                 let (encoder, decoder) = new_optional_multi_packet_codec();
-                let conn_handle = RedisClientConnectionHandle {
-                    frame: ClientCodec::new(encoder, decoder).framed(conn.into()),
-                    reclaim_sender,
-                };
-                Ok(PooledRedisClient::new(conn_handle, timeout))
+                let frame = ClientCodec::new(encoder, decoder).framed(conn);
+                Ok(SimpleRedisClient::new(frame, timeout))
             }
         }
     }
 }
 
-impl RedisClientFactory for PooledRedisClientFactory {
-    type Client = PooledRedisClient;
+impl RedisClientFactory for SimpleRedisClientFactory {
+    type Client = SimpleRedisClient;
 
     fn create_client<'s>(
         &'s self,
@@ -390,6 +519,7 @@ pub enum RedisClientError {
     Canceled,
     EncodeError,
     InvalidState,
+    StaleClient,
 }
 
 impl fmt::Display for RedisClientError {

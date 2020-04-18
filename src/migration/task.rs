@@ -228,7 +228,7 @@ pub struct ScanResponse {
 }
 
 impl ScanResponse {
-    pub fn parse_scan(resp: RespVec) -> Option<ScanResponse> {
+    pub fn parse_scan(resp: &RespVec) -> Option<ScanResponse> {
         match resp {
             Resp::Arr(Array::Arr(ref resps)) => {
                 let index_data = resps.get(0).and_then(|resp| match resp {

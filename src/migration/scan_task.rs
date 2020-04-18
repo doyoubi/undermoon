@@ -8,7 +8,7 @@ use crate::common::cluster::{
 };
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
-use crate::common::response::NOT_READY_FOR_SWITCHING_REPLY;
+use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
@@ -128,8 +128,10 @@ where
         let handle_pre_check = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
-                    if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
+                    if err_str == response::NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
                         debug!("pre_check not ready, try again {:?}", meta)
+                    } else if err_str == response::TASK_NOT_FOUND.as_bytes() {
+                        warn!("peer task not found");
                     } else {
                         error!(
                             "failed to check: {:?}",
@@ -186,13 +188,16 @@ where
         let handle_pre_switch = move |resp: RespVec| -> Result<(), RedisClientError> {
             match resp {
                 Resp::Error(err_str) => {
-                    if err_str == NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
+                    if err_str == response::NOT_READY_FOR_SWITCHING_REPLY.as_bytes() {
                         debug!("pre_switch not ready, try again {:?}", meta)
+                    } else if err_str == response::TASK_NOT_FOUND.as_bytes() {
+                        warn!("task not found, try again {:?}", meta)
+                    } else {
+                        error!(
+                            "failed to switch: {:?}",
+                            pretty_print_bytes(err_str.as_slice())
+                        );
                     }
-                    error!(
-                        "failed to switch: {:?}",
-                        pretty_print_bytes(err_str.as_slice())
-                    );
                     Ok(())
                 }
                 _reply => {

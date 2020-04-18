@@ -240,7 +240,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         };
 
         if run_new_migration_task_while_deleting_key {
-            error!("New migration starts while deleting keys is still running for the last task. May lose some keys.");
+            error!("New migration starts while deleting keys is still running for the last task. Some keys may get old values.");
         }
         Ok(())
     }
