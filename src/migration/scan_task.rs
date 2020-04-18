@@ -12,8 +12,9 @@ use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
-use crate::protocol::RespVec;
-use crate::protocol::{RedisClientError, RedisClientFactory, Resp};
+use crate::protocol::{
+    PreCheckRedisClientFactory, RedisClientError, RedisClientFactory, Resp, RespVec,
+};
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
 use crate::proxy::cluster::ClusterSendError;
@@ -148,7 +149,10 @@ where
             }
         };
 
-        let client_factory = self.client_factory.clone();
+        let client_factory = Arc::new(PreCheckRedisClientFactory::new(
+            self.client_factory.clone(),
+            2,
+        ));
         let dst_proxy_address = self.meta.dst_proxy_address.clone();
         let cmd = self
             .gen_switch_arg("PRECHECK")
@@ -207,7 +211,10 @@ where
             }
         };
 
-        let client_factory = self.client_factory.clone();
+        let client_factory = Arc::new(PreCheckRedisClientFactory::new(
+            self.client_factory.clone(),
+            2,
+        ));
         let dst_proxy_address = self.meta.dst_proxy_address.clone();
         let cmd = self
             .gen_switch_arg("PRESWITCH")
@@ -284,7 +291,10 @@ where
             }
         };
 
-        let client_factory = self.client_factory.clone();
+        let client_factory = Arc::new(PreCheckRedisClientFactory::new(
+            self.client_factory.clone(),
+            2,
+        ));
         let dst_proxy_address = self.meta.dst_proxy_address.clone();
         let cmd = self
             .gen_switch_arg("FINALSWITCH")

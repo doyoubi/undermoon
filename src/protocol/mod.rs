@@ -9,7 +9,8 @@ mod stateless;
 
 pub use self::client::{
     DummyRedisClientFactory, MockRedisClient, PooledRedisClient, PooledRedisClientFactory,
-    RedisClient, RedisClientError, RedisClientFactory, SimpleRedisClient, SimpleRedisClientFactory,
+    PreCheckRedisClientFactory, RedisClient, RedisClientError, RedisClientFactory,
+    SimpleRedisClient, SimpleRedisClientFactory,
 };
 pub use self::codec::RespCodec;
 pub use self::decoder::DecodeError;
