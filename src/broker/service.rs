@@ -16,6 +16,7 @@ use chrono;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
 
@@ -66,6 +67,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::post().to(replace_failed_node),
             )
             .route("/clusters/migrations", web::put().to(commit_migration))
+            .route("/clusters/migrations/post_tasks/{cluster_name}/{proxy_address}", web::post().to(report_post_task))
             .route("/proxies/failed/addresses", web::get().to(get_failed_proxies))
 
             // Additional api
@@ -81,6 +83,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::post().to(migrate_slots_to_scale_down),
             )
             .route("/clusters/migrations/expand/{cluster_name}", web::post().to(migrate_slots))
+            .route("/clusters/migrations/post_tasks/{cluster_name}", web::get().to(get_proxies_with_post_tasks_running))
             .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
             .route("/clusters/balance/{cluster_name}", web::put().to(balance_masters))
 
@@ -106,6 +109,7 @@ pub struct MemBrokerConfig {
     pub update_meta_file_interval: Option<NonZeroU64>,
     pub replica_addresses: Vec<String>,
     pub sync_meta_interval: Option<NonZeroU64>,
+    pub post_task_expire: Duration,
 }
 
 pub struct MemBrokerService {
@@ -277,10 +281,11 @@ impl MemBrokerService {
     }
 
     pub fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        let post_task_expire = self.config.post_task_expire;
         self.store
             .write()
             .expect("MemBrokerService::migrate_slots")
-            .migrate_slots(cluster_name)
+            .migrate_slots(cluster_name, post_task_expire)
     }
 
     pub fn migrate_slots_to_scale_down(
@@ -288,10 +293,33 @@ impl MemBrokerService {
         cluster_name: String,
         new_node_num: usize,
     ) -> Result<(), MetaStoreError> {
+        let post_task_expire = self.config.post_task_expire;
         self.store
             .write()
             .expect("MemBrokerService::migrate_slots_to_scale_down")
-            .migrate_slots_to_scale_down(cluster_name, new_node_num)
+            .migrate_slots_to_scale_down(cluster_name, new_node_num, post_task_expire)
+    }
+
+    pub fn report_post_task(
+        &self,
+        cluster_name: String,
+        proxy_address: String,
+    ) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::report_post_task")
+            .report_post_task(cluster_name, proxy_address)
+    }
+
+    pub fn get_proxies_with_post_tasks_running(
+        &self,
+        cluster_name: String,
+    ) -> Result<Vec<String>, MetaStoreError> {
+        let post_task_expire = self.config.post_task_expire;
+        self.store
+            .write()
+            .expect("MemBrokerService::get_proxies_with_post_tasks_running")
+            .get_proxies_with_post_tasks_running(cluster_name, post_task_expire)
     }
 
     pub fn get_failures(&self) -> Vec<String> {
@@ -548,6 +576,30 @@ async fn migrate_slots(
     Ok(res)
 }
 
+async fn report_post_task(
+    (path, state): (web::Path<(String, String)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    let (cluster_name, proxy_address) = path.into_inner();
+    let res = state
+        .report_post_task(cluster_name, proxy_address)
+        .map(|()| "")?;
+    state.trigger_update().await?;
+    Ok(res)
+}
+
+#[derive(Deserialize, Serialize)]
+struct RunningDelTasks {
+    proxy_addresses: Vec<String>,
+}
+
+async fn get_proxies_with_post_tasks_running(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> Result<web::Json<RunningDelTasks>, MetaStoreError> {
+    let (cluster_name,) = path.into_inner();
+    let proxy_addresses = state.get_proxies_with_post_tasks_running(cluster_name)?;
+    Ok(web::Json(RunningDelTasks { proxy_addresses }))
+}
+
 async fn migrate_slots_to_scale_down(
     (path, state): (web::Path<(String, usize)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
@@ -626,6 +678,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::InvalidProxyAddress => http::StatusCode::BAD_REQUEST,
             MetaStoreError::MigrationTaskNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::MigrationRunning => http::StatusCode::CONFLICT,
+            MetaStoreError::DeleteTaskRunning => http::StatusCode::CONFLICT,
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SyncError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,

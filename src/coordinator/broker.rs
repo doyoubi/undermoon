@@ -11,6 +11,7 @@ use std::pin::Pin;
 #[allow(clippy::indexing_slicing)]
 mod trait_mod {
     use super::*;
+    use crate::common::cluster::PostMgrTaskMeta;
 
     // To support large result set, return Stream here in some APIs.
     #[automock]
@@ -64,6 +65,12 @@ mod trait_mod {
         fn commit_migration<'s>(
             &'s self,
             meta: MigrationTaskMeta,
+        ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>>;
+
+        fn report_post_migration_task<'s>(
+            &'s self,
+            meta: PostMgrTaskMeta,
+            proxy_address: String,
         ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>>;
     }
 }

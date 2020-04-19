@@ -9,11 +9,13 @@ use crate::common::cluster::{
 };
 use crate::common::config::ClusterConfig;
 use crate::common::version::UNDERMOON_MEM_BROKER_META_VERSION;
+use chrono::Utc;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::time::Duration;
 
 pub const NODES_PER_PROXY: usize = 2;
 pub const CHUNK_PARTS: usize = 2;
@@ -143,11 +145,40 @@ pub struct ClusterStore {
     pub name: ClusterName,
     pub chunks: Vec<ChunkStore>,
     pub config: ClusterConfig,
+    // proxy address => timestamp
+    pub running_post_tasks: HashMap<String, u64>,
 }
 
 impl ClusterStore {
     pub fn set_epoch(&mut self, new_epoch: u64) {
         self.epoch = new_epoch;
+    }
+
+    pub fn report_running_post_task(&mut self, proxy_address: String) {
+        let now = Utc::now().timestamp_nanos() as u64;
+        self.running_post_tasks.insert(proxy_address, now);
+    }
+
+    pub fn running_post_task_exits(&mut self, expire_time: Duration) -> bool {
+        self.update_post_tasks(expire_time);
+        !self.running_post_tasks.is_empty()
+    }
+
+    pub fn get_proxies_with_post_task_running(&mut self, expire_time: Duration) -> Vec<String> {
+        self.update_post_tasks(expire_time);
+        self.running_post_tasks.keys().cloned().collect()
+    }
+
+    fn update_post_tasks(&mut self, expire_time: Duration) {
+        let now = Utc::now().timestamp_nanos() as u128;
+        self.running_post_tasks.retain(|_, t| {
+            let report_time = (*t) as u128;
+            let expire = expire_time.as_nanos();
+            if expire == 0 {
+                return false;
+            }
+            now < report_time + expire
+        });
     }
 
     // LimitMigration reduces the concurrent running migration.
@@ -236,6 +267,7 @@ impl ClusterStore {
             name: self.name.clone(),
             chunks,
             config: self.config.clone(),
+            running_post_tasks: self.running_post_tasks.clone(),
         }
     }
 }
@@ -246,7 +278,7 @@ pub struct MigrationSlots {
     pub meta: MigrationMetaStore,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MetaStore {
     pub version: String,
     pub global_epoch: u64,
@@ -371,16 +403,25 @@ impl MetaStore {
         MetaStoreUpdate::new(self).remove_proxy(proxy_address)
     }
 
-    pub fn migrate_slots(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        MetaStoreMigrate::new(self).migrate_slots(cluster_name)
+    pub fn migrate_slots(
+        &mut self,
+        cluster_name: String,
+        post_task_expire: Duration,
+    ) -> Result<(), MetaStoreError> {
+        MetaStoreMigrate::new(self).migrate_slots(cluster_name, post_task_expire)
     }
 
     pub fn migrate_slots_to_scale_down(
         &mut self,
         cluster_name: String,
         new_node_num: usize,
+        post_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
-        MetaStoreMigrate::new(self).migrate_slots_to_scale_down(cluster_name, new_node_num)
+        MetaStoreMigrate::new(self).migrate_slots_to_scale_down(
+            cluster_name,
+            new_node_num,
+            post_task_expire,
+        )
     }
 
     pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
@@ -435,6 +476,23 @@ impl MetaStore {
             cluster.epoch = new_epoch;
         }
     }
+
+    pub fn report_post_task(
+        &mut self,
+        cluster_name: String,
+        proxy_address: String,
+    ) -> Result<(), MetaStoreError> {
+        MetaStoreMigrate::new(self).report_post_task(cluster_name, proxy_address)
+    }
+
+    pub fn get_proxies_with_post_tasks_running(
+        &mut self,
+        cluster_name: String,
+        post_task_expire: Duration,
+    ) -> Result<Vec<String>, MetaStoreError> {
+        MetaStoreMigrate::new(self)
+            .get_proxies_with_post_tasks_running(cluster_name, post_task_expire)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -454,6 +512,7 @@ pub enum MetaStoreError {
     InvalidProxyAddress,
     MigrationTaskNotFound,
     MigrationRunning,
+    DeleteTaskRunning,
     InvalidConfig {
         key: String,
         value: String,
@@ -483,6 +542,7 @@ impl MetaStoreError {
             Self::InvalidProxyAddress => "INVALID_PROXY_ADDRESS",
             Self::MigrationTaskNotFound => "MIGRATION_TASK_NOT_FOUND",
             Self::MigrationRunning => "MIGRATION_RUNNING",
+            Self::DeleteTaskRunning => "DELETE_TASK_RUNNING",
             Self::InvalidConfig { .. } => "INVALID_CONFIG",
             Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
             Self::SyncError(err) => err.to_code(),
@@ -1089,7 +1149,9 @@ mod tests {
             all_proxy_num - start_node_num / 2 - added_node_num / 2
         );
 
-        store.migrate_slots(cluster_name.clone()).unwrap();
+        store
+            .migrate_slots(cluster_name.clone(), Duration::from_secs(0))
+            .unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
 
@@ -1382,7 +1444,11 @@ mod tests {
 
         let epoch1 = store.get_global_epoch();
         store
-            .migrate_slots_to_scale_down(cluster_name.clone(), start_node_num - removed_node_num)
+            .migrate_slots_to_scale_down(
+                cluster_name.clone(),
+                start_node_num - removed_node_num,
+                Duration::from_secs(0),
+            )
             .unwrap();
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
@@ -1670,7 +1736,9 @@ mod tests {
         let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
         store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
-        store.migrate_slots(cluster_name.clone()).unwrap();
+        store
+            .migrate_slots(cluster_name.clone(), Duration::from_secs(0))
+            .unwrap();
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
             .unwrap();
@@ -1697,7 +1765,9 @@ mod tests {
         let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
         store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
-        store.migrate_slots(cluster_name.clone()).unwrap();
+        store
+            .migrate_slots(cluster_name.clone(), Duration::from_secs(0))
+            .unwrap();
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
             .unwrap();
@@ -1911,5 +1981,24 @@ mod tests {
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
         assert!(new_epoch <= store.get_global_epoch());
         assert_eq!(cluster.get_epoch(), store.get_global_epoch());
+    }
+
+    #[test]
+    fn test_deleting_key_task_check() {
+        let host_num = 4;
+        let proxy_per_host = 2;
+        let migration_limit = 0;
+        let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+        test_scaling(&mut store, host_num * proxy_per_host, 4, migration_limit);
+
+        let cluster_names = store.get_cluster_names();
+        let cluster_name = cluster_names[0].to_string();
+        store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
+        let res = store.migrate_slots(cluster_name.clone(), Duration::from_secs(3600));
+        let err = res.unwrap_err();
+        assert_eq!(err, MetaStoreError::DeleteTaskRunning);
+
+        let res = store.migrate_slots(cluster_name, Duration::from_secs(0));
+        assert!(res.is_ok());
     }
 }

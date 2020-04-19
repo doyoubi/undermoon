@@ -209,24 +209,11 @@ class RandomTester:
 
             if names and random.randint(0, 300) < 1:
                 cluster_name = random.choice(names)
-                if not self.check_migration_running(cluster_name):
+                if not self.overmoon_client.post_task_running(cluster_name):
                     self.overmoon_client.delete_cluster(cluster_name)
                     self.kvs_tester.pop(cluster_name, None)
 
             time.sleep(0.1)
-
-    def check_migration_running(self, cluster_name):
-        cluster = self.overmoon_client.get_cluster(cluster_name)
-        if cluster is None:
-            return False
-        nodes = cluster['nodes']
-        for node in nodes:
-            slots = node['slots']
-            for slot_range in slots:
-                tag = slot_range['tag']
-                if tag != "None":
-                    return True
-        return False
 
     def keep_testing(self):
         while not self.stopped:

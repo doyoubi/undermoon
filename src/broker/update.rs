@@ -237,6 +237,7 @@ impl<'a> MetaStoreUpdate<'a> {
             name: cluster_name.clone(),
             chunks: chunk_stores,
             config: ClusterConfig::default(),
+            running_post_tasks: HashMap::new(),
         };
 
         // Tag the proxies as occupied

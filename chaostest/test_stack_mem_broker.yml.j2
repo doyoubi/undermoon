@@ -17,6 +17,7 @@ services:
       - UNDERMOON_ADDRESS=0.0.0.0:{{ broker_port }}
       - UNDERMOON_FAILURE_QUORUM=2
       - UNDERMOON_MIGRATION_LIMIT=2
+      - UNDERMOON_POST_TASK_EXPIRE=10
 
 {% filter indent(width=2) %}
 {% for coordinator_id in range(coordinator_num) %}

@@ -9,7 +9,9 @@ use super::detector::{
     BrokerFailureReporter, BrokerOrderedProxiesRetriever, BrokerProxiesRetriever,
     PingFailureDetector,
 };
-use super::migration::{BrokerMigrationCommitter, MigrationStateRespChecker};
+use super::migration::{
+    BrokerMigrationCommitter, BrokerPostTaskReporter, MigrationStateRespChecker,
+};
 use super::recover::{BrokerProxyFailureRetriever, ReplaceNodeHandler};
 use super::sync::{BrokerMetaRetriever, ProxyMetaRespSender};
 use crate::common::utils::ThreadSafe;
@@ -125,13 +127,15 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
     ) -> impl MigrationStateSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
         let checker = MigrationStateRespChecker::new(client_factory.clone());
-        let committer = BrokerMigrationCommitter::new(mani_broker);
+        let committer = BrokerMigrationCommitter::new(mani_broker.clone());
+        let reporter = BrokerPostTaskReporter::new(mani_broker);
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
         let sender = ProxyMetaRespSender::new(client_factory);
         ParMigrationStateSynchronizer::new(
             proxy_retriever,
             checker,
             committer,
+            reporter,
             meta_retriever,
             sender,
         )

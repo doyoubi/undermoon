@@ -38,6 +38,19 @@ impl DeleteKeysTaskMap {
         false
     }
 
+    pub fn get_running_tasks(&self) -> Vec<(ClusterName, String)> {
+        let mut task_meta_list = vec![];
+        for (cluster_name, cluster_tasks) in self.task_map.iter() {
+            for (node_address, task) in cluster_tasks.iter() {
+                if task.is_finished() {
+                    continue;
+                }
+                task_meta_list.push((cluster_name.clone(), node_address.clone()));
+            }
+        }
+        task_meta_list
+    }
+
     pub fn info(&self) -> RespVec {
         let tasks: Vec<RespVec> = self
             .task_map
