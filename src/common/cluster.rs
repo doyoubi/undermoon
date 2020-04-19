@@ -520,15 +520,15 @@ impl MigrationTaskMeta {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct DelKeyTaskMeta {
+pub struct PostMgrTaskMeta {
     pub cluster_name: ClusterName,
     pub epoch: u64,
     pub node_address: String,
 }
 
-impl DelKeyTaskMeta {
+impl PostMgrTaskMeta {
     pub fn into_strings(self) -> Vec<String> {
-        let DelKeyTaskMeta {
+        let PostMgrTaskMeta {
             cluster_name,
             epoch,
             node_address,

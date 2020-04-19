@@ -1,5 +1,5 @@
 use super::broker::{MetaDataBrokerError, MetaManipulationBrokerError};
-use crate::common::cluster::{MigrationTaskMeta, Proxy};
+use crate::common::cluster::{MigrationTaskMeta, PostMgrTaskMeta, Proxy};
 use crate::protocol::RedisClientError;
 use futures::{future, stream, Future, FutureExt, Stream, StreamExt, TryFutureExt};
 use futures_batch::ChunksTimeoutStreamExt;
@@ -352,11 +352,16 @@ impl<P: ProxiesRetriever, M: ProxyMetaRetriever, S: ProxyMetaSender> ProxyMetaSy
     }
 }
 
+pub enum MigrationStateMeta {
+    MgrTask(MigrationTaskMeta),
+    PostTask(PostMgrTaskMeta),
+}
+
 pub trait MigrationStateChecker: Sync + Send + 'static {
     fn check<'s>(
         &'s self,
         address: String,
-    ) -> Pin<Box<dyn Stream<Item = Result<MigrationTaskMeta, CoordinateError>> + Send + 's>>;
+    ) -> Pin<Box<dyn Stream<Item = Result<MigrationStateMeta, CoordinateError>> + Send + 's>>;
 }
 
 pub trait MigrationCommitter: Sync + Send + 'static {
@@ -366,10 +371,19 @@ pub trait MigrationCommitter: Sync + Send + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
 }
 
+pub trait PostTaskReporter: Sync + Send + 'static {
+    fn report<'s>(
+        &'s self,
+        meta: PostMgrTaskMeta,
+        proxy_address: String,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CoordinateError>> + Send + 's>>;
+}
+
 pub trait MigrationStateSynchronizer: Sync + Send + 'static {
     type PRetriever: ProxiesRetriever;
     type Checker: MigrationStateChecker;
     type Committer: MigrationCommitter;
+    type Reporter: PostTaskReporter;
     type MRetriever: ProxyMetaRetriever;
     type Sender: ProxyMetaSender;
 
@@ -377,6 +391,7 @@ pub trait MigrationStateSynchronizer: Sync + Send + 'static {
         proxy_retriever: Self::PRetriever,
         checker: Self::Checker,
         committer: Self::Committer,
+        reporter: Self::Reporter,
         meta_retriever: Self::MRetriever,
         sender: Self::Sender,
     ) -> Self;
@@ -387,12 +402,14 @@ pub struct ParMigrationStateSynchronizer<
     PR: ProxiesRetriever,
     SC: MigrationStateChecker,
     MC: MigrationCommitter,
+    PT: PostTaskReporter,
     MR: ProxyMetaRetriever,
     S: ProxyMetaSender,
 > {
     proxy_retriever: PR,
     checker: Arc<SC>,
     committer: Arc<MC>,
+    reporter: Arc<PT>,
     meta_retriever: Arc<MR>,
     sender: Arc<S>,
 }
@@ -401,9 +418,10 @@ impl<
         PR: ProxiesRetriever,
         SC: MigrationStateChecker,
         MC: MigrationCommitter,
+        PT: PostTaskReporter,
         MR: ProxyMetaRetriever,
         S: ProxyMetaSender,
-    > ParMigrationStateSynchronizer<PR, SC, MC, MR, S>
+    > ParMigrationStateSynchronizer<PR, SC, MC, PT, MR, S>
 {
     async fn set_cluster_meta(
         address: String,
@@ -454,20 +472,41 @@ impl<
         Ok(())
     }
 
+    async fn sync_post_task(
+        reporter: &PT,
+        post_task_meta: PostMgrTaskMeta,
+        proxy_address: String,
+    ) -> Result<(), CoordinateError> {
+        if let Err(err) = reporter.report(post_task_meta, proxy_address).await {
+            error!("failed to report post task: {:?}", err);
+            return Err(err);
+        }
+        Ok(())
+    }
+
     async fn check_and_sync(
         checker: &SC,
-        commiter: &MC,
+        committer: &MC,
+        reporter: &PT,
         meta_retriever: &MR,
         sender: &S,
         address: String,
     ) -> Result<(), CoordinateError> {
-        let mut s = checker.check(address);
+        let mut s = checker.check(address.clone());
         while let Some(res) = s.next().await {
             let meta = match res {
                 Ok(meta) => meta,
                 Err(err) => return Err(err),
             };
-            Self::sync_migration_state(commiter, meta_retriever, sender, meta).await?;
+            match meta {
+                MigrationStateMeta::MgrTask(task_meta) => {
+                    Self::sync_migration_state(committer, meta_retriever, sender, task_meta)
+                        .await?;
+                }
+                MigrationStateMeta::PostTask(post_task_meta) => {
+                    Self::sync_post_task(reporter, post_task_meta, address.clone()).await?;
+                }
+            }
         }
         Ok(())
     }
@@ -475,6 +514,7 @@ impl<
     async fn run_impl(&self) -> Result<(), CoordinateError> {
         let checker = self.checker.clone();
         let committer = self.committer.clone();
+        let reporter = self.reporter.clone();
         let meta_retriever = self.meta_retriever.clone();
         let sender = self.sender.clone();
 
@@ -500,7 +540,14 @@ impl<
             let futs: Vec<_> = proxies
                 .into_iter()
                 .map(|address| {
-                    Self::check_and_sync(&checker, &committer, &meta_retriever, &sender, address)
+                    Self::check_and_sync(
+                        &checker,
+                        &committer,
+                        &reporter,
+                        &meta_retriever,
+                        &sender,
+                        address,
+                    )
                 })
                 .collect();
             let results = future::join_all(futs).await;
@@ -519,13 +566,15 @@ impl<
         PR: ProxiesRetriever,
         SC: MigrationStateChecker,
         MC: MigrationCommitter,
+        PT: PostTaskReporter,
         MR: ProxyMetaRetriever,
         S: ProxyMetaSender,
-    > MigrationStateSynchronizer for ParMigrationStateSynchronizer<PR, SC, MC, MR, S>
+    > MigrationStateSynchronizer for ParMigrationStateSynchronizer<PR, SC, MC, PT, MR, S>
 {
     type PRetriever = PR;
     type Checker = SC;
     type Committer = MC;
+    type Reporter = PT;
     type MRetriever = MR;
     type Sender = S;
 
@@ -533,6 +582,7 @@ impl<
         proxy_retriever: Self::PRetriever,
         checker: Self::Checker,
         committer: Self::Committer,
+        reporter: Self::Reporter,
         meta_retriever: Self::MRetriever,
         sender: Self::Sender,
     ) -> Self {
@@ -540,6 +590,7 @@ impl<
             proxy_retriever,
             checker: Arc::new(checker),
             committer: Arc::new(committer),
+            reporter: Arc::new(reporter),
             meta_retriever: Arc::new(meta_retriever),
             sender: Arc::new(sender),
         }
