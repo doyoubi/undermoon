@@ -37,6 +37,9 @@ fn gen_conf() -> MemBrokerConfig {
                 .collect()
         });
 
+    let del_task_expire = s.get::<u64>("del_task_expire").unwrap_or(60);
+    let del_task_expire = Duration::from_secs(del_task_expire);
+
     MemBrokerConfig {
         address: s
             .get::<String>("address")
@@ -61,6 +64,7 @@ fn gen_conf() -> MemBrokerConfig {
         sync_meta_interval: NonZeroU64::new(
             s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 0),
         ),
+        del_task_expire,
     }
 }
 

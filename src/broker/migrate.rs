@@ -7,6 +7,7 @@ use crate::common::cluster::{MigrationTaskMeta, Range, RangeList, SlotRange, Slo
 use crate::common::utils::SLOT_NUM;
 use std::cmp::min;
 use std::convert::TryFrom;
+use std::time::Duration;
 
 pub struct MetaStoreMigrate<'a> {
     store: &'a mut MetaStore,
@@ -17,7 +18,11 @@ impl<'a> MetaStoreMigrate<'a> {
         Self { store }
     }
 
-    pub fn migrate_slots(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+    pub fn migrate_slots(
+        &mut self,
+        cluster_name: String,
+        del_task_expire: Duration,
+    ) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.store.bump_global_epoch();
@@ -35,12 +40,8 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::SlotsAlreadyEven);
         }
 
-        let running_migration = cluster
-            .chunks
-            .iter()
-            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()));
-        if running_migration {
-            return Err(MetaStoreError::MigrationRunning);
+        if let Err(err) = Self::check_running_tasks(cluster, del_task_expire) {
+            return Err(err);
         }
 
         let migration_slots = Self::remove_slots_from_src(cluster, new_epoch);
@@ -293,6 +294,7 @@ impl<'a> MetaStoreMigrate<'a> {
         &mut self,
         cluster_name: String,
         new_node_num: usize,
+        del_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
@@ -311,12 +313,8 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::FreeNodeFound);
         }
 
-        let running_migration = cluster
-            .chunks
-            .iter()
-            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()));
-        if running_migration {
-            return Err(MetaStoreError::MigrationRunning);
+        if let Err(err) = Self::check_running_tasks(cluster, del_task_expire) {
+            return Err(err);
         }
 
         if new_node_num == 0
@@ -564,6 +562,40 @@ impl<'a> MetaStoreMigrate<'a> {
         cluster.set_epoch(new_epoch);
 
         Self::check_slots_balance(cluster);
+        Ok(())
+    }
+
+    fn check_running_tasks(
+        cluster: &mut ClusterStore,
+        del_task_expire: Duration,
+    ) -> Result<(), MetaStoreError> {
+        let running_migration = cluster
+            .chunks
+            .iter()
+            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()));
+        if running_migration {
+            return Err(MetaStoreError::MigrationRunning);
+        }
+
+        if cluster.running_del_task_exits(del_task_expire) {
+            return Err(MetaStoreError::DeleteTaskRunning);
+        }
+
+        Ok(())
+    }
+
+    pub fn report_del_task(
+        &mut self,
+        cluster_name: String,
+        proxy_address: String,
+    ) -> Result<(), MetaStoreError> {
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_store = match self.store.clusters.get_mut(&cluster_name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(cluster) => cluster,
+        };
+        cluster_store.report_running_del_task(proxy_address);
         Ok(())
     }
 }

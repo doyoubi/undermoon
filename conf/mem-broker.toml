@@ -21,3 +21,6 @@ replica_addresses = []
 # This is in seconds.
 # Use zero to disable it.
 sync_meta_interval = 0
+
+# Time to detect tasks for deleting key in seconds.
+del_task_expire = 60
