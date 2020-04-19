@@ -536,7 +536,7 @@ impl PostMgrTaskMeta {
         vec![cluster_name.to_string(), epoch.to_string(), node_address]
     }
 
-    pub fn from_strings<It>(it: &mut Peekable<It>) -> Option<Self>
+    pub fn from_strings<It>(it: &mut It) -> Option<Self>
     where
         It: Iterator<Item = String>,
     {

@@ -274,13 +274,13 @@ impl<P: ProxiesRetriever, M: ProxyMetaRetriever, S: ProxyMetaSender>
         sender: &S,
         address: String,
     ) -> Result<(), CoordinateError> {
-        let proxy_opt = meta_retriever.get_proxy_meta(address).await?;
+        let proxy_opt = meta_retriever.get_proxy_meta(address.clone()).await?;
         let proxy = match proxy_opt {
             Some(proxy) => proxy,
             None => return Ok(()),
         };
         if let Err(err) = sender.send_meta(proxy).await {
-            error!("failed to set meta: {:?}", err);
+            error!("failed to set meta: {} {:?}", address, err);
             return Err(err);
         }
         Ok(())
@@ -315,7 +315,7 @@ impl<P: ProxiesRetriever, M: ProxyMetaRetriever, S: ProxyMetaSender>
             let results = future::join_all(futs).await;
             for r in results.into_iter() {
                 if let Err(err) = r {
-                    error!("faild to retrieve and send meta, error: {:?}", err);
+                    error!("failed to retrieve and send meta, error: {:?}", err);
                     res = Err(err);
                 }
             }

@@ -40,7 +40,7 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
         }
     }
 
-    fn parse_del_key_task_meta(element: &RespVec) -> Option<PostMgrTaskMeta> {
+    fn parse_post_mgr_task_meta(element: &RespVec) -> Option<PostMgrTaskMeta> {
         match element {
             Resp::Bulk(BulkStr::Str(s)) => {
                 let data = str::from_utf8(&s).ok()?;
@@ -48,12 +48,11 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
                     .split(' ')
                     .map(ToString::to_string)
                     .collect::<Vec<String>>()
-                    .into_iter()
-                    .peekable();
+                    .into_iter();
                 PostMgrTaskMeta::from_strings(&mut it)
             }
             others => {
-                error!("invalid migration task meta {:?}", others);
+                error!("invalid post migration task meta {:?}", others);
                 None
             }
         }
@@ -84,22 +83,23 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
             .await
             .map_err(CoordinateError::Redis)?;
 
-        let (info_mgr_reply, info_post_task_reply) = match (responses.get(0), responses.get(1)) {
-            (Some(info_mgr_reply), Some(info_post_task_reply)) => {
-                (info_mgr_reply, info_post_task_reply)
-            }
-            _ => {
-                error!("unexpected number of resposnes: {:?}", responses);
-                return Err(CoordinateError::Redis(RedisClientError::InvalidReply));
-            }
-        };
+        let (info_mgr_reply, info_post_task_reply) =
+            match (responses.len(), responses.get(0), responses.get(1)) {
+                (2, Some(info_mgr_reply), Some(info_post_task_reply)) => {
+                    (info_mgr_reply, info_post_task_reply)
+                }
+                _ => {
+                    error!("unexpected number of resposnes: {:?}", responses);
+                    return Err(CoordinateError::Redis(RedisClientError::InvalidReply));
+                }
+            };
 
         let mut state_meta = vec![];
 
         let migrations_task_meta = match info_mgr_reply {
             Resp::Arr(Array::Arr(arr)) => {
                 let mut metadata = vec![];
-                for element in arr.into_iter() {
+                for element in arr.iter() {
                     match Self::parse_migration_task_meta(&element) {
                         Some(meta) => metadata.push(meta),
                         None => {
@@ -111,7 +111,7 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
                 metadata
             }
             reply => {
-                error!("failed to send meta, invalid reply {:?}", reply);
+                error!("failed to send INFORMGR, invalid reply {:?}", reply);
                 return Err(CoordinateError::InvalidReply);
             }
         };
@@ -119,11 +119,14 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
         let post_mgr_task_meta = match info_post_task_reply {
             Resp::Arr(Array::Arr(arr)) => {
                 let mut metadata = vec![];
-                for element in arr.into_iter() {
-                    match Self::parse_del_key_task_meta(&element) {
+                for element in arr.iter() {
+                    match Self::parse_post_mgr_task_meta(&element) {
                         Some(meta) => metadata.push(meta),
                         None => {
-                            error!("failed to parse deleting key task meta data {:?}", element);
+                            error!(
+                                "failed to parse post migration task meta data {:?}",
+                                element
+                            );
                             return Err(CoordinateError::InvalidReply);
                         }
                     };
@@ -131,7 +134,7 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
                 metadata
             }
             reply => {
-                error!("failed to send meta, invalid reply {:?}", reply);
+                error!("failed to send INFOPOSTTASK, invalid reply {:?}", reply);
                 return Err(CoordinateError::InvalidReply);
             }
         };
