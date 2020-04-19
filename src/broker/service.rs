@@ -67,6 +67,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::post().to(replace_failed_node),
             )
             .route("/clusters/migrations", web::put().to(commit_migration))
+            .route("/clusters/migrations/post_tasks/{cluster_name}/{proxy_address}", web::post().to(report_del_task))
             .route("/proxies/failed/addresses", web::get().to(get_failed_proxies))
 
             // Additional api
@@ -82,7 +83,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::post().to(migrate_slots_to_scale_down),
             )
             .route("/clusters/migrations/expand/{cluster_name}", web::post().to(migrate_slots))
-            .route("/clusters/migrations/post_task/{cluster_name}/{proxy_address}", web::post().to(report_del_task))
+            .route("/clusters/migrations/post_tasks/{cluster_name}", web::get().to(get_proxies_with_del_tasks_running))
             .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
             .route("/clusters/balance/{cluster_name}", web::put().to(balance_masters))
 
@@ -308,6 +309,17 @@ impl MemBrokerService {
             .write()
             .expect("MemBrokerService::report_del_task")
             .report_del_task(cluster_name, proxy_address)
+    }
+
+    pub fn get_proxies_with_del_tasks_running(
+        &self,
+        cluster_name: String,
+    ) -> Result<Vec<String>, MetaStoreError> {
+        let del_task_expire = self.config.del_task_expire;
+        self.store
+            .write()
+            .expect("MemBrokerService::get_proxies_with_del_tasks_running")
+            .get_proxies_with_del_tasks_running(cluster_name, del_task_expire)
     }
 
     pub fn get_failures(&self) -> Vec<String> {
@@ -573,6 +585,19 @@ async fn report_del_task(
         .map(|()| "")?;
     state.trigger_update().await?;
     Ok(res)
+}
+
+#[derive(Deserialize, Serialize)]
+struct RunningDelTasks {
+    proxy_addresses: Vec<String>,
+}
+
+async fn get_proxies_with_del_tasks_running(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> Result<web::Json<RunningDelTasks>, MetaStoreError> {
+    let (cluster_name,) = path.into_inner();
+    let proxy_addresses = state.get_proxies_with_del_tasks_running(cluster_name)?;
+    Ok(web::Json(RunningDelTasks { proxy_addresses }))
 }
 
 async fn migrate_slots_to_scale_down(

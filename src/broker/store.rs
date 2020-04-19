@@ -160,13 +160,25 @@ impl ClusterStore {
     }
 
     pub fn running_del_task_exits(&mut self, expire_time: Duration) -> bool {
+        self.update_del_tasks(expire_time);
+        !self.running_del_tasks.is_empty()
+    }
+
+    pub fn get_proxies_with_del_task_running(&mut self, expire_time: Duration) -> Vec<String> {
+        self.update_del_tasks(expire_time);
+        self.running_del_tasks.keys().cloned().collect()
+    }
+
+    fn update_del_tasks(&mut self, expire_time: Duration) {
         let now = Utc::now().timestamp_nanos() as u128;
         self.running_del_tasks.retain(|_, t| {
             let report_time = (*t) as u128;
             let expire = expire_time.as_nanos();
+            if expire == 0 {
+                return false;
+            }
             now < report_time + expire
         });
-        !self.running_del_tasks.is_empty()
     }
 
     // LimitMigration reduces the concurrent running migration.
@@ -266,7 +278,7 @@ pub struct MigrationSlots {
     pub meta: MigrationMetaStore,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MetaStore {
     pub version: String,
     pub global_epoch: u64,
@@ -471,6 +483,15 @@ impl MetaStore {
         proxy_address: String,
     ) -> Result<(), MetaStoreError> {
         MetaStoreMigrate::new(self).report_del_task(cluster_name, proxy_address)
+    }
+
+    pub fn get_proxies_with_del_tasks_running(
+        &mut self,
+        cluster_name: String,
+        del_task_expire: Duration,
+    ) -> Result<Vec<String>, MetaStoreError> {
+        MetaStoreMigrate::new(self)
+            .get_proxies_with_del_tasks_running(cluster_name, del_task_expire)
     }
 }
 
@@ -1960,5 +1981,24 @@ mod tests {
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
         assert!(new_epoch <= store.get_global_epoch());
         assert_eq!(cluster.get_epoch(), store.get_global_epoch());
+    }
+
+    #[test]
+    fn test_deleting_key_task_check() {
+        let host_num = 4;
+        let proxy_per_host = 2;
+        let migration_limit = 0;
+        let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+        test_scaling(&mut store, host_num * proxy_per_host, 4, migration_limit);
+
+        let cluster_names = store.get_cluster_names();
+        let cluster_name = cluster_names[0].to_string();
+        store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
+        let res = store.migrate_slots(cluster_name.clone(), Duration::from_secs(3600));
+        let err = res.unwrap_err();
+        assert_eq!(err, MetaStoreError::DeleteTaskRunning);
+
+        let res = store.migrate_slots(cluster_name, Duration::from_secs(0));
+        assert!(res.is_ok());
     }
 }

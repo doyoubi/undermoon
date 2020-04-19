@@ -558,6 +558,17 @@ impl<'a> MetaStoreMigrate<'a> {
             }
         }
 
+        // Add deleting tasks
+        let proxy_addresses: Vec<String> = cluster
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.proxy_addresses.iter())
+            .cloned()
+            .collect();
+        for proxy_address in proxy_addresses.into_iter() {
+            cluster.report_running_del_task(proxy_address);
+        }
+
         Self::compact_slots(cluster);
         cluster.set_epoch(new_epoch);
 
@@ -597,5 +608,20 @@ impl<'a> MetaStoreMigrate<'a> {
         };
         cluster_store.report_running_del_task(proxy_address);
         Ok(())
+    }
+
+    pub fn get_proxies_with_del_tasks_running(
+        &mut self,
+        cluster_name: String,
+        del_task_expire: Duration,
+    ) -> Result<Vec<String>, MetaStoreError> {
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
+        let cluster_store = match self.store.clusters.get_mut(&cluster_name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(cluster) => cluster,
+        };
+        let addresses = cluster_store.get_proxies_with_del_task_running(del_task_expire);
+        Ok(addresses)
     }
 }

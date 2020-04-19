@@ -22,5 +22,9 @@ replica_addresses = []
 # Use zero to disable it.
 sync_meta_interval = 0
 
-# Time to detect tasks for deleting key in seconds.
+# After migration the server proxy may be still deleting keys.
+# If at this moment a new migration task start,
+# some data might get lost.
+# This is the time to detect tasks for deleting key in seconds.
+# Set it to zero to disable the detection.
 del_task_expire = 60
