@@ -21,7 +21,7 @@ impl<'a> MetaStoreMigrate<'a> {
     pub fn migrate_slots(
         &mut self,
         cluster_name: String,
-        del_task_expire: Duration,
+        post_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
@@ -40,7 +40,7 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::SlotsAlreadyEven);
         }
 
-        if let Err(err) = Self::check_running_tasks(cluster, del_task_expire) {
+        if let Err(err) = Self::check_running_tasks(cluster, post_task_expire) {
             return Err(err);
         }
 
@@ -294,7 +294,7 @@ impl<'a> MetaStoreMigrate<'a> {
         &mut self,
         cluster_name: String,
         new_node_num: usize,
-        del_task_expire: Duration,
+        post_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
@@ -313,7 +313,7 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::FreeNodeFound);
         }
 
-        if let Err(err) = Self::check_running_tasks(cluster, del_task_expire) {
+        if let Err(err) = Self::check_running_tasks(cluster, post_task_expire) {
             return Err(err);
         }
 
@@ -558,7 +558,7 @@ impl<'a> MetaStoreMigrate<'a> {
             }
         }
 
-        // Add deleting tasks
+        // Add post migration tasks
         let proxy_addresses: Vec<String> = cluster
             .chunks
             .iter()
@@ -566,7 +566,7 @@ impl<'a> MetaStoreMigrate<'a> {
             .cloned()
             .collect();
         for proxy_address in proxy_addresses.into_iter() {
-            cluster.report_running_del_task(proxy_address);
+            cluster.report_running_post_task(proxy_address);
         }
 
         Self::compact_slots(cluster);
@@ -578,7 +578,7 @@ impl<'a> MetaStoreMigrate<'a> {
 
     fn check_running_tasks(
         cluster: &mut ClusterStore,
-        del_task_expire: Duration,
+        post_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
         let running_migration = cluster
             .chunks
@@ -588,14 +588,14 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::MigrationRunning);
         }
 
-        if cluster.running_del_task_exits(del_task_expire) {
+        if cluster.running_post_task_exits(post_task_expire) {
             return Err(MetaStoreError::DeleteTaskRunning);
         }
 
         Ok(())
     }
 
-    pub fn report_del_task(
+    pub fn report_post_task(
         &mut self,
         cluster_name: String,
         proxy_address: String,
@@ -606,14 +606,14 @@ impl<'a> MetaStoreMigrate<'a> {
             None => return Err(MetaStoreError::ClusterNotFound),
             Some(cluster) => cluster,
         };
-        cluster_store.report_running_del_task(proxy_address);
+        cluster_store.report_running_post_task(proxy_address);
         Ok(())
     }
 
-    pub fn get_proxies_with_del_tasks_running(
+    pub fn get_proxies_with_post_tasks_running(
         &mut self,
         cluster_name: String,
-        del_task_expire: Duration,
+        post_task_expire: Duration,
     ) -> Result<Vec<String>, MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
@@ -621,7 +621,7 @@ impl<'a> MetaStoreMigrate<'a> {
             None => return Err(MetaStoreError::ClusterNotFound),
             Some(cluster) => cluster,
         };
-        let addresses = cluster_store.get_proxies_with_del_task_running(del_task_expire);
+        let addresses = cluster_store.get_proxies_with_post_task_running(post_task_expire);
         Ok(addresses)
     }
 }

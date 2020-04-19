@@ -27,4 +27,4 @@ sync_meta_interval = 0
 # some data might get lost.
 # This is the time to detect tasks for deleting key in seconds.
 # Set it to zero to disable the detection.
-del_task_expire = 60
+post_task_expire = 60

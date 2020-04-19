@@ -209,6 +209,15 @@ class OvermoonClient:
         logger.error('OVERMOON_ERROR: failed to get failed proxy addresses: {} {}', r.status_code, r.text)
         return []
 
+    def post_task_running(self, cluster_name):
+        r = self.client.get('/api/{}/clusters/migrations/post_tasks/{}'.format(BROKER_API_VERSION, cluster_name))
+        if r.status_code == 200:
+            return bool(r.json()['proxy_addresses'])
+        if r.status_code == 404:
+            return False
+        logger.error('OVERMOON_ERROR: failed to get post tasks: {} {}', r.status_code, r.text)
+        return []
+
     def get_free_proxies(self):
         proxies = self.get_proxy_addresses()
         failures = self.get_failures()

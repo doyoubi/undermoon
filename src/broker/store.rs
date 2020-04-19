@@ -146,7 +146,7 @@ pub struct ClusterStore {
     pub chunks: Vec<ChunkStore>,
     pub config: ClusterConfig,
     // proxy address => timestamp
-    pub running_del_tasks: HashMap<String, u64>,
+    pub running_post_tasks: HashMap<String, u64>,
 }
 
 impl ClusterStore {
@@ -154,24 +154,24 @@ impl ClusterStore {
         self.epoch = new_epoch;
     }
 
-    pub fn report_running_del_task(&mut self, proxy_address: String) {
+    pub fn report_running_post_task(&mut self, proxy_address: String) {
         let now = Utc::now().timestamp_nanos() as u64;
-        self.running_del_tasks.insert(proxy_address, now);
+        self.running_post_tasks.insert(proxy_address, now);
     }
 
-    pub fn running_del_task_exits(&mut self, expire_time: Duration) -> bool {
-        self.update_del_tasks(expire_time);
-        !self.running_del_tasks.is_empty()
+    pub fn running_post_task_exits(&mut self, expire_time: Duration) -> bool {
+        self.update_post_tasks(expire_time);
+        !self.running_post_tasks.is_empty()
     }
 
-    pub fn get_proxies_with_del_task_running(&mut self, expire_time: Duration) -> Vec<String> {
-        self.update_del_tasks(expire_time);
-        self.running_del_tasks.keys().cloned().collect()
+    pub fn get_proxies_with_post_task_running(&mut self, expire_time: Duration) -> Vec<String> {
+        self.update_post_tasks(expire_time);
+        self.running_post_tasks.keys().cloned().collect()
     }
 
-    fn update_del_tasks(&mut self, expire_time: Duration) {
+    fn update_post_tasks(&mut self, expire_time: Duration) {
         let now = Utc::now().timestamp_nanos() as u128;
-        self.running_del_tasks.retain(|_, t| {
+        self.running_post_tasks.retain(|_, t| {
             let report_time = (*t) as u128;
             let expire = expire_time.as_nanos();
             if expire == 0 {
@@ -267,7 +267,7 @@ impl ClusterStore {
             name: self.name.clone(),
             chunks,
             config: self.config.clone(),
-            running_del_tasks: self.running_del_tasks.clone(),
+            running_post_tasks: self.running_post_tasks.clone(),
         }
     }
 }
@@ -406,21 +406,21 @@ impl MetaStore {
     pub fn migrate_slots(
         &mut self,
         cluster_name: String,
-        del_task_expire: Duration,
+        post_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
-        MetaStoreMigrate::new(self).migrate_slots(cluster_name, del_task_expire)
+        MetaStoreMigrate::new(self).migrate_slots(cluster_name, post_task_expire)
     }
 
     pub fn migrate_slots_to_scale_down(
         &mut self,
         cluster_name: String,
         new_node_num: usize,
-        del_task_expire: Duration,
+        post_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
         MetaStoreMigrate::new(self).migrate_slots_to_scale_down(
             cluster_name,
             new_node_num,
-            del_task_expire,
+            post_task_expire,
         )
     }
 
@@ -477,21 +477,21 @@ impl MetaStore {
         }
     }
 
-    pub fn report_del_task(
+    pub fn report_post_task(
         &mut self,
         cluster_name: String,
         proxy_address: String,
     ) -> Result<(), MetaStoreError> {
-        MetaStoreMigrate::new(self).report_del_task(cluster_name, proxy_address)
+        MetaStoreMigrate::new(self).report_post_task(cluster_name, proxy_address)
     }
 
-    pub fn get_proxies_with_del_tasks_running(
+    pub fn get_proxies_with_post_tasks_running(
         &mut self,
         cluster_name: String,
-        del_task_expire: Duration,
+        post_task_expire: Duration,
     ) -> Result<Vec<String>, MetaStoreError> {
         MetaStoreMigrate::new(self)
-            .get_proxies_with_del_tasks_running(cluster_name, del_task_expire)
+            .get_proxies_with_post_tasks_running(cluster_name, post_task_expire)
     }
 }
 

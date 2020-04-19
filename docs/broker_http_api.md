@@ -197,3 +197,10 @@ Response:
     "addresses": ["server_proxy_address1", ...],
 }
 ```
+
+##### (10) POST /api/v2/clusters/migrations/post_tasks/<cluster_name>/<proxy_address>
+Report post migration tasks.
+```
+Response:
+empty payload
+```

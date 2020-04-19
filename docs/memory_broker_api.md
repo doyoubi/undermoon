@@ -176,6 +176,22 @@ HTTP 409 { "error": "SLOTS_ALREADY_EVEN" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
+#### Query running post migration tasks
+`GET` /api/v2/clusters/migrations/post_tasks/<cluster_name>
+
+##### Success
+```
+HTTP 200
+{
+    "proxy_addresses": ["server_proxy1:7001", ...]
+}
+```
+
+##### Error
+```
+HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
+```
+
 
 #### Change cluster config
 `PATCH` /api/v2/clusters/config/<cluster_name>
