@@ -12,7 +12,7 @@ use super::sender::{
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
-use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
+use crate::common::cluster::{ClusterName, DelKeyTaskMeta, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
@@ -305,6 +305,19 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {
         self.meta_map.load().migration_map.get_finished_tasks()
+    }
+
+    pub fn get_deleting_key_tasks(&self) -> Vec<DelKeyTaskMeta> {
+        let task_meta_list = self.meta_map.load().deleting_task_map.get_running_tasks();
+        let epoch = self.get_epoch();
+        task_meta_list
+            .into_iter()
+            .map(|(cluster_name, node_address)| DelKeyTaskMeta {
+                cluster_name,
+                epoch,
+                node_address,
+            })
+            .collect()
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
