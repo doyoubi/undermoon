@@ -285,3 +285,19 @@ HTTP 200
 ##### Error
 ```
 HTTP 409 { "error": "EPOCH_SMALLER_THAN_CURRENT" }
+```
+
+#### Check enough resources for failures
+`POST` /api/v2/resources/failures/check
+
+Empty `hosts_cannot_fail` means we still have enough resources for handling failures.
+
+If `hosts_cannot_fail` is not empty, we should add more server proxies.
+
+##### Success
+```
+HTTP 200
+{
+    "hosts_cannot_fail": ["host1", "host2", ...],
+}
+```
