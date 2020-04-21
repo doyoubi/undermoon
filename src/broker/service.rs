@@ -22,9 +22,10 @@ use std::time::Duration;
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
 
 pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
+    let service2 = service.clone();
     cfg.data(service).service(
         web::scope(MEM_BROKER_API_VERSION)
-            .wrap_fn(|req, srv| {
+            .wrap_fn(move |req, srv| {
                 let method = req.method().clone();
                 let peer_addr = match req.peer_addr() {
                     None => "".to_string(),
@@ -32,6 +33,13 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 };
                 let req_str = format!("{} {} {} {:?} {}", req.method(), req.path(), req.query_string(), req.version(), peer_addr);
                 let fut = srv.call(req);
+
+                let service = if service2.config.debug {
+                    Some(service2.clone())
+                } else {
+                    None
+                };
+
                 async move {
                     let res = fut.await;
                     // The GET APIs are accessed too frequently so we don't log them.
@@ -39,6 +47,10 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                         match &res {
                             Ok(response) => info!("{} status {}", req_str, response.status()),
                             Err(err) => info!("{} err {}", req_str, err)
+                        }
+                    } else if let Some(service) = service {
+                        if let Err(invalid_meta_store) = service.check_metadata() {
+                            error!("Invalid meta store: {:?}", invalid_meta_store);
                         }
                     }
                     res
@@ -112,6 +124,7 @@ pub struct MemBrokerConfig {
     pub replica_addresses: Vec<String>,
     pub sync_meta_interval: Option<NonZeroU64>,
     pub post_task_expire: Duration,
+    pub debug: bool,
 }
 
 pub struct MemBrokerService {
@@ -402,6 +415,13 @@ impl MemBrokerService {
             .expect("MemBrokerService::recover_epoch")
             .recover_epoch(largest_epoch + 1);
         Ok(failed_addresses)
+    }
+
+    pub fn check_metadata(&self) -> Result<(), MetaStore> {
+        self.store
+            .read()
+            .expect("MemBrokerService::check_metadata")
+            .check()
     }
 }
 

@@ -4,7 +4,7 @@ use super::store::{
 use crate::common::cluster::{Cluster, Node, PeerProxy, Proxy, ReplMeta, ReplPeer};
 use crate::common::cluster::{ClusterName, Role};
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 
 pub struct MetaStoreQuery<'a> {
@@ -265,5 +265,106 @@ impl<'a> MetaStoreQuery<'a> {
             });
         }
         free_proxies
+    }
+
+    pub fn check_metadata(&self) -> bool {
+        let mut data_correct = true;
+
+        for (cluster_name, cluster) in self.store.clusters.iter() {
+            let mut proxy_address_set = HashSet::new();
+            for chunk in cluster.chunks.iter() {
+                for (i, proxy_address) in chunk.proxy_addresses.iter().enumerate() {
+                    match self.store.all_proxies.get(proxy_address) {
+                        None => {
+                            error!("cannot find {} in all_proxies", proxy_address);
+                            data_correct = false;
+                        }
+                        Some(proxy_resource) => {
+                            if &proxy_resource.proxy_address != proxy_address {
+                                error!(
+                                    "not correspondent proxy address {} != {}",
+                                    proxy_resource.proxy_address, proxy_address
+                                );
+                                data_correct = false;
+                            }
+                            if proxy_resource.cluster != Some(cluster_name.clone()) {
+                                error!(
+                                    "incorrect cluster name for {} {:?} != {}",
+                                    proxy_address, proxy_resource.cluster, cluster_name
+                                );
+                                data_correct = false;
+                            }
+                            if proxy_address_set.contains(proxy_address) {
+                                error!(
+                                    "duplicate proxy address {} in cluster {}",
+                                    proxy_address, cluster_name
+                                );
+                                data_correct = false;
+                            }
+                            proxy_address_set.insert(proxy_address.clone());
+                            let (host, node_addresses) = if i == 0 {
+                                (
+                                    chunk.hosts[0].clone(),
+                                    [
+                                        chunk.node_addresses[0].clone(),
+                                        chunk.node_addresses[1].clone(),
+                                    ],
+                                )
+                            } else {
+                                (
+                                    chunk.hosts[1].clone(),
+                                    [
+                                        chunk.node_addresses[2].clone(),
+                                        chunk.node_addresses[3].clone(),
+                                    ],
+                                )
+                            };
+                            if host != proxy_resource.host {
+                                error!(
+                                    "invalid host for {} {:?} != {:?}",
+                                    proxy_address, host, proxy_resource.host
+                                );
+                                data_correct = false;
+                            }
+                            if node_addresses != proxy_resource.node_addresses {
+                                error!(
+                                    "invalid node_addresses for {} {:?} != {:?}",
+                                    proxy_address, node_addresses, proxy_resource.node_addresses
+                                );
+                                data_correct = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (proxy_address, proxy_resource) in self.store.all_proxies.iter() {
+            let cluster_name = match proxy_resource.cluster.as_ref() {
+                None => continue,
+                Some(cluster_name) => cluster_name,
+            };
+            match self.store.clusters.get(cluster_name) {
+                None => {
+                    error!("cannot find cluster {} {}", proxy_address, cluster_name);
+                    data_correct = false;
+                }
+                Some(cluster) => {
+                    let chunk = cluster
+                        .chunks
+                        .iter()
+                        .find(|chunk| chunk.proxy_addresses.contains(proxy_address));
+                    if chunk.is_none() {
+                        error!(
+                            "cannot find chunk in cluster {} {}",
+                            proxy_address, cluster_name
+                        );
+                        data_correct = false;
+                    }
+                }
+            }
+        }
+
+        data_correct
     }
 }

@@ -18,6 +18,7 @@ services:
       - UNDERMOON_FAILURE_QUORUM=2
       - UNDERMOON_MIGRATION_LIMIT=2
       - UNDERMOON_POST_TASK_EXPIRE=10
+      - UNDERMOON_DEBUG=true
 
 {% filter indent(width=2) %}
 {% for coordinator_id in range(coordinator_num) %}

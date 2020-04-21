@@ -657,7 +657,7 @@ impl<'a> MetaStoreUpdate<'a> {
                     &free_host_proxies,
                 )
             })
-            .map(|(peer_address, _)| peer_address)
+            .map(|(peer_host, _)| peer_host)
             .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
 
         let peer_proxy = MetaStoreQuery::new(&self.store)
@@ -678,7 +678,7 @@ impl<'a> MetaStoreUpdate<'a> {
     }
 
     fn build_link_table(&self) -> HashMap<String, HashMap<String, usize>> {
-        // Remove the fully occupied hosts or it will be severe performance problems.
+        // Remove the fully occupied hosts or there will be severe performance problems.
         let free_hosts: HashSet<String> = self
             .store
             .all_proxies
@@ -774,11 +774,13 @@ impl<'a> MetaStoreUpdate<'a> {
                 .expect("replace_failed_proxy: get cluster");
             for chunk in cluster.chunks.iter_mut() {
                 if chunk.proxy_addresses[0] == failed_proxy_address {
+                    chunk.hosts[0] = proxy_resource.host.clone();
                     chunk.proxy_addresses[0] = proxy_resource.proxy_address.clone();
                     chunk.node_addresses[0] = proxy_resource.node_addresses[0].clone();
                     chunk.node_addresses[1] = proxy_resource.node_addresses[1].clone();
                     break;
                 } else if chunk.proxy_addresses[1] == failed_proxy_address {
+                    chunk.hosts[1] = proxy_resource.host.clone();
                     chunk.proxy_addresses[1] = proxy_resource.proxy_address.clone();
                     chunk.node_addresses[2] = proxy_resource.node_addresses[0].clone();
                     chunk.node_addresses[3] = proxy_resource.node_addresses[1].clone();
