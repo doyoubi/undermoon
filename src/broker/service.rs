@@ -1,5 +1,6 @@
 use super::persistence::{MetaStorage, MetaSyncError};
 use super::replication::MetaReplicator;
+use super::resource::ResourceChecker;
 use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
 use crate::broker::recovery::{fetch_largest_epoch, EpochFetchResult};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
@@ -92,6 +93,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 "/proxies/meta/{proxy_address}",
                 web::delete().to(remove_proxy),
             )
+            .route("/resources/failures/check", web::post().to(check_resource_for_failures))
             .route("/epoch/recovery", web::put().to(recover_epoch))
             .route("/epoch/{new_epoch}", web::put().to(bump_epoch)),
     );
@@ -278,6 +280,17 @@ impl MemBrokerService {
             .write()
             .expect("MemBrokerService::remove_proxy")
             .remove_proxy(proxy_address)
+    }
+
+    pub fn check_resource_for_failures(&self) -> Result<Vec<String>, MetaStoreError> {
+        let migration_limit = self.config.migration_limit;
+        let store_copy = self
+            .store
+            .read()
+            .expect("MemBrokerService::check_resource_for_failures")
+            .clone();
+        let checker = ResourceChecker::new(store_copy);
+        checker.check_failure_tolerance(migration_limit)
     }
 
     pub fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
@@ -565,6 +578,18 @@ async fn remove_proxy(
     let res = state.remove_proxy(proxy_address).map(|()| "")?;
     state.trigger_update().await?;
     Ok(res)
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ResourceFailureCheckPayload {
+    hosts_cannot_fail: Vec<String>,
+}
+
+async fn check_resource_for_failures(
+    state: ServiceState,
+) -> Result<web::Json<ResourceFailureCheckPayload>, MetaStoreError> {
+    let hosts_cannot_fail = state.check_resource_for_failures()?;
+    Ok(web::Json(ResourceFailureCheckPayload { hosts_cannot_fail }))
 }
 
 async fn migrate_slots(

@@ -207,11 +207,10 @@ class RandomTester:
             if self.stopped:
                 break
 
-            if names and random.randint(0, 300) < 1:
+            if names and random.randint(0, 1000) < 1:
                 cluster_name = random.choice(names)
-                if not self.overmoon_client.post_task_running(cluster_name):
-                    self.overmoon_client.delete_cluster(cluster_name)
-                    self.kvs_tester.pop(cluster_name, None)
+                self.overmoon_client.delete_cluster(cluster_name)
+                self.kvs_tester.pop(cluster_name, None)
 
             time.sleep(0.1)
 

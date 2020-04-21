@@ -3,6 +3,7 @@ mod persistence;
 mod query;
 mod recovery;
 mod replication;
+mod resource;
 mod service;
 mod store;
 mod update;
