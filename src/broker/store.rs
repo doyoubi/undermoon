@@ -493,6 +493,14 @@ impl MetaStore {
         MetaStoreMigrate::new(self)
             .get_proxies_with_post_tasks_running(cluster_name, post_task_expire)
     }
+
+    pub fn check(&self) -> Result<(), Self> {
+        if MetaStoreQuery::new(self).check_metadata() {
+            Ok(())
+        } else {
+            Err(self.clone())
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -703,6 +711,8 @@ mod tests {
                 .iter()
                 .any(|addr| addr == &proxy.proxy_address)));
         }
+
+        assert!(store.check().is_ok());
     }
 
     #[test]
@@ -863,6 +873,7 @@ mod tests {
             for count in count_map.values() {
                 assert_eq!(*count, 1);
             }
+            check_cluster_and_proxy(&store);
         }
 
         {
@@ -883,6 +894,7 @@ mod tests {
                 assert!(*count >= 1);
                 assert!(*count <= 2);
             }
+            check_cluster_and_proxy(&store);
         }
     }
 
@@ -1005,6 +1017,7 @@ mod tests {
         );
         let epoch7 = store.get_global_epoch();
         assert!(epoch6 < epoch7);
+        check_cluster_and_proxy(&store);
     }
 
     const CLUSTER_NAME: &'static str = "testcluster";
@@ -1033,6 +1046,7 @@ mod tests {
                 .len(),
             4
         );
+        check_cluster_and_proxy(&store);
 
         store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
         let epoch2 = store.get_global_epoch();
@@ -1046,6 +1060,7 @@ mod tests {
                 .len(),
             8
         );
+        check_cluster_and_proxy(&store);
 
         store.audo_delete_free_nodes(cluster_name.clone()).unwrap();
         let epoch3 = store.get_global_epoch();
@@ -1059,6 +1074,7 @@ mod tests {
                 .len(),
             4
         );
+        check_cluster_and_proxy(&store);
     }
 
     fn test_migration_helper(
@@ -1225,6 +1241,7 @@ mod tests {
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap();
         check_cluster_slots(cluster, start_node_num + added_node_num);
+        check_cluster_and_proxy(&store);
     }
 
     fn check_cluster_slots(cluster: Cluster, node_num: usize) {
@@ -1400,6 +1417,7 @@ mod tests {
                 assert_eq!(node.get_role(), Role::Replica);
             }
         }
+        check_cluster_and_proxy(&store);
     }
 
     #[test]
@@ -1541,6 +1559,7 @@ mod tests {
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap();
         check_cluster_slots(cluster, start_node_num - removed_node_num);
+        check_cluster_and_proxy(&store);
     }
 
     fn test_migration_to_scale_down_helper(
@@ -1826,6 +1845,7 @@ mod tests {
         );
         assert!(!store.get_free_proxies().is_empty());
         add_failure_and_replace_proxy(&mut store, migration_limit);
+        check_cluster_and_proxy(&store);
     }
 
     #[test]
@@ -1912,6 +1932,8 @@ mod tests {
         {
             assert_ne!(chunk.role_position, ChunkRolePosition::Normal);
         }
+
+        check_cluster_and_proxy(&store);
     }
 
     #[test]

@@ -40,6 +40,8 @@ fn gen_conf() -> MemBrokerConfig {
     let post_task_expire = s.get::<u64>("post_task_expire").unwrap_or(60);
     let post_task_expire = Duration::from_secs(post_task_expire);
 
+    let debug = s.get::<bool>("debug").unwrap_or(false);
+
     MemBrokerConfig {
         address: s
             .get::<String>("address")
@@ -65,6 +67,7 @@ fn gen_conf() -> MemBrokerConfig {
             s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 0),
         ),
         post_task_expire,
+        debug,
     }
 }
 
@@ -155,6 +158,7 @@ async fn main() -> std::io::Result<()> {
     })
     .bind(&address)?
     .keep_alive(300)
+    .shutdown_timeout(1)
     .run()
     .await
 }
