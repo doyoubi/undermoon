@@ -55,7 +55,7 @@ where
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     task: Arc<ScanMigrationTask>,
     blocking_ctrl: Arc<BC>,
-    future_registry: Arc<TrackedFutureRegistry>,
+    _future_registry: Arc<TrackedFutureRegistry>,
     phantom: PhantomData<T>,
     active_redirection: bool,
 }
@@ -99,7 +99,7 @@ where
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             task: Arc::new(task),
             blocking_ctrl,
-            future_registry,
+            _future_registry: future_registry,
             phantom: PhantomData,
             active_redirection,
         }
@@ -236,34 +236,26 @@ where
 
     async fn scan_migrate(&self) -> Result<(), MigrationError> {
         let state = self.state.clone();
-        let (producer, consumer) = self
+        let mgr_fut = self
             .task
             .start()
             .ok_or_else(|| MigrationError::AlreadyStarted)?;
 
-        let fut = producer
-            .map_ok(|()| info!("migration producer finished scanning"))
+        let fut = mgr_fut
+            .map_ok(|()| info!("migration future finished scanning"))
             .map_err(|err| {
-                error!("migration producer finished error: {:?}", err);
+                error!("migration future finished error: {:?}", err);
+                err
             });
 
-        let desc = format!(
-            "scan_migrating: cluster_name={} meta={:?} slot_range=({})",
-            self.cluster_name,
-            self.meta,
-            self.slot_range.get_range_list().to_strings().join(" "),
-        );
-        let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
-        tokio::spawn(fut);
-
-        match consumer.await {
+        match fut.await {
             Ok(()) => {
                 state.set_state(MigrationState::FinalSwitch);
-                info!("migration consumer finished forwarding data");
+                info!("migration future finished forwarding data");
                 Ok(())
             }
             Err(err) => {
-                error!("migration consumer finished error: {:?}", err);
+                error!("migration future finished error: {:?}", err);
                 Err(err)
             }
         }
