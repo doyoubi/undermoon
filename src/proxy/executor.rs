@@ -919,6 +919,10 @@ where
         cmd_ctx.set_redirection_times(times);
         self.handle_data_cmd(cmd_ctx, reply_receiver)
     }
+
+    fn handle_umsync(&self, cmd_ctx: CmdCtx) {
+        self.manager.send_sync_task(cmd_ctx);
+    }
 }
 
 impl<F, C> CmdCtxHandler for ForwardHandler<F, C>
@@ -967,6 +971,7 @@ where
             ))),
             CmdType::UmCtl => self.handle_umctl(cmd_ctx),
             CmdType::UmForward => return self.handle_umforward(cmd_ctx, reply_receiver),
+            CmdType::UmSync => self.handle_umsync(cmd_ctx),
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
             CmdType::Config => self.handle_config(cmd_ctx),
             CmdType::Command => {

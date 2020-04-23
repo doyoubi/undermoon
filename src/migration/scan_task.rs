@@ -53,7 +53,7 @@ where
     client_factory: Arc<RCF>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
-    task: Arc<ScanMigrationTask>,
+    task: Arc<ScanMigrationTask<T>>,
     blocking_ctrl: Arc<BC>,
     _future_registry: Arc<TrackedFutureRegistry>,
     phantom: PhantomData<T>,
@@ -416,6 +416,14 @@ where
         )
     }
 
+    fn send_sync_task(
+        &self,
+        cmd_task: Self::Task,
+    ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>> {
+        self.task.handle_sync_task(cmd_task);
+        Ok(())
+    }
+
     fn get_state(&self) -> MigrationState {
         self.state.get_state()
     }
@@ -434,13 +442,13 @@ where
     }
 }
 
-pub struct MigratingTaskHandle {
-    task: Arc<ScanMigrationTask>,
+pub struct MigratingTaskHandle<T: CmdTask> {
+    task: Arc<ScanMigrationTask<T>>,
     meta: MigrationMeta,
     stop_signal_sender: Option<oneshot::Sender<()>>,
 }
 
-impl MigratingTaskHandle {
+impl<T: CmdTask> MigratingTaskHandle<T> {
     fn send_stop_signal(&mut self) {
         info!("stop migrating task: {:?}", self.meta);
         self.task.stop();
@@ -452,7 +460,7 @@ impl MigratingTaskHandle {
     }
 }
 
-impl Drop for MigratingTaskHandle {
+impl<T: CmdTask> Drop for MigratingTaskHandle<T> {
     fn drop(&mut self) {
         self.send_stop_signal()
     }

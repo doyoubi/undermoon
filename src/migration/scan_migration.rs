@@ -1,18 +1,24 @@
 use super::task::{ScanResponse, SlotRangeArray};
+use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::cluster::SlotRange;
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::keep_connecting_and_sending_cmd_with_cached_client;
+use crate::common::response;
 use crate::common::utils::pretty_print_bytes;
 use crate::migration::task::MigrationError;
 use crate::protocol::{
-    BulkStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
+    BinSafeStr, BulkStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp,
+    RespVec,
 };
+use crate::proxy::backend::CmdTask;
 use atomic_option::AtomicOption;
 use btoi;
-use futures::{Future, FutureExt};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::{future, Future, FutureExt, Stream, StreamExt};
 use futures_timer::Delay;
 use std::cmp::min;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -56,12 +62,13 @@ struct DataEntry {
 
 type MgrFut = Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>;
 
-pub struct ScanMigrationTask {
+pub struct ScanMigrationTask<T: CmdTask> {
     handle: AtomicOption<FutureAutoStopHandle>, // once this task get dropped, the future will stop.
     fut: AtomicOption<MgrFut>,
+    sync_tasks_sender: UnboundedSender<T>,
 }
 
-impl ScanMigrationTask {
+impl<T: CmdTask> ScanMigrationTask<T> {
     pub fn new<F: RedisClientFactory>(
         src_address: String,
         dst_address: String,
@@ -71,17 +78,29 @@ impl ScanMigrationTask {
     ) -> Self {
         let ranges = slot_range.to_range_list();
         let slot_ranges = SlotRangeArray::new(ranges);
+        let (sender, receiver) = unbounded();
         let (fut, fut_handle) = Self::gen_future(
             src_address,
             dst_address,
             slot_ranges,
             client_factory,
+            receiver,
             config,
         );
 
         Self {
             handle: AtomicOption::new(Box::new(fut_handle)),
             fut: AtomicOption::new(Box::new(fut)),
+            sync_tasks_sender: sender,
+        }
+    }
+
+    pub fn handle_sync_task(&self, task: T) {
+        if let Err(err) = self.sync_tasks_sender.unbounded_send(task) {
+            let task = err.into_inner();
+            task.set_resp_result(Ok(Resp::Error(
+                b"failed to forward sync migration task".to_vec(),
+            )));
         }
     }
 
@@ -117,6 +136,7 @@ impl ScanMigrationTask {
         dst_address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
+        sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
     ) -> (MgrFut, FutureAutoStopHandle) {
         // let data = (slot_ranges, 0, None);
@@ -137,6 +157,7 @@ impl ScanMigrationTask {
             dst_address,
             slot_ranges,
             client_factory,
+            sync_tasks_receiver,
             config,
         );
 
@@ -154,6 +175,7 @@ impl ScanMigrationTask {
         dst_address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
+        sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
     ) -> Result<(), RedisClientError> {
         const SLEEP_BATCH_TIMES: u64 = 10;
@@ -166,6 +188,19 @@ impl ScanMigrationTask {
         info!(
             "scan and migrate keys with batched interval: {:?} count: {}",
             interval, scan_count
+        );
+
+        let chunk_size = match NonZeroUsize::new(scan_count as usize) {
+            None => {
+                error!("zero scan count");
+                return Err(RedisClientError::InitError);
+            }
+            Some(chunk_size) => chunk_size,
+        };
+        let mut sync_tasks_receiver = sync_tasks_receiver.try_chunks_timeout(
+            chunk_size,
+            Duration::from_secs(0),
+            Duration::from_secs(0),
         );
 
         let mut scan_index = 0;
@@ -188,6 +223,7 @@ impl ScanMigrationTask {
                     &mut src_client,
                     dst_address.clone(),
                     client_factory.clone(),
+                    &mut sync_tasks_receiver,
                     scan_count,
                 )
                 .await;
@@ -216,29 +252,34 @@ impl ScanMigrationTask {
         }
     }
 
-    async fn scan_and_migrate_keys<F: RedisClientFactory>(
+    #[allow(clippy::too_many_arguments)]
+    async fn scan_and_migrate_keys<F: RedisClientFactory, S: Stream<Item = Vec<T>> + Unpin>(
         slot_ranges: &SlotRangeArray,
         index: u64,
         dst_client: Option<F::Client>,
         src_client: &mut F::Client,
         dst_address: String,
         client_factory: Arc<F>,
+        sync_tasks_receiver: &mut S,
         scan_count: u64,
     ) -> Result<(u64, Option<F::Client>), RedisClientError> {
-        let scan_cmd = vec![
-            "SCAN".to_string(),
-            index.to_string(),
-            "COUNT".to_string(),
-            scan_count.to_string(),
-        ];
-        let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
+        let task_receiver = sync_tasks_receiver.next();
 
-        let resp = src_client.execute_single(byte_cmd).await?;
-        let ScanResponse { next_index, keys } =
-            ScanResponse::parse_scan(&resp).ok_or_else(|| {
-                error!("Invalid scan reply: {:?}", resp);
-                RedisClientError::InvalidReply
-            })?;
+        let (next_index, keys, sync_tasks) =
+            match future::select(task_receiver, future::ready(())).await {
+                future::Either::Left((Some(cmd_tasks), _)) => {
+                    let keys = cmd_tasks
+                        .iter()
+                        .filter_map(|t| t.get_key().map(|b| b.to_vec()))
+                        .collect();
+                    (index, keys, Some(cmd_tasks))
+                }
+                _ => {
+                    let ScanResponse { next_index, keys } =
+                        Self::scan_keys(src_client, index, scan_count).await?;
+                    (next_index, keys, None)
+                }
+            };
 
         let entries = Self::produce_entries(slot_ranges, keys, src_client).await?;
         if entries.is_empty() {
@@ -251,12 +292,40 @@ impl ScanMigrationTask {
 
         Self::delete_keys(src_client, transferred_keys).await?;
 
+        if let Some(cmd_tasks) = sync_tasks {
+            for cmd_task in cmd_tasks.into_iter() {
+                cmd_task.set_resp_result(Ok(Resp::Simple(
+                    response::OK_REPLY.to_string().into_bytes(),
+                )));
+            }
+        }
+
         Ok((next_index, Some(dst_client)))
+    }
+
+    async fn scan_keys<C: RedisClient>(
+        src_client: &mut C,
+        index: u64,
+        scan_count: u64,
+    ) -> Result<ScanResponse, RedisClientError> {
+        let scan_cmd = vec![
+            "SCAN".to_string(),
+            index.to_string(),
+            "COUNT".to_string(),
+            scan_count.to_string(),
+        ];
+        let byte_cmd = scan_cmd.into_iter().map(|s| s.into_bytes()).collect();
+
+        let resp = src_client.execute_single(byte_cmd).await?;
+        ScanResponse::parse_scan(&resp).ok_or_else(|| {
+            error!("Invalid scan reply: {:?}", resp);
+            RedisClientError::InvalidReply
+        })
     }
 
     async fn produce_entries<C: RedisClient>(
         slot_ranges: &SlotRangeArray,
-        keys: Vec<Vec<u8>>,
+        keys: Vec<BinSafeStr>,
         client: &mut C,
     ) -> Result<Vec<DataEntry>, RedisClientError> {
         let keys: Vec<_> = keys
@@ -367,7 +436,7 @@ impl ScanMigrationTask {
 
     async fn delete_keys<C: RedisClient>(
         client: &mut C,
-        keys: Vec<Vec<u8>>,
+        keys: Vec<BinSafeStr>,
     ) -> Result<(), RedisClientError> {
         let mut del_cmd = vec!["DEL".to_string().into_bytes()];
         del_cmd.extend_from_slice(keys.as_slice());
@@ -383,7 +452,7 @@ impl ScanMigrationTask {
     }
 }
 
-impl Drop for ScanMigrationTask {
+impl<T: CmdTask> Drop for ScanMigrationTask<T> {
     fn drop(&mut self) {
         self.stop();
     }

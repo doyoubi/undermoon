@@ -18,6 +18,7 @@ const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access sourc
 type ReplyFuture = Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + Send>>;
 type DataEntryFuture =
     Pin<Box<dyn Future<Output = Result<Option<DataEntry>, CommandError>> + Send>>;
+type UmSyncFuture = Pin<Box<dyn Future<Output = Result<(), CommandError>> + Send>>;
 
 #[derive(Debug)]
 struct MgrCmdStateExists<F: CmdTaskFactory> {
@@ -69,6 +70,13 @@ impl MgrCmdStateForward {
         let inner_task = state.into_inner();
         (MgrCmdStateForward, ReqTask::Simple(inner_task))
     }
+
+    fn from_state_umsync<F: CmdTaskFactory>(
+        state: MgrCmdStateUmSync<F>,
+    ) -> (Self, ReqTask<F::Task>) {
+        let inner_task = state.into_inner();
+        (MgrCmdStateForward, ReqTask::Simple(inner_task))
+    }
 }
 
 #[derive(Debug)]
@@ -91,7 +99,6 @@ impl<F: CmdTaskFactory> MgrCmdStateDumpPttl<F> {
 
         let task = ReqTask::Multi(vec![dump_cmd_task, pttl_cmd_task]);
         let state = Self { inner_task, key };
-        //        let entry_fut = data_entry_future(dump_reply_fut, pttl_reply_fut);
         let entry_fut = Box::pin(get_data_entry(dump_reply_fut, pttl_reply_fut));
 
         (state, task, entry_fut)
@@ -150,6 +157,43 @@ async fn get_data_entry(
 }
 
 #[derive(Debug)]
+struct MgrCmdStateUmSync<F: CmdTaskFactory> {
+    inner_task: F::Task,
+    key: BinSafeStr,
+}
+
+impl<F: CmdTaskFactory> MgrCmdStateUmSync<F> {
+    fn from_state_exists(
+        state: MgrCmdStateExists<F>,
+        cmd_task_factory: &F,
+    ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
+        let MgrCmdStateExists { inner_task, key } = state;
+
+        let (umsync_cmd_task, umsync_reply_fut) =
+            cmd_task_factory.create_with(&inner_task, Self::gen_umsync_resp(&key));
+
+        let task = ReqTask::Simple(umsync_cmd_task);
+        let state = Self { inner_task, key };
+        let sync_fut = Box::pin(umsync_reply_fut);
+
+        (state, task, sync_fut)
+    }
+
+    fn gen_umsync_resp(key: &[u8]) -> RespVec {
+        let elements = vec![
+            Resp::Bulk(BulkStr::Str("UMSYNC".to_string().into_bytes())),
+            Resp::Bulk(BulkStr::Str(key.into())),
+        ];
+        Resp::Arr(Array::Arr(elements))
+    }
+
+    fn into_inner(self) -> F::Task {
+        let Self { inner_task, .. } = self;
+        inner_task
+    }
+}
+
+#[derive(Debug)]
 struct MgrCmdStateRestoreForward;
 
 impl MgrCmdStateRestoreForward {
@@ -189,6 +233,8 @@ type DumpPttlTaskSender<F> = UnboundedSender<(MgrCmdStateDumpPttl<F>, DataEntryF
 type DumpPttlTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
 type RestoreTaskSender = UnboundedSender<ReplyFuture>;
 type RestoreTaskReceiver = UnboundedReceiver<ReplyFuture>;
+type UmSyncTaskSender<F> = UnboundedSender<(MgrCmdStateUmSync<F>, ReplyFuture)>;
+type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 
 pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> {
     src_sender: Arc<S>,
@@ -196,10 +242,13 @@ pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: CmdTaskSender<Task = 
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
     restore_task_sender: RestoreTaskSender,
+    umsync_task_sender: UmSyncTaskSender<F>,
+    #[allow(clippy::type_complexity)]
     task_receivers: AtomicOption<(
         ExistsTaskReceiver<F>,
         DumpPttlTaskReceiver<F>,
         RestoreTaskReceiver,
+        UmSyncTaskReceiver<F>,
     )>,
     cmd_task_factory: Arc<F>,
 }
@@ -211,10 +260,12 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         let (exists_task_sender, exists_task_receiver) = unbounded();
         let (dump_pttl_task_sender, dump_pttl_task_receiver) = unbounded();
         let (restore_task_sender, restore_task_receiver) = unbounded();
+        let (umsync_task_sender, umsync_task_receiver) = unbounded();
         let task_receivers = AtomicOption::new(Box::new((
             exists_task_receiver,
             dump_pttl_task_receiver,
             restore_task_receiver,
+            umsync_task_receiver,
         )));
         Self {
             src_sender,
@@ -222,6 +273,7 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
             exists_task_sender,
             dump_pttl_task_sender,
             restore_task_sender,
+            umsync_task_sender,
             task_receivers,
             cmd_task_factory,
         }
@@ -241,14 +293,18 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         let cmd_task_factory = self.cmd_task_factory.clone();
 
         let receiver_opt = self.task_receivers.take(Ordering::SeqCst).map(|p| *p);
-        let (exists_task_receiver, dump_pttl_task_receiver, restore_task_receiver) =
-            match receiver_opt {
-                Some(r) => r,
-                None => {
-                    error!("RestoreDataCmdTaskHandler has already been started");
-                    return;
-                }
-            };
+        let (
+            exists_task_receiver,
+            dump_pttl_task_receiver,
+            restore_task_receiver,
+            umsync_task_receiver,
+        ) = match receiver_opt {
+            Some(r) => r,
+            None => {
+                error!("RestoreDataCmdTaskHandler has already been started");
+                return;
+            }
+        };
 
         let exists_task_handler = Self::handle_exists_task(
             exists_task_receiver,
@@ -261,11 +317,13 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         let dump_pttl_task_handler = Self::handle_dump_pttl_task(
             dump_pttl_task_receiver,
             restore_task_sender,
-            dst_sender,
+            dst_sender.clone(),
             cmd_task_factory,
         );
 
         let restore_task_handler = Self::handle_restore(restore_task_receiver);
+
+        let umsync_task_handler = Self::handle_umsync_task(umsync_task_receiver, dst_sender);
 
         let mut exists_task_handler = Box::pin(exists_task_handler.fuse());
         let mut dump_pttl_task_handler = Box::pin(dump_pttl_task_handler.fuse());
@@ -280,6 +338,7 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         // Need to finish the remaining commands before exiting.
         info!("wait for dump and pttl task");
         self.dump_pttl_task_sender.close_channel();
+        self.umsync_task_sender.close_channel();
 
         select! {
             () = dump_pttl_task_handler => (),
@@ -290,6 +349,9 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         info!("wait for restore task");
 
         restore_task_handler.await;
+
+        info!("wait for umsync task");
+        umsync_task_handler.await;
         info!("All remaining tasks in migration backend are finished");
     }
 
@@ -394,6 +456,37 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
                     let pretty_resp = others.as_ref().map(|s| pretty_print_bytes(&s));
                     error!("unexpected RESTORE result: {:?}", pretty_resp);
                 }
+            }
+        }
+    }
+
+    async fn handle_umsync_task(
+        mut umsync_task_receiver: UmSyncTaskReceiver<F>,
+        dst_sender: Arc<S>,
+    ) {
+        while let Some((state, reply_fut)) = umsync_task_receiver.next().await {
+            match reply_fut.await {
+                Err(err) => {
+                    let task = state.into_inner();
+                    task.set_resp_result(Ok(Resp::Error(
+                        format!("{}: {:?}", FAILED_TO_ACCESS_SOURCE, err).into_bytes(),
+                    )));
+                    continue;
+                }
+                Ok(Resp::Error(err)) => {
+                    error!("Invalid reply of UMSYNC {:?}", err);
+                    let task = state.into_inner();
+                    task.set_resp_result(Ok(Resp::Error(
+                        format!("{}: {:?}", FAILED_TO_ACCESS_SOURCE, err).into_bytes(),
+                    )));
+                    continue;
+                }
+                _ => (),
+            };
+
+            let (_state, req_task) = MgrCmdStateForward::from_state_umsync(state);
+            if let Err(err) = dst_sender.send(req_task) {
+                debug!("failed to forward: {:?}", err);
             }
         }
     }

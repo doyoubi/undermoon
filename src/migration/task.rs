@@ -93,6 +93,10 @@ pub trait MigratingTask: ThreadSafe {
         &self,
         cmd_task: Self::Task,
     ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>>;
+    fn send_sync_task(
+        &self,
+        cmd_task: Self::Task,
+    ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
     fn contains_slot(&self, slot: usize) -> bool;
     fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>>;

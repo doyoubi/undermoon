@@ -35,7 +35,8 @@ class KeyValueTester:
     def __init__(self, cluster_name, overmoon_client):
         self.cluster_name = cluster_name
         self.overmoon_client = overmoon_client
-        self.kvs = []
+        self.kvs = set()
+        self.deleted_kvs = set()
 
     def get_proxies(self):
         cluster = self.overmoon_client.get_cluster(self.cluster_name)
@@ -88,10 +89,13 @@ class KeyValueTester:
                 logger.info('cluster {} not ready', self.cluster_name)
                 return
 
-            if random.randint(0, 10) < 5:
+            n = random.randint(0, 10)
+            if n < 4:
                 self.test_set(proxies)
-            else:
+            elif n < 8:
                 self.test_get(proxies)
+            else:
+                self.test_del(proxies)
         except Exception as e:
             logger.error('REDIS_TEST_FAILED: {} {}', self.cluster_name, e)
             logger.error('REDIS_TEST_FAILED: {} ', self.overmoon_client.get_cluster(self.cluster_name))
@@ -113,7 +117,8 @@ class KeyValueTester:
             if not res:
                 logger.info('REDIS_TEST: invalid response: {} proxy: {}', res, proxy)
                 continue
-            self.kvs.append(k)
+            self.kvs.add(k)
+            self.deleted_kvs.discard(k)
 
     def test_get(self, proxies):
         rc = self.gen_client(proxies)
@@ -126,6 +131,31 @@ class KeyValueTester:
             if k != v:
                 logger.error('INCONSISTENT: key: {}, expected {}, got {}, proxy {}', k, k, v, proxy)
                 raise Exception("INCONSISTENT DATA")
+
+        for k in self.deleted_kvs:
+            try:
+                v, proxy = rc.get(k)
+            except Exception as e:
+                logger.error('REDIS_TEST: failed to get {}: {}', k, e)
+                raise
+            if v is not None:
+                logger.error('INCONSISTENT: key: {}, expected {}, got {}, proxy {}', k, None, v, proxy)
+                raise Exception("INCONSISTENT DATA")
+
+    def test_del(self, proxies):
+        rc = self.gen_client(proxies)
+
+        keys = list(self.kvs)
+        for k in keys:
+            if random.randint(0, 6) < 3:
+                continue
+            try:
+                v, proxy = rc.delete(k)
+            except Exception as e:
+                logger.error('REDIS_TEST: failed to get {}: {}', k, e)
+                raise
+            self.kvs.discard(k)
+            self.deleted_kvs.add(k)
 
 
 class RandomTester:

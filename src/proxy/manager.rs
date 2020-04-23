@@ -325,6 +325,20 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         send_cmd_ctx(&self.meta_map, cmd_ctx, max_redirections);
     }
 
+    pub fn send_sync_task(&self, cmd_ctx: CmdCtx) {
+        let meta_map = self.meta_map.load();
+        if let Err(err) = meta_map.migration_map.send_sync_task(cmd_ctx) {
+            match err {
+                ClusterSendError::SlotNotFound(cmd_ctx) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(b"migration task not found".to_vec())));
+                }
+                other_err => {
+                    error!("Failed to process sync task {:?}", other_err);
+                }
+            }
+        }
+    }
+
     pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
         let exists = self
             .meta_map

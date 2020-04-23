@@ -272,10 +272,7 @@ where
 
     pub fn send(&self, mut cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         cmd_task.log_event(TaskEvent::SentToMigrationBackend);
-        self.send_to_task(cmd_task)
-    }
 
-    pub fn send_to_task(&self, cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         // Optimization for not having any migration.
         if self.empty {
             return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
@@ -322,6 +319,45 @@ where
                 cmd_task, false,
             ))),
         }
+    }
+
+    pub fn send_sync_task(
+        &self,
+        mut cmd_task: T,
+    ) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
+        cmd_task.log_event(TaskEvent::SentToMigrationBackend);
+
+        // Optimization for not having any migration.
+        if self.empty {
+            return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
+                cmd_task, false,
+            )));
+        }
+
+        let cluster_name = cmd_task.get_cluster_name();
+        if let Some(tasks) = self.task_map.get(cluster_name) {
+            let slot = match cmd_task.get_slot() {
+                Some(slot) => slot,
+                None => {
+                    let resp = Resp::Error("missing key".to_string().into_bytes());
+                    cmd_task.set_resp_result(Ok(resp));
+                    return Err(ClusterSendError::MissingKey);
+                }
+            };
+
+            for mgr_task in tasks.values() {
+                match &mgr_task.task {
+                    Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
+                        return migrating_task.send_sync_task(cmd_task)
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
+            cmd_task, false,
+        )))
     }
 
     pub fn get_left_slots_after_change(
