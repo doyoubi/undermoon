@@ -12,6 +12,7 @@ use crate::protocol::{Array, BulkStr, RedisClientFactory, RespVec};
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHintTask, TaskBlockingControllerFactory};
 use crate::proxy::cluster::{ClusterSendError, ClusterTag};
+use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
@@ -41,6 +42,7 @@ where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: ClusterTag,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     config: Arc<ServerProxyConfig>,
     mgr_config: Arc<AtomicMigrationConfig>,
@@ -56,6 +58,7 @@ where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: ClusterTag,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     pub fn new(
         config: Arc<ServerProxyConfig>,
@@ -417,6 +420,7 @@ where
     where
         RCF: RedisClientFactory,
         CTF: CmdTaskFactory<Task = T> + ThreadSafe,
+        CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
         BCF: TaskBlockingControllerFactory,
         TSF: CmdTaskSenderFactory + ThreadSafe,
         <TSF as CmdTaskSenderFactory>::Sender: CmdTaskSender<Task = ReqTask<T>> + ThreadSafe,

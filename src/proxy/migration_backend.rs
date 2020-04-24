@@ -1,5 +1,5 @@
 use super::backend::{CmdTask, CmdTaskFactory, DefaultConnFactory, ReqTask};
-use super::command::CommandError;
+use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError};
 use super::reply::ReplyCommitHandlerFactory;
 use super::sender::{BackendSenderFactory, CmdTaskSender};
 use crate::common::utils::pretty_print_bytes;
@@ -18,7 +18,6 @@ const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access sourc
 type ReplyFuture = Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + Send>>;
 type DataEntryFuture =
     Pin<Box<dyn Future<Output = Result<Option<DataEntry>, CommandError>> + Send>>;
-type UmSyncFuture = Pin<Box<dyn Future<Output = Result<(), CommandError>> + Send>>;
 
 #[derive(Debug)]
 struct MgrCmdStateExists<F: CmdTaskFactory> {
@@ -236,9 +235,13 @@ type RestoreTaskReceiver = UnboundedReceiver<ReplyFuture>;
 type UmSyncTaskSender<F> = UnboundedSender<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 
-pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> {
+pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>>
+where
+    F::Task: CmdTask<TaskType = CmdTypeTuple>,
+{
     src_sender: Arc<S>,
     dst_sender: Arc<S>,
+    src_proxy_sender: Arc<S>,
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
     restore_task_sender: RestoreTaskSender,
@@ -253,10 +256,19 @@ pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: CmdTaskSender<Task = 
     cmd_task_factory: Arc<F>,
 }
 
-impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCmdTaskHandler<F, S> {
-    pub fn new(src_sender: S, dst_sender: S, cmd_task_factory: Arc<F>) -> Self {
+impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCmdTaskHandler<F, S>
+where
+    F::Task: CmdTask<TaskType = CmdTypeTuple>,
+{
+    pub fn new(
+        src_sender: S,
+        dst_sender: S,
+        src_proxy_sender: S,
+        cmd_task_factory: Arc<F>,
+    ) -> Self {
         let src_sender = Arc::new(src_sender);
         let dst_sender = Arc::new(dst_sender);
+        let src_proxy_sender = Arc::new(src_proxy_sender);
         let (exists_task_sender, exists_task_receiver) = unbounded();
         let (dump_pttl_task_sender, dump_pttl_task_receiver) = unbounded();
         let (restore_task_sender, restore_task_receiver) = unbounded();
@@ -270,6 +282,7 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         Self {
             src_sender,
             dst_sender,
+            src_proxy_sender,
             exists_task_sender,
             dump_pttl_task_sender,
             restore_task_sender,
@@ -287,8 +300,10 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
 
     pub async fn run_task_handler(&self) {
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
+        let umsync_task_sender = self.umsync_task_sender.clone();
         let src_sender = self.src_sender.clone();
         let dst_sender = self.dst_sender.clone();
+        let src_proxy_sender = self.src_proxy_sender.clone();
         let restore_task_sender = self.restore_task_sender.clone();
         let cmd_task_factory = self.cmd_task_factory.clone();
 
@@ -309,8 +324,10 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         let exists_task_handler = Self::handle_exists_task(
             exists_task_receiver,
             dump_pttl_task_sender,
+            umsync_task_sender,
             src_sender,
             dst_sender.clone(),
+            src_proxy_sender,
             cmd_task_factory.clone(),
         );
 
@@ -328,28 +345,34 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
         let mut exists_task_handler = Box::pin(exists_task_handler.fuse());
         let mut dump_pttl_task_handler = Box::pin(dump_pttl_task_handler.fuse());
         let mut restore_task_handler = Box::pin(restore_task_handler.fuse());
+        let mut umsync_task_handler = Box::pin(umsync_task_handler.fuse());
 
         select! {
             () = exists_task_handler => (),
             () = dump_pttl_task_handler => (),
             () = restore_task_handler => (),
+            () = umsync_task_handler => (),
         }
 
         // Need to finish the remaining commands before exiting.
         info!("wait for dump and pttl task");
         self.dump_pttl_task_sender.close_channel();
-        self.umsync_task_sender.close_channel();
 
         select! {
             () = dump_pttl_task_handler => (),
             () = restore_task_handler => (),
+            () = umsync_task_handler => (),
         }
 
         self.restore_task_sender.close_channel();
         info!("wait for restore task");
 
-        restore_task_handler.await;
+        select! {
+            () = restore_task_handler => (),
+            () = umsync_task_handler => (),
+        }
 
+        self.umsync_task_sender.close_channel();
         info!("wait for umsync task");
         umsync_task_handler.await;
         info!("All remaining tasks in migration backend are finished");
@@ -358,8 +381,10 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
     async fn handle_exists_task(
         mut exists_task_receiver: ExistsTaskReceiver<F>,
         dump_pttl_task_sender: DumpPttlTaskSender<F>,
+        umsync_task_sender: UmSyncTaskSender<F>,
         src_sender: Arc<S>,
         dst_sender: Arc<S>,
+        src_proxy_sender: Arc<S>,
         cmd_task_factory: Arc<F>,
     ) {
         while let Some((state, reply_receiver)) = exists_task_receiver.next().await {
@@ -383,6 +408,19 @@ impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCm
                 let (_state, req_task) = MgrCmdStateForward::from_state_exists(state);
                 if let Err(err) = dst_sender.send(req_task) {
                     debug!("failed to forward: {:?}", err);
+                }
+                continue;
+            }
+
+            let (_, data_cmd_type) = state.inner_task.get_type();
+            if requires_blocking_migration(data_cmd_type) {
+                let (state, req_task, reply_fut) =
+                    MgrCmdStateUmSync::from_state_exists(state, &(*cmd_task_factory));
+                if let Err(err) = src_proxy_sender.send(req_task) {
+                    debug!("failed to send umsync: {:?}", err);
+                }
+                if let Err(_err) = umsync_task_sender.unbounded_send((state, reply_fut)) {
+                    debug!("umsync_task_sender is canceled");
                 }
                 continue;
             }
@@ -646,6 +684,9 @@ mod tests {
                     self.exists.store(true, Ordering::SeqCst);
                     cmd_ctx.set_resp_result(Ok(Resp::Simple("OK".to_string().into_bytes())));
                 }
+                "UMSYNC" => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple(b"OK".to_vec())));
+                }
                 _ => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(
                         "unexpected command".to_string().into_bytes(),
@@ -733,6 +774,7 @@ mod tests {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(false, HashMap::new(), 666),
             DummyCmdTaskSender::new(true, HashMap::new(), 666),
+            DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
 
@@ -755,6 +797,7 @@ mod tests {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(true, HashMap::new(), 666),
             DummyCmdTaskSender::new(false, HashMap::new(), 1),
+            DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
 
@@ -777,6 +820,7 @@ mod tests {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(false, HashMap::new(), 666),
             DummyCmdTaskSender::new(false, HashMap::new(), 233),
+            DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
 
@@ -805,6 +849,7 @@ mod tests {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(false, HashMap::new(), 666),
                 DummyCmdTaskSender::new(true, err_set.clone(), 666),
+                DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -834,6 +879,7 @@ mod tests {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(false, HashMap::new(), 666),
                 DummyCmdTaskSender::new(true, err_set.clone(), 666),
+                DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -867,6 +913,7 @@ mod tests {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(true, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 666),
+                DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -896,6 +943,7 @@ mod tests {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(true, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 666),
+                DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -925,6 +973,7 @@ mod tests {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(true, HashMap::new(), 666),
                 DummyCmdTaskSender::new(false, err_set.clone(), 666),
+                DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
 
@@ -954,6 +1003,7 @@ mod tests {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(true, HashMap::new(), -1),
             DummyCmdTaskSender::new(false, HashMap::new(), -2),
+            DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
 

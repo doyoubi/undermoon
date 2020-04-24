@@ -428,6 +428,7 @@ impl<T: CmdTask + ClusterTag> ClusterTag for CounterTask<T> {
 
 impl<T: CmdTask> CmdTask for CounterTask<T> {
     type Pkt = T::Pkt;
+    type TaskType = T::TaskType;
 
     fn get_key(&self) -> Option<&[u8]> {
         self.inner.get_key()
@@ -443,6 +444,10 @@ impl<T: CmdTask> CmdTask for CounterTask<T> {
 
     fn get_packet(&self) -> Self::Pkt {
         self.inner.get_packet()
+    }
+
+    fn get_type(&self) -> Self::TaskType {
+        self.inner.get_type()
     }
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)
@@ -481,6 +486,7 @@ impl<T: CmdTask> BlockingHintTask<T> {
 
 impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
     type Pkt = T::Pkt;
+    type TaskType = T::TaskType;
 
     fn get_key(&self) -> Option<&[u8]> {
         self.inner.get_key()
@@ -496,6 +502,10 @@ impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
 
     fn get_packet(&self) -> Self::Pkt {
         self.inner.get_packet()
+    }
+
+    fn get_type(&self) -> Self::TaskType {
+        self.inner.get_type()
     }
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)

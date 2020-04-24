@@ -118,6 +118,7 @@ impl CmdCtx {
 
 impl CmdTask for CmdCtx {
     type Pkt = RespPacket;
+    type TaskType = (CmdType, DataCmdType);
 
     fn get_key(&self) -> Option<&[u8]> {
         self.get_cmd().get_key()
@@ -144,6 +145,10 @@ impl CmdTask for CmdCtx {
 
     fn get_packet(&self) -> Self::Pkt {
         self.cmd.get_packet()
+    }
+
+    fn get_type(&self) -> Self::TaskType {
+        (self.cmd.get_type(), self.cmd.get_data_cmd_type())
     }
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)

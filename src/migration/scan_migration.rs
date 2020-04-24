@@ -23,6 +23,7 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio;
 
 pub const PTTL_NO_EXPIRE: &[u8] = b"-1";
 pub const PTTL_KEY_NOT_FOUND: &[u8] = b"-2";
@@ -98,8 +99,8 @@ impl<T: CmdTask> ScanMigrationTask<T> {
     pub fn handle_sync_task(&self, task: T) {
         if let Err(err) = self.sync_tasks_sender.unbounded_send(task) {
             let task = err.into_inner();
-            task.set_resp_result(Ok(Resp::Error(
-                b"failed to forward sync migration task".to_vec(),
+            task.set_resp_result(Ok(Resp::Simple(
+                response::MIGRATING_FINISHED.to_string().into_bytes(),
             )));
         }
     }
@@ -242,7 +243,8 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                 }
 
                 if sleep_count >= SLEEP_BATCH_TIMES {
-                    Delay::new(interval).await;
+                    tokio::task::yield_now().await;
+                    // Delay::new(Duration::from_secs(0)).await;
                     sleep_count = 0;
                 } else {
                     sleep_count += 1;
@@ -282,25 +284,30 @@ impl<T: CmdTask> ScanMigrationTask<T> {
             };
 
         let entries = Self::produce_entries(slot_ranges, keys, src_client).await?;
-        if entries.is_empty() {
-            return Ok((next_index, dst_client));
-        }
+        let res = if entries.is_empty() {
+            Ok(dst_client)
+        } else {
+            let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
+            let dst_client =
+                Self::forward_entries(dst_address, dst_client, client_factory, entries).await;
 
-        let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
-        let dst_client =
-            Self::forward_entries(dst_address, dst_client, client_factory, entries).await;
-
-        Self::delete_keys(src_client, transferred_keys).await?;
+            Self::delete_keys(src_client, transferred_keys)
+                .await
+                .map(move |()| Some(dst_client))
+        };
 
         if let Some(cmd_tasks) = sync_tasks {
+            let resp = if res.is_ok() {
+                Resp::Simple(response::OK_REPLY.to_string().into_bytes())
+            } else {
+                Resp::Error(b"failed to delete keys".to_vec())
+            };
             for cmd_task in cmd_tasks.into_iter() {
-                cmd_task.set_resp_result(Ok(Resp::Simple(
-                    response::OK_REPLY.to_string().into_bytes(),
-                )));
+                cmd_task.set_resp_result(Ok(resp.clone()));
             }
         }
 
-        Ok((next_index, Some(dst_client)))
+        res.map(move |dst_client| (next_index, dst_client))
     }
 
     async fn scan_keys<C: RedisClient>(

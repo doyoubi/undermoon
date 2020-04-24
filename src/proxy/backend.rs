@@ -47,11 +47,13 @@ pub trait CmdTaskResultHandlerFactory: ThreadSafe {
 
 pub trait CmdTask: ThreadSafe {
     type Pkt: Packet + Send;
+    type TaskType;
 
     fn get_key(&self) -> Option<&[u8]>;
     fn get_slot(&self) -> Option<usize>;
     fn set_result(self, result: CommandResult<Self::Pkt>);
     fn get_packet(&self) -> Self::Pkt;
+    fn get_type(&self) -> Self::TaskType;
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)
     where
@@ -100,6 +102,7 @@ impl<T: CmdTask> From<T> for ReqTask<T> {
 
 impl<T: CmdTask> CmdTask for ReqTask<T> {
     type Pkt = OptionalMulti<T::Pkt>;
+    type TaskType = OptionalMulti<T::TaskType>;
 
     fn get_key(&self) -> Option<&[u8]> {
         match self {
@@ -174,6 +177,15 @@ impl<T: CmdTask> CmdTask for ReqTask<T> {
             Self::Multi(v) => {
                 let packets = v.iter().map(|t| t.get_packet()).collect();
                 OptionalMulti::Multi(packets)
+            }
+        }
+    }
+
+    fn get_type(&self) -> Self::TaskType {
+        match self {
+            Self::Simple(task) => OptionalMulti::Single(task.get_type()),
+            Self::Multi(tasks) => {
+                OptionalMulti::Multi(tasks.iter().map(|t| t.get_type()).collect())
             }
         }
     }

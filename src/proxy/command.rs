@@ -109,6 +109,33 @@ pub enum DataCmdType {
     BLPOP,
     BRPOP,
     BRPOPLPUSH,
+    LPOP,
+    RPOP,
+    RPOPLPUSH,
+    LREM,
+    LTRIM,
+    // Hash commands
+    HDEL,
+    // Set commands
+    SMOVE,
+    SPOP,
+    SREM,
+    // Sorted Set commands
+    ZPOPMAX,
+    ZPOPMIN,
+    ZREM,
+    ZREMRANGEBYLEX,
+    ZREMRANGEBYRANK,
+    ZREMRANGEBYSCORE,
+    // Key commands
+    EXPIRE,
+    EXPIREAT,
+    PEXPIRE,
+    PEXPIREAT,
+    MOVE,
+    RENAME,
+    RENAMENX,
+    UNLINK,
     Others,
 }
 
@@ -159,6 +186,29 @@ impl DataCmdType {
             b"BLPOP" => DataCmdType::BLPOP,
             b"BRPOP" => DataCmdType::BRPOP,
             b"BRPOPLPUSH" => DataCmdType::BRPOPLPUSH,
+            b"EXPIRE" => DataCmdType::EXPIRE,
+            b"EXPIREAT" => DataCmdType::EXPIREAT,
+            b"PEXPIRE" => DataCmdType::PEXPIRE,
+            b"PEXPIREAT" => DataCmdType::PEXPIREAT,
+            b"HDEL" => DataCmdType::HDEL,
+            b"LPOP" => DataCmdType::LPOP,
+            b"RPOP" => DataCmdType::RPOP,
+            b"RPOPLPUSH" => DataCmdType::RPOPLPUSH,
+            b"LREM" => DataCmdType::LREM,
+            b"LTRIM" => DataCmdType::LTRIM,
+            b"MOVE" => DataCmdType::MOVE,
+            b"RENAME" => DataCmdType::RENAME,
+            b"RENAMENX" => DataCmdType::RENAMENX,
+            b"SMOVE" => DataCmdType::SMOVE,
+            b"SPOP" => DataCmdType::SPOP,
+            b"SREM" => DataCmdType::SREM,
+            b"UNLINK" => DataCmdType::UNLINK,
+            b"ZPOPMAX" => DataCmdType::ZPOPMAX,
+            b"ZPOPMIN" => DataCmdType::ZPOPMIN,
+            b"ZREM" => DataCmdType::ZREM,
+            b"ZREMRANGEBYLEX" => DataCmdType::ZREMRANGEBYLEX,
+            b"ZREMRANGEBYRANK" => DataCmdType::ZREMRANGEBYRANK,
+            b"ZREMRANGEBYSCORE" => DataCmdType::ZREMRANGEBYSCORE,
             _ => DataCmdType::Others,
         }
     }
@@ -170,6 +220,40 @@ impl DataCmdType {
         };
 
         DataCmdType::from_cmd_name(cmd_name)
+    }
+}
+
+pub type CmdTypeTuple = (CmdType, DataCmdType);
+
+pub fn requires_blocking_migration(data_cmd_type: DataCmdType) -> bool {
+    match data_cmd_type {
+        DataCmdType::DEL => true,
+        DataCmdType::EVAL => true,
+        DataCmdType::EVALSHA => true,
+        DataCmdType::EXPIRE => true,
+        DataCmdType::EXPIREAT => true,
+        DataCmdType::HDEL => true,
+        DataCmdType::LPOP => true,
+        DataCmdType::RPOP => true,
+        DataCmdType::RPOPLPUSH => true,
+        DataCmdType::LREM => true,
+        DataCmdType::LTRIM => true,
+        DataCmdType::MOVE => true,
+        DataCmdType::PEXPIRE => true,
+        DataCmdType::PEXPIREAT => true,
+        DataCmdType::RENAME => true,
+        DataCmdType::RENAMENX => true,
+        DataCmdType::SMOVE => true,
+        DataCmdType::SPOP => true,
+        DataCmdType::SREM => true,
+        DataCmdType::UNLINK => true,
+        DataCmdType::ZPOPMAX => true,
+        DataCmdType::ZPOPMIN => true,
+        DataCmdType::ZREM => true,
+        DataCmdType::ZREMRANGEBYLEX => true,
+        DataCmdType::ZREMRANGEBYRANK => true,
+        DataCmdType::ZREMRANGEBYSCORE => true,
+        _ => false,
     }
 }
 

@@ -18,6 +18,7 @@ use crate::protocol::{
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
 use crate::proxy::cluster::ClusterSendError;
+use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
@@ -471,6 +472,7 @@ where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     _mgr_config: Arc<AtomicMigrationConfig>,
@@ -491,6 +493,7 @@ where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     pub fn new(
@@ -504,8 +507,13 @@ where
     ) -> Self {
         let src_sender = sender_factory.create(meta.src_node_address.clone());
         let dst_sender = sender_factory.create(meta.dst_node_address.clone());
-        let cmd_handler =
-            RestoreDataCmdTaskHandler::new(src_sender, dst_sender, cmd_task_factory.clone());
+        let src_proxy_sender = sender_factory.create(meta.src_proxy_address.clone());
+        let cmd_handler = RestoreDataCmdTaskHandler::new(
+            src_sender,
+            dst_sender,
+            src_proxy_sender,
+            cmd_task_factory.clone(),
+        );
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let range_map = RangeMap::from(slot_range.get_range_list());
         let active_redirection = config.active_redirection;
@@ -530,6 +538,7 @@ where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     type Task = CTF::Task;
