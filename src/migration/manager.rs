@@ -2,7 +2,7 @@ use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
-use crate::common::proto::ProxyClusterMap;
+use crate::common::proto::{ClusterConfigMap, ProxyClusterMap};
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::ThreadSafe;
 use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
@@ -83,10 +83,12 @@ where
         &self,
         old_migration_map: &MigrationMap<CTF::Task>,
         local_cluster_map: &ProxyClusterMap,
+        cluster_config_map: &ClusterConfigMap,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<CTF::Task> {
         old_migration_map.update_from_old_task_map(
             local_cluster_map,
+            cluster_config_map,
             self.config.clone(),
             self.mgr_config.clone(),
             self.client_factory.clone(),
@@ -409,6 +411,7 @@ where
     pub fn update_from_old_task_map<RCF, CTF, BCF, TSF>(
         &self,
         local_cluster_map: &ProxyClusterMap,
+        cluster_config_map: &ClusterConfigMap,
         config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
@@ -492,10 +495,18 @@ where
                                 continue;
                             }
 
+                            let cluster_mgr_config = match cluster_config_map.get(cluster_name) {
+                                Some(cluster_config) => {
+                                    Arc::new(AtomicMigrationConfig::from_config(
+                                        cluster_config.migration_config,
+                                    ))
+                                }
+                                None => mgr_config.clone(),
+                            };
                             let ctrl = blocking_ctrl_factory.create(meta.src_node_address.clone());
                             let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
-                                mgr_config.clone(),
+                                cluster_mgr_config,
                                 cluster_name.clone(),
                                 slot_range.clone(),
                                 meta.clone(),

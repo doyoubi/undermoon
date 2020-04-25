@@ -275,11 +275,15 @@ impl ClusterConfigMap {
         Self { config_map }
     }
 
-    pub fn get(&self, cluster_name: &ClusterName) -> ClusterConfig {
+    pub fn get_or_default(&self, cluster_name: &ClusterName) -> ClusterConfig {
         self.config_map
             .get(cluster_name)
             .cloned()
             .unwrap_or_else(ClusterConfig::default)
+    }
+
+    pub fn get(&self, cluster_name: &ClusterName) -> Option<ClusterConfig> {
+        self.config_map.get(cluster_name).cloned()
     }
 
     pub fn get_map(&self) -> &HashMap<ClusterName, ClusterConfig> {
@@ -822,7 +826,7 @@ mod tests {
         assert_eq!(
             cluster_meta
                 .get_configs()
-                .get(&ClusterName::try_from("cluster_name").unwrap())
+                .get_or_default(&ClusterName::try_from("cluster_name").unwrap())
                 .compression_strategy,
             CompressionStrategy::SetGetOnly
         );

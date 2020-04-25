@@ -208,6 +208,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
                 &old_meta_map.migration_map,
                 cluster_meta.get_local(),
+                cluster_meta.get_configs(),
                 self.blocking_map.clone(),
             );
 
