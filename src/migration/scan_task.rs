@@ -9,7 +9,6 @@ use crate::common::cluster::{
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
 use crate::common::response;
-use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::{
@@ -18,6 +17,7 @@ use crate::protocol::{
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
 use crate::proxy::cluster::ClusterSendError;
+use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
@@ -53,9 +53,8 @@ where
     client_factory: Arc<RCF>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
-    task: Arc<ScanMigrationTask>,
+    task: Arc<ScanMigrationTask<T>>,
     blocking_ctrl: Arc<BC>,
-    future_registry: Arc<TrackedFutureRegistry>,
     phantom: PhantomData<T>,
     active_redirection: bool,
 }
@@ -75,7 +74,6 @@ where
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         blocking_ctrl: Arc<BC>,
-        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let task = ScanMigrationTask::new(
@@ -99,7 +97,6 @@ where
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             task: Arc::new(task),
             blocking_ctrl,
-            future_registry,
             phantom: PhantomData,
             active_redirection,
         }
@@ -236,34 +233,26 @@ where
 
     async fn scan_migrate(&self) -> Result<(), MigrationError> {
         let state = self.state.clone();
-        let (producer, consumer) = self
+        let mgr_fut = self
             .task
             .start()
             .ok_or_else(|| MigrationError::AlreadyStarted)?;
 
-        let fut = producer
-            .map_ok(|()| info!("migration producer finished scanning"))
+        let fut = mgr_fut
+            .map_ok(|()| info!("migration future finished scanning"))
             .map_err(|err| {
-                error!("migration producer finished error: {:?}", err);
+                error!("migration future finished error: {:?}", err);
+                err
             });
 
-        let desc = format!(
-            "scan_migrating: cluster_name={} meta={:?} slot_range=({})",
-            self.cluster_name,
-            self.meta,
-            self.slot_range.get_range_list().to_strings().join(" "),
-        );
-        let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
-        tokio::spawn(fut);
-
-        match consumer.await {
+        match fut.await {
             Ok(()) => {
                 state.set_state(MigrationState::FinalSwitch);
-                info!("migration consumer finished forwarding data");
+                info!("migration future finished forwarding data");
                 Ok(())
             }
             Err(err) => {
-                error!("migration consumer finished error: {:?}", err);
+                error!("migration future finished error: {:?}", err);
                 Err(err)
             }
         }
@@ -424,6 +413,14 @@ where
         )
     }
 
+    fn send_sync_task(
+        &self,
+        cmd_task: Self::Task,
+    ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>> {
+        self.task.handle_sync_task(cmd_task);
+        Ok(())
+    }
+
     fn get_state(&self) -> MigrationState {
         self.state.get_state()
     }
@@ -442,13 +439,13 @@ where
     }
 }
 
-pub struct MigratingTaskHandle {
-    task: Arc<ScanMigrationTask>,
+pub struct MigratingTaskHandle<T: CmdTask> {
+    task: Arc<ScanMigrationTask<T>>,
     meta: MigrationMeta,
     stop_signal_sender: Option<oneshot::Sender<()>>,
 }
 
-impl MigratingTaskHandle {
+impl<T: CmdTask> MigratingTaskHandle<T> {
     fn send_stop_signal(&mut self) {
         info!("stop migrating task: {:?}", self.meta);
         self.task.stop();
@@ -460,7 +457,7 @@ impl MigratingTaskHandle {
     }
 }
 
-impl Drop for MigratingTaskHandle {
+impl<T: CmdTask> Drop for MigratingTaskHandle<T> {
     fn drop(&mut self) {
         self.send_stop_signal()
     }
@@ -471,6 +468,7 @@ where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     _mgr_config: Arc<AtomicMigrationConfig>,
@@ -491,6 +489,7 @@ where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     pub fn new(
@@ -504,8 +503,13 @@ where
     ) -> Self {
         let src_sender = sender_factory.create(meta.src_node_address.clone());
         let dst_sender = sender_factory.create(meta.dst_node_address.clone());
-        let cmd_handler =
-            RestoreDataCmdTaskHandler::new(src_sender, dst_sender, cmd_task_factory.clone());
+        let src_proxy_sender = sender_factory.create(meta.src_proxy_address.clone());
+        let cmd_handler = RestoreDataCmdTaskHandler::new(
+            src_sender,
+            dst_sender,
+            src_proxy_sender,
+            cmd_task_factory.clone(),
+        );
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let range_map = RangeMap::from(slot_range.get_range_list());
         let active_redirection = config.active_redirection;
@@ -530,6 +534,7 @@ where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     type Task = CTF::Task;

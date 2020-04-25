@@ -2,7 +2,7 @@ use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
-use crate::common::proto::ProxyClusterMap;
+use crate::common::proto::{ClusterConfigMap, ProxyClusterMap};
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::ThreadSafe;
 use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
@@ -12,6 +12,7 @@ use crate::protocol::{Array, BulkStr, RedisClientFactory, RespVec};
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHintTask, TaskBlockingControllerFactory};
 use crate::proxy::cluster::{ClusterSendError, ClusterTag};
+use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
@@ -41,6 +42,7 @@ where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: ClusterTag,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     config: Arc<ServerProxyConfig>,
     mgr_config: Arc<AtomicMigrationConfig>,
@@ -56,6 +58,7 @@ where
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: ClusterTag,
+    CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     pub fn new(
         config: Arc<ServerProxyConfig>,
@@ -80,17 +83,18 @@ where
         &self,
         old_migration_map: &MigrationMap<CTF::Task>,
         local_cluster_map: &ProxyClusterMap,
+        cluster_config_map: &ClusterConfigMap,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<CTF::Task> {
         old_migration_map.update_from_old_task_map(
             local_cluster_map,
+            cluster_config_map,
             self.config.clone(),
             self.mgr_config.clone(),
             self.client_factory.clone(),
             self.sender_factory.clone(),
             self.cmd_task_factory.clone(),
             blocking_ctrl_factory,
-            self.future_registry.clone(),
         )
     }
 
@@ -272,10 +276,7 @@ where
 
     pub fn send(&self, mut cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         cmd_task.log_event(TaskEvent::SentToMigrationBackend);
-        self.send_to_task(cmd_task)
-    }
 
-    pub fn send_to_task(&self, cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         // Optimization for not having any migration.
         if self.empty {
             return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
@@ -324,6 +325,45 @@ where
         }
     }
 
+    pub fn send_sync_task(
+        &self,
+        mut cmd_task: T,
+    ) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
+        cmd_task.log_event(TaskEvent::SentToMigrationBackend);
+
+        // Optimization for not having any migration.
+        if self.empty {
+            return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
+                cmd_task, false,
+            )));
+        }
+
+        let cluster_name = cmd_task.get_cluster_name();
+        if let Some(tasks) = self.task_map.get(cluster_name) {
+            let slot = match cmd_task.get_slot() {
+                Some(slot) => slot,
+                None => {
+                    let resp = Resp::Error("missing key".to_string().into_bytes());
+                    cmd_task.set_resp_result(Ok(resp));
+                    return Err(ClusterSendError::MissingKey);
+                }
+            };
+
+            for mgr_task in tasks.values() {
+                match &mgr_task.task {
+                    Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
+                        return migrating_task.send_sync_task(cmd_task)
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
+            cmd_task, false,
+        )))
+    }
+
     pub fn get_left_slots_after_change(
         &self,
         new_migration_map: &Self,
@@ -370,17 +410,18 @@ where
     pub fn update_from_old_task_map<RCF, CTF, BCF, TSF>(
         &self,
         local_cluster_map: &ProxyClusterMap,
+        cluster_config_map: &ClusterConfigMap,
         config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
         blocking_ctrl_factory: Arc<BCF>,
-        future_registry: Arc<TrackedFutureRegistry>,
     ) -> (Self, Vec<NewTask<T>>)
     where
         RCF: RedisClientFactory,
         CTF: CmdTaskFactory<Task = T> + ThreadSafe,
+        CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
         BCF: TaskBlockingControllerFactory,
         TSF: CmdTaskSenderFactory + ThreadSafe,
         <TSF as CmdTaskSenderFactory>::Sender: CmdTaskSender<Task = ReqTask<T>> + ThreadSafe,
@@ -452,16 +493,23 @@ where
                                 continue;
                             }
 
+                            let cluster_mgr_config = match cluster_config_map.get(cluster_name) {
+                                Some(cluster_config) => {
+                                    Arc::new(AtomicMigrationConfig::from_config(
+                                        cluster_config.migration_config,
+                                    ))
+                                }
+                                None => mgr_config.clone(),
+                            };
                             let ctrl = blocking_ctrl_factory.create(meta.src_node_address.clone());
                             let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
-                                mgr_config.clone(),
+                                cluster_mgr_config,
                                 cluster_name.clone(),
                                 slot_range.clone(),
                                 meta.clone(),
                                 client_factory.clone(),
                                 ctrl,
-                                future_registry.clone(),
                             ));
                             new_tasks.push(NewTask {
                                 cluster_name: cluster_name.clone(),

@@ -208,6 +208,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
                 &old_meta_map.migration_map,
                 cluster_meta.get_local(),
+                cluster_meta.get_configs(),
                 self.blocking_map.clone(),
             );
 
@@ -323,6 +324,25 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     pub fn send(&self, cmd_ctx: CmdCtx) {
         let max_redirections = self.config.max_redirections;
         send_cmd_ctx(&self.meta_map, cmd_ctx, max_redirections);
+    }
+
+    pub fn send_sync_task(&self, cmd_ctx: CmdCtx) {
+        let meta_map = self.meta_map.load();
+        if let Err(err) = meta_map.migration_map.send_sync_task(cmd_ctx) {
+            match err {
+                ClusterSendError::SlotNotFound(task) => {
+                    task.set_resp_result(Ok(Resp::Error(b"migration task not found".to_vec())));
+                }
+                ClusterSendError::ActiveRedirection { task, .. } => {
+                    task.set_resp_result(Ok(Resp::Error(
+                        b"unexpected active redirection".to_vec(),
+                    )));
+                }
+                other_err => {
+                    error!("Failed to process sync task {:?}", other_err);
+                }
+            }
+        }
     }
 
     pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {

@@ -193,6 +193,9 @@ impl MigrationConfig {
                 let v = value
                     .parse::<u64>()
                     .map_err(|_| ConfigError::InvalidValue)?;
+                if v == 0 {
+                    return Err(ConfigError::InvalidValue);
+                }
                 self.scan_count = v;
             }
             _ => return Err(ConfigError::FieldNotFound),

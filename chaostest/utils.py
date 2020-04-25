@@ -264,6 +264,9 @@ class RedisClusterClient:
     def set(self, key, value):
         return self.exec(lambda client: client.set(key, value))
 
+    def delete(self, key):
+        return self.exec(lambda client: client.delete(key))
+
     def exec(self, send_func):
         proxy = random.choice(self.startup_nodes)
         client = self.get_or_create_client(proxy)
