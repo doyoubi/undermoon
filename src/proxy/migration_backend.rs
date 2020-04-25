@@ -266,8 +266,8 @@ type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
 type DumpPttlTaskSender<F> = UnboundedSender<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
 type DumpPttlTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
-type RestoreTaskSender = UnboundedSender<ReplyFuture>;
-type RestoreTaskReceiver = UnboundedReceiver<ReplyFuture>;
+type RestoreTaskSender = UnboundedSender<(MgrCmdStateRestoreForward, ReplyFuture)>;
+type RestoreTaskReceiver = UnboundedReceiver<(MgrCmdStateRestoreForward, ReplyFuture)>;
 type UmSyncTaskSender<F> = UnboundedSender<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 
@@ -532,20 +532,20 @@ where
                 }
             };
 
-            let (_state, req_task, reply_receiver) =
+            let (state, req_task, reply_receiver) =
                 MgrCmdStateRestoreForward::from_state_exists(state, entry, &(*cmd_task_factory));
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to send restore and forward: {:?}", err);
             }
 
-            if let Err(err) = restore_task_sender.unbounded_send(reply_receiver) {
+            if let Err(err) = restore_task_sender.unbounded_send((state, reply_receiver)) {
                 debug!("failed to send restore task to queue: {:?}", err);
             }
         }
     }
 
     async fn handle_restore(mut restore_task_receiver: RestoreTaskReceiver) {
-        while let Some(reply_fut) = restore_task_receiver.next().await {
+        while let Some((state, reply_fut)) = restore_task_receiver.next().await {
             let resp = match reply_fut.await {
                 Ok(resp) => resp,
                 Err(err) => {
@@ -553,6 +553,9 @@ where
                     continue;
                 }
             };
+            // Drop the lock
+            let _ = state;
+
             const BUSYKEY: &[u8] = b"BUSYKEY";
             match resp {
                 Resp::Simple(_) => (),
@@ -571,8 +574,11 @@ where
         dst_sender: Arc<S>,
     ) {
         while let Some((state, reply_fut)) = umsync_task_receiver.next().await {
+            // The DUMP and RESTORE has already been processed in the source proxy.
+            // We can safely drop the lock here after reply_fut is done.
             match reply_fut.await {
                 Err(err) => {
+                    // drop the lock here
                     let task = state.into_inner();
                     task.set_resp_result(Ok(Resp::Error(
                         format!("{}: {:?}", FAILED_TO_ACCESS_SOURCE, err).into_bytes(),
@@ -581,6 +587,7 @@ where
                 }
                 Ok(Resp::Error(err)) => {
                     error!("Invalid reply of UMSYNC {:?}", err);
+                    // drop the lock here
                     let task = state.into_inner();
                     task.set_resp_result(Ok(Resp::Error(
                         format!("{}: {:?}", FAILED_TO_ACCESS_SOURCE, err).into_bytes(),
@@ -831,6 +838,9 @@ mod tests {
                 "UMSYNC" => {
                     cmd_ctx.set_resp_result(Ok(Resp::Simple(b"OK".to_vec())));
                 }
+                "DEL" => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Integer("1".to_string().into_bytes())));
+                }
                 _ => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(
                         "unexpected command".to_string().into_bytes(),
@@ -870,11 +880,13 @@ mod tests {
         }
     }
 
-    fn gen_test_cmd_ctx() -> (CmdCtx, CmdReplyReceiver) {
-        let resp = Resp::Arr(Array::Arr(vec![
-            Resp::Bulk(BulkStr::Str("GET".to_string().into())),
-            Resp::Bulk(BulkStr::Str("somekey".to_string().into())),
-        ]));
+    fn gen_test_cmd_ctx(command: Vec<&'static str>) -> (CmdCtx, CmdReplyReceiver) {
+        let resp = Resp::Arr(Array::Arr(
+            command
+                .into_iter()
+                .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
+                .collect(),
+        ));
         let cluster = ClusterName::try_from("mycluster").unwrap();
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
@@ -892,6 +904,7 @@ mod tests {
                 match packet.to_resp_slice() {
                     Resp::Bulk(BulkStr::Str(s)) => s.to_vec(),
                     Resp::Bulk(BulkStr::Nil) => "key_not_exists".to_string().into_bytes(),
+                    Resp::Integer(n) => n.to_vec(),
                     Resp::Error(err_str) => err_str.to_vec(),
                     others => format!("invalid_reply {:?}", others).into_bytes(),
                 }
@@ -922,7 +935,7 @@ mod tests {
             Arc::new(CmdCtxFactory::default()),
         );
 
-        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
         handler.handle_cmd_task(cmd_ctx);
         let s = run_future(&handler, reply_receiver).await;
@@ -945,7 +958,7 @@ mod tests {
             Arc::new(CmdCtxFactory::default()),
         );
 
-        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
         handler.handle_cmd_task(cmd_ctx);
         let s = run_future(&handler, reply_receiver).await;
@@ -968,7 +981,7 @@ mod tests {
             Arc::new(CmdCtxFactory::default()),
         );
 
-        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
         handler.handle_cmd_task(cmd_ctx);
         let s = run_future(&handler, reply_receiver).await;
@@ -997,7 +1010,7 @@ mod tests {
                 Arc::new(CmdCtxFactory::default()),
             );
 
-            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
@@ -1027,7 +1040,7 @@ mod tests {
                 Arc::new(CmdCtxFactory::default()),
             );
 
-            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
@@ -1061,7 +1074,7 @@ mod tests {
                 Arc::new(CmdCtxFactory::default()),
             );
 
-            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
@@ -1091,7 +1104,7 @@ mod tests {
                 Arc::new(CmdCtxFactory::default()),
             );
 
-            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
@@ -1121,7 +1134,7 @@ mod tests {
                 Arc::new(CmdCtxFactory::default()),
             );
 
-            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+            let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
             handler.handle_cmd_task(cmd_ctx);
             let s = run_future(&handler, reply_receiver).await;
@@ -1151,7 +1164,7 @@ mod tests {
             Arc::new(CmdCtxFactory::default()),
         );
 
-        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx();
+        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
         handler.handle_cmd_task(cmd_ctx);
         let s = run_future(&handler, reply_receiver).await;
@@ -1163,5 +1176,49 @@ mod tests {
         assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), Some(1));
 
         assert_eq!(s, "get_reply".to_string().into_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_key_dst_not_exists_for_del() {
+        let handler = RestoreDataCmdTaskHandler::new(
+            DummyCmdTaskSender::new(true, HashMap::new(), 666),
+            DummyCmdTaskSender::new(false, HashMap::new(), 1),
+            DummyCmdTaskSender::new(false, HashMap::new(), 0),
+            Arc::new(CmdCtxFactory::default()),
+        );
+
+        let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["DEL", "somekey"]);
+
+        handler.handle_cmd_task(cmd_ctx);
+        let s = run_future(&handler, reply_receiver).await;
+
+        assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
+        assert_eq!(handler.dst_sender.get_cmd_count("DEL"), Some(1));
+        assert_eq!(handler.src_proxy_sender.get_cmd_count("UMSYNC"), Some(1));
+        // These should be triggered by migrating task but not in this tests.
+        assert_eq!(handler.src_sender.get_cmd_count("DUMP"), None);
+        assert_eq!(handler.src_sender.get_cmd_count("PTTL"), None);
+        assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+
+        assert_eq!(s, b"1".to_vec());
+    }
+
+    #[test]
+    fn test_key_lock() {
+        let lock = KeyLock::new(1);
+        let some_key = b"some_key".to_vec();
+        let another_key = b"another_key".to_vec();
+        {
+            let _guard = lock.lock(some_key.clone(), 0).unwrap();
+            assert!(lock.lock(some_key.clone(), 0).is_none());
+            assert!(lock.lock(another_key.clone(), 0).is_some());
+        }
+        assert!(lock.lock(some_key.clone(), 0).is_some());
+
+        {
+            let _guard = lock.lock(some_key.clone(), 233).unwrap();
+            assert!(lock.lock(some_key.clone(), 0).is_none());
+            assert!(lock.lock(another_key.clone(), 0).is_some());
+        }
     }
 }
