@@ -226,6 +226,7 @@ impl DataCmdType {
 pub type CmdTypeTuple = (CmdType, DataCmdType);
 
 pub fn requires_blocking_migration(data_cmd_type: DataCmdType) -> bool {
+    // Any commands that could possibly delete the key should be migrated in a blocking way.
     match data_cmd_type {
         DataCmdType::DEL => true,
         DataCmdType::EVAL => true,

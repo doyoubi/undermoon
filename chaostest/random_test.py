@@ -154,7 +154,7 @@ class KeyValueTester:
             try:
                 v, proxy = rc.delete(k)
             except Exception as e:
-                logger.error('REDIS_TEST: failed to get {}: {}', k, e)
+                logger.error('REDIS_TEST: failed to del {}: {}', k, e)
                 raise
             self.kvs.discard(k)
             self.deleted_kvs.add(k)

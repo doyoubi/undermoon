@@ -6,6 +6,7 @@ use crate::common::resp_execution::keep_connecting_and_sending_cmd_with_cached_c
 use crate::common::response;
 use crate::common::try_chunks::TryChunksStreamExt;
 use crate::common::utils::pretty_print_bytes;
+use crate::common::yield_now::YieldNow;
 use crate::migration::task::MigrationError;
 use crate::protocol::{
     BinSafeStr, BulkStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp,
@@ -213,9 +214,19 @@ impl<T: CmdTask> ScanMigrationTask<T> {
             loop {
                 let cmd_tasks = if sleep_count >= SLEEP_BATCH_TIMES {
                     sleep_count = 0;
-                    match future::select(sync_tasks_receiver.next(), Delay::new(interval)).await {
-                        future::Either::Left((Some(cmd_tasks), _)) => Some(cmd_tasks),
-                        _ => None,
+                    if interval == Duration::from_secs(0) {
+                        // Need yield so that we won't get stuck in the unit tests.
+                        match future::select(sync_tasks_receiver.next(), YieldNow::default()).await
+                        {
+                            future::Either::Left((Some(cmd_tasks), _)) => Some(cmd_tasks),
+                            _ => None,
+                        }
+                    } else {
+                        match future::select(sync_tasks_receiver.next(), Delay::new(interval)).await
+                        {
+                            future::Either::Left((Some(cmd_tasks), _)) => Some(cmd_tasks),
+                            _ => None,
+                        }
                     }
                 } else {
                     sleep_count += 1;
