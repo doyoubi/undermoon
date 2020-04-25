@@ -165,6 +165,7 @@ pub enum MigrationError {
     RedisClient(RedisClientError),
     Io(io::Error),
     Timeout,
+    InvalidConfig,
 }
 
 impl fmt::Display for MigrationError {

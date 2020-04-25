@@ -162,11 +162,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         );
 
         let (send, handle) = new_auto_drop_future(send);
-        let send = send.map(|opt| {
-            opt.map_or(Err(MigrationError::Canceled), |r| {
-                r.map_err(MigrationError::RedisClient)
-            })
-        });
+        let send = send.map(|opt| opt.map_or(Err(MigrationError::Canceled), |r| r));
         (Box::pin(send), handle)
     }
 
@@ -177,7 +173,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         client_factory: Arc<F>,
         sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
-    ) -> Result<(), RedisClientError> {
+    ) -> Result<(), MigrationError> {
         const SLEEP_BATCH_TIMES: u64 = 10;
 
         let interval = min(
@@ -193,7 +189,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         let chunk_size = match NonZeroUsize::new(scan_count as usize) {
             None => {
                 error!("zero scan count");
-                return Err(RedisClientError::InitError);
+                return Err(MigrationError::InvalidConfig);
             }
             Some(chunk_size) => chunk_size,
         };
@@ -212,7 +208,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                 }
             };
             loop {
-                let cmd_tasks = if sleep_count >= SLEEP_BATCH_TIMES {
+                let sync_tasks = if sleep_count >= SLEEP_BATCH_TIMES {
                     sleep_count = 0;
                     if interval == Duration::from_secs(0) {
                         // Need yield so that we won't get stuck in the unit tests.
@@ -236,17 +232,33 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                     }
                 };
 
-                let res = Self::scan_and_migrate_keys(
-                    &slot_ranges,
-                    scan_index,
-                    cached_dst_client.take(),
-                    &mut src_client,
-                    dst_address.clone(),
-                    client_factory.clone(),
-                    scan_count,
-                    cmd_tasks,
-                )
-                .await;
+                let res = match sync_tasks {
+                    Some(cmd_tasks) => {
+                        let res = Self::handle_blocking_requests(
+                            &slot_ranges,
+                            cached_dst_client.take(),
+                            &mut src_client,
+                            dst_address.clone(),
+                            client_factory.clone(),
+                            cmd_tasks,
+                        )
+                        .await;
+                        res.map(|dst_client| (scan_index, dst_client))
+                    }
+                    None => {
+                        Self::scan_and_migrate_keys(
+                            &slot_ranges,
+                            scan_index,
+                            cached_dst_client.take(),
+                            &mut src_client,
+                            dst_address.clone(),
+                            client_factory.clone(),
+                            scan_count,
+                        )
+                        .await
+                    }
+                };
+
                 match res {
                     Err(err) => {
                         error!("failed to scan and migrate {:?}", err);
@@ -265,7 +277,6 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn scan_and_migrate_keys<F: RedisClientFactory>(
         slot_ranges: &SlotRangeArray,
         index: u64,
@@ -274,48 +285,66 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         dst_address: String,
         client_factory: Arc<F>,
         scan_count: u64,
-        sync_tasks: Option<Vec<T>>,
     ) -> Result<(u64, Option<F::Client>), RedisClientError> {
-        let (next_index, keys) = match &sync_tasks {
-            Some(tasks) => {
-                let keys = tasks
-                    .iter()
-                    .filter_map(|t| t.get_key().map(|b| b.to_vec()))
-                    .collect();
-                (index, keys)
-            }
-            None => {
-                let ScanResponse { next_index, keys } =
-                    Self::scan_keys(src_client, index, scan_count).await?;
-                (next_index, keys)
-            }
-        };
+        let ScanResponse { next_index, keys } =
+            Self::scan_keys(src_client, index, scan_count).await?;
 
         let entries = Self::produce_entries(slot_ranges, keys, src_client).await?;
-        let res = if entries.is_empty() {
-            Ok(dst_client)
-        } else {
-            let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
-            let dst_client =
-                Self::forward_entries(dst_address, dst_client, client_factory, entries).await;
-
-            Self::delete_keys(src_client, transferred_keys)
-                .await
-                .map(move |()| Some(dst_client))
-        };
-
-        if let Some(cmd_tasks) = sync_tasks {
-            let resp = if res.is_ok() {
-                Resp::Simple(response::OK_REPLY.to_string().into_bytes())
-            } else {
-                Resp::Error(b"failed to delete keys".to_vec())
-            };
-            for cmd_task in cmd_tasks.into_iter() {
-                cmd_task.set_resp_result(Ok(resp.clone()));
-            }
+        if entries.is_empty() {
+            return Ok((next_index, dst_client));
         }
 
-        res.map(move |dst_client| (next_index, dst_client))
+        let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
+        let dst_client =
+            Self::forward_entries(dst_address, dst_client, client_factory, entries).await;
+
+        Self::delete_keys(src_client, transferred_keys).await?;
+        Ok((next_index, Some(dst_client)))
+    }
+
+    async fn handle_blocking_requests<F: RedisClientFactory>(
+        slot_ranges: &SlotRangeArray,
+        dst_client: Option<F::Client>,
+        src_client: &mut F::Client,
+        dst_address: String,
+        client_factory: Arc<F>,
+        cmd_tasks: Vec<T>,
+    ) -> Result<Option<F::Client>, RedisClientError> {
+        let keys = cmd_tasks
+            .iter()
+            .filter_map(|t| t.get_key().map(|b| b.to_vec()))
+            .collect();
+
+        let res = match Self::produce_entries(slot_ranges, keys, src_client).await {
+            Ok(entries) => {
+                if entries.is_empty() {
+                    Ok(dst_client)
+                } else {
+                    let transferred_keys: Vec<_> =
+                        entries.iter().map(|entry| entry.key.clone()).collect();
+                    let dst_client =
+                        Self::forward_entries(dst_address, dst_client, client_factory, entries)
+                            .await;
+
+                    Self::delete_keys(src_client, transferred_keys)
+                        .await
+                        .map(move |()| Some(dst_client))
+                }
+            }
+            Err(err) => Err(err),
+        };
+
+        let resp = if res.is_ok() {
+            Resp::Simple(response::OK_REPLY.to_string().into_bytes())
+        } else {
+            Resp::Error(b"failed to delete keys".to_vec())
+        };
+
+        for cmd_task in cmd_tasks.into_iter() {
+            cmd_task.set_resp_result(Ok(resp.clone()));
+        }
+
+        res
     }
 
     async fn scan_keys<C: RedisClient>(

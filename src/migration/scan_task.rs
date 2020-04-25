@@ -9,7 +9,6 @@ use crate::common::cluster::{
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::resp_execution::keep_connecting_and_sending_cmd;
 use crate::common::response;
-use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, pretty_print_bytes, ThreadSafe};
 use crate::common::version::UNDERMOON_MIGRATION_VERSION;
 use crate::protocol::{
@@ -56,7 +55,6 @@ where
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     task: Arc<ScanMigrationTask<T>>,
     blocking_ctrl: Arc<BC>,
-    _future_registry: Arc<TrackedFutureRegistry>,
     phantom: PhantomData<T>,
     active_redirection: bool,
 }
@@ -76,7 +74,6 @@ where
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         blocking_ctrl: Arc<BC>,
-        future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let task = ScanMigrationTask::new(
@@ -100,7 +97,6 @@ where
             stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
             task: Arc::new(task),
             blocking_ctrl,
-            _future_registry: future_registry,
             phantom: PhantomData,
             active_redirection,
         }

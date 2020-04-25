@@ -95,7 +95,6 @@ where
             self.sender_factory.clone(),
             self.cmd_task_factory.clone(),
             blocking_ctrl_factory,
-            self.future_registry.clone(),
         )
     }
 
@@ -418,7 +417,6 @@ where
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
         blocking_ctrl_factory: Arc<BCF>,
-        future_registry: Arc<TrackedFutureRegistry>,
     ) -> (Self, Vec<NewTask<T>>)
     where
         RCF: RedisClientFactory,
@@ -512,7 +510,6 @@ where
                                 meta.clone(),
                                 client_factory.clone(),
                                 ctrl,
-                                future_registry.clone(),
                             ));
                             new_tasks.push(NewTask {
                                 cluster_name: cluster_name.clone(),
