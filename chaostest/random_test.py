@@ -91,7 +91,7 @@ class KeyValueTester:
 
             n = random.randint(0, 10)
             if n < 4:
-                self.test_set(proxies)
+                self.test_set(proxies, self.cluster_name)
             elif n < 8:
                 self.test_get(proxies)
             else:
@@ -101,14 +101,16 @@ class KeyValueTester:
             logger.error('REDIS_TEST_FAILED: {} ', self.overmoon_client.get_cluster(self.cluster_name))
             raise
 
-    def test_set(self, proxies):
+    def test_set(self, proxies, cluster_name):
         if len(self.kvs) >= self.MAX_KVS:
             return
 
         rc = self.gen_client(proxies)
         t = int(time.time())
         for i in range(10):
-            k = 'test:{}:{}'.format(t, i)
+            # Need cluster name to avoid key being transferred to another cluster
+            # so that the key get recovered if it was set in multiple clusters.
+            k = 'test:{}:{}:{}'.format(cluster_name, t, i)
             try:
                 res, proxy = rc.set(k, k)
             except Exception as e:

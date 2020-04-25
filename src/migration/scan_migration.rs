@@ -1,10 +1,10 @@
 use super::task::{ScanResponse, SlotRangeArray};
-use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::cluster::SlotRange;
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::resp_execution::keep_connecting_and_sending_cmd_with_cached_client;
 use crate::common::response;
+use crate::common::try_chunks::TryChunksStreamExt;
 use crate::common::utils::pretty_print_bytes;
 use crate::migration::task::MigrationError;
 use crate::protocol::{
@@ -15,7 +15,7 @@ use crate::proxy::backend::CmdTask;
 use atomic_option::AtomicOption;
 use btoi;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::{future, Future, FutureExt, Stream, StreamExt};
+use futures::{future, Future, FutureExt, StreamExt};
 use futures_timer::Delay;
 use std::cmp::min;
 use std::num::NonZeroUsize;
@@ -23,7 +23,6 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio;
 
 pub const PTTL_NO_EXPIRE: &[u8] = b"-1";
 pub const PTTL_KEY_NOT_FOUND: &[u8] = b"-2";
@@ -197,11 +196,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
             }
             Some(chunk_size) => chunk_size,
         };
-        let mut sync_tasks_receiver = sync_tasks_receiver.try_chunks_timeout(
-            chunk_size,
-            Duration::from_secs(0),
-            Duration::from_secs(0),
-        );
+        let mut sync_tasks_receiver = sync_tasks_receiver.try_chunks(chunk_size);
 
         let mut scan_index = 0;
         let mut cached_dst_client = None;
@@ -216,6 +211,20 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                 }
             };
             loop {
+                let cmd_tasks = if sleep_count >= SLEEP_BATCH_TIMES {
+                    sleep_count = 0;
+                    match future::select(sync_tasks_receiver.next(), Delay::new(interval)).await {
+                        future::Either::Left((Some(cmd_tasks), _)) => Some(cmd_tasks),
+                        _ => None,
+                    }
+                } else {
+                    sleep_count += 1;
+                    match future::select(sync_tasks_receiver.next(), future::ready(())).await {
+                        future::Either::Left((Some(cmd_tasks), _)) => Some(cmd_tasks),
+                        _ => None,
+                    }
+                };
+
                 let res = Self::scan_and_migrate_keys(
                     &slot_ranges,
                     scan_index,
@@ -223,8 +232,8 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                     &mut src_client,
                     dst_address.clone(),
                     client_factory.clone(),
-                    &mut sync_tasks_receiver,
                     scan_count,
+                    cmd_tasks,
                 )
                 .await;
                 match res {
@@ -240,47 +249,36 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                         cached_dst_client = dst_client;
                     }
                 }
-
-                if sleep_count >= SLEEP_BATCH_TIMES {
-                    tokio::task::yield_now().await;
-                    // Delay::new(Duration::from_secs(0)).await;
-                    sleep_count = 0;
-                } else {
-                    sleep_count += 1;
-                }
             }
             Delay::new(interval).await;
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn scan_and_migrate_keys<F: RedisClientFactory, S: Stream<Item = Vec<T>> + Unpin>(
+    async fn scan_and_migrate_keys<F: RedisClientFactory>(
         slot_ranges: &SlotRangeArray,
         index: u64,
         dst_client: Option<F::Client>,
         src_client: &mut F::Client,
         dst_address: String,
         client_factory: Arc<F>,
-        sync_tasks_receiver: &mut S,
         scan_count: u64,
+        sync_tasks: Option<Vec<T>>,
     ) -> Result<(u64, Option<F::Client>), RedisClientError> {
-        let task_receiver = sync_tasks_receiver.next();
-
-        let (next_index, keys, sync_tasks) =
-            match future::select(task_receiver, future::ready(())).await {
-                future::Either::Left((Some(cmd_tasks), _)) => {
-                    let keys = cmd_tasks
-                        .iter()
-                        .filter_map(|t| t.get_key().map(|b| b.to_vec()))
-                        .collect();
-                    (index, keys, Some(cmd_tasks))
-                }
-                _ => {
-                    let ScanResponse { next_index, keys } =
-                        Self::scan_keys(src_client, index, scan_count).await?;
-                    (next_index, keys, None)
-                }
-            };
+        let (next_index, keys) = match &sync_tasks {
+            Some(tasks) => {
+                let keys = tasks
+                    .iter()
+                    .filter_map(|t| t.get_key().map(|b| b.to_vec()))
+                    .collect();
+                (index, keys)
+            }
+            None => {
+                let ScanResponse { next_index, keys } =
+                    Self::scan_keys(src_client, index, scan_count).await?;
+                (next_index, keys)
+            }
+        };
 
         let entries = Self::produce_entries(slot_ranges, keys, src_client).await?;
         let res = if entries.is_empty() {
