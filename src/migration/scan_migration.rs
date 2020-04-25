@@ -140,7 +140,6 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
     ) -> (MgrFut, FutureAutoStopHandle) {
-        // let data = (slot_ranges, 0, None);
         let interval = min(
             Duration::from_micros(config.get_scan_interval()),
             Duration::from_millis(10),

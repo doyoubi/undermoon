@@ -6,11 +6,15 @@ use crate::common::utils::pretty_print_bytes;
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespPacket, RespVec, VFunctor};
 use atomic_option::AtomicOption;
+use dashmap::DashSet;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::{select, Future, FutureExt, StreamExt};
+use futures::{future, select, Future, FutureExt, StreamExt};
+use futures_timer::Delay;
+use std::fmt;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 const KEY_NOT_EXISTS: &str = "0";
 const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access source node";
@@ -23,18 +27,24 @@ type DataEntryFuture =
 struct MgrCmdStateExists<F: CmdTaskFactory> {
     inner_task: F::Task,
     key: BinSafeStr,
+    slot: usize,
 }
 
 impl<F: CmdTaskFactory> MgrCmdStateExists<F> {
     fn from_task(
         inner_task: F::Task,
         key: BinSafeStr,
+        slot: usize,
         cmd_task_factory: &F,
     ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
         let resp = Self::gen_exists_resp(&key);
         let (cmd_task, reply_fut) = cmd_task_factory.create_with(&inner_task, resp);
         let task = ReqTask::Simple(cmd_task);
-        let state = Self { inner_task, key };
+        let state = Self {
+            inner_task,
+            key,
+            slot,
+        };
         (state, task, reply_fut)
     }
 
@@ -82,14 +92,18 @@ impl MgrCmdStateForward {
 struct MgrCmdStateDumpPttl<F: CmdTaskFactory> {
     inner_task: F::Task,
     key: BinSafeStr,
+    lock_guard: KeyLockGuard,
 }
 
 impl<F: CmdTaskFactory> MgrCmdStateDumpPttl<F> {
     fn from_state_exists(
         state: MgrCmdStateExists<F>,
         cmd_task_factory: &F,
+        lock_guard: KeyLockGuard,
     ) -> (Self, ReqTask<F::Task>, DataEntryFuture) {
-        let MgrCmdStateExists { inner_task, key } = state;
+        let MgrCmdStateExists {
+            inner_task, key, ..
+        } = state;
 
         let (dump_cmd_task, dump_reply_fut) =
             cmd_task_factory.create_with(&inner_task, Self::gen_dump_resp(&key));
@@ -97,7 +111,11 @@ impl<F: CmdTaskFactory> MgrCmdStateDumpPttl<F> {
             cmd_task_factory.create_with(&inner_task, Self::gen_pttl_resp(&key));
 
         let task = ReqTask::Multi(vec![dump_cmd_task, pttl_cmd_task]);
-        let state = Self { inner_task, key };
+        let state = Self {
+            inner_task,
+            key,
+            lock_guard,
+        };
         let entry_fut = Box::pin(get_data_entry(dump_reply_fut, pttl_reply_fut));
 
         (state, task, entry_fut)
@@ -159,20 +177,28 @@ async fn get_data_entry(
 struct MgrCmdStateUmSync<F: CmdTaskFactory> {
     inner_task: F::Task,
     key: BinSafeStr,
+    lock_guard: KeyLockGuard,
 }
 
 impl<F: CmdTaskFactory> MgrCmdStateUmSync<F> {
     fn from_state_exists(
         state: MgrCmdStateExists<F>,
         cmd_task_factory: &F,
+        lock_guard: KeyLockGuard,
     ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
-        let MgrCmdStateExists { inner_task, key } = state;
+        let MgrCmdStateExists {
+            inner_task, key, ..
+        } = state;
 
         let (umsync_cmd_task, umsync_reply_fut) =
             cmd_task_factory.create_with(&inner_task, Self::gen_umsync_resp(&key));
 
         let task = ReqTask::Simple(umsync_cmd_task);
-        let state = Self { inner_task, key };
+        let state = Self {
+            inner_task,
+            key,
+            lock_guard,
+        };
         let sync_fut = Box::pin(umsync_reply_fut);
 
         (state, task, sync_fut)
@@ -193,7 +219,9 @@ impl<F: CmdTaskFactory> MgrCmdStateUmSync<F> {
 }
 
 #[derive(Debug)]
-struct MgrCmdStateRestoreForward;
+struct MgrCmdStateRestoreForward {
+    lock_guard: KeyLockGuard,
+}
 
 impl MgrCmdStateRestoreForward {
     fn from_state_exists<F: CmdTaskFactory>(
@@ -201,13 +229,21 @@ impl MgrCmdStateRestoreForward {
         entry: DataEntry,
         cmd_task_factory: &F,
     ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
-        let MgrCmdStateDumpPttl { inner_task, key } = state;
+        let MgrCmdStateDumpPttl {
+            inner_task,
+            key,
+            lock_guard,
+        } = state;
         let DataEntry { raw_data, pttl } = entry;
         let resp = Self::gen_restore_resp(&key, raw_data, pttl);
         let (restore_cmd_task, restore_reply_fut) = cmd_task_factory.create_with(&inner_task, resp);
 
         let task = ReqTask::Multi(vec![restore_cmd_task, inner_task]);
-        (MgrCmdStateRestoreForward, task, restore_reply_fut)
+        (
+            MgrCmdStateRestoreForward { lock_guard },
+            task,
+            restore_reply_fut,
+        )
     }
 
     fn gen_restore_resp(key: &[u8], raw_data: BinSafeStr, pttl: BinSafeStr) -> RespVec {
@@ -254,6 +290,7 @@ where
         UmSyncTaskReceiver<F>,
     )>,
     cmd_task_factory: Arc<F>,
+    key_lock: Arc<KeyLock>,
 }
 
 impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCmdTaskHandler<F, S>
@@ -279,6 +316,7 @@ where
             restore_task_receiver,
             umsync_task_receiver,
         )));
+        let key_lock = Arc::new(KeyLock::new(LOCK_SHARD_SIZE));
         Self {
             src_sender,
             dst_sender,
@@ -289,6 +327,7 @@ where
             umsync_task_sender,
             task_receivers,
             cmd_task_factory,
+            key_lock,
         }
     }
 
@@ -299,6 +338,7 @@ where
     }
 
     pub async fn run_task_handler(&self) {
+        let exists_task_sender = self.exists_task_sender.clone();
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
         let umsync_task_sender = self.umsync_task_sender.clone();
         let src_sender = self.src_sender.clone();
@@ -306,6 +346,7 @@ where
         let src_proxy_sender = self.src_proxy_sender.clone();
         let restore_task_sender = self.restore_task_sender.clone();
         let cmd_task_factory = self.cmd_task_factory.clone();
+        let key_lock = self.key_lock.clone();
 
         let receiver_opt = self.task_receivers.take(Ordering::SeqCst).map(|p| *p);
         let (
@@ -322,6 +363,7 @@ where
         };
 
         let exists_task_handler = Self::handle_exists_task(
+            exists_task_sender,
             exists_task_receiver,
             dump_pttl_task_sender,
             umsync_task_sender,
@@ -329,6 +371,7 @@ where
             dst_sender.clone(),
             src_proxy_sender,
             cmd_task_factory.clone(),
+            key_lock.clone(),
         );
 
         let dump_pttl_task_handler = Self::handle_dump_pttl_task(
@@ -378,7 +421,9 @@ where
         info!("All remaining tasks in migration backend are finished");
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_exists_task(
+        exists_task_sender: ExistsTaskSender<F>,
         mut exists_task_receiver: ExistsTaskReceiver<F>,
         dump_pttl_task_sender: DumpPttlTaskSender<F>,
         umsync_task_sender: UmSyncTaskSender<F>,
@@ -386,6 +431,7 @@ where
         dst_sender: Arc<S>,
         src_proxy_sender: Arc<S>,
         cmd_task_factory: Arc<F>,
+        key_lock: Arc<KeyLock>,
     ) {
         while let Some((state, reply_receiver)) = exists_task_receiver.next().await {
             let res = reply_receiver.await;
@@ -396,7 +442,7 @@ where
                     continue;
                 }
             };
-            let key_exists = match resp {
+            let key_exists = match &resp {
                 Resp::Integer(num) => num.as_slice() != KEY_NOT_EXISTS.as_bytes(),
                 others => {
                     error!("Unexpected reply from EXISTS: {:?}. Skip it.", others);
@@ -412,10 +458,32 @@ where
                 continue;
             }
 
+            // Avoid restoring and deleting at the same time.
+            let (lock_guard, state) = match key_lock.lock(state.key.clone(), state.slot) {
+                Some(lock_guard) => (lock_guard, state),
+                None => {
+                    // Retry later
+                    let reply_receiver = Box::pin(future::ready(Ok(resp)));
+                    match exists_task_sender.unbounded_send((state, reply_receiver)) {
+                        Ok(()) => continue,
+                        Err(err) => {
+                            let (state, _reply_receiver) = err.into_inner();
+                            loop {
+                                warn!("EXISTS channel is closed. Waiting to get lock.");
+                                match key_lock.lock(state.key.clone(), state.slot) {
+                                    Some(lock_guard) => break (lock_guard, state),
+                                    None => Delay::new(Duration::from_millis(3)).await,
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
             let (_, data_cmd_type) = state.inner_task.get_type();
             if requires_blocking_migration(data_cmd_type) {
                 let (state, req_task, reply_fut) =
-                    MgrCmdStateUmSync::from_state_exists(state, &(*cmd_task_factory));
+                    MgrCmdStateUmSync::from_state_exists(state, &(*cmd_task_factory), lock_guard);
                 if let Err(err) = src_proxy_sender.send(req_task) {
                     debug!("failed to send umsync: {:?}", err);
                 }
@@ -426,7 +494,7 @@ where
             }
 
             let (state, req_task, reply_fut) =
-                MgrCmdStateDumpPttl::from_state_exists(state, &(*cmd_task_factory));
+                MgrCmdStateDumpPttl::from_state_exists(state, &(*cmd_task_factory), lock_guard);
             if let Err(err) = src_sender.send(req_task) {
                 debug!("failed to send dump pttl: {:?}", err);
             }
@@ -530,9 +598,9 @@ where
     }
 
     pub fn handle_cmd_task(&self, cmd_task: F::Task) {
-        let key = match cmd_task.get_key() {
-            Some(key) => key.to_vec(),
-            None => {
+        let (key, slot) = match (cmd_task.get_key(), cmd_task.get_slot()) {
+            (Some(key), Some(slot)) => (key.to_vec(), slot),
+            _ => {
                 cmd_task.set_resp_result(Ok(Resp::Error(
                     String::from("Missing key while migrating").into_bytes(),
                 )));
@@ -541,7 +609,7 @@ where
         };
 
         let (state, task, reply_fut) =
-            MgrCmdStateExists::from_task(cmd_task, key, &(*self.cmd_task_factory));
+            MgrCmdStateExists::from_task(cmd_task, key, slot, &(*self.cmd_task_factory));
         if let Err(err) = self.dst_sender.send(task) {
             let cmd_task: F::Task = state.into_inner();
             cmd_task.set_resp_result(Ok(Resp::Error(
@@ -573,6 +641,82 @@ impl<F: CmdTaskFactory> Drop for StopHandle<F> {
     fn drop(&mut self) {
         info!("RestoreDataCmdTaskHandler start to stop");
         self.exists_task_sender.close_channel();
+    }
+}
+
+const LOCK_SHARD_SIZE: usize = 256;
+
+struct KeyLock {
+    inner: Arc<KeyLockInner>,
+}
+
+impl KeyLock {
+    fn new(shard_size: usize) -> Self {
+        Self {
+            inner: Arc::new(KeyLockInner::new(shard_size)),
+        }
+    }
+
+    fn lock(&self, key: BinSafeStr, slot: usize) -> Option<KeyLockGuard> {
+        if self.inner.lock(key.clone(), slot) {
+            Some(KeyLockGuard {
+                inner: self.inner.clone(),
+                key,
+                slot,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+struct KeyLockInner {
+    shards: Vec<DashSet<BinSafeStr>>,
+}
+
+impl KeyLockInner {
+    fn new(shard_size: usize) -> Self {
+        let mut shards = Vec::with_capacity(shard_size);
+        for _ in 0..shard_size {
+            shards.push(DashSet::new());
+        }
+        Self { shards }
+    }
+
+    fn lock(&self, key: BinSafeStr, slot: usize) -> bool {
+        let shard_slot = slot % self.shards.len();
+        let s = match self.shards.get(shard_slot) {
+            None => return false,
+            Some(s) => s,
+        };
+        s.insert(key)
+    }
+
+    fn unlock(&self, key: &[u8], slot: usize) {
+        let shard_slot = slot % self.shards.len();
+        let s = match self.shards.get(shard_slot) {
+            None => return,
+            Some(s) => s,
+        };
+        s.remove(key);
+    }
+}
+
+struct KeyLockGuard {
+    inner: Arc<KeyLockInner>,
+    key: BinSafeStr,
+    slot: usize,
+}
+
+impl fmt::Debug for KeyLockGuard {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "KeyLockGuard<key: {:?}, slot: {}>", self.key, self.slot)
+    }
+}
+
+impl Drop for KeyLockGuard {
+    fn drop(&mut self) {
+        self.inner.unlock(self.key.as_slice(), self.slot);
     }
 }
 
