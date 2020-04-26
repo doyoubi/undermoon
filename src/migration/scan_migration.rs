@@ -253,7 +253,16 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                             cmd_tasks,
                         )
                         .await;
-                        res.map(|dst_client| (scan_index, dst_client))
+                        match res {
+                            Err(err) => {
+                                error!("failed to handle blocking requests {:?}", err);
+                                break;
+                            }
+                            Ok(dst_client) => {
+                                cached_dst_client = dst_client;
+                            }
+                        }
+                        continue;
                     }
                     None => {
                         Self::scan_and_migrate_keys(
