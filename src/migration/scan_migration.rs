@@ -85,6 +85,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
             dst_address,
             slot_ranges,
             client_factory,
+            sender.clone(),
             receiver,
             config,
         );
@@ -137,6 +138,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         dst_address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
+        sync_tasks_sender: UnboundedSender<T>,
         sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
     ) -> (MgrFut, FutureAutoStopHandle) {
@@ -157,6 +159,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
             dst_address,
             slot_ranges,
             client_factory,
+            sync_tasks_sender,
             sync_tasks_receiver,
             config,
         );
@@ -171,7 +174,8 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         dst_address: String,
         slot_ranges: SlotRangeArray,
         client_factory: Arc<F>,
-        sync_tasks_receiver: UnboundedReceiver<T>,
+        sync_tasks_sender: UnboundedSender<T>,
+        mut sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
     ) -> Result<(), MigrationError> {
         const SLEEP_BATCH_TIMES: u64 = 10;
@@ -189,6 +193,12 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         let chunk_size = match NonZeroUsize::new(scan_count as usize) {
             None => {
                 error!("zero scan count");
+                sync_tasks_sender.close_channel();
+                while let Some(cmd_task) = sync_tasks_receiver.next().await {
+                    cmd_task.set_resp_result(Ok(Resp::Simple(
+                        response::MIGRATING_FINISHED.to_string().into_bytes(),
+                    )));
+                }
                 return Err(MigrationError::InvalidConfig);
             }
             Some(chunk_size) => chunk_size,
@@ -266,6 +276,14 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                     }
                     Ok((new_scan_index, dst_client)) => {
                         if new_scan_index == 0 {
+                            sync_tasks_sender.close_channel();
+                            while let Some(cmd_tasks) = sync_tasks_receiver.next().await {
+                                for cmd_task in cmd_tasks.into_iter() {
+                                    cmd_task.set_resp_result(Ok(Resp::Simple(
+                                        response::MIGRATING_FINISHED.to_string().into_bytes(),
+                                    )));
+                                }
+                            }
                             return Ok(());
                         }
                         scan_index = new_scan_index;
