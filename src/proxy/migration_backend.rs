@@ -410,7 +410,7 @@ where
             exists_task_receiver,
             dump_pttl_task_sender,
             umsync_task_sender,
-            src_sender,
+            src_sender.clone(),
             dst_sender.clone(),
             src_proxy_sender,
             cmd_task_factory.clone(),
@@ -426,7 +426,7 @@ where
 
         let restore_task_handler = Self::handle_restore(
             restore_task_receiver,
-            dst_sender.clone(),
+            src_sender,
             del_task_sender.clone(),
             cmd_task_factory,
         );
@@ -607,7 +607,7 @@ where
 
     async fn handle_restore(
         mut restore_task_receiver: RestoreTaskReceiver<F>,
-        dst_sender: Arc<S>,
+        src_sender: Arc<S>,
         del_task_sender: DeleteKeyTaskSender,
         cmd_task_factory: Arc<F>,
     ) {
@@ -641,8 +641,8 @@ where
             let (_state, req_task, reply_receiver) =
                 MgrCmdStateDel::from_task_context(task_context, key, &(*cmd_task_factory));
 
-            if let Err(err) = dst_sender.send(req_task) {
-                warn!("failed to send DEL to proxy server: {:?}", err);
+            if let Err(err) = src_sender.send(req_task) {
+                warn!("failed to send DEL to source node: {:?}", err);
                 continue;
             }
             if del_task_sender.unbounded_send(reply_receiver).is_err() {
@@ -682,7 +682,6 @@ where
             let (_state, req_task) = MgrCmdStateForward::from_state_umsync(state);
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to forward: {:?}", err);
-                continue;
             }
         }
     }
@@ -1069,6 +1068,9 @@ mod tests {
         assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
         assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
         assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), Some(1));
+        // This is async
+        // assert_eq!(handler.src_sender.get_cmd_count("DEL"), Some(1));
+        assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
         assert_eq!(s, "get_reply".to_string().into_bytes());
     }
@@ -1092,6 +1094,8 @@ mod tests {
         assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
         assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
         assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+        assert_eq!(handler.src_sender.get_cmd_count("DEL"), None);
+        assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
         assert_eq!(s, "key_not_exists".to_string().into_bytes());
     }
@@ -1121,6 +1125,8 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("DUMP"), None);
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), None);
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(handler.src_sender.get_cmd_count("DEL"), None);
+            assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
             assert!(s.starts_with("future_returns_error".as_bytes()));
         }
@@ -1151,6 +1157,8 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("DUMP"), None);
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), None);
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(handler.src_sender.get_cmd_count("DEL"), None);
+            assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
             if i == 0 {
                 assert_eq!(s, "GET cmd error".as_bytes());
@@ -1185,6 +1193,8 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(handler.src_sender.get_cmd_count("DEL"), None);
+            assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
             assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
@@ -1215,6 +1225,8 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+            assert_eq!(handler.src_sender.get_cmd_count("DEL"), None);
+            assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
             assert!(s.starts_with(FAILED_TO_ACCESS_SOURCE.as_bytes()));
         }
@@ -1245,6 +1257,8 @@ mod tests {
             assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
             assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
             assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), Some(1));
+            assert_eq!(handler.src_sender.get_cmd_count("DEL"), None);
+            assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
             if i == 0 {
                 // Since the last RESTORE and GET command are sent at the same time,
@@ -1275,6 +1289,9 @@ mod tests {
         assert_eq!(handler.src_sender.get_cmd_count("DUMP"), Some(1));
         assert_eq!(handler.src_sender.get_cmd_count("PTTL"), Some(1));
         assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), Some(1));
+        // This is async
+        // assert_eq!(handler.src_sender.get_cmd_count("DEL"), Some(1));
+        assert_eq!(handler.dst_sender.get_cmd_count("DEL"), None);
 
         assert_eq!(s, "get_reply".to_string().into_bytes());
     }
@@ -1300,6 +1317,7 @@ mod tests {
         assert_eq!(handler.src_sender.get_cmd_count("DUMP"), None);
         assert_eq!(handler.src_sender.get_cmd_count("PTTL"), None);
         assert_eq!(handler.dst_sender.get_cmd_count("RESTORE"), None);
+        assert_eq!(handler.src_sender.get_cmd_count("DEL"), None);
 
         assert_eq!(s, b"1".to_vec());
     }
