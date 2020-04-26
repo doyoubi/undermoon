@@ -60,14 +60,6 @@ impl ClusterConfig {
                 self.migration_config.max_blocking_time.to_string(),
             ),
             (
-                "migration_delete_interval",
-                self.migration_config.delete_interval.to_string(),
-            ),
-            (
-                "migration_delete_count",
-                self.migration_config.delete_count.to_string(),
-            ),
-            (
                 "migration_scan_interval",
                 self.migration_config.scan_interval.to_string(),
             ),
@@ -149,8 +141,6 @@ impl<'de> Deserialize<'de> for CompressionStrategy {
 pub struct MigrationConfig {
     pub max_migration_time: u64,
     pub max_blocking_time: u64,
-    pub delete_interval: u64,
-    pub delete_count: u64,
     pub scan_interval: u64,
     pub scan_count: u64,
 }
@@ -170,18 +160,6 @@ impl MigrationConfig {
                     .parse::<u64>()
                     .map_err(|_| ConfigError::InvalidValue)?;
                 self.max_blocking_time = v;
-            }
-            "delete_interval" => {
-                let v = value
-                    .parse::<u64>()
-                    .map_err(|_| ConfigError::InvalidValue)?;
-                self.delete_interval = v;
-            }
-            "delete_count" => {
-                let v = value
-                    .parse::<u64>()
-                    .map_err(|_| ConfigError::InvalidValue)?;
-                self.delete_count = v;
             }
             "scan_interval" => {
                 let v = value
@@ -209,8 +187,6 @@ impl Default for MigrationConfig {
         Self {
             max_migration_time: 3 * 60 * 60, // 3 hours
             max_blocking_time: 10_000,       // 10 seconds waiting for switch
-            delete_interval: 500,            // 500 microseconds
-            delete_count: 16,
             scan_interval: 500, // 500 microseconds
             scan_count: 16,
         }
@@ -220,8 +196,6 @@ impl Default for MigrationConfig {
 pub struct AtomicMigrationConfig {
     max_migration_time: AtomicU64,
     max_blocking_time: AtomicU64,
-    delete_interval: AtomicU64,
-    delete_count: AtomicU64,
     scan_interval: AtomicU64,
     scan_count: AtomicU64,
 }
@@ -237,8 +211,6 @@ impl AtomicMigrationConfig {
         Self {
             max_migration_time: AtomicU64::new(config.max_migration_time),
             max_blocking_time: AtomicU64::new(config.max_blocking_time),
-            delete_interval: AtomicU64::new(config.delete_interval),
-            delete_count: AtomicU64::new(config.delete_count),
             scan_interval: AtomicU64::new(config.scan_interval),
             scan_count: AtomicU64::new(config.scan_count),
         }
@@ -250,14 +222,6 @@ impl AtomicMigrationConfig {
 
     pub fn get_max_blocking_time(&self) -> u64 {
         self.max_blocking_time.load(Ordering::SeqCst)
-    }
-
-    pub fn get_delete_interval(&self) -> u64 {
-        self.delete_interval.load(Ordering::SeqCst)
-    }
-
-    pub fn get_delete_count(&self) -> u64 {
-        self.delete_count.load(Ordering::SeqCst)
     }
 
     pub fn get_scan_interval(&self) -> u64 {
@@ -293,13 +257,13 @@ mod tests {
     #[test]
     fn test_config_set_field() {
         let mut migration_config = MigrationConfig::default();
-        migration_config.set_field("delete_count", "233").unwrap();
-        assert_eq!(migration_config.delete_count, 233);
+        migration_config.set_field("scan_count", "233").unwrap();
+        assert_eq!(migration_config.scan_count, 233);
 
         let mut cluster_config = ClusterConfig::default();
         cluster_config
-            .set_field("migration_delete_count", "666")
+            .set_field("migration_scan_count", "666")
             .unwrap();
-        assert_eq!(cluster_config.migration_config.delete_count, 666);
+        assert_eq!(cluster_config.migration_config.scan_count, 666);
     }
 }
