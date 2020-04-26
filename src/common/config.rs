@@ -187,7 +187,7 @@ impl Default for MigrationConfig {
         Self {
             max_migration_time: 3 * 60 * 60, // 3 hours
             max_blocking_time: 10_000,       // 10 seconds waiting for switch
-            scan_interval: 500, // 500 microseconds
+            scan_interval: 500,              // 500 microseconds
             scan_count: 16,
         }
     }

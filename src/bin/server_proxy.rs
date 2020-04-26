@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::sync::Arc;
 use std::time::Duration;
 use string_error::into_err;
+use undermoon::common::config::ClusterConfig;
 use undermoon::common::track::TrackedFutureRegistry;
 use undermoon::protocol::SimpleRedisClientFactory;
 use undermoon::proxy::backend::DefaultConnFactory;
@@ -24,7 +25,7 @@ use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 use undermoon::proxy::slowlog::SlowRequestLogger;
 use undermoon::MAX_REDIRECTIONS;
 
-fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
+fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     let mut s = config::Config::new();
     // If config file is specified, load it.
     if let Some(conf_file_path) = env::args().nth(1) {
@@ -104,17 +105,37 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
             .unwrap_or_else(|_| false),
         max_redirections,
     };
-    Ok(config)
+
+    let mut cluster_config = ClusterConfig::default();
+    let cluster_fields = [
+        "compression_strategy",
+        "migration_max_migration_time",
+        "migration_max_blocking_time",
+        "migration_scan_interval",
+        "migration_scan_count",
+    ];
+    for field in cluster_fields.iter() {
+        if let Ok(value) = s.get::<String>(*field) {
+            if cluster_config.set_field(*field, value.as_str()).is_err() {
+                return Err(*field);
+            }
+        }
+    }
+
+    Ok((config, cluster_config))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
-    let conf = gen_conf().map_err(|field| {
+    let (config, cluster_config) = gen_conf().map_err(|field| {
         let err_msg = format!("invalid field {}", field);
         into_err(err_msg)
     })?;
 
-    let config = Arc::new(conf);
+    info!("config: {:?}", config);
+    info!("cluster default config: {:?}", cluster_config);
+
+    let config = Arc::new(config);
 
     let timeout = Duration::new(1, 0);
     let client_factory = SimpleRedisClientFactory::new(timeout);
@@ -125,6 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let forward_handler = SharedForwardHandler::new(
         config.clone(),
+        cluster_config,
         Arc::new(client_factory),
         slow_request_logger.clone(),
         meta_map,
