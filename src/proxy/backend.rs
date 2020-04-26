@@ -48,12 +48,14 @@ pub trait CmdTaskResultHandlerFactory: ThreadSafe {
 pub trait CmdTask: ThreadSafe {
     type Pkt: Packet + Send;
     type TaskType;
+    type Context: ThreadSafe;
 
     fn get_key(&self) -> Option<&[u8]>;
     fn get_slot(&self) -> Option<usize>;
     fn set_result(self, result: CommandResult<Self::Pkt>);
     fn get_packet(&self) -> Self::Pkt;
     fn get_type(&self) -> Self::TaskType;
+    fn get_context(&self) -> Self::Context;
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)
     where
@@ -75,10 +77,9 @@ impl<T: CmdTask> IntoTask<T> for T {
 pub trait CmdTaskFactory {
     type Task: CmdTask;
 
-    fn create_with(
+    fn create_with_ctx(
         &self,
-        // TODO: make it an general context
-        another_task: &Self::Task,
+        context: <Self::Task as CmdTask>::Context,
         resp: RespVec,
     ) -> (
         Self::Task,
@@ -103,6 +104,7 @@ impl<T: CmdTask> From<T> for ReqTask<T> {
 impl<T: CmdTask> CmdTask for ReqTask<T> {
     type Pkt = OptionalMulti<T::Pkt>;
     type TaskType = OptionalMulti<T::TaskType>;
+    type Context = OptionalMulti<T::Context>;
 
     fn get_key(&self) -> Option<&[u8]> {
         match self {
@@ -186,6 +188,15 @@ impl<T: CmdTask> CmdTask for ReqTask<T> {
             Self::Simple(task) => OptionalMulti::Single(task.get_type()),
             Self::Multi(tasks) => {
                 OptionalMulti::Multi(tasks.iter().map(|t| t.get_type()).collect())
+            }
+        }
+    }
+
+    fn get_context(&self) -> Self::Context {
+        match self {
+            Self::Simple(task) => OptionalMulti::Single(task.get_context()),
+            Self::Multi(tasks) => {
+                OptionalMulti::Multi(tasks.iter().map(|t| t.get_context()).collect())
             }
         }
     }

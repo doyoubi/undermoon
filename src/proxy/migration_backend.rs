@@ -23,7 +23,6 @@ type ReplyFuture = Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + 
 type DataEntryFuture =
     Pin<Box<dyn Future<Output = Result<Option<DataEntry>, CommandError>> + Send>>;
 
-#[derive(Debug)]
 struct MgrCmdStateExists<F: CmdTaskFactory> {
     inner_task: F::Task,
     key: BinSafeStr,
@@ -38,7 +37,8 @@ impl<F: CmdTaskFactory> MgrCmdStateExists<F> {
         cmd_task_factory: &F,
     ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
         let resp = Self::gen_exists_resp(&key);
-        let (cmd_task, reply_fut) = cmd_task_factory.create_with(&inner_task, resp);
+        let (cmd_task, reply_fut) =
+            cmd_task_factory.create_with_ctx(inner_task.get_context(), resp);
         let task = ReqTask::Simple(cmd_task);
         let state = Self {
             inner_task,
@@ -62,7 +62,6 @@ impl<F: CmdTaskFactory> MgrCmdStateExists<F> {
     }
 }
 
-#[derive(Debug)]
 struct MgrCmdStateForward;
 
 impl MgrCmdStateForward {
@@ -83,12 +82,15 @@ impl MgrCmdStateForward {
     fn from_state_umsync<F: CmdTaskFactory>(
         state: MgrCmdStateUmSync<F>,
     ) -> (Self, ReqTask<F::Task>) {
-        let inner_task = state.into_inner();
+        let MgrCmdStateUmSync {
+            inner_task,
+            lock_guard,
+        } = state;
+        drop(lock_guard);
         (MgrCmdStateForward, ReqTask::Simple(inner_task))
     }
 }
 
-#[derive(Debug)]
 struct MgrCmdStateDumpPttl<F: CmdTaskFactory> {
     inner_task: F::Task,
     key: BinSafeStr,
@@ -106,9 +108,9 @@ impl<F: CmdTaskFactory> MgrCmdStateDumpPttl<F> {
         } = state;
 
         let (dump_cmd_task, dump_reply_fut) =
-            cmd_task_factory.create_with(&inner_task, Self::gen_dump_resp(&key));
+            cmd_task_factory.create_with_ctx(inner_task.get_context(), Self::gen_dump_resp(&key));
         let (pttl_cmd_task, pttl_reply_fut) =
-            cmd_task_factory.create_with(&inner_task, Self::gen_pttl_resp(&key));
+            cmd_task_factory.create_with_ctx(inner_task.get_context(), Self::gen_pttl_resp(&key));
 
         let task = ReqTask::Multi(vec![dump_cmd_task, pttl_cmd_task]);
         let state = Self {
@@ -173,10 +175,8 @@ async fn get_data_entry(
     }
 }
 
-#[derive(Debug)]
 struct MgrCmdStateUmSync<F: CmdTaskFactory> {
     inner_task: F::Task,
-    key: BinSafeStr,
     lock_guard: KeyLockGuard,
 }
 
@@ -191,12 +191,11 @@ impl<F: CmdTaskFactory> MgrCmdStateUmSync<F> {
         } = state;
 
         let (umsync_cmd_task, umsync_reply_fut) =
-            cmd_task_factory.create_with(&inner_task, Self::gen_umsync_resp(&key));
+            cmd_task_factory.create_with_ctx(inner_task.get_context(), Self::gen_umsync_resp(&key));
 
         let task = ReqTask::Simple(umsync_cmd_task);
         let state = Self {
             inner_task,
-            key,
             lock_guard,
         };
         let sync_fut = Box::pin(umsync_reply_fut);
@@ -218,13 +217,14 @@ impl<F: CmdTaskFactory> MgrCmdStateUmSync<F> {
     }
 }
 
-#[derive(Debug)]
-struct MgrCmdStateRestoreForward {
+struct MgrCmdStateRestoreForward<F: CmdTaskFactory> {
     lock_guard: KeyLockGuard,
+    key: BinSafeStr,
+    task_context: <F::Task as CmdTask>::Context,
 }
 
-impl MgrCmdStateRestoreForward {
-    fn from_state_exists<F: CmdTaskFactory>(
+impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
+    fn from_state_exists(
         state: MgrCmdStateDumpPttl<F>,
         entry: DataEntry,
         cmd_task_factory: &F,
@@ -234,13 +234,19 @@ impl MgrCmdStateRestoreForward {
             key,
             lock_guard,
         } = state;
+        let task_context = inner_task.get_context();
         let DataEntry { raw_data, pttl } = entry;
         let resp = Self::gen_restore_resp(&key, raw_data, pttl);
-        let (restore_cmd_task, restore_reply_fut) = cmd_task_factory.create_with(&inner_task, resp);
+        let (restore_cmd_task, restore_reply_fut) =
+            cmd_task_factory.create_with_ctx(inner_task.get_context(), resp);
 
         let task = ReqTask::Multi(vec![restore_cmd_task, inner_task]);
         (
-            MgrCmdStateRestoreForward { lock_guard },
+            MgrCmdStateRestoreForward {
+                lock_guard,
+                key,
+                task_context,
+            },
             task,
             restore_reply_fut,
         )
@@ -259,6 +265,30 @@ impl MgrCmdStateRestoreForward {
     }
 }
 
+#[derive(Debug)]
+struct MgrCmdStateDel;
+
+impl MgrCmdStateDel {
+    fn from_task_context<F: CmdTaskFactory>(
+        inner_task_context: <F::Task as CmdTask>::Context,
+        key: BinSafeStr,
+        cmd_task_factory: &F,
+    ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
+        let resp = Self::gen_del_resp(&key);
+        let (cmd_task, reply_fut) = cmd_task_factory.create_with_ctx(inner_task_context, resp);
+        let task = ReqTask::Simple(cmd_task);
+        (Self, task, reply_fut)
+    }
+
+    fn gen_del_resp(key: &[u8]) -> RespVec {
+        let elements = vec![
+            Resp::Bulk(BulkStr::Str("DEL".to_string().into_bytes())),
+            Resp::Bulk(BulkStr::Str(key.into())),
+        ];
+        Resp::Arr(Array::Arr(elements))
+    }
+}
+
 pub type SenderFactory =
     BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
 
@@ -266,36 +296,44 @@ type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
 type DumpPttlTaskSender<F> = UnboundedSender<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
 type DumpPttlTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
-type RestoreTaskSender = UnboundedSender<(MgrCmdStateRestoreForward, ReplyFuture)>;
-type RestoreTaskReceiver = UnboundedReceiver<(MgrCmdStateRestoreForward, ReplyFuture)>;
+type RestoreTaskSender<F> = UnboundedSender<(MgrCmdStateRestoreForward<F>, ReplyFuture)>;
+type RestoreTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateRestoreForward<F>, ReplyFuture)>;
 type UmSyncTaskSender<F> = UnboundedSender<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFuture)>;
+type DeleteKeyTaskSender = UnboundedSender<ReplyFuture>;
+type DeleteKeyTaskReceiver = UnboundedReceiver<ReplyFuture>;
 
-pub struct RestoreDataCmdTaskHandler<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>>
+pub struct RestoreDataCmdTaskHandler<F, S>
 where
+    F: CmdTaskFactory,
     F::Task: CmdTask<TaskType = CmdTypeTuple>,
+    S: CmdTaskSender<Task = ReqTask<F::Task>>,
 {
     src_sender: Arc<S>,
     dst_sender: Arc<S>,
     src_proxy_sender: Arc<S>,
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
-    restore_task_sender: RestoreTaskSender,
+    restore_task_sender: RestoreTaskSender<F>,
     umsync_task_sender: UmSyncTaskSender<F>,
+    del_task_sender: DeleteKeyTaskSender,
     #[allow(clippy::type_complexity)]
     task_receivers: AtomicOption<(
         ExistsTaskReceiver<F>,
         DumpPttlTaskReceiver<F>,
-        RestoreTaskReceiver,
+        RestoreTaskReceiver<F>,
         UmSyncTaskReceiver<F>,
+        DeleteKeyTaskReceiver,
     )>,
     cmd_task_factory: Arc<F>,
     key_lock: Arc<KeyLock>,
 }
 
-impl<F: CmdTaskFactory, S: CmdTaskSender<Task = ReqTask<F::Task>>> RestoreDataCmdTaskHandler<F, S>
+impl<F, S> RestoreDataCmdTaskHandler<F, S>
 where
+    F: CmdTaskFactory,
     F::Task: CmdTask<TaskType = CmdTypeTuple>,
+    S: CmdTaskSender<Task = ReqTask<F::Task>>,
 {
     pub fn new(
         src_sender: S,
@@ -310,11 +348,13 @@ where
         let (dump_pttl_task_sender, dump_pttl_task_receiver) = unbounded();
         let (restore_task_sender, restore_task_receiver) = unbounded();
         let (umsync_task_sender, umsync_task_receiver) = unbounded();
+        let (del_task_sender, del_task_receiver) = unbounded();
         let task_receivers = AtomicOption::new(Box::new((
             exists_task_receiver,
             dump_pttl_task_receiver,
             restore_task_receiver,
             umsync_task_receiver,
+            del_task_receiver,
         )));
         let key_lock = Arc::new(KeyLock::new(LOCK_SHARD_SIZE));
         Self {
@@ -325,6 +365,7 @@ where
             dump_pttl_task_sender,
             restore_task_sender,
             umsync_task_sender,
+            del_task_sender,
             task_receivers,
             cmd_task_factory,
             key_lock,
@@ -341,6 +382,7 @@ where
         let exists_task_sender = self.exists_task_sender.clone();
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
         let umsync_task_sender = self.umsync_task_sender.clone();
+        let del_task_sender = self.del_task_sender.clone();
         let src_sender = self.src_sender.clone();
         let dst_sender = self.dst_sender.clone();
         let src_proxy_sender = self.src_proxy_sender.clone();
@@ -354,6 +396,7 @@ where
             dump_pttl_task_receiver,
             restore_task_receiver,
             umsync_task_receiver,
+            del_task_receiver,
         ) = match receiver_opt {
             Some(r) => r,
             None => {
@@ -378,23 +421,32 @@ where
             dump_pttl_task_receiver,
             restore_task_sender,
             dst_sender.clone(),
+            cmd_task_factory.clone(),
+        );
+
+        let restore_task_handler = Self::handle_restore(
+            restore_task_receiver,
+            dst_sender.clone(),
+            del_task_sender.clone(),
             cmd_task_factory,
         );
 
-        let restore_task_handler = Self::handle_restore(restore_task_receiver);
-
         let umsync_task_handler = Self::handle_umsync_task(umsync_task_receiver, dst_sender);
+
+        let del_task_handler = Self::handle_del_task(del_task_receiver);
 
         let mut exists_task_handler = Box::pin(exists_task_handler.fuse());
         let mut dump_pttl_task_handler = Box::pin(dump_pttl_task_handler.fuse());
         let mut restore_task_handler = Box::pin(restore_task_handler.fuse());
         let mut umsync_task_handler = Box::pin(umsync_task_handler.fuse());
+        let mut del_task_handler = Box::pin(del_task_handler.fuse());
 
         select! {
             () = exists_task_handler => (),
             () = dump_pttl_task_handler => (),
             () = restore_task_handler => (),
             () = umsync_task_handler => (),
+            () = del_task_handler => (),
         }
 
         // Need to finish the remaining commands before exiting.
@@ -405,6 +457,7 @@ where
             () = dump_pttl_task_handler => (),
             () = restore_task_handler => (),
             () = umsync_task_handler => (),
+            () = del_task_handler => (),
         }
 
         self.restore_task_sender.close_channel();
@@ -413,11 +466,19 @@ where
         select! {
             () = restore_task_handler => (),
             () = umsync_task_handler => (),
+            () = del_task_handler => (),
         }
 
         self.umsync_task_sender.close_channel();
         info!("wait for umsync task");
-        umsync_task_handler.await;
+        select! {
+            () = umsync_task_handler => (),
+            () = del_task_handler => (),
+        }
+
+        self.del_task_sender.close_channel();
+        info!("wait for del task");
+        del_task_handler.await;
         info!("All remaining tasks in migration backend are finished");
     }
 
@@ -506,7 +567,7 @@ where
 
     async fn handle_dump_pttl_task(
         mut dump_pttl_task_receiver: DumpPttlTaskReceiver<F>,
-        restore_task_sender: RestoreTaskSender,
+        restore_task_sender: RestoreTaskSender<F>,
         dst_sender: Arc<S>,
         cmd_task_factory: Arc<F>,
     ) {
@@ -544,7 +605,12 @@ where
         }
     }
 
-    async fn handle_restore(mut restore_task_receiver: RestoreTaskReceiver) {
+    async fn handle_restore(
+        mut restore_task_receiver: RestoreTaskReceiver<F>,
+        dst_sender: Arc<S>,
+        del_task_sender: DeleteKeyTaskSender,
+        cmd_task_factory: Arc<F>,
+    ) {
         while let Some((state, reply_fut)) = restore_task_receiver.next().await {
             let resp = match reply_fut.await {
                 Ok(resp) => resp,
@@ -553,8 +619,12 @@ where
                     continue;
                 }
             };
-            // Drop the lock
-            let _ = state;
+            let MgrCmdStateRestoreForward {
+                key,
+                task_context,
+                lock_guard,
+            } = state;
+            drop(lock_guard);
 
             const BUSYKEY: &[u8] = b"BUSYKEY";
             match resp {
@@ -564,7 +634,19 @@ where
                 others => {
                     let pretty_resp = others.as_ref().map(|s| pretty_print_bytes(&s));
                     error!("unexpected RESTORE result: {:?}", pretty_resp);
+                    continue;
                 }
+            }
+
+            let (_state, req_task, reply_receiver) =
+                MgrCmdStateDel::from_task_context(task_context, key, &(*cmd_task_factory));
+
+            if let Err(err) = dst_sender.send(req_task) {
+                warn!("failed to send DEL to proxy server: {:?}", err);
+                continue;
+            }
+            if del_task_sender.unbounded_send(reply_receiver).is_err() {
+                warn!("failed to send del key task");
             }
         }
     }
@@ -600,6 +682,25 @@ where
             let (_state, req_task) = MgrCmdStateForward::from_state_umsync(state);
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to forward: {:?}", err);
+                continue;
+            }
+        }
+    }
+
+    async fn handle_del_task(mut del_task_receiver: DeleteKeyTaskReceiver) {
+        while let Some(reply_fut) = del_task_receiver.next().await {
+            let resp = match reply_fut.await {
+                Ok(reply) => reply,
+                Err(err) => {
+                    error!("failed to delete keys from source proxy: {:?}", err);
+                    continue;
+                }
+            };
+            if let Resp::Error(err) = resp {
+                error!(
+                    "failed to delete keys from source proxy. response: {:?}",
+                    err
+                );
             }
         }
     }
