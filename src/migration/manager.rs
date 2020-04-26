@@ -1,11 +1,10 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
-use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag};
+use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::proto::{ClusterConfigMap, ProxyClusterMap};
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::ThreadSafe;
-use crate::migration::delete_keys::{DeleteKeysTask, DeleteKeysTaskMap};
 use crate::migration::task::MgrSubCmd;
 use crate::protocol::Resp;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, RespVec};
@@ -16,7 +15,6 @@ use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
-use futures::TryFutureExt;
 use itertools::Either;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -173,47 +171,6 @@ where
         }
         info!("spawn finished");
     }
-
-    pub fn create_new_deleting_task_map(
-        &self,
-        old_deleting_task_map: &DeleteKeysTaskMap,
-        local_cluster_map: &ProxyClusterMap,
-        left_slots_after_change: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>,
-    ) -> (DeleteKeysTaskMap, Vec<Arc<DeleteKeysTask>>) {
-        old_deleting_task_map.update_from_old_task_map(
-            local_cluster_map,
-            left_slots_after_change,
-            self.mgr_config.clone(),
-            self.client_factory.clone(),
-        )
-    }
-
-    pub fn run_deleting_tasks(&self, new_tasks: Vec<Arc<DeleteKeysTask>>) {
-        if new_tasks.is_empty() {
-            return;
-        }
-
-        for task in new_tasks.into_iter() {
-            if let Some(fut) = task.start() {
-                let address = task.get_address();
-                let slot_ranges = task.get_slot_ranges();
-                let desc = format!(
-                    "deleting_keys: address={} slot_ranges={}",
-                    address, slot_ranges
-                );
-                let fut = fut
-                    .map_ok(move |()| info!("deleting keys for {} stopped", address))
-                    .map_err(move |e| match e {
-                        MigrationError::Canceled => info!("task for deleting keys get canceled"),
-                        _ => error!("task for deleting keys exit with error {:?}", e),
-                    });
-
-                let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
-                tokio::spawn(fut);
-            }
-        }
-        info!("spawn finished for deleting keys");
-    }
 }
 
 pub struct MigrationMap<T>
@@ -362,48 +319,6 @@ where
         Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
             cmd_task, false,
         )))
-    }
-
-    pub fn get_left_slots_after_change(
-        &self,
-        new_migration_map: &Self,
-        new_cluster_map: &ProxyClusterMap,
-    ) -> HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> {
-        let mut left_slots = HashMap::new();
-        for (cluster_name, cluster_task) in self.task_map.iter() {
-            let nodes = match new_cluster_map.get_map().get(cluster_name) {
-                Some(nodes) => nodes,
-                None => continue,
-            };
-
-            for task_meta in cluster_task.keys() {
-                if new_migration_map
-                    .task_map
-                    .get(cluster_name)
-                    .and_then(|cluster_task_map| cluster_task_map.get(task_meta))
-                    .is_some()
-                {
-                    // task is still running, ignore it.
-                    continue;
-                }
-
-                let tag = &task_meta.slot_range.tag;
-                let address = match tag {
-                    SlotRangeTag::None => continue,
-                    SlotRangeTag::Importing(meta) => &meta.dst_node_address,
-                    SlotRangeTag::Migrating(meta) => &meta.src_node_address,
-                };
-                let slots = match nodes.get(address) {
-                    Some(slots) => slots,
-                    None => continue,
-                };
-                left_slots
-                    .entry(cluster_name.clone())
-                    .or_insert_with(HashMap::new)
-                    .insert(address.clone(), slots.clone());
-            }
-        }
-        left_slots
     }
 
     #[allow(clippy::too_many_arguments)]

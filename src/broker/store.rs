@@ -462,7 +462,6 @@ pub enum MetaStoreError {
     InvalidProxyAddress,
     MigrationTaskNotFound,
     MigrationRunning,
-    DeleteTaskRunning,
     InvalidConfig {
         key: String,
         value: String,
@@ -492,7 +491,6 @@ impl MetaStoreError {
             Self::InvalidProxyAddress => "INVALID_PROXY_ADDRESS",
             Self::MigrationTaskNotFound => "MIGRATION_TASK_NOT_FOUND",
             Self::MigrationRunning => "MIGRATION_RUNNING",
-            Self::DeleteTaskRunning => "DELETE_TASK_RUNNING",
             Self::InvalidConfig { .. } => "INVALID_CONFIG",
             Self::SlotsAlreadyEven => "SLOTS_ALREADY_EVEN",
             Self::SyncError(err) => err.to_code(),

@@ -671,7 +671,6 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::InvalidProxyAddress => http::StatusCode::BAD_REQUEST,
             MetaStoreError::MigrationTaskNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::MigrationRunning => http::StatusCode::CONFLICT,
-            MetaStoreError::DeleteTaskRunning => http::StatusCode::CONFLICT,
             MetaStoreError::InvalidConfig { .. } => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SlotsAlreadyEven => http::StatusCode::BAD_REQUEST,
             MetaStoreError::SyncError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
