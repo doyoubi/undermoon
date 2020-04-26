@@ -533,7 +533,7 @@ where
                 Resp::Bulk(BulkStr::Str(b"GET".to_vec())),
                 Resp::Bulk(BulkStr::Str(key.to_vec())),
             ]));
-            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            let (sub_cmd_ctx, fut) = factory.create_with_ctx(cmd_ctx.get_context(), resp);
             futs.push(fut);
             self.handle_single_key_data_cmd(sub_cmd_ctx);
         }
@@ -601,7 +601,7 @@ where
                 Resp::Bulk(BulkStr::Str(key.to_vec())),
                 Resp::Bulk(BulkStr::Str(value.to_vec())),
             ]));
-            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            let (sub_cmd_ctx, fut) = factory.create_with_ctx(cmd_ctx.get_context(), resp);
             futs.push(fut);
             self.handle_single_key_data_cmd(sub_cmd_ctx);
         }
@@ -661,7 +661,7 @@ where
                 Resp::Bulk(BulkStr::Str(cmd_name.to_string().into_bytes())),
                 Resp::Bulk(BulkStr::Str(key.to_vec())),
             ]));
-            let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, resp);
+            let (sub_cmd_ctx, fut) = factory.create_with_ctx(cmd_ctx.get_context(), resp);
             futs.push(fut);
             self.handle_single_key_data_cmd(sub_cmd_ctx);
         }
@@ -815,7 +815,8 @@ where
             }
 
             for (key, non_blocking_cmd) in cmds.into_iter() {
-                let (sub_cmd_ctx, fut) = factory.create_with(&cmd_ctx, non_blocking_cmd);
+                let (sub_cmd_ctx, fut) =
+                    factory.create_with_ctx(cmd_ctx.get_context(), non_blocking_cmd);
                 self.handle_single_key_data_cmd(sub_cmd_ctx);
 
                 let resp = match fut.await {

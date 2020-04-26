@@ -116,9 +116,16 @@ impl CmdCtx {
     }
 }
 
+pub struct SessionContext {
+    cluster_name: ClusterName,
+    session_id: usize,
+    slowlog_enabled: bool,
+}
+
 impl CmdTask for CmdCtx {
     type Pkt = RespPacket;
     type TaskType = (CmdType, DataCmdType);
+    type Context = SessionContext;
 
     fn get_key(&self) -> Option<&[u8]> {
         self.get_cmd().get_key()
@@ -149,6 +156,14 @@ impl CmdTask for CmdCtx {
 
     fn get_type(&self) -> Self::TaskType {
         (self.cmd.get_type(), self.cmd.get_data_cmd_type())
+    }
+
+    fn get_context(&self) -> Self::Context {
+        SessionContext {
+            cluster_name: self.cluster_name.clone(),
+            session_id: self.get_session_id(),
+            slowlog_enabled: self.slowlog.is_enabled(),
+        }
     }
 
     fn set_resp_result(self, result: Result<RespVec, CommandError>)
@@ -184,9 +199,9 @@ impl Default for CmdCtxFactory {
 impl CmdTaskFactory for CmdCtxFactory {
     type Task = CmdCtx;
 
-    fn create_with(
+    fn create_with_ctx(
         &self,
-        another_task: &Self::Task,
+        context: <Self::Task as CmdTask>::Context,
         resp: RespVec,
     ) -> (
         Self::Task,
@@ -195,13 +210,12 @@ impl CmdTaskFactory for CmdCtxFactory {
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(
-            another_task.get_cluster(),
-            cmd,
-            reply_sender,
-            another_task.get_session_id(),
-            another_task.slowlog.is_enabled(),
-        );
+        let SessionContext {
+            cluster_name,
+            session_id,
+            slowlog_enabled,
+        } = context;
+        let cmd_ctx = CmdCtx::new(cluster_name, cmd, reply_sender, session_id, slowlog_enabled);
         let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
     }

@@ -169,6 +169,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
         (Box::pin(send), handle)
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn keep_migrating<F: RedisClientFactory>(
         src_address: String,
         dst_address: String,
