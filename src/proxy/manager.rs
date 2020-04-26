@@ -12,12 +12,11 @@ use super::sender::{
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
-use crate::common::cluster::{ClusterName, MigrationTaskMeta, PostMgrTaskMeta, SlotRangeTag};
+use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::AtomicMigrationConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
-use crate::migration::delete_keys::DeleteKeysTaskMap;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
@@ -38,7 +37,6 @@ where
 {
     cluster_map: ClusterBackendMap<S, P>,
     migration_map: MigrationMap<T>,
-    deleting_task_map: DeleteKeysTaskMap,
 }
 
 impl<S: CmdTaskSender, P: CmdTaskSender, T> MetaMap<S, P, T>
@@ -51,11 +49,9 @@ where
     pub fn empty() -> Self {
         let cluster_map = ClusterBackendMap::default();
         let migration_map = MigrationMap::empty();
-        let deleting_task_map = DeleteKeysTaskMap::empty();
         Self {
             cluster_map,
             migration_map,
-            deleting_task_map,
         }
     }
 
@@ -189,7 +185,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let peer_sender_factory = &self.peer_sender_factory;
         let migration_manager = &self.migration_manager;
 
-        let run_new_migration_task_while_deleting_key = {
+        {
             let _guard = self.lock.lock().expect("MetaManager::set_meta");
 
             if cluster_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst)
@@ -212,37 +208,16 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 self.blocking_map.clone(),
             );
 
-            let run_new_migration_task_while_deleting_key =
-                !new_tasks.is_empty() && old_meta_map.deleting_task_map.contains_running_tasks();
-
-            let left_slots_after_change = old_meta_map
-                .migration_map
-                .get_left_slots_after_change(&migration_map, cluster_meta.get_local());
-            let (deleting_task_map, new_deleting_tasks) = migration_manager
-                .create_new_deleting_task_map(
-                    &old_meta_map.deleting_task_map,
-                    cluster_meta.get_local(),
-                    left_slots_after_change,
-                );
-
             self.meta_map.store(Arc::new(MetaMap {
                 cluster_map,
                 migration_map,
-                deleting_task_map,
             }));
             // Should go after the meta_map.store above
             self.epoch.store(cluster_meta.get_epoch(), Ordering::SeqCst);
 
             self.migration_manager.run_tasks(new_tasks);
-            self.migration_manager
-                .run_deleting_tasks(new_deleting_tasks);
-
-            run_new_migration_task_while_deleting_key
         };
 
-        if run_new_migration_task_while_deleting_key {
-            error!("New migration starts while deleting keys is still running for the last task. Some keys may get old values.");
-        }
         Ok(())
     }
 
@@ -258,7 +233,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let meta_map = self.meta_map.load();
         let cluster_info = meta_map.cluster_map.info();
         let mgr_info = meta_map.migration_map.info();
-        let del_info = meta_map.deleting_task_map.info();
         let repl_info = self.replicator_manager.get_metadata_report();
         Resp::Arr(Array::Arr(vec![
             Resp::Bulk(BulkStr::Str(b"Cluster".to_vec())),
@@ -267,8 +241,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             repl_info,
             Resp::Bulk(BulkStr::Str(b"Migration".to_vec())),
             mgr_info,
-            Resp::Bulk(BulkStr::Str(b"DeletingKeyTask".to_vec())),
-            del_info,
         ]))
     }
 
@@ -306,19 +278,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {
         self.meta_map.load().migration_map.get_finished_tasks()
-    }
-
-    pub fn get_deleting_key_tasks(&self) -> Vec<PostMgrTaskMeta> {
-        let task_meta_list = self.meta_map.load().deleting_task_map.get_running_tasks();
-        let epoch = self.get_epoch();
-        task_meta_list
-            .into_iter()
-            .map(|(cluster_name, node_address)| PostMgrTaskMeta {
-                cluster_name,
-                epoch,
-                node_address,
-            })
-            .collect()
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {

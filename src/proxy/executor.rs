@@ -245,8 +245,6 @@ where
             self.handle_umctl_info_repl(cmd_ctx);
         } else if sub_cmd.eq("INFOMGR") {
             self.handle_umctl_info_migration(cmd_ctx);
-        } else if sub_cmd.eq("INFOPOSTTASK") {
-            self.handle_umctl_info_post_task(cmd_ctx);
         } else if sub_cmd.eq(MgrSubCmd::PreCheck.as_str()) {
             self.handle_umctl_mgr_cmd(cmd_ctx, MgrSubCmd::PreCheck);
         } else if sub_cmd.eq(MgrSubCmd::PreSwitch.as_str()) {
@@ -368,16 +366,6 @@ where
     fn handle_umctl_info_migration(&self, cmd_ctx: CmdCtx) {
         let finished_tasks = self.manager.get_finished_migration_tasks();
         let packet: Vec<RespVec> = finished_tasks
-            .into_iter()
-            .map(|task| task.into_strings().join(" "))
-            .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
-            .collect();
-        cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(packet))))
-    }
-
-    fn handle_umctl_info_post_task(&self, cmd_ctx: CmdCtx) {
-        let del_key_tasks = self.manager.get_deleting_key_tasks();
-        let packet: Vec<RespVec> = del_key_tasks
             .into_iter()
             .map(|task| task.into_strings().join(" "))
             .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))

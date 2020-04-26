@@ -519,40 +519,6 @@ impl MigrationTaskMeta {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct PostMgrTaskMeta {
-    pub cluster_name: ClusterName,
-    pub epoch: u64,
-    pub node_address: String,
-}
-
-impl PostMgrTaskMeta {
-    pub fn into_strings(self) -> Vec<String> {
-        let PostMgrTaskMeta {
-            cluster_name,
-            epoch,
-            node_address,
-        } = self;
-        vec![cluster_name.to_string(), epoch.to_string(), node_address]
-    }
-
-    pub fn from_strings<It>(it: &mut It) -> Option<Self>
-    where
-        It: Iterator<Item = String>,
-    {
-        let cluster_name_str = it.next()?;
-        let cluster_name = ClusterName::try_from(cluster_name_str.as_str()).ok()?;
-        let epoch_str = it.next()?;
-        let epoch = str::parse::<u64>(epoch_str.as_str()).ok()?;
-        let node_address = it.next()?;
-        Some(Self {
-            cluster_name,
-            epoch,
-            node_address,
-        })
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ReplPeer {
     pub node_address: String,
