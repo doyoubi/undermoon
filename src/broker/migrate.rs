@@ -7,7 +7,6 @@ use crate::common::cluster::{MigrationTaskMeta, Range, RangeList, SlotRange, Slo
 use crate::common::utils::SLOT_NUM;
 use std::cmp::min;
 use std::convert::TryFrom;
-use std::time::Duration;
 
 pub struct MetaStoreMigrate<'a> {
     store: &'a mut MetaStore,
@@ -18,11 +17,7 @@ impl<'a> MetaStoreMigrate<'a> {
         Self { store }
     }
 
-    pub fn migrate_slots(
-        &mut self,
-        cluster_name: String,
-        post_task_expire: Duration,
-    ) -> Result<(), MetaStoreError> {
+    pub fn migrate_slots(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.store.bump_global_epoch();
@@ -40,7 +35,7 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::SlotsAlreadyEven);
         }
 
-        if let Err(err) = Self::check_running_tasks(cluster, post_task_expire) {
+        if let Err(err) = Self::check_running_tasks(cluster) {
             return Err(err);
         }
 
@@ -294,7 +289,6 @@ impl<'a> MetaStoreMigrate<'a> {
         &mut self,
         cluster_name: String,
         new_node_num: usize,
-        post_task_expire: Duration,
     ) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
@@ -313,7 +307,7 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::FreeNodeFound);
         }
 
-        if let Err(err) = Self::check_running_tasks(cluster, post_task_expire) {
+        if let Err(err) = Self::check_running_tasks(cluster) {
             return Err(err);
         }
 
@@ -558,17 +552,6 @@ impl<'a> MetaStoreMigrate<'a> {
             }
         }
 
-        // Add post migration tasks
-        let proxy_addresses: Vec<String> = cluster
-            .chunks
-            .iter()
-            .flat_map(|chunk| chunk.proxy_addresses.iter())
-            .cloned()
-            .collect();
-        for proxy_address in proxy_addresses.into_iter() {
-            cluster.report_running_post_task(proxy_address);
-        }
-
         Self::compact_slots(cluster);
         cluster.set_epoch(new_epoch);
 
@@ -576,10 +559,7 @@ impl<'a> MetaStoreMigrate<'a> {
         Ok(())
     }
 
-    fn check_running_tasks(
-        cluster: &mut ClusterStore,
-        post_task_expire: Duration,
-    ) -> Result<(), MetaStoreError> {
+    fn check_running_tasks(cluster: &mut ClusterStore) -> Result<(), MetaStoreError> {
         let running_migration = cluster
             .chunks
             .iter()
@@ -588,40 +568,6 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::MigrationRunning);
         }
 
-        if cluster.running_post_task_exits(post_task_expire) {
-            return Err(MetaStoreError::DeleteTaskRunning);
-        }
-
         Ok(())
-    }
-
-    pub fn report_post_task(
-        &mut self,
-        cluster_name: String,
-        proxy_address: String,
-    ) -> Result<(), MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let cluster_store = match self.store.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => cluster,
-        };
-        cluster_store.report_running_post_task(proxy_address);
-        Ok(())
-    }
-
-    pub fn get_proxies_with_post_tasks_running(
-        &mut self,
-        cluster_name: String,
-        post_task_expire: Duration,
-    ) -> Result<Vec<String>, MetaStoreError> {
-        let cluster_name = ClusterName::try_from(cluster_name.as_str())
-            .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let cluster_store = match self.store.clusters.get_mut(&cluster_name) {
-            None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => cluster,
-        };
-        let addresses = cluster_store.get_proxies_with_post_task_running(post_task_expire);
-        Ok(addresses)
     }
 }

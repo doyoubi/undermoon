@@ -174,7 +174,7 @@ mod tests {
         let factory = DummyRedisClientFactory::new(create_client_func);
         let checker = MigrationStateRespChecker::new(Arc::new(factory));
         let res: Vec<_> = checker.check("127.0.0.1:6000".to_string()).collect().await;
-        assert_eq!(res.len(), 2);
+        assert_eq!(res.len(), 1);
         for r in res.into_iter() {
             let meta = r.unwrap();
             assert_eq!(meta.cluster_name.to_string(), "mycluster");
