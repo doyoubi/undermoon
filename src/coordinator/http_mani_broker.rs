@@ -1,7 +1,7 @@
 use super::broker::{MetaManipulationBroker, MetaManipulationBrokerError};
 use super::service::BrokerAddresses;
 use crate::broker::MEM_BROKER_API_VERSION;
-use crate::common::cluster::{MigrationTaskMeta, PostMgrTaskMeta, Proxy};
+use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use futures::Future;
 use reqwest;
 use std::pin::Pin;
@@ -116,50 +116,6 @@ impl HttpMetaManipulationBroker {
             }
         }
     }
-
-    async fn report_post_migration_task_impl(
-        &self,
-        meta: PostMgrTaskMeta,
-        proxy_address: String,
-    ) -> Result<(), MetaManipulationBrokerError> {
-        let url = self
-            .gen_url("/clusters/migrations/post_tasks")
-            .ok_or_else(|| MetaManipulationBrokerError::NoBroker)?;
-        let url = format!("{}/{}/{}", url, meta.cluster_name, proxy_address);
-
-        let response = self.client.post(&url).send().await.map_err(|e| {
-            error!("Failed to report post migration task {:?}", e);
-            MetaManipulationBrokerError::RequestFailed
-        })?;
-
-        let status = response.status();
-
-        if status.is_success() || status.as_u16() == 404 {
-            Ok(())
-        } else {
-            error!(
-                "Failed to report post migration task, status code {:?}",
-                status
-            );
-            let result = response.text().await;
-            match result {
-                Ok(body) => {
-                    error!(
-                        "HttpMetaManipulationBroker::report_post_migration Error body: {:?}",
-                        body
-                    );
-                    Err(MetaManipulationBrokerError::InvalidReply)
-                }
-                Err(e) => {
-                    error!(
-                        "HttpMetaManipulationBroker::report_post_migration Failed to get body: {:?}",
-                        e
-                    );
-                    Err(MetaManipulationBrokerError::InvalidReply)
-                }
-            }
-        }
-    }
 }
 
 impl MetaManipulationBroker for HttpMetaManipulationBroker {
@@ -176,14 +132,6 @@ impl MetaManipulationBroker for HttpMetaManipulationBroker {
         meta: MigrationTaskMeta,
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>> {
         Box::pin(self.commit_migration_impl(meta))
-    }
-
-    fn report_post_migration_task<'s>(
-        &'s self,
-        meta: PostMgrTaskMeta,
-        proxy_address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaManipulationBrokerError>> + Send + 's>> {
-        Box::pin(self.report_post_migration_task_impl(meta, proxy_address))
     }
 }
 
