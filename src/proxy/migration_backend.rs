@@ -8,7 +8,7 @@ use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespPacket, Re
 use atomic_option::AtomicOption;
 use dashmap::DashSet;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::{future, select, Future, FutureExt, StreamExt};
+use futures::{select, Future, FutureExt, StreamExt};
 use futures_timer::Delay;
 use std::fmt;
 use std::pin::Pin;
@@ -482,7 +482,7 @@ where
         info!("All remaining tasks in migration backend are finished");
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::cognitive_complexity)]
     async fn handle_exists_task(
         exists_task_sender: ExistsTaskSender<F>,
         mut exists_task_receiver: ExistsTaskReceiver<F>,
@@ -496,19 +496,9 @@ where
     ) {
         while let Some((state, reply_receiver)) = exists_task_receiver.next().await {
             let res = reply_receiver.await;
-            let resp = match res {
-                Ok(resp) => resp,
-                Err(err) => {
-                    error!("failed to get exists cmd response: {:?}", err);
-                    continue;
-                }
-            };
-            let key_exists = match &resp {
-                Resp::Integer(num) => num.as_slice() != KEY_NOT_EXISTS.as_bytes(),
-                others => {
-                    error!("Unexpected reply from EXISTS: {:?}. Skip it.", others);
-                    continue;
-                }
+            let key_exists = match Self::parse_exists_result(res) {
+                Ok(key_exists) => key_exists,
+                Err(()) => continue,
             };
 
             if key_exists {
@@ -524,11 +514,39 @@ where
                 Some(lock_guard) => (lock_guard, state),
                 None => {
                     // Retry later
-                    let reply_receiver = Box::pin(future::ready(Ok(resp)));
+                    let MgrCmdStateExists {
+                        inner_task,
+                        key,
+                        slot,
+                    } = state;
+                    let (state, reply_receiver) = match Self::send_to_exist_to_src(
+                        inner_task,
+                        &(*cmd_task_factory),
+                        key,
+                        slot,
+                        &dst_sender,
+                    ) {
+                        Ok(r) => r,
+                        Err(()) => continue,
+                    };
                     match exists_task_sender.unbounded_send((state, reply_receiver)) {
                         Ok(()) => continue,
                         Err(err) => {
-                            let (state, _reply_receiver) = err.into_inner();
+                            let (state, reply_receiver) = err.into_inner();
+
+                            let key_exists = match Self::parse_exists_result(reply_receiver.await) {
+                                Ok(key_exists) => key_exists,
+                                Err(()) => continue,
+                            };
+                            if key_exists {
+                                let (_state, req_task) =
+                                    MgrCmdStateForward::from_state_exists(state);
+                                if let Err(err) = dst_sender.send(req_task) {
+                                    debug!("failed to forward: {:?}", err);
+                                }
+                                continue;
+                            }
+
                             loop {
                                 warn!("EXISTS channel is closed. Waiting to get lock.");
                                 match key_lock.lock(state.key.clone(), state.slot) {
@@ -563,6 +581,24 @@ where
                 debug!("dump_pttl_task_sender is canceled");
             }
         }
+    }
+
+    fn parse_exists_result(result: Result<RespVec, CommandError>) -> Result<bool, ()> {
+        let resp = match result {
+            Ok(resp) => resp,
+            Err(err) => {
+                error!("failed to get exists cmd response: {:?}", err);
+                return Err(());
+            }
+        };
+        let key_exists = match &resp {
+            Resp::Integer(num) => num.as_slice() != KEY_NOT_EXISTS.as_bytes(),
+            others => {
+                error!("Unexpected reply from EXISTS: {:?}. Skip it.", others);
+                return Err(());
+            }
+        };
+        Ok(key_exists)
     }
 
     async fn handle_dump_pttl_task(
@@ -715,16 +751,16 @@ where
             }
         };
 
-        let (state, task, reply_fut) =
-            MgrCmdStateExists::from_task(cmd_task, key, slot, &(*self.cmd_task_factory));
-        if let Err(err) = self.dst_sender.send(task) {
-            let cmd_task: F::Task = state.into_inner();
-            cmd_task.set_resp_result(Ok(Resp::Error(
-                format!("Migration backend error: {:?}", err).into_bytes(),
-            )));
-            return;
-        }
-
+        let (state, reply_fut) = match Self::send_to_exist_to_src(
+            cmd_task,
+            &(*self.cmd_task_factory),
+            key,
+            slot,
+            &self.dst_sender,
+        ) {
+            Ok(r) => r,
+            Err(()) => return,
+        };
         if let Err(err) = self.exists_task_sender.unbounded_send((state, reply_fut)) {
             let (state, _) = err.into_inner();
             let cmd_task: F::Task = state.into_inner();
@@ -732,6 +768,25 @@ where
                 String::from("Migration backend canceled").into_bytes(),
             )));
         }
+    }
+
+    fn send_to_exist_to_src(
+        cmd_task: F::Task,
+        cmd_task_factory: &F,
+        key: BinSafeStr,
+        slot: usize,
+        dst_sender: &S,
+    ) -> Result<(MgrCmdStateExists<F>, ReplyFuture), ()> {
+        let (state, task, reply_fut) =
+            MgrCmdStateExists::from_task(cmd_task, key, slot, cmd_task_factory);
+        if let Err(err) = dst_sender.send(task) {
+            let cmd_task: F::Task = state.into_inner();
+            cmd_task.set_resp_result(Ok(Resp::Error(
+                format!("Migration backend error: {:?}", err).into_bytes(),
+            )));
+            return Err(());
+        }
+        Ok((state, reply_fut))
     }
 }
 
