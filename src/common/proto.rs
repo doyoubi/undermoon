@@ -544,8 +544,8 @@ mod tests {
             "compression_strategy",
             "allow_all",
             "othercluster",
-            "migration_delete_count",
-            "233",
+            "migration_max_blocking_time",
+            "66699",
             "mycluster",
             "migration_max_migration_time",
             "666",
@@ -577,8 +577,8 @@ mod tests {
                 .get(&ClusterName::try_from("othercluster").unwrap())
                 .unwrap()
                 .migration_config
-                .delete_count,
-            233
+                .max_blocking_time,
+            66699
         );
 
         let mut result_args = clusters_config.to_args();
@@ -588,17 +588,11 @@ mod tests {
             "compression_strategy",
             "allow_all",
             "mycluster",
-            "migration_delete_count",
-            "16",
-            "mycluster",
             "migration_max_migration_time",
             "666",
             "mycluster",
             "migration_max_blocking_time",
             "10000",
-            "mycluster",
-            "migration_delete_interval",
-            "500",
             "mycluster",
             "migration_scan_interval",
             "500",
@@ -609,17 +603,11 @@ mod tests {
             "compression_strategy",
             "disabled",
             "othercluster",
-            "migration_delete_count",
-            "233",
-            "othercluster",
             "migration_max_migration_time",
             "10800",
             "othercluster",
             "migration_max_blocking_time",
-            "10000",
-            "othercluster",
-            "migration_delete_interval",
-            "500",
+            "66699",
             "othercluster",
             "migration_scan_interval",
             "500",
@@ -773,17 +761,11 @@ mod tests {
         let mut cluster_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         let extended = vec![
             "cluster_name",
-            "migration_delete_count",
-            "16",
-            "cluster_name",
             "migration_max_migration_time",
             "10800",
             "cluster_name",
             "migration_max_blocking_time",
             "10000",
-            "cluster_name",
-            "migration_delete_interval",
-            "500",
             "cluster_name",
             "migration_scan_interval",
             "500",

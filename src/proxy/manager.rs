@@ -13,7 +13,7 @@ use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
-use crate::common::config::AtomicMigrationConfig;
+use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
@@ -97,6 +97,7 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
 impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> {
     pub fn new(
         config: Arc<ServerProxyConfig>,
+        cluster_config: ClusterConfig,
         client_factory: Arc<F>,
         conn_factory: Arc<C>,
         meta_map: SharedMetaMap<C>,
@@ -129,7 +130,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             future_registry.clone(),
         ));
         let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
-        let migration_config = Arc::new(AtomicMigrationConfig::default());
         let config_clone = config.clone();
         Self {
             config,
@@ -142,7 +142,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             ),
             migration_manager: MigrationManager::new(
                 config_clone,
-                migration_config,
+                cluster_config,
                 client_factory,
                 migration_sender_factory,
                 cmd_ctx_factory,

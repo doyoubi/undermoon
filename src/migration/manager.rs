@@ -1,7 +1,7 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRangeTag};
-use crate::common::config::AtomicMigrationConfig;
+use crate::common::config::{AtomicMigrationConfig, ClusterConfig};
 use crate::common::proto::{ClusterConfigMap, ProxyClusterMap};
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::ThreadSafe;
@@ -43,7 +43,7 @@ where
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     config: Arc<ServerProxyConfig>,
-    mgr_config: Arc<AtomicMigrationConfig>,
+    cluster_config: ClusterConfig,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     cmd_task_factory: Arc<CTF>,
@@ -60,7 +60,7 @@ where
 {
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        mgr_config: Arc<AtomicMigrationConfig>,
+        cluster_config: ClusterConfig,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
         cmd_task_factory: Arc<CTF>,
@@ -68,7 +68,7 @@ where
     ) -> Self {
         Self {
             config,
-            mgr_config,
+            cluster_config,
             client_factory,
             sender_factory,
             cmd_task_factory,
@@ -84,11 +84,15 @@ where
         cluster_config_map: &ClusterConfigMap,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<CTF::Task> {
+        // TODO: implement dynamic configuration through CONFIG command later.
+        let mgr_config = Arc::new(AtomicMigrationConfig::from_config(
+            self.cluster_config.migration_config.clone(),
+        ));
         old_migration_map.update_from_old_task_map(
             local_cluster_map,
             cluster_config_map,
             self.config.clone(),
-            self.mgr_config.clone(),
+            mgr_config,
             self.client_factory.clone(),
             self.sender_factory.clone(),
             self.cmd_task_factory.clone(),

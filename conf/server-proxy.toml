@@ -38,3 +38,14 @@ active_redirection = false
 # Use 0 to disable limitation.
 # Or it should be at least 4.
 max_redirections = 4
+
+# Cluster Config
+# The config below is per cluster specific and could be modified dynamically in the memory broker
+compression_strategy = "disabled"
+# In seconds
+migration_max_migration_time = 3600
+# In milliseconds
+migration_max_blocking_time = 10000
+# In microseconds
+migration_scan_interval = 500
+migration_scan_count = 16
