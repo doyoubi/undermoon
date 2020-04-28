@@ -292,8 +292,8 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 ClusterSendError::SlotNotFound(task) => {
                     // When the migrating task is closed,
                     // the destination proxy might keep sending UMSYNC to source proxy.
-                    // This should be a success response.
-                    task.set_resp_result(Ok(Resp::Simple(
+                    // We need to tag this case.
+                    task.set_resp_result(Ok(Resp::Error(
                         response::MIGRATION_TASK_NOT_FOUND.to_string().into_bytes(),
                     )));
                 }

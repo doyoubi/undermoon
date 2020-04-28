@@ -2,6 +2,7 @@ use super::backend::{CmdTask, CmdTaskFactory, DefaultConnFactory, ReqTask};
 use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError};
 use super::reply::ReplyCommitHandlerFactory;
 use super::sender::{BackendSenderFactory, CmdTaskSender};
+use crate::common::response;
 use crate::common::utils::pretty_print_bytes;
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespPacket, RespVec, VFunctor};
@@ -709,7 +710,7 @@ where
                     )));
                     continue;
                 }
-                Ok(Resp::Error(err)) => {
+                Ok(Resp::Error(err)) if err != response::MIGRATION_TASK_NOT_FOUND.as_bytes() => {
                     error!("Invalid reply of UMSYNC {:?}", err);
                     // drop the lock here
                     let task = state.into_inner();
