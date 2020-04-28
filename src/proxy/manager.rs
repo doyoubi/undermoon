@@ -290,7 +290,12 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         if let Err(err) = meta_map.migration_map.send_sync_task(cmd_ctx) {
             match err {
                 ClusterSendError::SlotNotFound(task) => {
-                    task.set_resp_result(Ok(Resp::Error(b"migration task not found".to_vec())));
+                    // When the migrating task is closed,
+                    // the destination proxy might keep sending UMSYNC to source proxy.
+                    // We need to tag this case.
+                    task.set_resp_result(Ok(Resp::Error(
+                        response::MIGRATION_TASK_NOT_FOUND.to_string().into_bytes(),
+                    )));
                 }
                 ClusterSendError::ActiveRedirection { task, .. } => {
                     task.set_resp_result(Ok(Resp::Error(
