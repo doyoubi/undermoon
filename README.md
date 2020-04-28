@@ -52,7 +52,7 @@ Requirements:
 - redis-cli
 
 #### Run the cluster in docker-compose
-Before run any example, run this command to build the basic `undermoon` docker image:
+Before running any example, run this command to build the basic `undermoon` docker image:
 ```bash
 $ make docker-build-image
 $ make docker-mem-broker

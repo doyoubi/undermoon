@@ -529,6 +529,12 @@ where
                         Ok(r) => r,
                         Err(()) => continue,
                     };
+
+                    // Just sending back (state, future::ready(resp)) could possibly result in dead loop.
+                    // The whole task will just get stuck in this function.
+                    // So we have to emake the future `reply_receiver` not always ready.
+                    // And checking the key again by `EXISTS` is a good choice for reducing
+                    // unnecessary DUMP and PTTL.
                     match exists_task_sender.unbounded_send((state, reply_receiver)) {
                         Ok(()) => continue,
                         Err(err) => {

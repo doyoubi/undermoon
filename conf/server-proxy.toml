@@ -40,7 +40,11 @@ active_redirection = false
 max_redirections = 4
 
 # Cluster Config
-# The config below is per cluster specific and could be modified dynamically in the memory broker
+# Cluster config can vary between clusters.
+# The config below is the default cluster config
+# and could be modified dynamically in the memory broker.
+
+# Could only be "disabled", "allow_all", "set_get_only"
 compression_strategy = "disabled"
 # In seconds
 migration_max_migration_time = 3600
