@@ -958,7 +958,7 @@ where
                 }
             }
             CmdType::Select => {
-                cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(response::OK_REPLY.to_string().into_bytes())))
             }
             CmdType::Invalid => cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid command").into_bytes(),
@@ -970,6 +970,9 @@ where
             CmdType::Config => self.handle_config(cmd_ctx),
             CmdType::Command => {
                 cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
+            }
+            CmdType::Asking => {
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(response::OK_REPLY.to_string().into_bytes())))
             }
             CmdType::Others => return self.handle_data_cmd(cmd_ctx, reply_receiver),
         };

@@ -33,6 +33,7 @@ pub enum CmdType {
     Cluster,
     Config,
     Command,
+    Asking,
 }
 
 impl CmdType {
@@ -60,6 +61,7 @@ impl CmdType {
             b"CLUSTER" => CmdType::Cluster,
             b"CONFIG" => CmdType::Config,
             b"COMMAND" => CmdType::Command,
+            b"ASKING" => CmdType::Asking,
             _ => CmdType::Others,
         }
     }
