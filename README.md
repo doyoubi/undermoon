@@ -14,7 +14,7 @@ Any storage system implementing redis protocol could also somehow work with unde
 such as [KeyDB](https://github.com/JohnSully/KeyDB) and [pika](https://github.com/Qihoo360/pika).
 
 For more in-depth explanation of Redis Cluster Protocol and how Undermoon implement it,
-please refer to [Redis Cluster Protocl](./docs/redis_cluster_protocol.md).
+please refer to [Redis Cluster Protocol](./docs/redis_cluster_protocol.md).
 
 ## Architecture
 ![architecture](docs/architecture.svg)
@@ -202,6 +202,7 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 - [Slot Migration](./docs/slots_migration.md)
 - [Memory Broker Replica](./docs/mem_broker_replica.md)
 - [Configure to support non-cluster-mode clients](./docs/active_redirection.md)
+- [Command Table](./docs/command_table.md)
 
 ## API
 - [Proxy UMCTL command](./docs/meta_command.md)
