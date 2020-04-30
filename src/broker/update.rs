@@ -330,6 +330,27 @@ impl<'a> MetaStoreUpdate<'a> {
         Ok(())
     }
 
+    pub fn auto_scale_up_nodes(
+        &mut self,
+        cluster_name: String,
+        expected_num: usize,
+    ) -> Result<Vec<Node>, MetaStoreError> {
+        let name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
+
+        let existing_node_num = match self.store.clusters.get(&name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(cluster) => cluster.chunks.len() * 4,
+        };
+
+        let added_num = match expected_num.checked_sub(existing_node_num) {
+            None | Some(0) => return Err(MetaStoreError::NodeNumAlreadyEnough),
+            Some(added_num) => added_num,
+        };
+
+        self.auto_add_nodes(cluster_name, added_num)
+    }
+
     pub fn auto_add_nodes(
         &mut self,
         cluster_name: String,

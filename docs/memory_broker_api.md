@@ -68,7 +68,7 @@ HTTP 409 { "error": "INVALID_META_VERSION" }
 - `cluster_name`
   - 0 < length <= 30
   - only contains alphabetic and numeric ascii or '@', '-', '_'
-- `node_number` should be the multiples of `4`.  
+- `node_number` should be the multiples of `4`.
 
 ##### Success
 ```
@@ -107,7 +107,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 }
 ```
 - `node_number` should be the multiples of `4`.
-  
+
 ##### Success
 ```
 HTTP 200
@@ -115,6 +115,34 @@ HTTP 200
 
 ##### Error
 ```
+HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
+HTTP 400 { "error": "INVALID_NODE_NUMBER" }
+HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
+HTTP 409 { "error": "ALREADY_EXISTED" }
+HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
+HTTP 409 { "error": "MIGRATION_RUNNING" }
+```
+
+#### Add nodes to cluster if needed
+This API is idempotent compared to the previous one.
+`PUT` /api/v2/clusters/nodes/<cluster_name>
+
+##### Request
+```json
+{
+    "cluster_node_number": 8
+}
+```
+- `node_number` should be the multiples of `4`.
+
+##### Success
+```
+HTTP 200
+```
+
+##### Error
+```
+HTTP 409 { "error": "NODE_NUM_ALREADY_ENOUGH }
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 400 { "error": "INVALID_NODE_NUMBER" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }

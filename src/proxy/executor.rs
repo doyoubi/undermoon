@@ -957,9 +957,9 @@ where
                     None => cmd_ctx.set_resp_result(Ok(Resp::Error(b"Missing message".to_vec()))),
                 }
             }
-            CmdType::Select => {
-                cmd_ctx.set_resp_result(Ok(Resp::Simple(response::OK_REPLY.to_string().into_bytes())))
-            }
+            CmdType::Select => cmd_ctx.set_resp_result(Ok(Resp::Simple(
+                response::OK_REPLY.to_string().into_bytes(),
+            ))),
             CmdType::Invalid => cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid command").into_bytes(),
             ))),
@@ -971,9 +971,9 @@ where
             CmdType::Command => {
                 cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
             }
-            CmdType::Asking => {
-                cmd_ctx.set_resp_result(Ok(Resp::Simple(response::OK_REPLY.to_string().into_bytes())))
-            }
+            CmdType::Asking => cmd_ctx.set_resp_result(Ok(Resp::Simple(
+                response::OK_REPLY.to_string().into_bytes(),
+            ))),
             CmdType::Others => return self.handle_data_cmd(cmd_ctx, reply_receiver),
         };
         CmdReplyFuture::Left(reply_receiver)
