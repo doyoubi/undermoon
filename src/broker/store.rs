@@ -355,6 +355,14 @@ impl MetaStore {
         MetaStoreUpdate::new(self).remove_cluster(cluster_name)
     }
 
+    pub fn auto_scale_up_nodes(
+        &mut self,
+        cluster_name: String,
+        cluster_node_num: usize,
+    ) -> Result<Vec<Node>, MetaStoreError> {
+        MetaStoreUpdate::new(self).auto_scale_up_nodes(cluster_name, cluster_node_num)
+    }
+
     pub fn auto_add_nodes(
         &mut self,
         cluster_name: String,
@@ -457,6 +465,7 @@ pub enum MetaStoreError {
     FreeNodeFound,
     ProxyNotFound,
     InvalidNodeNum,
+    NodeNumAlreadyEnough,
     InvalidClusterName,
     InvalidMigrationTask,
     InvalidProxyAddress,
@@ -486,6 +495,7 @@ impl MetaStoreError {
             Self::FreeNodeFound => "FREE_NODE_NOT_FOUND",
             Self::ProxyNotFound => "PROXY_NOT_FOUND",
             Self::InvalidNodeNum => "INVALID_NODE_NUMBER",
+            Self::NodeNumAlreadyEnough => "NODE_NUM_ALREADY_ENOUGH",
             Self::InvalidClusterName => "INVALID_CLUSTER_NAME",
             Self::InvalidMigrationTask => "INVALID_MIGRATION_TASK",
             Self::InvalidProxyAddress => "INVALID_PROXY_ADDRESS",

@@ -88,6 +88,10 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 "/clusters/nodes/{cluster_name}",
                 web::patch().to(auto_add_nodes),
             )
+            .route(
+                "/clusters/nodes/{cluster_name}",
+                web::put().to(auto_scale_up_nodes),
+            )
             .route("/clusters/free_nodes/{cluster_name}", web::delete().to(audo_delete_free_nodes))
             .route(
                 "/clusters/migrations/shrink/{cluster_name}/{node_number}",
@@ -257,6 +261,17 @@ impl MemBrokerService {
             .write()
             .expect("MemBrokerService::auto_add_node")
             .auto_add_nodes(cluster_name, node_num)
+    }
+
+    pub fn auto_scale_up_nodes(
+        &self,
+        cluster_name: String,
+        cluster_node_num: usize,
+    ) -> Result<Vec<Node>, MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::auto_scale_up_nodes")
+            .auto_scale_up_nodes(cluster_name, cluster_node_num)
     }
 
     pub fn audo_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
@@ -501,6 +516,27 @@ async fn remove_cluster(
 }
 
 #[derive(Deserialize, Serialize)]
+pub struct AutoScaleUpNodesPayload {
+    cluster_node_number: usize,
+}
+
+async fn auto_scale_up_nodes(
+    (path, payload, state): (
+        web::Path<(String,)>,
+        web::Json<AutoScaleUpNodesPayload>,
+        ServiceState,
+    ),
+) -> Result<web::Json<Vec<Node>>, MetaStoreError> {
+    let cluster_name = path.into_inner().0;
+    let node_num = payload.into_inner().cluster_node_number;
+    let res = state
+        .auto_scale_up_nodes(cluster_name, node_num)
+        .map(web::Json)?;
+    state.trigger_update().await?;
+    Ok(res)
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct AutoAddNodesPayload {
     node_number: usize,
 }
@@ -666,6 +702,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::FreeNodeFound => http::StatusCode::CONFLICT,
             MetaStoreError::ProxyNotFound => http::StatusCode::NOT_FOUND,
             MetaStoreError::InvalidNodeNum => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::NodeNumAlreadyEnough => http::StatusCode::CONFLICT,
             MetaStoreError::InvalidClusterName => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidMigrationTask => http::StatusCode::BAD_REQUEST,
             MetaStoreError::InvalidProxyAddress => http::StatusCode::BAD_REQUEST,
