@@ -50,6 +50,7 @@ Requirements:
 
 - docker-compose
 - redis-cli
+- [jq](https://stedolan.github.io/jq/)
 
 #### Run the cluster in docker-compose
 Before running any example, run this command to build the basic `undermoon` docker image:

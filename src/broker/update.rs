@@ -338,13 +338,13 @@ impl<'a> MetaStoreUpdate<'a> {
         let name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
 
-        let existing_proxy_num = match self.store.clusters.get(&name) {
+        let existing_node_num = match self.store.clusters.get(&name) {
             None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => cluster.chunks.len() * 2,
+            Some(cluster) => cluster.chunks.len() * 4,
         };
 
-        let added_num = match expected_num.checked_sub(existing_proxy_num) {
-            None => return Err(MetaStoreError::NodeNumAlreadyEnough),
+        let added_num = match expected_num.checked_sub(existing_node_num) {
+            None | Some(0) => return Err(MetaStoreError::NodeNumAlreadyEnough),
             Some(added_num) => added_num,
         };
 
