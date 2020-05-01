@@ -1,7 +1,7 @@
 use super::backend::{CmdTask, CmdTaskFactory, ConnFactory};
 use super::cluster::{ClusterMetaError, ClusterTag};
 use super::command::{CmdReplyReceiver, CmdType, DataCmdType, TaskResult};
-use super::compress::{CmdCompressor, CompressionError};
+use super::compress::{CmdCompressor, CompressionError, CompressionStrategyMetaMapConfig};
 use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
@@ -93,7 +93,7 @@ pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket
     config: Arc<ServerProxyConfig>,
     manager: MetaManager<F, C>,
     slow_request_logger: Arc<SlowRequestLogger>,
-    compressor: CmdCompressor<C>,
+    compressor: CmdCompressor<CompressionStrategyMetaMapConfig<C>>,
     future_registry: Arc<TrackedFutureRegistry>,
 }
 
@@ -122,7 +122,7 @@ where
                 future_registry.clone(),
             ),
             slow_request_logger,
-            compressor: CmdCompressor::new(meta_map),
+            compressor: CmdCompressor::new(CompressionStrategyMetaMapConfig::new(meta_map)),
             future_registry,
         }
     }
