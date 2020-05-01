@@ -77,12 +77,16 @@ where
         sender_factory: &F,
         peer_sender_factory: &PF,
         active_redirection: bool,
+        cluster_config: &ClusterConfig,
     ) -> Self {
         let epoch = cluster_meta.get_epoch();
 
         let mut local_clusters = HashMap::new();
         for (cluster_name, slot_ranges) in cluster_meta.get_local().get_map().iter() {
-            let config = cluster_meta.get_configs().get_or_default(cluster_name);
+            let config = cluster_meta
+                .get_configs()
+                .get(cluster_name)
+                .unwrap_or_else(|| cluster_config.clone());
             let local_cluster = LocalCluster::from_slot_map(
                 sender_factory,
                 cluster_name.clone(),

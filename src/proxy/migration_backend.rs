@@ -1,11 +1,10 @@
-use super::backend::{CmdTask, CmdTaskFactory, DefaultConnFactory, ReqTask};
+use super::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError};
-use super::reply::ReplyCommitHandlerFactory;
-use super::sender::{BackendSenderFactory, CmdTaskSender};
+use super::sender::CmdTaskSender;
 use crate::common::response;
 use crate::common::utils::pretty_print_bytes;
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
-use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespPacket, RespVec, VFunctor};
+use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use atomic_option::AtomicOption;
 use dashmap::DashSet;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -290,9 +289,6 @@ impl MgrCmdStateDel {
     }
 }
 
-pub type SenderFactory =
-    BackendSenderFactory<ReplyCommitHandlerFactory, DefaultConnFactory<RespPacket>>;
-
 type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
 type DumpPttlTaskSender<F> = UnboundedSender<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
@@ -304,15 +300,16 @@ type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFutur
 type DeleteKeyTaskSender = UnboundedSender<ReplyFuture>;
 type DeleteKeyTaskReceiver = UnboundedReceiver<ReplyFuture>;
 
-pub struct RestoreDataCmdTaskHandler<F, S>
+pub struct RestoreDataCmdTaskHandler<F, S, PS>
 where
     F: CmdTaskFactory,
     F::Task: CmdTask<TaskType = CmdTypeTuple>,
     S: CmdTaskSender<Task = ReqTask<F::Task>>,
+    PS: CmdTaskSender<Task = ReqTask<F::Task>>,
 {
     src_sender: Arc<S>,
     dst_sender: Arc<S>,
-    src_proxy_sender: Arc<S>,
+    src_proxy_sender: Arc<PS>,
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
     restore_task_sender: RestoreTaskSender<F>,
@@ -330,16 +327,17 @@ where
     key_lock: Arc<KeyLock>,
 }
 
-impl<F, S> RestoreDataCmdTaskHandler<F, S>
+impl<F, S, PS> RestoreDataCmdTaskHandler<F, S, PS>
 where
     F: CmdTaskFactory,
     F::Task: CmdTask<TaskType = CmdTypeTuple>,
     S: CmdTaskSender<Task = ReqTask<F::Task>>,
+    PS: CmdTaskSender<Task = ReqTask<F::Task>>,
 {
     pub fn new(
         src_sender: S,
         dst_sender: S,
-        src_proxy_sender: S,
+        src_proxy_sender: PS,
         cmd_task_factory: Arc<F>,
     ) -> Self {
         let src_sender = Arc::new(src_sender);
@@ -491,7 +489,7 @@ where
         umsync_task_sender: UmSyncTaskSender<F>,
         src_sender: Arc<S>,
         dst_sender: Arc<S>,
-        src_proxy_sender: Arc<S>,
+        src_proxy_sender: Arc<PS>,
         cmd_task_factory: Arc<F>,
         key_lock: Arc<KeyLock>,
     ) {
@@ -1074,7 +1072,7 @@ mod tests {
     }
 
     async fn run_future(
-        handler: &RestoreDataCmdTaskHandler<CmdCtxFactory, DummyCmdTaskSender>,
+        handler: &RestoreDataCmdTaskHandler<CmdCtxFactory, DummyCmdTaskSender, DummyCmdTaskSender>,
         reply_receiver: CmdReplyReceiver,
     ) -> BinSafeStr {
         let reply = gen_reply_future(reply_receiver);

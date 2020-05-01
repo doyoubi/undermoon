@@ -35,9 +35,13 @@ pub struct NewTask<T: CmdTask> {
     task: TaskRecord<T>,
 }
 
-pub struct MigrationManager<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
+pub struct MigrationManager<RCF, TSF, PTSF, CTF>
 where
+    RCF: RedisClientFactory,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    TSF: CmdTaskSenderFactory + ThreadSafe,
+    <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    PTSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: ClusterTag,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
@@ -46,14 +50,18 @@ where
     cluster_config: ClusterConfig,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
+    proxy_sender_factory: Arc<PTSF>,
     cmd_task_factory: Arc<CTF>,
     future_registry: Arc<TrackedFutureRegistry>,
 }
 
-impl<RCF: RedisClientFactory, TSF: CmdTaskSenderFactory + ThreadSafe, CTF>
-    MigrationManager<RCF, TSF, CTF>
+impl<RCF, TSF, PTSF, CTF> MigrationManager<RCF, TSF, PTSF, CTF>
 where
+    RCF: RedisClientFactory,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    TSF: CmdTaskSenderFactory + ThreadSafe,
+    <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    PTSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: ClusterTag,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
@@ -63,6 +71,7 @@ where
         cluster_config: ClusterConfig,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
@@ -71,6 +80,7 @@ where
             cluster_config,
             client_factory,
             sender_factory,
+            proxy_sender_factory,
             cmd_task_factory,
             future_registry,
         }
@@ -95,6 +105,7 @@ where
             mgr_config,
             self.client_factory.clone(),
             self.sender_factory.clone(),
+            self.proxy_sender_factory.clone(),
             self.cmd_task_factory.clone(),
             blocking_ctrl_factory,
         )
@@ -326,7 +337,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn update_from_old_task_map<RCF, CTF, BCF, TSF>(
+    pub fn update_from_old_task_map<RCF, CTF, BCF, TSF, PTSF>(
         &self,
         local_cluster_map: &ProxyClusterMap,
         cluster_config_map: &ClusterConfigMap,
@@ -334,6 +345,7 @@ where
         mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> (Self, Vec<NewTask<T>>)
@@ -344,6 +356,8 @@ where
         BCF: TaskBlockingControllerFactory,
         TSF: CmdTaskSenderFactory + ThreadSafe,
         <TSF as CmdTaskSenderFactory>::Sender: CmdTaskSender<Task = ReqTask<T>> + ThreadSafe,
+        PTSF: CmdTaskSenderFactory + ThreadSafe,
+        <PTSF as CmdTaskSenderFactory>::Sender: CmdTaskSender<Task = ReqTask<T>> + ThreadSafe,
     {
         let old_task_map = &self.task_map;
 
@@ -468,6 +482,7 @@ where
                                 slot_range.clone(),
                                 client_factory.clone(),
                                 sender_factory.clone(),
+                                proxy_sender_factory.clone(),
                                 cmd_task_factory.clone(),
                             ));
                             new_tasks.push(NewTask {
