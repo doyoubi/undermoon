@@ -3,7 +3,6 @@ use super::service::BrokerAddresses;
 use crate::broker::MEM_BROKER_API_VERSION;
 use crate::common::cluster::{MigrationTaskMeta, Proxy};
 use futures::Future;
-use reqwest;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

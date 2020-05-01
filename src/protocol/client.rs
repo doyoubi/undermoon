@@ -4,7 +4,6 @@ use crate::protocol::{
     new_optional_multi_packet_codec, EncodeError, OptionalMulti, OptionalMultiPacketDecoder,
     OptionalMultiPacketEncoder, RespCodec,
 };
-use crossbeam_channel;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use either::Either;

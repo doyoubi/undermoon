@@ -70,7 +70,9 @@ type SenderFactory<C> = BlockingBackendSenderFactory<
 
 type PeerSenderFactory<C> = BackendSenderFactory<ReplyCommitHandlerFactory, C>;
 
-type MigrationSenderFactory<C> = MigrationBackendSenderFactory<ReplyCommitHandlerFactory, C>;
+type MigrationSenderFactory<C> =
+    MigrationBackendSenderFactory<DecompressCommitHandlerFactory<CmdCtx, C>, C>;
+type MigrationProxySenderFactory<C> = MigrationBackendSenderFactory<ReplyCommitHandlerFactory, C>;
 
 type ProxyMetaMap<C> = MetaMap<
     <SenderFactory<C> as CmdTaskSenderFactory>::Sender,
@@ -88,10 +90,16 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     epoch: AtomicU64,
     lock: Mutex<()>, // This is the write lock for `epoch`, `cluster`, and `task`.
     replicator_manager: ReplicatorManager<F>,
-    migration_manager: MigrationManager<F, MigrationSenderFactory<C>, CmdCtxFactory>,
+    migration_manager: MigrationManager<
+        F,
+        MigrationSenderFactory<C>,
+        MigrationProxySenderFactory<C>,
+        CmdCtxFactory,
+    >,
     sender_factory: SenderFactory<C>,
     peer_sender_factory: PeerSenderFactory<C>,
     blocking_map: Arc<BlockingMap<BasicSenderFactory<C>, BlockingTaskRetrySender<C>>>,
+    cluster_config: ClusterConfig,
 }
 
 impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> {
@@ -125,12 +133,19 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         );
         let migration_sender_factory = Arc::new(gen_migration_sender_factory(
             config.clone(),
+            Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone())),
+            conn_factory.clone(),
+            future_registry.clone(),
+        ));
+        let migration_proxy_sender_factory = Arc::new(gen_migration_sender_factory(
+            config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
             conn_factory,
             future_registry.clone(),
         ));
         let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let config_clone = config.clone();
+        let cluster_config_clone = cluster_config.clone();
         Self {
             config,
             meta_map,
@@ -142,15 +157,17 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             ),
             migration_manager: MigrationManager::new(
                 config_clone,
-                cluster_config,
+                cluster_config_clone,
                 client_factory,
                 migration_sender_factory,
+                migration_proxy_sender_factory,
                 cmd_ctx_factory,
                 future_registry,
             ),
             sender_factory,
             peer_sender_factory,
             blocking_map,
+            cluster_config,
         }
     }
 
@@ -184,6 +201,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let sender_factory = &self.sender_factory;
         let peer_sender_factory = &self.peer_sender_factory;
         let migration_manager = &self.migration_manager;
+        let cluster_config = &self.cluster_config;
 
         {
             let _guard = self.lock.lock().expect("MetaManager::set_meta");
@@ -200,6 +218,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 sender_factory,
                 peer_sender_factory,
                 active_redirection,
+                cluster_config,
             );
             let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
                 &old_meta_map.migration_map,

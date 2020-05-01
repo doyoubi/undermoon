@@ -13,7 +13,6 @@ use crate::coordinator::http_meta_broker::{
 use actix_http::ResponseBuilder;
 use actix_web::dev::Service;
 use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
-use chrono;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};

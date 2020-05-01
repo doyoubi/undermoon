@@ -1,4 +1,3 @@
-use coarsetime;
 use core::mem;
 use core::pin::Pin;
 use futures::stream::{Fuse, FusedStream, Stream};

@@ -4,7 +4,6 @@ use crate::broker::MEM_BROKER_API_VERSION;
 use crate::common::cluster::{Cluster, ClusterName, Proxy};
 use crate::common::utils::vec_result_to_stream;
 use futures::{future, stream, Future, FutureExt, Stream, StreamExt};
-use reqwest;
 use serde_derive::Deserialize;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};

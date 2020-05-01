@@ -463,13 +463,15 @@ impl<T: CmdTask> Drop for MigratingTaskHandle<T> {
     }
 }
 
-pub struct RedisScanImportingTask<RCF, TSF, CTF>
+pub struct RedisScanImportingTask<RCF, TSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    PTSF: CmdTaskSenderFactory + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     _mgr_config: Arc<AtomicMigrationConfig>,
     meta: MigrationMeta,
@@ -479,19 +481,26 @@ where
     _sender_factory: Arc<TSF>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
-    cmd_handler: RestoreDataCmdTaskHandler<CTF, <TSF as CmdTaskSenderFactory>::Sender>,
+    cmd_handler: RestoreDataCmdTaskHandler<
+        CTF,
+        <TSF as CmdTaskSenderFactory>::Sender,
+        <PTSF as CmdTaskSenderFactory>::Sender,
+    >,
     _cmd_task_factory: Arc<CTF>,
     active_redirection: bool,
 }
 
-impl<RCF, TSF, CTF> RedisScanImportingTask<RCF, TSF, CTF>
+impl<RCF, TSF, PTSF, CTF> RedisScanImportingTask<RCF, TSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    PTSF: CmdTaskSenderFactory + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
@@ -499,11 +508,12 @@ where
         slot_range: SlotRange,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
     ) -> Self {
         let src_sender = sender_factory.create(meta.src_node_address.clone());
         let dst_sender = sender_factory.create(meta.dst_node_address.clone());
-        let src_proxy_sender = sender_factory.create(meta.src_proxy_address.clone());
+        let src_proxy_sender = proxy_sender_factory.create(meta.src_proxy_address.clone());
         let cmd_handler = RestoreDataCmdTaskHandler::new(
             src_sender,
             dst_sender,
@@ -529,13 +539,15 @@ where
     }
 }
 
-impl<RCF, TSF, CTF> ImportingTask for RedisScanImportingTask<RCF, TSF, CTF>
+impl<RCF, TSF, PTSF, CTF> ImportingTask for RedisScanImportingTask<RCF, TSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    PTSF: CmdTaskSenderFactory + ThreadSafe,
+    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
-    <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
 {
     type Task = CTF::Task;
 

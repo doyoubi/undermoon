@@ -7,7 +7,6 @@ extern crate config;
 extern crate env_logger;
 
 use arc_swap::ArcSwap;
-use reqwest;
 use std::cmp::max;
 use std::env;
 use std::error::Error;

@@ -77,7 +77,7 @@ impl ClusterConfig {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CompressionStrategy {
     Disabled = 0,
-    // Only allow SET, SETEX, PSETEX, SETNX, GET, GETSET commands for String data type
+    // Only allow SET, SETEX, PSETEX, SETNX, GET, GETSET , MGET, MSET, MSETNX commands for String data type
     // as once compression is enabled other commands will get the wrong result.
     SetGetOnly = 1,
     // Allow all the String commands. User need to use lua script to

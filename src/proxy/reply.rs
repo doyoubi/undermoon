@@ -1,7 +1,7 @@
 use super::backend::{
     BackendResult, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory,
 };
-use super::compress::{CmdReplyDecompressor, CompressionError};
+use super::compress::{CmdReplyDecompressor, CompressionError, CompressionStrategyMetaMapConfig};
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
 use crate::common::utils::Wrapper;
@@ -38,7 +38,9 @@ where
 
     fn create(&self) -> Self::Handler {
         DecompressCommitHandler {
-            decompressor: CmdReplyDecompressor::new(self.meta_map.clone()),
+            decompressor: CmdReplyDecompressor::new(CompressionStrategyMetaMapConfig::new(
+                self.meta_map.clone(),
+            )),
             phanthom: PhantomData,
         }
     }
@@ -48,7 +50,7 @@ pub struct DecompressCommitHandler<
     T: CmdTask<Pkt = RespPacket> + Into<Wrapper<CmdCtx>>,
     C: ConnFactory<Pkt = RespPacket>,
 > {
-    decompressor: CmdReplyDecompressor<C>,
+    decompressor: CmdReplyDecompressor<CompressionStrategyMetaMapConfig<C>>,
     phanthom: PhantomData<T>,
 }
 
