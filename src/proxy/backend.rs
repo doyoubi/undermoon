@@ -22,7 +22,6 @@ use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 

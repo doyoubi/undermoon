@@ -13,7 +13,6 @@ use crate::common::cluster::ClusterName;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
-use crossbeam_channel;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};

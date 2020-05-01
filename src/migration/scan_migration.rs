@@ -14,7 +14,6 @@ use crate::protocol::{
 };
 use crate::proxy::backend::CmdTask;
 use atomic_option::AtomicOption;
-use btoi;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{future, Future, FutureExt, StreamExt};
 use futures_timer::Delay;

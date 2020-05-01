@@ -2,7 +2,6 @@ use super::persistence::MetaSyncError;
 use super::store::MetaStore;
 use crate::broker::MEM_BROKER_API_VERSION;
 use futures::{future, Future};
-use reqwest;
 use std::pin::Pin;
 use std::sync::Arc;
 

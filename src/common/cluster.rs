@@ -1,6 +1,5 @@
 use super::utils::{IMPORTING_TAG, MIGRATING_TAG, SLOT_NUM};
 use crate::common::config::ClusterConfig;
-use arrayvec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::max;

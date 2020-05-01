@@ -10,7 +10,6 @@ use crate::proxy::cluster::ClusterMetaError;
 use itertools::Either;
 use std::collections::HashMap;
 use std::sync::{atomic, Arc, RwLock};
-use tokio;
 
 type ReplicatorRecord = Either<Arc<dyn MasterReplicator>, Arc<dyn ReplicaReplicator>>;
 type ReplicatorMap = HashMap<(ClusterName, String), (ReplicatorRecord, Arc<FutureAutoStopHandle>)>;

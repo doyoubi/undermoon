@@ -9,7 +9,6 @@ use crate::protocol::{Array, BulkStr, OptionalMulti, Resp, RespPacket};
 use std::error::Error;
 use std::fmt;
 use std::io;
-use zstd;
 
 pub trait CompressionStrategyConfig {
     fn get_config(&self, cluster_name: &ClusterName) -> CompressionStrategy;
@@ -228,6 +227,7 @@ impl Error for CompressionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::BinSafeStr;
     use crate::proxy::command::{new_command_pair, Command};
     use std::convert::TryFrom;
 
@@ -240,8 +240,8 @@ mod tests {
         RespPacket::Data(resp)
     }
 
-    fn gen_bulk_str_packet(s: String) -> RespPacket {
-        RespPacket::Data(Resp::Bulk(BulkStr::Str(s.into_bytes())))
+    fn gen_bulk_str_packet(s: BinSafeStr) -> RespPacket {
+        RespPacket::Data(Resp::Bulk(BulkStr::Str(s)))
     }
 
     fn gen_cmd_ctx(cmd: Vec<String>) -> CmdCtx {
@@ -287,7 +287,7 @@ mod tests {
             strategy: CompressionStrategy::Disabled,
         };
         let decompressor = CmdReplyDecompressor::new(config);
-        let mut reply_packet = gen_bulk_str_packet("value".to_string());
+        let mut reply_packet = gen_bulk_str_packet("value".to_string().into_bytes());
         let err = decompressor
             .decompress(&mut cmd_ctx, &mut reply_packet)
             .unwrap_err();
@@ -295,18 +295,90 @@ mod tests {
     }
 
     #[test]
-    fn test_enabled_for_set() {
+    fn test_enabled_for_set_get() {
+        let comppressed_value = {
+            let mut cmd_ctx = gen_cmd_ctx(vec![
+                "SET".to_string(),
+                "key".to_string(),
+                "value".to_string(),
+            ]);
+            let config = DummyConfig {
+                strategy: CompressionStrategy::SetGetOnly,
+            };
+            let compressor = CmdCompressor::new(config);
+            compressor.try_compressing_cmd_ctx(&mut cmd_ctx).unwrap();
+            let comppressed_value = cmd_ctx.get_cmd().get_command_element(2).unwrap().to_vec();
+            assert_ne!(comppressed_value, b"value");
+            comppressed_value
+        };
+
+        let mut cmd_ctx = gen_cmd_ctx(vec!["GET".to_string(), "key".to_string()]);
+        let config = DummyConfig {
+            strategy: CompressionStrategy::SetGetOnly,
+        };
+        let decompressor = CmdReplyDecompressor::new(config);
+        let mut reply_packet = gen_bulk_str_packet(comppressed_value);
+        decompressor
+            .decompress(&mut cmd_ctx, &mut reply_packet)
+            .unwrap();
+        let v = match reply_packet {
+            RespPacket::Data(Resp::Bulk(BulkStr::Str(v))) => v,
+            _ => panic!(),
+        };
+        assert_eq!(v, b"value");
+    }
+
+    #[test]
+    fn test_enabled_for_mset_mget() {
+        let (comppressed_value_one, comppressed_value_two) = {
+            let mut cmd_ctx = gen_cmd_ctx(vec![
+                "MSET".to_string(),
+                "key_one".to_string(),
+                "value_one".to_string(),
+                "key_two".to_string(),
+                "value_two".to_string(),
+            ]);
+            let config = DummyConfig {
+                strategy: CompressionStrategy::SetGetOnly,
+            };
+            let compressor = CmdCompressor::new(config);
+            compressor.try_compressing_cmd_ctx(&mut cmd_ctx).unwrap();
+            let comppressed_value_one = cmd_ctx.get_cmd().get_command_element(2).unwrap().to_vec();
+            assert_ne!(comppressed_value_one, b"value_one");
+            let comppressed_value_two = cmd_ctx.get_cmd().get_command_element(4).unwrap().to_vec();
+            assert_ne!(comppressed_value_two, b"value_two");
+            (comppressed_value_one, comppressed_value_two)
+        };
+
         let mut cmd_ctx = gen_cmd_ctx(vec![
-            "SET".to_string(),
-            "key".to_string(),
-            "value".to_string(),
+            "MGET".to_string(),
+            "key_one".to_string(),
+            "key_two".to_string(),
         ]);
         let config = DummyConfig {
             strategy: CompressionStrategy::SetGetOnly,
         };
-        let compressor = CmdCompressor::new(config);
-        compressor.try_compressing_cmd_ctx(&mut cmd_ctx).unwrap();
-        let value = cmd_ctx.get_cmd().get_command_element(2).unwrap();
-        assert_ne!(value, b"value");
+        let decompressor = CmdReplyDecompressor::new(config);
+        let mut reply_packet = RespPacket::Data(Resp::Arr(Array::Arr(vec![
+            Resp::Bulk(BulkStr::Str(comppressed_value_one)),
+            Resp::Bulk(BulkStr::Str(comppressed_value_two)),
+        ])));
+        decompressor
+            .decompress(&mut cmd_ctx, &mut reply_packet)
+            .unwrap();
+        let arr = match reply_packet {
+            RespPacket::Data(Resp::Arr(Array::Arr(arr))) => arr,
+            _ => panic!(),
+        };
+        let reply_one = match &arr[0] {
+            Resp::Bulk(BulkStr::Str(s)) => s,
+            _ => panic!(),
+        };
+        let reply_two = match &arr[1] {
+            Resp::Bulk(BulkStr::Str(s)) => s,
+            _ => panic!(),
+        };
+        assert_eq!(reply_one, b"value_one");
+        assert_eq!(reply_two, b"value_two");
     }
 }
