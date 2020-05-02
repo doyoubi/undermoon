@@ -102,13 +102,17 @@ impl<'a> MetaStoreQuery<'a> {
                 .collect();
             (peers, vec![])
         };
+
+        let mut cluster_config = HashMap::new();
+        cluster_config.insert(cluster_name, cluster.get_config());
+
         let proxy = Proxy::new(
             address.to_string(),
             epoch,
             nodes,
             free_nodes,
             peers,
-            HashMap::new(),
+            cluster_config,
         );
         Some(proxy)
     }
