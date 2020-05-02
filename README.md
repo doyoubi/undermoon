@@ -75,7 +75,8 @@ Since every proxy has 2 corresponding Redis nodes, we have 12 nodes in total.
 Note that the number of a cluster could only be the multiples of 4.
 Let's create a cluster with 4 nodes.
 ```bash
-$ curl -XPOST -H 'Content-Type: application/json' http://localhost:7799/api/v2/clusters/meta/mycluster -d '{"node_number": 4}'
+$ curl -XPOST -H 'Content-Type: application/json' \
+    http://localhost:7799/api/v2/clusters/meta/mycluster -d '{"node_number": 4}'
 ```
 
 Before connecting to the cluster, you need to add these hosts to you `/etc/hosts`:
@@ -134,7 +135,8 @@ Two of them are masters and the other two of them are replicas.
 Let's scale up to 8 nodes:
 ```bash
 # Add 4 nodes
-$ curl -XPATCH -H 'Content-Type: application/json' http://localhost:7799/api/v2/clusters/nodes/mycluster -d '{"node_number": 4}'
+$ curl -XPATCH -H 'Content-Type: application/json' \
+    http://localhost:7799/api/v2/clusters/nodes/mycluster -d '{"node_number": 4}'
 # Start migrating the data
 $ curl -XPOST http://localhost:7799/api/v2/clusters/migrations/expand/mycluster
 ```
@@ -205,6 +207,7 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 - [Configure to support non-cluster-mode clients](./docs/active_redirection.md)
 - [Command Table](./docs/command_table.md)
 - [Performance](./docs/performance.md)
+- [Best Practice](./docs/best_practice.md)
 
 ## API
 - [Proxy UMCTL command](./docs/meta_command.md)
