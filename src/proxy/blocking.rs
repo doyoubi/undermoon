@@ -241,6 +241,14 @@ where
     }
 
     fn send(&self, cmd_task: BlockingHintTask<BS::Task>) -> Result<(), BackendError> {
+        // `cmd_need_blocking` is still needed even we have `self.is_blocking()` check.
+        // Without it, the following case could happen:
+        // (1) A command with the key should be migrated is executed.
+        // (2) The migration manager check that it should be sent to the blocking queue.
+        // (3) It goes all the way into this function.
+        // (4) The blocking is done, this function will forward all the commands to the backend node.
+        // (5) This command is sent to the backend, which is not correct.
+        // Thus we need a blocking hint for consistency.
         let cmd_need_blocking = cmd_task.get_blocking();
         let cmd_task = cmd_task.into_inner();
 

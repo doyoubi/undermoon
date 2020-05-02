@@ -399,8 +399,10 @@ where
                 )))
             }
             MigrationState::PreBlocking | MigrationState::PreSwitch => {
+                let need_blocking = self.blocking_ctrl.is_blocking();
                 return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                    cmd_task, true,
+                    cmd_task,
+                    need_blocking,
                 )));
             }
             _ => (),
