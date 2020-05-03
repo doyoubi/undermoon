@@ -53,7 +53,12 @@ Requirements:
 - [jq](https://stedolan.github.io/jq/)
 
 #### Run the cluster in docker-compose
-Before running any example, run this command to build the basic `undermoon` docker image:
+Download and run the cluster directly:
+```bash
+$ make docker-mem-broker-example
+```
+
+Or build it yourself and run the `undermoon` docker image:
 ```bash
 $ make docker-build-image
 $ make docker-mem-broker
@@ -201,7 +206,7 @@ $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 
 ## Development
 `undermoon` tries to avoid `unsafe` and some calls that could crash.
-It used a [customized linter](https://github.com/doyoubi/mylint-rs) to scan all the codes except test modules.
+It uses a [customized linter](https://github.com/doyoubi/mylint-rs) to scan all the codes except test modules.
 
 Install linters:
 ```

@@ -69,6 +69,9 @@ docker-build-release:
 docker-mem-broker:
 	docker-compose -f examples/docker-compose-mem-broker.yml up
 
+docker-mem-broker-example:
+	docker-compose -f examples/docker-compose-mem-broker-example.yml up
+
 docker-overmoon:
 	# Need to build the 'overmoon' image first
 	# > git clone https://github.com/doyoubi/overmoon
