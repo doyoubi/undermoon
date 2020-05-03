@@ -199,6 +199,23 @@ And we can remove the server_proxy3 from the `undermoon` cluster now.
 $ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
 ```
 
+## Development
+`undermoon` tries to avoid `unsafe` and some calls that could crash.
+It used a [customized linter](https://github.com/doyoubi/mylint-rs) to scan all the codes except test modules.
+
+Install linters:
+```
+$ make install-linters
+```
+
+Then run the following commands before commit your codes:
+```
+$ make lint
+$ make test
+```
+
+See more in the [development guide](./docs/development.md).
+
 ## Documentation
 - [Redis Cluster Protocol and Server Proxy](./docs/redis_cluster_protocol.md)
 - [Chunk](./docs/chunk.md)
