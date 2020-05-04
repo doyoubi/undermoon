@@ -1,4 +1,5 @@
 use super::persistence::MetaSyncError;
+use super::service::ReplicaAddresses;
 use super::store::MetaStore;
 use crate::broker::MEM_BROKER_API_VERSION;
 use futures::{future, Future};
@@ -13,12 +14,12 @@ pub trait MetaReplicator {
 }
 
 pub struct JsonMetaReplicator {
-    replica_addresses: Vec<String>,
+    replica_addresses: ReplicaAddresses,
     client: reqwest::Client,
 }
 
 impl JsonMetaReplicator {
-    pub fn new(replica_addresses: Vec<String>, client: reqwest::Client) -> Self {
+    pub fn new(replica_addresses: ReplicaAddresses, client: reqwest::Client) -> Self {
         Self {
             replica_addresses,
             client,
@@ -69,8 +70,8 @@ impl JsonMetaReplicator {
     }
 
     async fn sync_meta_impl(&self, store: Arc<MetaStore>) -> Result<(), MetaSyncError> {
-        let futs = self
-            .replica_addresses
+        let replica_addresses = self.replica_addresses.lease();
+        let futs = replica_addresses
             .iter()
             .map(|address| self.sync_one_replica(store.clone(), address.as_str()))
             .collect::<Vec<_>>();

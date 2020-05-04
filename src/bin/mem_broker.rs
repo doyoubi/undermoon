@@ -5,6 +5,7 @@ extern crate log;
 extern crate config;
 extern crate env_logger;
 use actix_web::{middleware, App, HttpServer};
+use arc_swap::ArcSwap;
 use futures_timer::Delay;
 use std::env;
 use std::num::NonZeroU64;
@@ -36,6 +37,7 @@ fn gen_conf() -> MemBrokerConfig {
                 .map(|s| s.to_string())
                 .collect()
         });
+    let replica_addresses = Arc::new(ArcSwap::new(Arc::new(replica_addresses)));
 
     let debug = s.get::<bool>("debug").unwrap_or(false);
 

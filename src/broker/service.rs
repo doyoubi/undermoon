@@ -13,6 +13,7 @@ use crate::coordinator::http_meta_broker::{
 use actix_http::ResponseBuilder;
 use actix_web::dev::Service;
 use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};
@@ -106,10 +107,13 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::delete().to(remove_proxy),
             )
             .route("/resources/failures/check", web::post().to(check_resource_for_failures))
+            .route("/config", web::put().to(change_broker_config))
             .route("/epoch/recovery", web::put().to(recover_epoch))
             .route("/epoch/{new_epoch}", web::put().to(bump_epoch)),
     );
 }
+
+pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 
 #[derive(Debug, Clone)]
 pub struct MemBrokerConfig {
@@ -121,9 +125,22 @@ pub struct MemBrokerConfig {
     pub meta_filename: String,
     pub auto_update_meta_file: bool,
     pub update_meta_file_interval: Option<NonZeroU64>,
-    pub replica_addresses: Vec<String>,
+    pub replica_addresses: ReplicaAddresses,
     pub sync_meta_interval: Option<NonZeroU64>,
     pub debug: bool,
+}
+
+impl MemBrokerConfig {
+    pub fn update(&self, config_payload: MemBrokerConfigPayload) -> Result<(), MetaStoreError> {
+        let MemBrokerConfigPayload { replica_addresses } = config_payload;
+        self.replica_addresses.swap(Arc::new(replica_addresses));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MemBrokerConfigPayload {
+    pub replica_addresses: Vec<String>,
 }
 
 pub struct MemBrokerService {
@@ -169,7 +186,7 @@ impl MemBrokerService {
     }
 
     pub async fn sync_meta(&self) -> Result<(), MetaSyncError> {
-        if self.config.replica_addresses.is_empty() {
+        if self.config.replica_addresses.lease().is_empty() {
             return Ok(());
         }
         let store = self.store.read().map_err(|_| MetaSyncError::Lock)?.clone();
@@ -314,6 +331,14 @@ impl MemBrokerService {
             .clone();
         let checker = ResourceChecker::new(store_copy);
         checker.check_failure_tolerance(migration_limit)
+    }
+
+    pub fn change_broker_config(
+        &self,
+        config_payload: MemBrokerConfigPayload,
+    ) -> Result<(), MetaStoreError> {
+        self.config.update(config_payload)?;
+        Ok(())
     }
 
     pub fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
@@ -617,6 +642,13 @@ async fn check_resource_for_failures(
 ) -> Result<web::Json<ResourceFailureCheckPayload>, MetaStoreError> {
     let hosts_cannot_fail = state.check_resource_for_failures()?;
     Ok(web::Json(ResourceFailureCheckPayload { hosts_cannot_fail }))
+}
+
+async fn change_broker_config(
+    (state, config_payload): (ServiceState, web::Json<MemBrokerConfigPayload>),
+) -> Result<&'static str, MetaStoreError> {
+    state.change_broker_config(config_payload.into_inner())?;
+    Ok("")
 }
 
 async fn migrate_slots(

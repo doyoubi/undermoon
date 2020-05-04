@@ -277,6 +277,9 @@ impl MetaStore {
         if self.version != other.version {
             return Err(MetaStoreError::InvalidMetaVersion);
         }
+        if self.global_epoch > other.global_epoch {
+            return Err(MetaStoreError::SmallEpoch);
+        }
         *self = other;
         Ok(())
     }
