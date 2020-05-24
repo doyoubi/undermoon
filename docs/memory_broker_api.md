@@ -312,3 +312,18 @@ HTTP 200
     "hosts_cannot_fail": ["host1", "host2", ...],
 }
 ```
+
+#### Change Broker Config
+`PUT` /api/v2/config
+
+##### Request
+```
+{
+    "replica_addresses": ["127.0.0.1:17799", "127.0.0.1:27799"]
+}
+```
+
+##### Success
+```
+HTTP 200
+```
