@@ -282,6 +282,16 @@ HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 ```
 
+#### Get the current global epoch
+`GET` /api/v2/epoch
+
+##### Success
+```
+HTTP 200
+
+<integer>
+```
+
 #### Force to bump all epoch
 Update all the epoch to the specified new epoch.
 This should only be used when metadata is stale after failover
@@ -326,4 +336,17 @@ HTTP 200
 ##### Success
 ```
 HTTP 200
+```
+
+#### Query Broker Config
+`GET` /api/v2/config
+
+
+##### Success
+```
+HTTP 200
+
+{
+    "replica_addresses": ["127.0.0.1:17799", "127.0.0.1:27799"]
+}
 ```
