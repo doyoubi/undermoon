@@ -1,0 +1,7 @@
+FROM rust:1.43-buster
+
+WORKDIR /undermoon
+
+COPY ./examples/target_volume/debug/server_proxy /bin/
+COPY ./examples/target_volume/debug/coordinator /bin/
+COPY ./examples/target_volume/debug/mem_broker /bin/

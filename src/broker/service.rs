@@ -108,6 +108,8 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             )
             .route("/resources/failures/check", web::post().to(check_resource_for_failures))
             .route("/config", web::put().to(change_broker_config))
+            .route("/config", web::get().to(get_broker_config))
+            .route("/epoch", web::get().to(get_epoch))
             .route("/epoch/recovery", web::put().to(recover_epoch))
             .route("/epoch/{new_epoch}", web::put().to(bump_epoch)),
     );
@@ -341,6 +343,13 @@ impl MemBrokerService {
         Ok(())
     }
 
+    pub fn get_broker_config(&self) -> Result<MemBrokerConfigPayload, MetaStoreError> {
+        let payload = MemBrokerConfigPayload {
+            replica_addresses: (*self.config.replica_addresses.load()).clone(),
+        };
+        Ok(payload)
+    }
+
     pub fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         self.store
             .write()
@@ -405,6 +414,15 @@ impl MemBrokerService {
             .write()
             .expect("MemBrokerService::force_bump_all_epoch")
             .force_bump_all_epoch(new_epoch)
+    }
+
+    pub fn get_epoch(&self) -> Result<u64, MetaStoreError> {
+        let epoch = self
+            .store
+            .read()
+            .expect("MemBrokerService::get_epoch")
+            .get_global_epoch();
+        Ok(epoch)
     }
 
     pub async fn recover_epoch(&self) -> Result<Vec<String>, MetaStoreError> {
@@ -651,6 +669,13 @@ async fn change_broker_config(
     Ok("")
 }
 
+async fn get_broker_config(
+    state: ServiceState,
+) -> Result<web::Json<MemBrokerConfigPayload>, MetaStoreError> {
+    let payload = state.get_broker_config()?;
+    Ok(web::Json(payload))
+}
+
 async fn migrate_slots(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
@@ -705,6 +730,10 @@ async fn replace_failed_node(
 async fn get_failed_proxies(state: ServiceState) -> impl Responder {
     let addresses = state.get_failed_proxies();
     web::Json(FailedProxiesPayload { addresses })
+}
+
+async fn get_epoch(state: ServiceState) -> Result<String, MetaStoreError> {
+    state.get_epoch().map(|epoch| epoch.to_string())
 }
 
 #[derive(Deserialize, Serialize)]

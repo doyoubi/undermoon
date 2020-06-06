@@ -53,6 +53,18 @@ docker-build-image:
 docker-rebuild-bin:
 	sh scripts/dkrebuild.sh
 
+# Image for testing undermoon-operator
+docker-build-test-image:
+	docker image build -f examples/Dockerfile-builder-test -t undermoon_builder_test .
+	mkdir -p ./examples/target_volume/debug
+	docker rm undermoon-builder-container-debug || true
+	docker create -it --name undermoon-builder-container-debug undermoon_builder_test bash
+	docker cp undermoon-builder-container-debug:/undermoon/target/debug/server_proxy ./examples/target_volume/debug/
+	docker cp undermoon-builder-container-debug:/undermoon/target/debug/coordinator ./examples/target_volume/debug/
+	docker cp undermoon-builder-container-debug:/undermoon/target/debug/mem_broker ./examples/target_volume/debug/
+	docker rm undermoon-builder-container-debug
+	docker image build -f examples/Dockerfile-undermoon-test -t undermoon_test .
+
 # The release builder will build the binaries and move it out by `docker cp`.
 # When the release undermoon image is built, the binaries will be moved into it.
 docker-build-release:
