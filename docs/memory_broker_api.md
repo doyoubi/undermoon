@@ -181,7 +181,7 @@ HTTP 200
 ```
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
-HTTP 409 { "error": "FreeNodeFound" }
+HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
@@ -199,8 +199,9 @@ HTTP 200
 ##### Error
 ```
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
+HTTP 400 { "error": "INVALID_NODE_NUMBER" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
-HTTP 409 { "error": "SLOTS_ALREADY_EVEN" }
+HTTP 409 { "error": "FREE_NODE_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 

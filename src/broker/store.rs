@@ -495,7 +495,7 @@ impl MetaStoreError {
             Self::AlreadyExisted => "ALREADY_EXISTED",
             Self::ClusterNotFound => "CLUSTER_NOT_FOUND",
             Self::FreeNodeNotFound => "FREE_NODE_NOT_FOUND",
-            Self::FreeNodeFound => "FREE_NODE_NOT_FOUND",
+            Self::FreeNodeFound => "FREE_NODE_FOUND",
             Self::ProxyNotFound => "PROXY_NOT_FOUND",
             Self::InvalidNodeNum => "INVALID_NODE_NUMBER",
             Self::NodeNumAlreadyEnough => "NODE_NUM_ALREADY_ENOUGH",
