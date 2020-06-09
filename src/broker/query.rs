@@ -1,5 +1,6 @@
 use super::store::{
-    ChunkRolePosition, ClusterStore, HostProxy, MetaStore, CHUNK_HALF_NODE_NUM, CHUNK_NODE_NUM,
+    ChunkRolePosition, ClusterInfo, ClusterStore, HostProxy, MetaStore, CHUNK_HALF_NODE_NUM,
+    CHUNK_NODE_NUM,
 };
 use crate::common::cluster::{Cluster, Node, PeerProxy, Proxy, ReplMeta, ReplPeer};
 use crate::common::cluster::{ClusterName, Role};
@@ -140,6 +141,18 @@ impl<'a> MetaStoreQuery<'a> {
         let cluster_store =
             Self::get_cluster_store(&self.store.clusters, &cluster_name, migration_limit)?;
         Some(Self::cluster_store_to_cluster(&cluster_store))
+    }
+
+    pub fn get_cluster_info_by_name(
+        &self,
+        cluster_name: &str,
+        migration_limit: u64,
+    ) -> Option<ClusterInfo> {
+        let cluster_name = ClusterName::try_from(cluster_name).ok()?;
+
+        let cluster_store =
+            Self::get_cluster_store(&self.store.clusters, &cluster_name, migration_limit)?;
+        Some(cluster_store.get_info())
     }
 
     fn cluster_store_to_cluster(cluster_store: &ClusterStore) -> Cluster {

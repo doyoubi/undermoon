@@ -411,6 +411,19 @@ impl<'a> MetaStoreUpdate<'a> {
         Ok(new_nodes)
     }
 
+    pub fn auto_delete_free_nodes_if_exists(
+        &mut self,
+        cluster_name: String,
+    ) -> Result<(), MetaStoreError> {
+        match self.audo_delete_free_nodes(cluster_name) {
+            Ok(()) => Ok(()),
+            Err(err) => match err {
+                MetaStoreError::MigrationRunning | MetaStoreError::FreeNodeNotFound => Ok(()),
+                other_err => Err(other_err),
+            },
+        }
+    }
+
     pub fn audo_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;

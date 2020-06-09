@@ -1,7 +1,7 @@
 use super::persistence::{MetaStorage, MetaSyncError};
 use super::replication::MetaReplicator;
 use super::resource::ResourceChecker;
-use super::store::{MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
+use super::store::{ClusterInfo, MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
 use crate::broker::recovery::{fetch_largest_epoch, EpochFetchResult};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
@@ -82,6 +82,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
             .route("/proxies/failed/addresses", web::get().to(get_failed_proxies))
 
             // Additional api
+            .route("/clusters/info/{cluster_name}", web::get().to(get_cluster_info_by_name))
             .route("/clusters/meta/{cluster_name}", web::post().to(add_cluster))
             .route("/clusters/meta/{cluster_name}", web::delete().to(remove_cluster))
             .route(
@@ -98,6 +99,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 web::post().to(migrate_slots_to_scale_down),
             )
             .route("/clusters/migrations/expand/{cluster_name}", web::post().to(migrate_slots))
+            .route("/clusters/migrations/auto/{cluster_name}/{node_number}", web::post().to(auto_scale_node_number))
             .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
             .route("/clusters/balance/{cluster_name}", web::put().to(balance_masters))
 
@@ -244,6 +246,14 @@ impl MemBrokerService {
             .get_cluster_by_name(name, migration_limit)
     }
 
+    pub fn get_cluster_info_by_name(&self, name: &str) -> Option<ClusterInfo> {
+        let migration_limit = self.config.migration_limit;
+        self.store
+            .read()
+            .expect("MemBrokerService::get_cluster_info_by_name")
+            .get_cluster_info_by_name(name, migration_limit)
+    }
+
     pub fn add_proxy(&self, proxy_resource: ProxyResourcePayload) -> Result<(), MetaStoreError> {
         let ProxyResourcePayload {
             proxy_address,
@@ -368,6 +378,17 @@ impl MemBrokerService {
             .migrate_slots_to_scale_down(cluster_name, new_node_num)
     }
 
+    pub fn auto_scale_node_number(
+        &self,
+        cluster_name: String,
+        new_node_num: usize,
+    ) -> Result<(), MetaStoreError> {
+        self.store
+            .write()
+            .expect("MemBrokerService::auto_scale_node_number")
+            .auto_scale_node_number(cluster_name, new_node_num)
+    }
+
     pub fn get_failures(&self) -> Vec<String> {
         let failure_ttl = chrono::Duration::seconds(self.config.failure_ttl as i64);
         let failure_quorum = self.config.failure_quorum;
@@ -388,7 +409,7 @@ impl MemBrokerService {
         self.store
             .write()
             .expect("MemBrokerService::commit_migration")
-            .commit_migration(task)
+            .commit_migration(task, true)
     }
 
     pub fn replace_failed_proxy(
@@ -507,6 +528,16 @@ async fn get_cluster_by_name(
     let name = path.into_inner().0;
     let cluster = state.get_cluster_by_name(&name);
     web::Json(ClusterPayload { cluster })
+}
+
+async fn get_cluster_info_by_name(
+    (path, state): (web::Path<(String,)>, ServiceState),
+) -> Result<web::Json<ClusterInfo>, MetaStoreError> {
+    let name = path.into_inner().0;
+    match state.get_cluster_info_by_name(&name) {
+        Some(cluster_info) => Ok(web::Json(cluster_info)),
+        None => Err(MetaStoreError::ClusterNotFound),
+    }
 }
 
 async fn get_failures(state: ServiceState) -> impl Responder {
@@ -680,20 +711,27 @@ async fn migrate_slots(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name,) = path.into_inner();
-    let res = state.migrate_slots(cluster_name).map(|()| "")?;
+    state.migrate_slots(cluster_name)?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
 }
 
 async fn migrate_slots_to_scale_down(
     (path, state): (web::Path<(String, usize)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name, new_node_num) = path.into_inner();
-    let res = state
-        .migrate_slots_to_scale_down(cluster_name, new_node_num)
-        .map(|()| "")?;
+    state.migrate_slots_to_scale_down(cluster_name, new_node_num)?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
+}
+
+async fn auto_scale_node_number(
+    (path, state): (web::Path<(String, usize)>, ServiceState),
+) -> Result<&'static str, MetaStoreError> {
+    let (cluster, new_node_num) = path.into_inner();
+    state.auto_scale_node_number(cluster, new_node_num)?;
+    state.trigger_update().await?;
+    Ok("")
 }
 
 async fn add_failure(
