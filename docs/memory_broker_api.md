@@ -56,13 +56,33 @@ HTTP 200
 HTTP 409 { "error": "INVALID_META_VERSION" }
 ```
 
+#### Get cluster info
+`GET` /api/v2/clusters/info/<cluster_name>
+
+##### Success
+```
+HTTP 200
+
+{
+    "name": "cluster_name",
+    "node_number": 8,
+    "node_number_with_slots": 8,
+    "is_migrating": false
+}
+```
+
+##### Error
+```
+HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
+```
+
 #### Create cluster
 `POST` /api/v2/clusters/meta/<cluster_name>
 
 ##### Request
 ```json
 {
-    "node_number": 8,
+    "node_number": 8
 }
 ```
 - `cluster_name`
@@ -167,6 +187,23 @@ HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
+#### Add or remove nodes and start migration
+`POST` /api/v2/clusters/migrations/auto/<cluster_name>/<node_number>
+
+##### Success
+```
+HTTP 200
+```
+
+##### Error
+```
+HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
+HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
+HTTP 409 { "error": "MIGRATION_RUNNING" }
+HTTP 400 { "error": "INVALID_NODE_NUMBER" }
+HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
+```
+
 #### Start migration for scaling out
 Note that you need to call `Add nodes to cluster` beforehand.
 
@@ -181,7 +218,7 @@ HTTP 200
 ```
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
-HTTP 409 { "error": "FreeNodeFound" }
+HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 
@@ -199,8 +236,9 @@ HTTP 200
 ##### Error
 ```
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
+HTTP 400 { "error": "INVALID_NODE_NUMBER" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
-HTTP 409 { "error": "SLOTS_ALREADY_EVEN" }
+HTTP 409 { "error": "FREE_NODE_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 ```
 

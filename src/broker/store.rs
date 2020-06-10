@@ -10,8 +10,9 @@ use crate::common::cluster::{
 use crate::common::config::ClusterConfig;
 use crate::common::version::UNDERMOON_MEM_BROKER_META_VERSION;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use std::cmp::max;
+use std::cmp::{max, Ordering};
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 
@@ -138,6 +139,14 @@ pub struct ChunkStore {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClusterInfo {
+    pub name: ClusterName,
+    pub node_number: usize,
+    pub node_number_with_slots: usize,
+    pub is_migrating: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClusterStore {
     pub epoch: u64,
     pub name: ClusterName,
@@ -146,8 +155,42 @@ pub struct ClusterStore {
 }
 
 impl ClusterStore {
+    pub fn get_info(&self) -> ClusterInfo {
+        ClusterInfo {
+            name: self.name.clone(),
+            node_number: self.get_node_number(),
+            node_number_with_slots: self.get_node_number_with_slots(),
+            is_migrating: self.is_migrating(),
+        }
+    }
+
     pub fn set_epoch(&mut self, new_epoch: u64) {
         self.epoch = new_epoch;
+    }
+
+    pub fn is_migrating(&self) -> bool {
+        self.chunks
+            .iter()
+            .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()))
+    }
+
+    pub fn get_node_number(&self) -> usize {
+        self.chunks.len() * CHUNK_NODE_NUM
+    }
+
+    pub fn get_node_number_with_slots(&self) -> usize {
+        let masters_with_slots: usize = self
+            .chunks
+            .iter()
+            .map(|chunk| {
+                chunk
+                    .stable_slots
+                    .iter()
+                    .filter(|slots| slots.is_some())
+                    .count()
+            })
+            .sum();
+        masters_with_slots * CHUNK_HALF_NODE_NUM
     }
 
     // LimitMigration reduces the concurrent running migration.
@@ -325,6 +368,14 @@ impl MetaStore {
         MetaStoreQuery::new(self).get_cluster_by_name(cluster_name, migration_limit)
     }
 
+    pub fn get_cluster_info_by_name(
+        &self,
+        cluster_name: &str,
+        migration_limit: u64,
+    ) -> Option<ClusterInfo> {
+        MetaStoreQuery::new(self).get_cluster_info_by_name(cluster_name, migration_limit)
+    }
+
     pub fn add_failure(&mut self, address: String, reporter_id: String) {
         MetaStoreUpdate::new(self).add_failure(address, reporter_id)
     }
@@ -394,8 +445,65 @@ impl MetaStore {
         MetaStoreMigrate::new(self).migrate_slots_to_scale_down(cluster_name, new_node_num)
     }
 
-    pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
-        MetaStoreMigrate::new(self).commit_migration(task)
+    pub fn commit_migration(
+        &mut self,
+        task: MigrationTaskMeta,
+        clear_free_nodes: bool,
+    ) -> Result<(), MetaStoreError> {
+        let cluster_name = task.cluster_name.to_string();
+        MetaStoreMigrate::new(self).commit_migration(task)?;
+        if clear_free_nodes {
+            MetaStoreUpdate::new(self).auto_delete_free_nodes_if_exists(cluster_name)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn auto_scale_node_number(
+        &mut self,
+        cluster_name: String,
+        expected_num: usize,
+    ) -> Result<(), MetaStoreError> {
+        let name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
+
+        let (existing_node_num, is_migrating) = match self.clusters.get(&name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(cluster) => (
+                cluster.chunks.len() * CHUNK_NODE_NUM,
+                cluster.is_migrating(),
+            ),
+        };
+
+        if is_migrating {
+            return Err(MetaStoreError::MigrationRunning);
+        }
+
+        match existing_node_num.cmp(&expected_num) {
+            Ordering::Equal => (), // Still keep going for those clusters which have extra nodes without slots.
+            Ordering::Less => {
+                self.auto_scale_up_nodes(cluster_name.clone(), expected_num)?;
+            }
+            Ordering::Greater => {
+                MetaStoreMigrate::new(self)
+                    .migrate_slots_to_scale_down(cluster_name, expected_num)?;
+                return Ok(());
+            }
+        }
+
+        let node_num_with_slots = match self.clusters.get(&name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(cluster) => cluster.get_node_number_with_slots(),
+        };
+
+        match node_num_with_slots.cmp(&expected_num) {
+            Ordering::Equal | Ordering::Greater => (),
+            Ordering::Less => {
+                MetaStoreMigrate::new(self).migrate_slots(cluster_name)?;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn get_free_proxies(&self) -> Vec<HostProxy> {
@@ -495,7 +603,7 @@ impl MetaStoreError {
             Self::AlreadyExisted => "ALREADY_EXISTED",
             Self::ClusterNotFound => "CLUSTER_NOT_FOUND",
             Self::FreeNodeNotFound => "FREE_NODE_NOT_FOUND",
-            Self::FreeNodeFound => "FREE_NODE_NOT_FOUND",
+            Self::FreeNodeFound => "FREE_NODE_FOUND",
             Self::ProxyNotFound => "PROXY_NOT_FOUND",
             Self::InvalidNodeNum => "INVALID_NODE_NUMBER",
             Self::NodeNumAlreadyEnough => "NODE_NUM_ALREADY_ENOUGH",
@@ -704,6 +812,13 @@ mod tests {
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap();
         assert_eq!(cluster.get_nodes().len(), 4);
+        let cluster_store = store
+            .clusters
+            .get(&ClusterName::try_from(cluster_name.as_str()).unwrap())
+            .unwrap();
+        assert_eq!(cluster_store.get_node_number(), 4);
+        assert_eq!(cluster_store.get_node_number_with_slots(), 4);
+        assert_eq!(cluster_store.is_migrating(), false);
 
         check_cluster_slots(cluster.clone(), 4);
 
@@ -1184,7 +1299,7 @@ mod tests {
                     cluster_name: ClusterName::try_from(cluster_name.as_str()).unwrap(),
                     slot_range,
                 };
-                store.commit_migration(task_meta).unwrap();
+                store.commit_migration(task_meta, false).unwrap();
             }
         }
 
@@ -1484,7 +1599,7 @@ mod tests {
                     cluster_name: ClusterName::try_from(cluster_name.as_str()).unwrap(),
                     slot_range,
                 };
-                store.commit_migration(task_meta).unwrap();
+                store.commit_migration(task_meta, false).unwrap();
             }
         }
 
