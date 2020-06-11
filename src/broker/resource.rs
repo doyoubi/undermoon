@@ -58,23 +58,8 @@ impl ResourceChecker {
 
 #[cfg(test)]
 mod tests {
+    use super::super::utils::tests::add_testing_proxies;
     use super::*;
-
-    fn add_testing_proxies(store: &mut MetaStore, host_num: usize, proxy_per_host: usize) {
-        for host_index in 1..=host_num {
-            for i in 1..=proxy_per_host {
-                let proxy_address = format!("127.0.0.{}:70{:02}", host_index, i);
-                let node_addresses = [
-                    format!("127.0.0.{}:60{:02}", host_index, i * 2),
-                    format!("127.0.0.{}:60{:02}", host_index, i * 2 + 1),
-                ];
-                let index = host_index * proxy_per_host + i;
-                store
-                    .add_proxy(proxy_address, node_addresses, None, Some(index))
-                    .unwrap();
-            }
-        }
-    }
 
     #[test]
     fn test_no_cluster() {

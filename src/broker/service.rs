@@ -820,6 +820,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::MissingIndex => http::StatusCode::BAD_REQUEST,
             MetaStoreError::ProxyResourceOutOfOrder => http::StatusCode::CONFLICT,
             MetaStoreError::OrderedProxyEnabled => http::StatusCode::CONFLICT,
+            MetaStoreError::OneClusterAlreadyExisted => http::StatusCode::CONFLICT,
         }
     }
 

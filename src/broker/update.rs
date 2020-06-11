@@ -225,6 +225,10 @@ impl<'a> MetaStoreUpdate<'a> {
         cluster_name: String,
         node_num: usize,
     ) -> Result<(), MetaStoreError> {
+        if self.store.enable_ordered_proxy && !self.store.clusters.is_empty() {
+            return Err(MetaStoreError::OneClusterAlreadyExisted);
+        }
+
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
         if self.store.clusters.contains_key(&cluster_name) {
