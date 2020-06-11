@@ -2,12 +2,14 @@
 mod tests {
     use super::super::store::{MetaStore, MetaStoreError};
     use super::super::utils::tests::{check_cluster_and_proxy, check_cluster_slots};
-    use crate::common::cluster::ClusterName;
+    use crate::common::cluster::{Cluster, ClusterName, Role};
     use std::collections::HashSet;
     use std::convert::TryFrom;
 
+    const CLUSTER_NAME: &'static str = "testcluster";
+
     fn add_testing_proxies(store: &mut MetaStore, host_num: usize) {
-        for host_index in 0..=host_num {
+        for host_index in 0..host_num {
             let proxy_address = format!("127.0.0.{}:70{:02}", host_index, host_index);
             let node_addresses = [
                 format!("127.0.0.{}:60{:02}", host_index, host_index * 2),
@@ -18,6 +20,18 @@ mod tests {
                 .unwrap();
         }
     }
+
+    fn check_cluster_proxy_order(cluster: &Cluster) {
+        for (i, node) in cluster.get_nodes().iter().enumerate() {
+            let proxy_index = i / 2;
+            let address = node.get_proxy_address();
+            let expected_address = format!("127.0.0.{}:70{:02}", proxy_index, proxy_index);
+            assert_eq!(address, expected_address);
+        }
+    }
+
+    // The following tests are ported from the `store` test module
+    // for `enable_ordered_proxy` mode.
 
     #[test]
     fn test_add_and_remove_proxy() {
@@ -30,7 +44,7 @@ mod tests {
         let err = store
             .add_proxy(proxy_address.to_string(), nodes.clone(), None, None)
             .unwrap_err();
-        assert!(matches!(err, MetaStoreError::MissingIndex));
+        assert_eq!(err, MetaStoreError::MissingIndex);
 
         store
             .add_proxy(proxy_address.to_string(), nodes.clone(), None, Some(1))
@@ -75,11 +89,15 @@ mod tests {
         let epoch1 = store.get_global_epoch();
 
         check_cluster_and_proxy(&store);
-        let cluster_name = "testcluster".to_string();
+        let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
         check_cluster_and_proxy(&store);
+        let cluster = store
+            .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap();
+        check_cluster_proxy_order(&cluster);
 
         let names: Vec<String> = store
             .get_cluster_names()
@@ -92,6 +110,7 @@ mod tests {
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap();
         assert_eq!(cluster.get_nodes().len(), 4);
+        check_cluster_proxy_order(&cluster);
         let cluster_store = store
             .clusters
             .get(&ClusterName::try_from(cluster_name.as_str()).unwrap())
@@ -115,7 +134,7 @@ mod tests {
 
         let another_cluster = "another_cluster".to_string();
         let err = store.add_cluster(another_cluster.clone(), 4).unwrap_err();
-        assert!(matches!(err, MetaStoreError::OneClusterAlreadyExisted));
+        assert_eq!(err, MetaStoreError::OneClusterAlreadyExisted);
         check_cluster_and_proxy(&store);
 
         for node in cluster.get_nodes() {
@@ -169,5 +188,201 @@ mod tests {
             .map(|proxy| proxy.get_free_nodes().len())
             .sum();
         assert_eq!(free_node_num, original_free_node_num);
+    }
+
+    #[test]
+    fn test_failures() {
+        let migration_limit = 0;
+
+        let mut store = MetaStore::new(true);
+        const ALL_PROXIES: usize = 8;
+        add_testing_proxies(&mut store, ALL_PROXIES);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES);
+
+        let original_proxy_num = store.get_proxies().len();
+        let failed_address = "127.0.0.2:7002";
+        assert!(store
+            .get_proxy_by_address(failed_address, migration_limit)
+            .is_some());
+        let epoch1 = store.get_global_epoch();
+
+        store.add_failure(failed_address.to_string(), "reporter_id".to_string());
+        let epoch2 = store.get_global_epoch();
+        assert!(epoch1 < epoch2);
+        let proxy_num = store.get_proxies().len();
+        assert_eq!(proxy_num, original_proxy_num);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
+
+        let failure_quorum: u64 = 1;
+        assert_eq!(
+            store.get_failures(chrono::Duration::max_value(), failure_quorum),
+            vec![failed_address.to_string()],
+        );
+        let failure_quorum: u64 = 2;
+        assert!(store
+            .get_failures(chrono::Duration::max_value(), failure_quorum)
+            .is_empty());
+        store.remove_proxy(failed_address.to_string()).unwrap();
+        let epoch3 = store.get_global_epoch();
+        assert!(epoch2 < epoch3);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+        let err = store.add_cluster(cluster_name.clone(), 8).unwrap_err();
+        assert_eq!(err, MetaStoreError::ProxyResourceOutOfOrder);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
+
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
+        let epoch4 = store.get_global_epoch();
+        assert!(epoch3 < epoch4);
+
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap();
+        check_cluster_slots(cluster.clone(), 4);
+        check_cluster_proxy_order(&cluster);
+
+        let failed_proxy_index = 0;
+        let (failed_proxy_address, peer_proxy_address) = cluster
+            .get_nodes()
+            .get(failed_proxy_index)
+            .map(|node| {
+                (
+                    node.get_proxy_address().to_string(),
+                    node.get_repl_meta().get_peers()[0].proxy_address.clone(),
+                )
+            })
+            .unwrap();
+        store.add_failure(failed_proxy_address.clone(), "reporter_id".to_string());
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
+        let epoch5 = store.get_global_epoch();
+        assert!(epoch4 < epoch5);
+
+        let proxy_num = store.get_proxies().len();
+        assert_eq!(proxy_num, original_proxy_num - 1);
+        let failure_quorum = 1;
+        assert_eq!(
+            store.get_failures(chrono::Duration::max_value(), failure_quorum),
+            vec![failed_proxy_address.clone()]
+        );
+
+        let new_proxy = store
+            .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
+            .unwrap();
+        assert_eq!(new_proxy, None);
+        let epoch6 = store.get_global_epoch();
+        assert!(epoch5 < epoch6);
+
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap();
+        assert_eq!(
+            cluster
+                .get_nodes()
+                .iter()
+                .filter(|node| node.get_proxy_address() == &failed_proxy_address)
+                .count(),
+            2
+        );
+        for node in cluster.get_nodes().iter() {
+            if node.get_proxy_address() == peer_proxy_address {
+                assert_eq!(node.get_role(), Role::Master);
+            } else if node.get_proxy_address() == failed_proxy_address {
+                assert_eq!(node.get_role(), Role::Replica);
+            }
+        }
+        check_cluster_proxy_order(&cluster);
+
+        // Recover proxy
+        let nodes = store
+            .all_proxies
+            .get(&failed_proxy_address)
+            .unwrap()
+            .node_addresses
+            .clone();
+        let err = store
+            .add_proxy(
+                failed_proxy_address.clone(),
+                nodes,
+                None,
+                Some(failed_proxy_index),
+            )
+            .unwrap_err();
+        assert_eq!(err, MetaStoreError::AlreadyExisted);
+        let failure_quorum = 1;
+        assert_eq!(
+            store
+                .get_failures(chrono::Duration::max_value(), failure_quorum)
+                .len(),
+            0
+        );
+        let epoch7 = store.get_global_epoch();
+        assert!(epoch6 < epoch7);
+        check_cluster_and_proxy(&store);
+    }
+
+    #[test]
+    fn test_add_and_delete_free_nodes() {
+        let migration_limit = 0;
+
+        let mut store = MetaStore::new(true);
+        let all_proxy_num = 4;
+        add_testing_proxies(&mut store, all_proxy_num);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        let epoch1 = store.get_global_epoch();
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
+        assert_eq!(
+            store
+                .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            4
+        );
+        check_cluster_and_proxy(&store);
+        let cluster = store
+            .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap();
+        check_cluster_proxy_order(&cluster);
+
+        store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
+        let epoch2 = store.get_global_epoch();
+        assert!(epoch1 < epoch2);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num - 4);
+        assert_eq!(
+            store
+                .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            8
+        );
+        check_cluster_and_proxy(&store);
+        let cluster = store
+            .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap();
+        check_cluster_proxy_order(&cluster);
+
+        store.audo_delete_free_nodes(cluster_name.clone()).unwrap();
+        let epoch3 = store.get_global_epoch();
+        assert!(epoch2 < epoch3);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
+        assert_eq!(
+            store
+                .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            4
+        );
+        check_cluster_and_proxy(&store);
+        let cluster = store
+            .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap();
+        check_cluster_proxy_order(&cluster);
     }
 }

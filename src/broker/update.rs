@@ -873,6 +873,7 @@ impl<'a> MetaStoreUpdate<'a> {
 
         // If enable_ordered_proxy is true, we won't replace the proxy.
         if self.store.enable_ordered_proxy {
+            self.store.bump_global_epoch();
             return Ok(None);
         }
 

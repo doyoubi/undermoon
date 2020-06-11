@@ -774,7 +774,7 @@ mod tests {
         let epoch1 = store.get_global_epoch();
 
         check_cluster_and_proxy(&store);
-        let cluster_name = "testcluster".to_string();
+        let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
@@ -904,7 +904,7 @@ mod tests {
 
         {
             store
-                .add_cluster("testcluster".to_string(), (host_num - 1) * 2)
+                .add_cluster(CLUSTER_NAME.to_string(), (host_num - 1) * 2)
                 .unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
@@ -968,18 +968,20 @@ mod tests {
         assert_eq!(proxy_num, original_proxy_num);
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
 
+        let failure_quorum: u64 = 1;
         assert_eq!(
-            store.get_failures(chrono::Duration::max_value(), 1),
+            store.get_failures(chrono::Duration::max_value(), failure_quorum),
             vec![failed_address.to_string()],
         );
+        let failure_quorum: u64 = 2;
         assert!(store
-            .get_failures(chrono::Duration::max_value(), 2)
-            .is_empty(),);
+            .get_failures(chrono::Duration::max_value(), failure_quorum)
+            .is_empty());
         store.remove_proxy(failed_address.to_string()).unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
 
-        let cluster_name = "testcluster".to_string();
+        let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
         let epoch4 = store.get_global_epoch();
@@ -1001,14 +1003,15 @@ mod tests {
             })
             .unwrap();
         store.add_failure(failed_proxy_address.clone(), "reporter_id".to_string());
-        assert_eq!(store.get_free_proxies().len(), 9);
+        assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
         let epoch5 = store.get_global_epoch();
         assert!(epoch4 < epoch5);
 
         let proxy_num = store.get_proxies().len();
         assert_eq!(proxy_num, original_proxy_num - 1);
+        let failure_quorum: u64 = 1;
         assert_eq!(
-            store.get_failures(chrono::Duration::max_value(), 1),
+            store.get_failures(chrono::Duration::max_value(), failure_quorum),
             vec![failed_proxy_address.clone()]
         );
 
