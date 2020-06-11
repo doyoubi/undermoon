@@ -2,6 +2,7 @@ use super::store::{
     ChunkRolePosition, ClusterInfo, ClusterStore, HostProxy, MetaStore, CHUNK_HALF_NODE_NUM,
     CHUNK_NODE_NUM,
 };
+use crate::broker::store::ProxyResource;
 use crate::common::cluster::{Cluster, Node, PeerProxy, Proxy, ReplMeta, ReplPeer};
 use crate::common::cluster::{ClusterName, Role};
 use itertools::Itertools;
@@ -260,7 +261,7 @@ impl<'a> MetaStoreQuery<'a> {
         )
     }
 
-    pub fn get_free_proxies(&self) -> Vec<HostProxy> {
+    pub fn get_free_proxy_resource(&self) -> Vec<ProxyResource> {
         let failed_proxies = self.store.failed_proxies.clone();
         let failures = self.store.failures.clone();
 
@@ -276,12 +277,19 @@ impl<'a> MetaStoreQuery<'a> {
             if failures.contains_key(proxy_address) {
                 continue;
             }
-            free_proxies.push(HostProxy {
-                host: proxy_resource.host.clone(),
-                proxy_address: proxy_address.clone(),
-            });
+            free_proxies.push(proxy_resource.clone());
         }
         free_proxies
+    }
+
+    pub fn get_free_proxies(&self) -> Vec<HostProxy> {
+        self.get_free_proxy_resource()
+            .into_iter()
+            .map(|proxy_resource| HostProxy {
+                host: proxy_resource.host.clone(),
+                proxy_address: proxy_resource.proxy_address,
+            })
+            .collect()
     }
 
     pub fn check_metadata(&self) -> bool {

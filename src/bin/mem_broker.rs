@@ -65,6 +65,9 @@ fn gen_conf() -> MemBrokerConfig {
         sync_meta_interval: NonZeroU64::new(
             s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 0),
         ),
+        enable_ordered_proxy: s
+            .get::<bool>("enable_ordered_proxy")
+            .unwrap_or_else(|_| false),
         debug,
     }
 }

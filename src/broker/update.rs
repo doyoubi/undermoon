@@ -10,6 +10,7 @@ use crate::common::cluster::{ClusterName, Role};
 use crate::common::config::ClusterConfig;
 use crate::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use itertools::Itertools;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -176,14 +177,22 @@ impl<'a> MetaStoreUpdate<'a> {
         proxy_address: String,
         nodes: [String; NODES_PER_PROXY],
         host: Option<String>,
+        proxy_index: Option<usize>,
     ) -> Result<(), MetaStoreError> {
         if proxy_address.split(':').count() != 2 {
             return Err(MetaStoreError::InvalidProxyAddress);
         }
+
         let host = match (host, proxy_address.split(':').next()) {
             (Some(h), _) => h,
             (None, Some(h)) => h.to_string(),
             (None, None) => return Err(MetaStoreError::InvalidProxyAddress),
+        };
+
+        let index = match (self.store.enable_ordered_proxy, proxy_index) {
+            (false, _) => 0,
+            (true, Some(index)) => index,
+            (true, None) => return Err(MetaStoreError::MissingIndex),
         };
 
         self.store.bump_global_epoch();
@@ -197,6 +206,7 @@ impl<'a> MetaStoreUpdate<'a> {
                 proxy_address: proxy_address.clone(),
                 node_addresses: nodes,
                 host,
+                index,
                 cluster: None,
             });
 
@@ -227,7 +237,11 @@ impl<'a> MetaStoreUpdate<'a> {
         let proxy_num =
             NonZeroUsize::new(node_num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
 
-        let proxy_resource_arr = self.generate_free_chunks(proxy_num)?;
+        let proxy_resource_arr = if self.store.enable_ordered_proxy {
+            self.generate_free_chunks_for_ordered_proxy_index(proxy_num, 0)?
+        } else {
+            self.generate_free_chunks(proxy_num)?
+        };
         let chunk_stores = Self::proxy_resource_to_chunk_store(proxy_resource_arr, true);
 
         let epoch = self.store.bump_global_epoch();
@@ -255,6 +269,7 @@ impl<'a> MetaStoreUpdate<'a> {
         Ok(())
     }
 
+    // This function should preserve the order of the chunks in `proxy_resource_arr`.
     fn proxy_resource_to_chunk_store(
         proxy_resource_arr: Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>,
         with_slots: bool,
@@ -359,7 +374,7 @@ impl<'a> MetaStoreUpdate<'a> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
 
-        match self.store.clusters.get(&cluster_name) {
+        let existing_proxy_num = match self.store.clusters.get(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
             Some(cluster) => {
                 if cluster
@@ -369,6 +384,7 @@ impl<'a> MetaStoreUpdate<'a> {
                 {
                     return Err(MetaStoreError::MigrationRunning);
                 }
+                cluster.chunks.len() * CHUNK_PARTS
             }
         };
 
@@ -377,7 +393,11 @@ impl<'a> MetaStoreUpdate<'a> {
         }
         let proxy_num = NonZeroUsize::new(num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
 
-        let proxy_resource_arr = self.generate_free_chunks(proxy_num)?;
+        let proxy_resource_arr = if self.store.enable_ordered_proxy {
+            self.generate_free_chunks_for_ordered_proxy_index(proxy_num, existing_proxy_num)?
+        } else {
+            self.generate_free_chunks(proxy_num)?
+        };
         let mut chunks = Self::proxy_resource_to_chunk_store(proxy_resource_arr, false);
 
         let new_epoch = self.store.bump_global_epoch();
@@ -522,6 +542,56 @@ impl<'a> MetaStoreUpdate<'a> {
             })
             .collect();
         Ok(new_proxies)
+    }
+
+    fn generate_free_chunks_for_ordered_proxy_index(
+        &self,
+        proxy_num: NonZeroUsize,
+        first_index: usize,
+    ) -> Result<Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>, MetaStoreError> {
+        let mut host_proxies = MetaStoreQuery::new(&self.store).get_free_proxy_resource();
+        if host_proxies.len() < proxy_num.get() {
+            return Err(MetaStoreError::NoAvailableResource);
+        }
+
+        host_proxies.sort_by_key(|proxy_resource| proxy_resource.index);
+        host_proxies.truncate(proxy_num.get());
+
+        let mut indices = host_proxies
+            .iter()
+            .map(|proxy_resource| proxy_resource.index);
+        if let Some(first) = indices.next() {
+            if first != first_index {
+                return Err(MetaStoreError::ProxyResourceOutOfOrder);
+            }
+            let mut last_index = first;
+            for i in indices {
+                if last_index + 1 != i {
+                    return Err(MetaStoreError::ProxyResourceOutOfOrder);
+                }
+                last_index = i;
+            }
+        }
+
+        let mut proxy_resources = vec![];
+        for mut chunk in host_proxies
+            .into_iter()
+            .chunks(CHUNK_HALF_NODE_NUM)
+            .into_iter()
+        {
+            let first = chunk.next().ok_or_else(|| {
+                error!("Invalid state. Cannot get first host proxy.");
+                MetaStoreError::InvalidNodeNum
+            })?;
+            let second = chunk.next().ok_or_else(|| {
+                error!("Invalid state. Cannot get second host proxy.");
+                MetaStoreError::InvalidNodeNum
+            })?;
+
+            proxy_resources.push([first, second]);
+        }
+
+        Ok(proxy_resources)
     }
 
     fn generate_free_host_proxies(&self) -> HashMap<String, Vec<String>> {
@@ -796,6 +866,11 @@ impl<'a> MetaStoreUpdate<'a> {
         self.store
             .failed_proxies
             .insert(failed_proxy_address.clone());
+
+        // If enable_ordered_proxy is true, we won't replace the proxy.
+        if self.store.enable_ordered_proxy {
+            return Ok(None);
+        }
 
         let proxy_resource = self.generate_new_free_proxy(failed_proxy_address.clone())?;
         let new_epoch = self.store.bump_global_epoch();

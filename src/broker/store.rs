@@ -26,6 +26,9 @@ pub struct ProxyResource {
     pub proxy_address: String,
     pub node_addresses: [String; NODES_PER_PROXY],
     pub host: String,
+    // `index` is only used as the index in StatefulSet of Kubernetes
+    // when `enable_ordered_proxy` is true.
+    pub index: usize,
     pub cluster: Option<ClusterName>,
 }
 
@@ -300,10 +303,14 @@ pub struct MetaStore {
     pub failed_proxies: HashSet<String>,
     // failed_proxy_address => reporter_id => time,
     pub failures: HashMap<String, HashMap<String, i64>>,
+    // Set it `true` for kubernetes StatefulSet
+    // to disable the chunk allocation algorithm
+    // and only use ProxyResource.index to allocate chunks.
+    pub enable_ordered_proxy: bool,
 }
 
-impl Default for MetaStore {
-    fn default() -> Self {
+impl MetaStore {
+    pub fn new(enable_ordered_proxy: bool) -> Self {
         Self {
             version: UNDERMOON_MEM_BROKER_META_VERSION.to_string(),
             global_epoch: 0,
@@ -311,11 +318,10 @@ impl Default for MetaStore {
             all_proxies: HashMap::new(),
             failed_proxies: HashSet::new(),
             failures: HashMap::new(),
+            enable_ordered_proxy,
         }
     }
-}
 
-impl MetaStore {
     pub fn restore(&mut self, other: MetaStore) -> Result<(), MetaStoreError> {
         if self.version != other.version {
             return Err(MetaStoreError::InvalidMetaVersion);
@@ -393,8 +399,9 @@ impl MetaStore {
         proxy_address: String,
         nodes: [String; NODES_PER_PROXY],
         host: Option<String>,
+        index: Option<usize>,
     ) -> Result<(), MetaStoreError> {
-        MetaStoreUpdate::new(self).add_proxy(proxy_address, nodes, host)
+        MetaStoreUpdate::new(self).add_proxy(proxy_address, nodes, host, index)
     }
 
     pub fn add_cluster(
@@ -591,6 +598,9 @@ pub enum MetaStoreError {
     SyncError(MetaSyncError),
     InvalidMetaVersion,
     SmallEpoch,
+    MissingIndex,
+    ProxyResourceOutOfOrder,
+    OrderedProxyEnabled,
 }
 
 impl MetaStoreError {
@@ -617,6 +627,9 @@ impl MetaStoreError {
             Self::SyncError(err) => err.to_code(),
             Self::InvalidMetaVersion => "INVALID_META_VERSION",
             Self::SmallEpoch => "EPOCH_SMALLER_THAN_CURRENT",
+            Self::MissingIndex => "MISSING_SERVER_PROXY_INDEX",
+            Self::ProxyResourceOutOfOrder => "PROXY_RESOURCE_OUT_OF_ORDER",
+            Self::OrderedProxyEnabled => "ORDERED_PROXY_ENABLED",
         }
     }
 }
@@ -679,8 +692,9 @@ mod tests {
                     format!("127.0.0.{}:60{:02}", host_index, i * 2),
                     format!("127.0.0.{}:60{:02}", host_index, i * 2 + 1),
                 ];
+                let index = host_index * proxy_per_host + i;
                 store
-                    .add_proxy(proxy_address, node_addresses, None)
+                    .add_proxy(proxy_address, node_addresses, None, Some(index))
                     .unwrap();
             }
         }
@@ -690,16 +704,16 @@ mod tests {
     fn test_add_and_remove_proxy() {
         let migration_limit = 0;
 
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let proxy_address = "127.0.0.1:7000";
         let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
 
         assert!(store
-            .add_proxy("127.0.0.1".to_string(), nodes.clone(), None)
+            .add_proxy("127.0.0.1".to_string(), nodes.clone(), None, None)
             .is_err());
 
         store
-            .add_proxy(proxy_address.to_string(), nodes.clone(), None)
+            .add_proxy(proxy_address.to_string(), nodes.clone(), None, None)
             .unwrap();
         assert_eq!(store.get_global_epoch(), 1);
         assert_eq!(store.all_proxies.len(), 1);
@@ -727,9 +741,9 @@ mod tests {
         let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
 
         {
-            let mut store = MetaStore::default();
+            let mut store = MetaStore::new(false);
             store
-                .add_proxy(proxy_address.to_string(), nodes.clone(), None)
+                .add_proxy(proxy_address.to_string(), nodes.clone(), None, None)
                 .unwrap();
             let proxies = store.get_free_proxies();
             let proxy = proxies.get(0).unwrap();
@@ -737,12 +751,13 @@ mod tests {
             assert_eq!(proxy.host, "127.0.0.1");
         }
         {
-            let mut store = MetaStore::default();
+            let mut store = MetaStore::new(false);
             store
                 .add_proxy(
                     proxy_address.to_string(),
                     nodes.clone(),
                     Some("localhost".to_string()),
+                    Some(299),
                 )
                 .unwrap();
             let proxies = store.get_free_proxies();
@@ -780,7 +795,7 @@ mod tests {
     fn test_add_and_remove_cluster() {
         let migration_limit = 0;
 
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 3);
         let proxies: Vec<_> = store
             .get_proxies()
@@ -909,7 +924,7 @@ mod tests {
     fn test_allocation_distribution() {
         let migration_limit = 0;
 
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let host_num = 11;
         assert_eq!(host_num % 2, 1);
         add_testing_proxies(&mut store, host_num, 3);
@@ -970,7 +985,7 @@ mod tests {
     fn test_failures() {
         let migration_limit = 0;
 
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         const ALL_PROXIES: usize = 4 * 3;
         add_testing_proxies(&mut store, 4, 3);
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES);
@@ -1076,7 +1091,7 @@ mod tests {
             .node_addresses
             .clone();
         let err = store
-            .add_proxy(failed_proxy_address.clone(), nodes, None)
+            .add_proxy(failed_proxy_address.clone(), nodes, None, None)
             .unwrap_err();
         assert_eq!(err, MetaStoreError::AlreadyExisted);
         assert_eq!(
@@ -1094,7 +1109,7 @@ mod tests {
     fn test_add_and_delete_free_nodes() {
         let migration_limit = 0;
 
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let host_num = 4;
         let proxy_per_host = 3;
         let all_proxy_num = host_num * proxy_per_host;
@@ -1168,7 +1183,7 @@ mod tests {
         start_node_num: usize,
         migration_limit: u64,
     ) -> MetaStore {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let all_proxy_num = host_num * proxy_per_host;
         add_testing_proxies(&mut store, host_num, proxy_per_host);
         assert_eq!(store.get_free_proxies().len(), all_proxy_num);
@@ -1777,7 +1792,7 @@ mod tests {
     fn test_config() {
         let migration_limit = 0;
 
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 3);
 
         let cluster_name = CLUSTER_NAME.to_string();
@@ -1810,7 +1825,7 @@ mod tests {
 
     #[test]
     fn test_limited_migration() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 3);
 
         let migration_limit = 1;
@@ -1837,7 +1852,7 @@ mod tests {
 
     #[test]
     fn test_unlimited_migration() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 3);
 
         let migration_limit = 0;
@@ -1908,7 +1923,7 @@ mod tests {
 
     #[test]
     fn test_balance_masters() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let host_num = 3;
         let proxy_per_host = 1;
         let all_proxy_num = host_num * proxy_per_host;
@@ -1996,7 +2011,7 @@ mod tests {
 
     #[test]
     fn test_bump_epoch() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let host_num = 3;
         let proxy_per_host = 1;
         let all_proxy_num = host_num * proxy_per_host;
@@ -2019,7 +2034,7 @@ mod tests {
 
     #[test]
     fn test_recover_epoch() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let host_num = 3;
         let proxy_per_host = 1;
         let all_proxy_num = host_num * proxy_per_host;
@@ -2042,7 +2057,7 @@ mod tests {
 
     #[test]
     fn test_recover_epoch_without_free_proxy() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         let host_num = 2;
         let proxy_per_host = 1;
         let all_proxy_num = host_num * proxy_per_host;

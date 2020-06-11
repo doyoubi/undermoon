@@ -68,8 +68,9 @@ mod tests {
                     format!("127.0.0.{}:60{:02}", host_index, i * 2),
                     format!("127.0.0.{}:60{:02}", host_index, i * 2 + 1),
                 ];
+                let index = host_index * proxy_per_host + i;
                 store
-                    .add_proxy(proxy_address, node_addresses, None)
+                    .add_proxy(proxy_address, node_addresses, None, Some(index))
                     .unwrap();
             }
         }
@@ -77,7 +78,7 @@ mod tests {
 
     #[test]
     fn test_no_cluster() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 2);
 
         let checker = ResourceChecker::new(store);
@@ -88,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_enough_resources() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 2);
         store.add_cluster("test_cluster".to_string(), 12).unwrap();
 
@@ -100,7 +101,7 @@ mod tests {
 
     #[test]
     fn test_no_enough_resource() {
-        let mut store = MetaStore::default();
+        let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 2);
         store.add_cluster("test_cluster".to_string(), 16).unwrap();
 

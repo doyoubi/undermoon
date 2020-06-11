@@ -107,6 +107,8 @@ If not:
 
 ##### (5) POST /api/v2/failures/<server_proxy_address>/<reporter_id>
 Report a suspected failure and tag it use a unique <reporter_id> for every Coordinator.
+In the memory broker implementation, if `enable_ordered_proxy` is on,
+this API won't do anything and return 200.
 ```
 Response:
 empty payload
@@ -124,6 +126,8 @@ Response:
 
 ##### (7) POST /api/v2/proxies/failover/<server_proxy_address>
 Try to do the failover for the specified proxy.
+In the memory broker implementation, if `enable_ordered_proxy` is on,
+this API will always return 409.
 ```
 Request:
 empty payload
