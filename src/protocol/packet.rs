@@ -640,7 +640,6 @@ impl<D: DecodedPacket<Hint = ()>> PacketDecoder for OptionalMultiPacketDecoder<D
 mod tests {
     use super::*;
     use crate::protocol::Array;
-    use matches::assert_matches;
 
     #[test]
     fn test_single_packet() {
@@ -661,7 +660,7 @@ mod tests {
             OptionalMulti::Multi(_) => panic!("test_single_packet"),
             OptionalMulti::Single(response) => response,
         };
-        assert_matches!(response, Resp::Arr(Array::Arr(_)));
+        assert!(matches!(response, Resp::Arr(Array::Arr(_))));
     }
 
     #[test]
