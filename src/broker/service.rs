@@ -131,6 +131,7 @@ pub struct MemBrokerConfig {
     pub update_meta_file_interval: Option<NonZeroU64>,
     pub replica_addresses: ReplicaAddresses,
     pub sync_meta_interval: Option<NonZeroU64>,
+    pub enable_ordered_proxy: bool,
     pub debug: bool,
 }
 
@@ -162,8 +163,11 @@ impl MemBrokerService {
         last_meta_store: Option<MetaStore>,
     ) -> Result<Self, MetaStoreError> {
         info!("config: {:?}", config);
-        let mut meta_store = MetaStore::default();
+        let mut meta_store = MetaStore::new(config.enable_ordered_proxy);
         if let Some(last) = last_meta_store {
+            if meta_store.enable_ordered_proxy != last.enable_ordered_proxy {
+                error!("The configured enable_ordered_proxy is not the same as the recovered data. Will ignore the configured one.");
+            }
             info!("restore metadata");
             meta_store.restore(last)?;
         }
@@ -259,11 +263,12 @@ impl MemBrokerService {
             proxy_address,
             nodes,
             host,
+            index,
         } = proxy_resource;
         self.store
             .write()
             .expect("MemBrokerService::add_proxy")
-            .add_proxy(proxy_address, nodes, host)
+            .add_proxy(proxy_address, nodes, host, index)
     }
 
     pub fn add_cluster(&self, cluster_name: String, node_num: usize) -> Result<(), MetaStoreError> {
@@ -550,6 +555,7 @@ pub struct ProxyResourcePayload {
     proxy_address: String,
     nodes: [String; CHUNK_HALF_NODE_NUM],
     host: Option<String>,
+    index: Option<usize>,
 }
 
 async fn add_proxy(
@@ -811,6 +817,10 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::SyncError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::InvalidMetaVersion => http::StatusCode::CONFLICT,
             MetaStoreError::SmallEpoch => http::StatusCode::CONFLICT,
+            MetaStoreError::MissingIndex => http::StatusCode::BAD_REQUEST,
+            MetaStoreError::ProxyResourceOutOfOrder => http::StatusCode::CONFLICT,
+            MetaStoreError::OrderedProxyEnabled => http::StatusCode::CONFLICT,
+            MetaStoreError::OneClusterAlreadyExisted => http::StatusCode::CONFLICT,
         }
     }
 

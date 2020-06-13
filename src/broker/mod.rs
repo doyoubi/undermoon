@@ -8,6 +8,9 @@ mod service;
 mod store;
 mod update;
 
+mod ordered_proxy;
+mod utils;
+
 pub use self::persistence::{JsonFileStorage, MetaStorage, MetaSyncError};
 pub use self::replication::{JsonMetaReplicator, MetaReplicator};
 pub use self::service::{

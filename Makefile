@@ -55,8 +55,8 @@ docker-rebuild-bin:
 
 # Image for testing undermoon-operator
 docker-build-test-image:
-	rm examples/target_volume/debug/*
-	rm examples/target_volume/release/*
+	rm -f examples/target_volume/debug/*
+	rm -f examples/target_volume/release/*
 	docker image build -f examples/Dockerfile-builder-test -t undermoon_builder_test .
 	mkdir -p ./examples/target_volume/debug
 	docker rm undermoon-builder-container-debug || true
@@ -70,8 +70,8 @@ docker-build-test-image:
 # The release builder will build the binaries and move it out by `docker cp`.
 # When the release undermoon image is built, the binaries will be moved into it.
 docker-build-release:
-	rm examples/target_volume/debug/*
-	rm examples/target_volume/release/*
+	rm -f examples/target_volume/debug/*
+	rm -f examples/target_volume/release/*
 	docker image build -f examples/Dockerfile-builder-release -t undermoon_builder_release .
 	mkdir -p ./examples/target_volume/release
 	docker rm undermoon-builder-container || true

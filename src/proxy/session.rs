@@ -422,7 +422,6 @@ impl Error for SessionError {
 mod tests {
     use super::*;
     use crate::protocol::{Array, BulkStr, Resp};
-    use matches::assert_matches;
     use std::convert::TryFrom;
     use tokio;
 
@@ -440,6 +439,6 @@ mod tests {
             Ok(_) => panic!(),
             Err(err) => err,
         };
-        assert_matches!(err, CommandError::Dropped);
+        assert!(matches!(err, CommandError::Dropped));
     }
 }

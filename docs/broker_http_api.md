@@ -124,6 +124,8 @@ Response:
 
 ##### (7) POST /api/v2/proxies/failover/<server_proxy_address>
 Try to do the failover for the specified proxy.
+In the memory broker implementation, if `enable_ordered_proxy` is on,
+this API will only change the role and will not replace the failed server proxy.
 ```
 Request:
 empty payload

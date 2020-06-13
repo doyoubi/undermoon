@@ -22,4 +22,13 @@ replica_addresses = []
 # Use zero to disable it.
 sync_meta_interval = 10
 
+# Set it to `true` for kubernetes StatefulSet
+# to disable the chunk allocation algorithm
+# and only use the index of server proxy to allocate chunks.
+# If this is true，
+# (1) when adding proxies, the "index" field is required and should be the index of the StatefulSet index.
+# (2) failover will only change the role and will not replace proxy.
+# (3) the whole undermoon cluster can only create one Redis cluster.
+enable_ordered_proxy = false
+
 debug = false
