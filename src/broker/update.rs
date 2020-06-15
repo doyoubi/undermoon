@@ -867,15 +867,15 @@ impl<'a> MetaStoreUpdate<'a> {
 
         self.takeover_master(&cluster_name, failed_proxy_address.clone())?;
 
-        self.store
-            .failed_proxies
-            .insert(failed_proxy_address.clone());
-
         // If enable_ordered_proxy is true, we won't replace the proxy.
         if self.store.enable_ordered_proxy {
             self.store.bump_global_epoch();
             return Ok(None);
         }
+
+        self.store
+            .failed_proxies
+            .insert(failed_proxy_address.clone());
 
         let proxy_resource = self.generate_new_free_proxy(failed_proxy_address.clone())?;
         let new_epoch = self.store.bump_global_epoch();
