@@ -411,10 +411,11 @@ impl MemBrokerService {
     }
 
     pub fn commit_migration(&self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
+        // TODO: Maybe we need to make `clear_free_nodes` of `commit_migration` configurable.
         self.store
             .write()
             .expect("MemBrokerService::commit_migration")
-            .commit_migration(task, true)
+            .commit_migration(task, false)
     }
 
     pub fn replace_failed_proxy(

@@ -11,6 +11,7 @@ pip install -r chaostest/requirements.txt
 ```
 
 #### (2) Generate docker-compose.yaml
+**Note that overmoon is not available yet.**
 ```
 python chaostest/render_compose.py [mem_broker|overmoon] [enable_failure]
 ```
@@ -25,7 +26,7 @@ make build-docker
 
 Build `undermoon`:
 ```
-docker-build-image
+make docker-build-image
 ```
 
 Or rebuild if the source codes are changed:
