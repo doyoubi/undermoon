@@ -355,17 +355,13 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         // The proxy is ready when it contains stable slots.
         //
         // When scaling out, the proxy will not be added to the service
-        // until slots finish migrating to it. But it will still receive
-        // requests redirected from other proxies.
+        // when slots start migrating to it.
         //
         // When scaling down, the proxy is turned into not ready
         // once migration started, which could leave the time for
         // the service to remove the proxy.
         let meta_map = self.meta_map.load();
-        let migration_states = meta_map.migration_map.get_states(&cluster_name);
-        meta_map
-            .cluster_map
-            .stable_slot_exists(cluster_name, &migration_states)
+        meta_map.cluster_map.is_ready(cluster_name)
     }
 }
 
