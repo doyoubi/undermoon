@@ -347,6 +347,26 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     pub fn get_epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }
+
+    pub fn is_ready(&self, cluster_name: ClusterName) -> bool {
+        // This is used to determined whether this proxy could be
+        // added or removed from the Service of kubernetes.
+        //
+        // The proxy is ready when it contains stable slots.
+        //
+        // When scaling out, the proxy will not be added to the service
+        // until slots finish migrating to it. But it will still receive
+        // requests redirected from other proxies.
+        //
+        // When scaling down, the proxy is turned into not ready
+        // once migration started, which could leave the time for
+        // the service to remove the proxy.
+        let meta_map = self.meta_map.load();
+        let migration_states = meta_map.migration_map.get_states(&cluster_name);
+        meta_map
+            .cluster_map
+            .stable_slot_exists(cluster_name, &migration_states)
+    }
 }
 
 pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(

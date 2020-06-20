@@ -248,6 +248,18 @@ where
         Ok(Resp::Arr(Array::Arr(local)))
     }
 
+    pub fn stable_slot_exists(
+        &self,
+        cluster_name: ClusterName,
+        migration_states: &HashMap<RangeList, MigrationState>,
+    ) -> bool {
+        self.local_clusters
+            .get(&cluster_name)
+            .map_or(false, |local_cluster| {
+                local_cluster.stable_slot_exists(migration_states)
+            })
+    }
+
     pub fn auto_select_cluster(&self) -> Option<ClusterName> {
         {
             let local = &self.local_clusters;
@@ -394,6 +406,20 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
         gen_cluster_slots_helper(&slot_ranges, migration_states)
+    }
+
+    pub fn stable_slot_exists(
+        &self,
+        migration_states: &HashMap<RangeList, MigrationState>,
+    ) -> bool {
+        for slot_ranges in self.slot_ranges.values() {
+            for slot_range in slot_ranges.iter() {
+                if !should_ignore_slots(slot_range, migration_states) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 

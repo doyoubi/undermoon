@@ -262,6 +262,8 @@ where
             self.handle_umctl_debug(cmd_ctx);
         } else if sub_cmd.eq("GETEPOCH") {
             self.handle_umctl_get_epoch(cmd_ctx);
+        } else if sub_cmd.eq("READY") {
+            self.handle_umctl_ready(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -432,6 +434,12 @@ where
     fn handle_umctl_get_epoch(&self, cmd_ctx: CmdCtx) {
         let epoch = self.manager.get_epoch();
         cmd_ctx.set_resp_result(Ok(Resp::Integer(epoch.to_string().into_bytes())))
+    }
+
+    fn handle_umctl_ready(&self, cmd_ctx: CmdCtx) {
+        let is_ready = self.manager.is_ready(cmd_ctx.get_cluster());
+        let n = if is_ready { 1 } else { 0 };
+        cmd_ctx.set_resp_result(Ok(Resp::Integer(n.to_string().into_bytes())))
     }
 
     fn handle_config(&self, cmd_ctx: CmdCtx) {
