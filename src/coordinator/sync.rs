@@ -179,7 +179,7 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: ClusterMapFlags) -> Vec<Stri
         match role {
             Role::Master => {
                 // For importing nodes in 0.1 migration protocol,
-                // the role is controlled by the migration progress.
+                // the role is also controlled by the migration progress.
                 // And the role cannot be affected by replicator set in this place.
                 // But this has been changed in 0.2 migration protocol.
                 // if node.get_slots().iter().any(|sr| sr.tag.is_importing()) {

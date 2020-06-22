@@ -189,6 +189,12 @@ HTTP 409 { "error": "MIGRATION_RUNNING" }
 
 #### Add or remove nodes and start migration
 `POST` /api/v2/clusters/migrations/auto/<cluster_name>/<node_number>
+For scaling out, this API will first add nodes and
+wait for all the newly added proxies have their metadata synced
+and finally start migration.
+
+For scaling down, this API will just shrink the slots and
+will **NOT** remove the nodes.
 
 ##### Success
 ```

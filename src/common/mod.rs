@@ -1,3 +1,4 @@
+pub mod atomic_lock;
 pub mod batch;
 pub mod cluster;
 pub mod config;

@@ -403,16 +403,20 @@ impl<S: CmdTaskSender> LocalCluster<S> {
     }
 
     pub fn is_ready(&self) -> bool {
-        for slot_ranges in self.slot_ranges.values() {
-            for slot_range in slot_ranges.iter() {
-                match &slot_range.tag {
-                    SlotRangeTag::Migrating(_) => continue,
-                    _ => return true,
-                }
+        is_ready(&self.slot_ranges)
+    }
+}
+
+fn is_ready(slot_ranges: &HashMap<String, Vec<SlotRange>>) -> bool {
+    for slot_ranges in slot_ranges.values() {
+        for slot_range in slot_ranges.iter() {
+            match &slot_range.tag {
+                SlotRangeTag::Migrating(_) => continue,
+                _ => return true,
             }
         }
-        false
     }
+    false
 }
 
 pub struct RemoteCluster<P: CmdTaskSender> {
@@ -1004,6 +1008,13 @@ mod tests {
         let slot_ranges = gen_testing_migration_slot_ranges(true);
         let output = gen_cluster_slots_helper(&slot_ranges, &m).unwrap();
         assert_eq!(output.len(), 0);
+    }
+
+    #[test]
+    fn test_ready_check() {
+        assert!(is_ready(&gen_testing_slot_ranges("127.0.0.1:5299")));
+        assert!(is_ready(&gen_testing_migration_slot_ranges(false)));
+        assert!(!is_ready(&gen_testing_migration_slot_ranges(true)));
     }
 
     #[test]
