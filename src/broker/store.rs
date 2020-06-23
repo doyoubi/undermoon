@@ -177,6 +177,14 @@ impl ClusterStore {
             .any(|chunk| chunk.migrating_slots.iter().any(|slots| !slots.is_empty()))
     }
 
+    pub fn get_proxy_addresses(&self) -> Vec<String> {
+        self.chunks
+            .iter()
+            .flat_map(|chunk| chunk.proxy_addresses.iter())
+            .cloned()
+            .collect()
+    }
+
     pub fn get_node_number(&self) -> usize {
         self.chunks.len() * CHUNK_NODE_NUM
     }
@@ -290,6 +298,12 @@ impl ClusterStore {
 pub struct MigrationSlots {
     pub ranges: Vec<Range>,
     pub meta: MigrationMetaStore,
+}
+
+pub enum ScaleOp {
+    NoOp,
+    ScaleOut,
+    ScaleDown,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -466,11 +480,11 @@ impl MetaStore {
         }
     }
 
-    pub fn auto_scale_node_number(
+    pub fn auto_change_node_number(
         &mut self,
         cluster_name: String,
         expected_num: usize,
-    ) -> Result<(), MetaStoreError> {
+    ) -> Result<(ScaleOp, Vec<String>, u64), MetaStoreError> {
         let name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
 
@@ -486,17 +500,43 @@ impl MetaStore {
             return Err(MetaStoreError::MigrationRunning);
         }
 
-        match existing_node_num.cmp(&expected_num) {
-            Ordering::Equal => (), // Still keep going for those clusters which have extra nodes without slots.
+        // Remove the free nodes first so that this API could be easy to retry.
+        if let Err(err) = self.audo_delete_free_nodes(cluster_name.clone()) {
+            if err != MetaStoreError::FreeNodeNotFound {
+                return Err(err);
+            }
+        }
+
+        let scale_op = match existing_node_num.cmp(&expected_num) {
+            Ordering::Equal => ScaleOp::NoOp,
             Ordering::Less => {
-                self.auto_scale_up_nodes(cluster_name.clone(), expected_num)?;
+                self.auto_scale_up_nodes(cluster_name, expected_num)?;
+                // Need to wait for the new proxy to have metadata synced
+                // and call `auto_scale_out_node_number` to start migration.
+                ScaleOp::ScaleOut
             }
             Ordering::Greater => {
                 MetaStoreMigrate::new(self)
                     .migrate_slots_to_scale_down(cluster_name, expected_num)?;
-                return Ok(());
+                ScaleOp::ScaleDown
             }
-        }
+        };
+
+        let (proxy_addresses, cluster_epoch) = match self.clusters.get(&name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(cluster) => (cluster.get_proxy_addresses(), cluster.epoch),
+        };
+
+        Ok((scale_op, proxy_addresses, cluster_epoch))
+    }
+
+    pub fn auto_scale_out_node_number(
+        &mut self,
+        cluster_name: String,
+        expected_num: usize,
+    ) -> Result<(), MetaStoreError> {
+        let name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| MetaStoreError::InvalidClusterName)?;
 
         let node_num_with_slots = match self.clusters.get(&name) {
             None => return Err(MetaStoreError::ClusterNotFound),
@@ -602,6 +642,8 @@ pub enum MetaStoreError {
     ProxyResourceOutOfOrder,
     OrderedProxyEnabled,
     OneClusterAlreadyExisted,
+    ProxyNotSync,
+    NodeNumberChanging,
 }
 
 impl MetaStoreError {
@@ -632,6 +674,8 @@ impl MetaStoreError {
             Self::ProxyResourceOutOfOrder => "PROXY_RESOURCE_OUT_OF_ORDER",
             Self::OrderedProxyEnabled => "ORDERED_PROXY_ENABLED",
             Self::OneClusterAlreadyExisted => "ONE_CLUSTER_ALREADY_EXISTED",
+            Self::ProxyNotSync => "PROXY_NOT_SYNC",
+            Self::NodeNumberChanging => "NODE_NUMBER_CHANGING",
         }
     }
 }

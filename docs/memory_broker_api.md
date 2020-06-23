@@ -141,6 +141,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "ALREADY_EXISTED" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
+HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
 ```
 
 #### Add nodes to cluster if needed
@@ -169,6 +170,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "ALREADY_EXISTED" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
+HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
 ```
 
 #### Delete Unused nodes in a cluster
@@ -185,10 +187,17 @@ HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
+HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
 ```
 
 #### Add or remove nodes and start migration
 `POST` /api/v2/clusters/migrations/auto/<cluster_name>/<node_number>
+For scaling out, this API will first add nodes and
+wait for all the newly added proxies have their metadata synced
+and finally start migration.
+
+For scaling down, this API will just shrink the slots and
+will **NOT** remove the nodes.
 
 ##### Success
 ```
@@ -202,6 +211,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 HTTP 400 { "error": "INVALID_NODE_NUMBER" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
+HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
 ```
 
 #### Start migration for scaling out
@@ -220,6 +230,7 @@ HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
+HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
 ```
 
 #### Start migration for scaling down
@@ -240,6 +251,7 @@ HTTP 400 { "error": "INVALID_NODE_NUMBER" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "FREE_NODE_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
+HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
 ```
 
 #### Change cluster config

@@ -1,8 +1,9 @@
 use super::persistence::{MetaStorage, MetaSyncError};
 use super::replication::MetaReplicator;
 use super::resource::ResourceChecker;
-use super::store::{ClusterInfo, MetaStore, MetaStoreError, CHUNK_HALF_NODE_NUM};
-use crate::broker::recovery::{fetch_largest_epoch, EpochFetchResult};
+use super::store::{ClusterInfo, MetaStore, MetaStoreError, ScaleOp, CHUNK_HALF_NODE_NUM};
+use crate::broker::epoch::{fetch_max_epoch, wait_for_proxy_epoch, EpochFetchResult};
+use crate::common::atomic_lock::AtomicLock;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_mani_broker::ReplaceProxyResponse;
@@ -153,6 +154,7 @@ pub struct MemBrokerService {
     store: Arc<RwLock<MetaStore>>,
     meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
     meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
+    scale_lock: AtomicLock,
 }
 
 impl MemBrokerService {
@@ -177,6 +179,7 @@ impl MemBrokerService {
             store: Arc::new(RwLock::new(meta_store)),
             meta_storage,
             meta_replicator,
+            scale_lock: AtomicLock::default(),
         };
         Ok(service)
     }
@@ -290,6 +293,11 @@ impl MemBrokerService {
         cluster_name: String,
         node_num: usize,
     ) -> Result<Vec<Node>, MetaStoreError> {
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+
         self.store
             .write()
             .expect("MemBrokerService::auto_add_node")
@@ -301,6 +309,11 @@ impl MemBrokerService {
         cluster_name: String,
         cluster_node_num: usize,
     ) -> Result<Vec<Node>, MetaStoreError> {
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+
         self.store
             .write()
             .expect("MemBrokerService::auto_scale_up_nodes")
@@ -308,6 +321,11 @@ impl MemBrokerService {
     }
 
     pub fn audo_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+
         self.store
             .write()
             .expect("MemBrokerService::audo_delete_free_nodes")
@@ -366,6 +384,11 @@ impl MemBrokerService {
     }
 
     pub fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+
         self.store
             .write()
             .expect("MemBrokerService::migrate_slots")
@@ -377,21 +400,53 @@ impl MemBrokerService {
         cluster_name: String,
         new_node_num: usize,
     ) -> Result<(), MetaStoreError> {
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+
         self.store
             .write()
             .expect("MemBrokerService::migrate_slots_to_scale_down")
             .migrate_slots_to_scale_down(cluster_name, new_node_num)
     }
 
-    pub fn auto_scale_node_number(
+    pub async fn auto_scale_node_number(
         &self,
         cluster_name: String,
         new_node_num: usize,
     ) -> Result<(), MetaStoreError> {
+        // Since this operation consists of two phrase
+        // protected by two locking phase, we need
+        // another lock to prevent other scaling operation
+        // between them.
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+
+        let (scale_op, proxy_addresses, cluster_epoch) = self
+            .store
+            .write()
+            .expect("MemBrokerService::auto_scale_node_number")
+            .auto_change_node_number(cluster_name.clone(), new_node_num)?;
+
+        if let ScaleOp::NoOp | ScaleOp::ScaleDown = scale_op {
+            return Ok(());
+        }
+
+        if let Err(failed_proxy) = wait_for_proxy_epoch(proxy_addresses, cluster_epoch).await {
+            error!(
+                "failed to wait for epoch sync. failed proxy: {}",
+                failed_proxy
+            );
+            return Err(MetaStoreError::ProxyNotSync);
+        }
+
         self.store
             .write()
             .expect("MemBrokerService::auto_scale_node_number")
-            .auto_scale_node_number(cluster_name, new_node_num)
+            .auto_scale_out_node_number(cluster_name, new_node_num)
     }
 
     pub fn get_failures(&self) -> Vec<String> {
@@ -459,17 +514,17 @@ impl MemBrokerService {
             .expect("MemBrokerService::recover_epoch")
             .get_proxies();
         let EpochFetchResult {
-            largest_epoch,
+            max_epoch,
             failed_addresses,
-        } = fetch_largest_epoch(proxy_addresses).await;
+        } = fetch_max_epoch(proxy_addresses).await;
         info!(
             "Get largest epoch {} with failed addresses: {:?}",
-            largest_epoch, failed_addresses
+            max_epoch, failed_addresses
         );
         self.store
             .write()
             .expect("MemBrokerService::recover_epoch")
-            .recover_epoch(largest_epoch + 1);
+            .recover_epoch(max_epoch + 1);
         Ok(failed_addresses)
     }
 
@@ -736,7 +791,7 @@ async fn auto_scale_node_number(
     (path, state): (web::Path<(String, usize)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster, new_node_num) = path.into_inner();
-    state.auto_scale_node_number(cluster, new_node_num)?;
+    state.auto_scale_node_number(cluster, new_node_num).await?;
     state.trigger_update().await?;
     Ok("")
 }
@@ -822,6 +877,8 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::ProxyResourceOutOfOrder => http::StatusCode::CONFLICT,
             MetaStoreError::OrderedProxyEnabled => http::StatusCode::CONFLICT,
             MetaStoreError::OneClusterAlreadyExisted => http::StatusCode::CONFLICT,
+            MetaStoreError::ProxyNotSync => http::StatusCode::INTERNAL_SERVER_ERROR,
+            MetaStoreError::NodeNumberChanging => http::StatusCode::CONFLICT,
         }
     }
 

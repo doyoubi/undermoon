@@ -58,9 +58,14 @@ impl<B: MetaDataBroker> ProxiesRetriever for BrokerProxiesRetriever<B> {
 // When the cluster is added some new proxies, the client may be redirected
 // to the new nodes especially when the migration starts.
 // But this time the metadata might have not synchronized to the new nodes
-// yet. This will cause a `cluster not found` error since the new nodes is still
+// yet. This will cause a `ERR_CLUSTER_NOT_FOUND` error since the new nodes is still
 // uninitialized. Thus we should always synchronize the metadata to the
 // new nodes first.
+//
+// Note that this can't 100% guarantee the new added nodes always
+// receive the metadata first. Other coordinator could possibly sync
+// the old nodes first if those old nodes were free and are also just added
+// to the cluster too.
 //
 // NOTICE: The clients should not directly use the address list from
 // the MetaDataBroker::get_proxy_addresses(). They should check whether

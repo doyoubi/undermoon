@@ -1,7 +1,7 @@
+mod epoch;
 mod migrate;
 mod persistence;
 mod query;
-mod recovery;
 mod replication;
 mod resource;
 mod service;

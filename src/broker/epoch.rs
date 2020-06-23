@@ -1,14 +1,15 @@
 use crate::protocol::{PooledRedisClientFactory, RedisClient, RedisClientFactory, Resp};
 use futures::future;
+use futures_timer::Delay;
 use std::cmp::max;
 use std::time::Duration;
 
 pub struct EpochFetchResult {
-    pub largest_epoch: u64,
+    pub max_epoch: u64,
     pub failed_addresses: Vec<String>,
 }
 
-pub async fn fetch_largest_epoch(proxy_addresses: Vec<String>) -> EpochFetchResult {
+pub async fn fetch_max_epoch(proxy_addresses: Vec<String>) -> EpochFetchResult {
     let timeout = Duration::from_secs(1);
     let client_factory = PooledRedisClientFactory::new(1, timeout);
 
@@ -19,11 +20,11 @@ pub async fn fetch_largest_epoch(proxy_addresses: Vec<String>) -> EpochFetchResu
     let results = future::join_all(futs).await;
 
     let mut failed_addresses = vec![];
-    let mut largest_epoch = 0;
+    let mut max_epoch = 0;
     for res in results.into_iter() {
         match res {
             Ok(epoch) => {
-                largest_epoch = max(largest_epoch, epoch);
+                max_epoch = max(max_epoch, epoch);
             }
             Err(address) => {
                 failed_addresses.push(address);
@@ -31,9 +32,50 @@ pub async fn fetch_largest_epoch(proxy_addresses: Vec<String>) -> EpochFetchResu
         }
     }
     EpochFetchResult {
-        largest_epoch,
+        max_epoch,
         failed_addresses,
     }
+}
+
+const MAX_RETRY_TIMES: usize = 30;
+const RETRY_INTERVAL: u64 = 1;
+
+pub async fn wait_for_proxy_epoch(proxy_addresses: Vec<String>, epoch: u64) -> Result<(), String> {
+    let mut i = 0;
+    loop {
+        Delay::new(Duration::from_secs(RETRY_INTERVAL)).await;
+        let min_epoch = match fetch_min_epoch(proxy_addresses.clone()).await {
+            Ok(min_epoch) => min_epoch,
+            Err(failed_address) => {
+                if i >= MAX_RETRY_TIMES {
+                    return Err(failed_address);
+                }
+                i += 1;
+                continue;
+            }
+        };
+        if min_epoch >= epoch {
+            return Ok(());
+        }
+        info!("waiting for proxy epoch");
+    }
+}
+
+async fn fetch_min_epoch(proxy_addresses: Vec<String>) -> Result<u64, String> {
+    let timeout = Duration::from_secs(1);
+    let client_factory = PooledRedisClientFactory::new(1, timeout);
+
+    let futs: Vec<_> = proxy_addresses
+        .into_iter()
+        .map(|address| fetch_proxy_epoch(address, &client_factory))
+        .collect();
+    let results = future::join_all(futs).await;
+
+    let mut epoch_list = vec![];
+    for res in results.into_iter() {
+        epoch_list.push(res?);
+    }
+    Ok(epoch_list.into_iter().min().unwrap_or(0))
 }
 
 async fn fetch_proxy_epoch(
