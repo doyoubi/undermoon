@@ -39,6 +39,15 @@ active_redirection = false
 # Or it should be at least 4.
 max_redirections = 4
 
+# This should almost only be used in undermoon-operator in Kubernetes.
+# When scaling down, the kubernetes service may not be able to remove
+# the pods already deleted from the cluster,
+# which results in a `CLUSTER_NOT_FOUND` error.
+# This default address will redirect the clients to the service
+# and try again.
+# Leave it empty to disable it.
+default_redirection_address = ""
+
 # Cluster Config
 # Cluster config can vary between clusters.
 # The config below is the default cluster config

@@ -4,7 +4,6 @@ use super::slot::SlotMap;
 use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
-use crate::common::response::ERR_CLUSTER_NOT_FOUND;
 use crate::common::utils::gen_moved;
 use crate::migration::task::MigrationState;
 use crate::protocol::{Array, BulkStr, Resp, RespVec};
@@ -171,11 +170,10 @@ where
                 } else {
                     let cluster_name = cmd_task.get_cluster_name().to_string();
                     debug!("cluster not found: {}", cluster_name);
-                    let resp = Resp::Error(
-                        format!("{}: {}", ERR_CLUSTER_NOT_FOUND, cluster_name).into_bytes(),
-                    );
-                    cmd_task.set_resp_result(Ok(resp));
-                    Err(ClusterSendError::ClusterNotFound(cluster_name))
+                    Err(ClusterSendError::ClusterNotFound {
+                        task: cmd_task,
+                        cluster_name,
+                    })
                 }
             }
         }
@@ -571,7 +569,10 @@ fn format_slot_ranges(slot_ranges: &HashMap<String, Vec<SlotRange>>) -> Vec<Resp
 
 pub enum ClusterSendError<T: CmdTask> {
     MissingKey,
-    ClusterNotFound(String),
+    ClusterNotFound {
+        task: T,
+        cluster_name: String,
+    },
     SlotNotFound(T),
     SlotNotCovered,
     Backend(BackendError),
@@ -593,9 +594,10 @@ impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::MissingKey => "ClusterSendError::MissingKey".to_string(),
-            Self::ClusterNotFound(cluster_name) => {
-                format!("ClusterSendError::ClusterNotFound({})", cluster_name)
-            }
+            Self::ClusterNotFound {
+                task: _,
+                cluster_name,
+            } => format!("ClusterSendError::ClusterNotFound({})", cluster_name),
             Self::SlotNotFound(_) => "ClusterSendError::SlotNotFound".to_string(),
             Self::SlotNotCovered => "ClusterSendError::SlotNotCovered".to_string(),
             Self::Backend(err) => format!("ClusterSendError::Backend({})", err),
@@ -612,7 +614,7 @@ impl<T: CmdTask> Error for ClusterSendError<T> {
     fn cause(&self) -> Option<&dyn Error> {
         match self {
             Self::MissingKey => None,
-            Self::ClusterNotFound(_) => None,
+            Self::ClusterNotFound { .. } => None,
             Self::SlotNotFound(_) => None,
             Self::Backend(err) => Some(err),
             Self::SlotNotCovered => None,
@@ -630,7 +632,10 @@ impl<T: CmdTask> ClusterSendError<T> {
     {
         match self {
             Self::MissingKey => ClusterSendError::MissingKey,
-            Self::ClusterNotFound(cluster) => ClusterSendError::ClusterNotFound(cluster),
+            Self::ClusterNotFound { task, cluster_name } => ClusterSendError::ClusterNotFound {
+                task: f(task),
+                cluster_name,
+            },
             Self::SlotNotFound(task) => ClusterSendError::SlotNotFound(f(task)),
             Self::Backend(err) => ClusterSendError::Backend(err),
             Self::SlotNotCovered => ClusterSendError::SlotNotCovered,
