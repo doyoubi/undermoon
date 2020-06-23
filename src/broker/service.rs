@@ -293,7 +293,10 @@ impl MemBrokerService {
         cluster_name: String,
         node_num: usize,
     ) -> Result<Vec<Node>, MetaStoreError> {
-        let _guard = self.scale_lock.lock();
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
         self.store
             .write()
@@ -306,7 +309,10 @@ impl MemBrokerService {
         cluster_name: String,
         cluster_node_num: usize,
     ) -> Result<Vec<Node>, MetaStoreError> {
-        let _guard = self.scale_lock.lock();
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
         self.store
             .write()
@@ -315,7 +321,10 @@ impl MemBrokerService {
     }
 
     pub fn audo_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let _guard = self.scale_lock.lock();
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
         self.store
             .write()
@@ -375,7 +384,10 @@ impl MemBrokerService {
     }
 
     pub fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        let _guard = self.scale_lock.lock();
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
         self.store
             .write()
@@ -388,7 +400,10 @@ impl MemBrokerService {
         cluster_name: String,
         new_node_num: usize,
     ) -> Result<(), MetaStoreError> {
-        let _guard = self.scale_lock.lock();
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
         self.store
             .write()
@@ -405,7 +420,10 @@ impl MemBrokerService {
         // protected by two locking phase, we need
         // another lock to prevent other scaling operation
         // between them.
-        let _guard = self.scale_lock.lock();
+        let _guard = self
+            .scale_lock
+            .lock()
+            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
         let (scale_op, proxy_addresses, cluster_epoch) = self
             .store
@@ -860,6 +878,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::OrderedProxyEnabled => http::StatusCode::CONFLICT,
             MetaStoreError::OneClusterAlreadyExisted => http::StatusCode::CONFLICT,
             MetaStoreError::ProxyNotSync => http::StatusCode::INTERNAL_SERVER_ERROR,
+            MetaStoreError::NodeNumberChanging => http::StatusCode::CONFLICT,
         }
     }
 

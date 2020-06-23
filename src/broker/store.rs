@@ -643,6 +643,7 @@ pub enum MetaStoreError {
     OrderedProxyEnabled,
     OneClusterAlreadyExisted,
     ProxyNotSync,
+    NodeNumberChanging,
 }
 
 impl MetaStoreError {
@@ -674,6 +675,7 @@ impl MetaStoreError {
             Self::OrderedProxyEnabled => "ORDERED_PROXY_ENABLED",
             Self::OneClusterAlreadyExisted => "ONE_CLUSTER_ALREADY_EXISTED",
             Self::ProxyNotSync => "PROXY_NOT_SYNC",
+            Self::NodeNumberChanging => "NODE_NUMBER_CHANGING",
         }
     }
 }
