@@ -17,7 +17,7 @@ use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::gen_moved;
+use crate::common::utils::{gen_moved, RetryError};
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
@@ -304,7 +304,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     pub fn send(&self, cmd_ctx: CmdCtx) {
         let max_redirections = self.config.max_redirections;
         let default_redirection_address = self.config.default_redirection_address.as_ref();
-        send_cmd_ctx(
+        loop_send_cmd_ctx(
             &self.meta_map,
             cmd_ctx,
             max_redirections,
@@ -327,6 +327,11 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 ClusterSendError::ActiveRedirection { task, .. } => {
                     task.set_resp_result(Ok(Resp::Error(
                         b"unexpected active redirection".to_vec(),
+                    )));
+                }
+                ClusterSendError::Retry(task) => {
+                    task.set_resp_result(Ok(Resp::Error(
+                        b"unexpected retry error on sync task".to_vec(),
                     )));
                 }
                 other_err => {
@@ -373,15 +378,42 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 }
 
-pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
+pub fn loop_send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     meta_map: &SharedMetaMap<C>,
     cmd_ctx: CmdCtx,
     max_redirections: Option<NonZeroUsize>,
     default_redirection_address: Option<&String>,
 ) {
+    let mut cmd_ctx = cmd_ctx;
+    const MAX_RETRY_NUM: usize = 10;
+    for i in 0..MAX_RETRY_NUM {
+        cmd_ctx = match send_cmd_ctx(
+            meta_map,
+            cmd_ctx,
+            max_redirections,
+            default_redirection_address,
+        ) {
+            Ok(()) => return,
+            Err(retry_err) => retry_err.into_inner(),
+        };
+        if i + 1 == MAX_RETRY_NUM {
+            let resp = Resp::Error(b"cmd exceeds retry limit".to_vec());
+            cmd_ctx.set_resp_result(Ok(resp));
+            return;
+        }
+        info!("retry send cmd_ctx");
+    }
+}
+
+pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
+    meta_map: &SharedMetaMap<C>,
+    cmd_ctx: CmdCtx,
+    max_redirections: Option<NonZeroUsize>,
+    default_redirection_address: Option<&String>,
+) -> Result<(), RetryError<CmdCtx>> {
     let meta_map = meta_map.lease();
     let mut cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
-        Ok(()) => return,
+        Ok(()) => return Ok(()),
         Err(e) => match e {
             ClusterSendError::SlotNotFound(cmd_ctx) => cmd_ctx,
             ClusterSendError::ActiveRedirection {
@@ -397,11 +429,12 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
                     address,
                     max_redirections,
                 );
-                return;
+                return Ok(());
             }
+            ClusterSendError::Retry(cmd_ctx) => return Err(RetryError::new(cmd_ctx.into_inner())),
             err => {
                 error!("migration send task failed: {:?}", err);
-                return;
+                return Ok(());
             }
         },
     };
@@ -448,11 +481,16 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
                     address,
                     max_redirections,
                 );
-                return;
+                return Ok(());
+            }
+            ClusterSendError::Retry(cmd_ctx) => {
+                return Err(RetryError::new(cmd_ctx.into_inner()));
             }
             err => warn!("Failed to forward cmd_ctx: {:?}", err),
         }
     }
+
+    Ok(())
 }
 
 fn send_cmd_ctx_to_remote_directly<C: ConnFactory<Pkt = RespPacket>>(
@@ -520,7 +558,7 @@ impl<C: ConnFactory<Pkt = RespPacket>> CmdTaskSender for BlockingTaskRetrySender
     type Task = CmdCtx;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        send_cmd_ctx(
+        loop_send_cmd_ctx(
             &self.meta_map,
             cmd_task,
             self.max_redirections,

@@ -566,3 +566,59 @@ impl Error for BackendError {
         }
     }
 }
+
+pub enum SenderBackendError<T> {
+    Io(io::Error),
+    NodeNotFound,
+    InvalidProtocol,
+    InvalidAddress,
+    Canceled,
+    InvalidState,
+    Retry(T),
+}
+
+impl<T> SenderBackendError<T> {
+    pub fn from_backend_error(err: BackendError) -> Self {
+        match err {
+            BackendError::Io(io_err) => SenderBackendError::Io(io_err),
+            BackendError::NodeNotFound => SenderBackendError::NodeNotFound,
+            BackendError::InvalidProtocol => SenderBackendError::InvalidProtocol,
+            BackendError::InvalidAddress => SenderBackendError::InvalidAddress,
+            BackendError::Canceled => SenderBackendError::Canceled,
+            BackendError::InvalidState => SenderBackendError::InvalidState,
+        }
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for SenderBackendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Io(io_err) => write!(f, "BackendError::Io({:?})", io_err),
+            Self::NodeNotFound => write!(f, "backendError::NodeNotFound"),
+            Self::InvalidProtocol => write!(f, "backendError::InvalidProtocol"),
+            Self::InvalidAddress => write!(f, "backendError::InvalidAddress"),
+            Self::Canceled => write!(f, "backendError::Canceled"),
+            Self::InvalidState => write!(f, "backendError::InvalidState"),
+            Self::Retry(task) => write!(f, "BackendError::Retry({:?})", task),
+        }
+    }
+}
+
+impl<T: fmt::Debug> fmt::Display for SenderBackendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl<T: fmt::Debug> Error for SenderBackendError<T> {
+    fn description(&self) -> &str {
+        "sender backend error"
+    }
+
+    fn cause(&self) -> Option<&dyn Error> {
+        match self {
+            Self::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}

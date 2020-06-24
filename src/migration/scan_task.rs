@@ -596,7 +596,12 @@ where
             );
         }
 
-        self.cmd_handler.handle_cmd_task(cmd_task);
+        if let Err(retry_err) = self.cmd_handler.handle_cmd_task(cmd_task) {
+            return Err(ClusterSendError::Retry(BlockingHintTask::new(
+                retry_err.into_inner(),
+                false,
+            )));
+        }
         Ok(())
     }
 
