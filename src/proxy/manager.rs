@@ -17,6 +17,7 @@ use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
+use crate::common::utils::gen_moved;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
@@ -115,6 +116,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let blocking_task_sender = Arc::new(BlockingTaskRetrySender::new(
             meta_map.clone(),
             config.max_redirections,
+            config.default_redirection_address.clone(),
         ));
         let basic_sender_factory = gen_basic_blocking_sender_factory(
             config.clone(),
@@ -301,7 +303,13 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
         let max_redirections = self.config.max_redirections;
-        send_cmd_ctx(&self.meta_map, cmd_ctx, max_redirections);
+        let default_redirection_address = self.config.default_redirection_address.as_ref();
+        send_cmd_ctx(
+            &self.meta_map,
+            cmd_ctx,
+            max_redirections,
+            default_redirection_address,
+        );
     }
 
     pub fn send_sync_task(&self, cmd_ctx: CmdCtx) {
@@ -369,6 +377,7 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     meta_map: &SharedMetaMap<C>,
     cmd_ctx: CmdCtx,
     max_redirections: Option<NonZeroUsize>,
+    default_redirection_address: Option<&String>,
 ) {
     let meta_map = meta_map.lease();
     let mut cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
@@ -403,6 +412,29 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     if let Err(e) = res {
         match e {
             ClusterSendError::MissingKey => (),
+            ClusterSendError::ClusterNotFound { task, cluster_name } => {
+                match default_redirection_address {
+                    Some(redirection_address) => match task.get_slot() {
+                        None => {
+                            let resp = Resp::Error("missing key".to_string().into_bytes());
+                            task.set_resp_result(Ok(resp));
+                        }
+                        Some(slot) => {
+                            let resp = Resp::Error(
+                                gen_moved(slot, redirection_address.clone()).into_bytes(),
+                            );
+                            task.set_resp_result(Ok(resp));
+                        }
+                    },
+                    None => {
+                        let resp = Resp::Error(
+                            format!("{}: {}", response::ERR_CLUSTER_NOT_FOUND, cluster_name)
+                                .into_bytes(),
+                        );
+                        task.set_resp_result(Ok(resp));
+                    }
+                }
+            }
             ClusterSendError::ActiveRedirection {
                 task,
                 slot,
@@ -467,13 +499,19 @@ fn send_cmd_ctx_to_remote_directly<C: ConnFactory<Pkt = RespPacket>>(
 pub struct BlockingTaskRetrySender<C: ConnFactory<Pkt = RespPacket>> {
     meta_map: SharedMetaMap<C>,
     max_redirections: Option<NonZeroUsize>,
+    default_redirection_address: Option<String>,
 }
 
 impl<C: ConnFactory<Pkt = RespPacket>> BlockingTaskRetrySender<C> {
-    fn new(meta_map: SharedMetaMap<C>, max_redirections: Option<NonZeroUsize>) -> Self {
+    fn new(
+        meta_map: SharedMetaMap<C>,
+        max_redirections: Option<NonZeroUsize>,
+        default_redirection_address: Option<String>,
+    ) -> Self {
         Self {
             meta_map,
             max_redirections,
+            default_redirection_address,
         }
     }
 }
@@ -482,7 +520,12 @@ impl<C: ConnFactory<Pkt = RespPacket>> CmdTaskSender for BlockingTaskRetrySender
     type Task = CmdCtx;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
-        send_cmd_ctx(&self.meta_map, cmd_task, self.max_redirections);
+        send_cmd_ctx(
+            &self.meta_map,
+            cmd_task,
+            self.max_redirections,
+            self.default_redirection_address.as_ref(),
+        );
         Ok(())
     }
 }

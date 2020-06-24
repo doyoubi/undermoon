@@ -62,6 +62,15 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     }
     let max_redirections = NonZeroUsize::new(max_redirections);
 
+    let default_redirection_address = s
+        .get::<String>("default_redirection_address")
+        .unwrap_or_else(|_| "".to_string());
+    let default_redirection_address = if default_redirection_address.is_empty() {
+        None
+    } else {
+        Some(default_redirection_address)
+    };
+
     let config = ServerProxyConfig {
         address: address.clone(),
         announce_address: s
@@ -104,6 +113,7 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
             .get::<bool>("active_redirection")
             .unwrap_or_else(|_| false),
         max_redirections,
+        default_redirection_address,
     };
 
     let mut cluster_config = ClusterConfig::default();

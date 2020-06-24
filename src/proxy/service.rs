@@ -32,6 +32,7 @@ pub struct ServerProxyConfig {
     pub session_batch_buf: NonZeroUsize,
     pub active_redirection: bool,
     pub max_redirections: Option<NonZeroUsize>,
+    pub default_redirection_address: Option<String>,
 }
 
 impl ServerProxyConfig {

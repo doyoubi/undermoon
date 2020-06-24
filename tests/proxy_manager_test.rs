@@ -63,6 +63,7 @@ mod tests {
             session_batch_buf: NonZeroUsize::new(50).unwrap(),
             active_redirection: false,
             max_redirections: None,
+            default_redirection_address: None,
         }
     }
 
