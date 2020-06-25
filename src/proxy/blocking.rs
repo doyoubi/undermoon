@@ -1,5 +1,6 @@
 use super::backend::{
-    CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory, IntoTask, SenderBackendError,
+    CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory, IntoTask,
+    SenderBackendError,
 };
 use super::cluster::ClusterTag;
 use super::command::{CommandError, CommandResult};
@@ -203,10 +204,6 @@ impl<BS: BlockingCmdTaskSender> BlockingHandleInner<BS> {
             }
         }
     }
-
-    fn send_to_blocking_task_sender(&self, cmd_task: BS::Task) -> Result<(), SenderBackendError<BS::Task>> {
-        self.blocking_task_sender.send(cmd_task)
-    }
 }
 
 pub struct TaskBlockingQueue<S, BS>
@@ -240,7 +237,10 @@ where
         }
     }
 
-    fn send(&self, cmd_task: BlockingHintTask<BS::Task>) -> Result<(), SenderBackendError<BlockingHintTask<BS::Task>>> {
+    fn send(
+        &self,
+        cmd_task: BlockingHintTask<BS::Task>,
+    ) -> Result<(), SenderBackendError<BlockingHintTask<BS::Task>>> {
         // `cmd_need_blocking` is still needed even we have `self.is_blocking()` check.
         // Without it, the following case could happen:
         // (1) A command with the key should be migrated is executed.
@@ -262,17 +262,15 @@ where
         if !self.is_blocking() {
             if !cmd_need_blocking {
                 let counter_task = CounterTask::new(cmd_task, self.running_cmd.clone());
-                return self.inner_sender.send(counter_task)
-                    .map_err(|err| err.map_task(|task| BlockingHintTask::new(task.into_inner(), cmd_need_blocking)));
+                return self.inner_sender.send(counter_task).map_err(|err| {
+                    err.map_task(|task| BlockingHintTask::new(task.into_inner(), cmd_need_blocking))
+                });
             }
 
-            return Err(SenderBackendError::Retry(BlockingHintTask::new(cmd_task, cmd_need_blocking)));
-            // CAUTION: this will trigger a recursive call to the same call path
-            // and relies on the correctness on BlockingHintTask to avoid stack overflow.
-//            return self
-//                .blocking_handle_inner
-//                .send_to_blocking_task_sender(cmd_task)
-//                .map_err(|err| err.map_task(|task|BlockingHintTask::new(task, cmd_need_blocking)));
+            return Err(SenderBackendError::Retry(BlockingHintTask::new(
+                cmd_task,
+                cmd_need_blocking,
+            )));
         }
         drop(counter);
 

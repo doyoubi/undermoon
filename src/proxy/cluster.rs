@@ -8,11 +8,11 @@ use crate::common::utils::gen_moved;
 use crate::migration::task::MigrationState;
 use crate::protocol::{Array, BulkStr, Resp, RespVec};
 use crc64::crc64;
+use either::Either;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::iter::Iterator;
-use either::Either;
 
 pub const DEFAULT_CLUSTER: &str = "admin";
 
@@ -359,7 +359,9 @@ impl<S: CmdTaskSender> LocalCluster<S> {
 
         match self.local_backend.slot_map.get(slot) {
             Some(addr) => match self.local_backend.nodes.get(addr) {
-                Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::from_sender_backend_error),
+                Some(sender) => sender
+                    .send(cmd_task)
+                    .map_err(ClusterSendError::from_sender_backend_error),
                 None => {
                     warn!("failed to get node");
                     Err(ClusterSendError::SlotNotFound(cmd_task))
@@ -498,7 +500,9 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
     ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         if let Some(remote_backend) = self.remote_backend.as_ref() {
             match remote_backend.nodes.get(address) {
-                Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::from_sender_backend_error),
+                Some(sender) => sender
+                    .send(cmd_task)
+                    .map_err(ClusterSendError::from_sender_backend_error),
                 None => {
                     warn!("failed to get node");
                     Err(ClusterSendError::SlotNotFound(cmd_task))

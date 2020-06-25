@@ -2,11 +2,12 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::batch::TryChunksTimeoutStreamExt;
-use crate::common::utils::{resolve_first_address, ThreadSafe, RetryError};
+use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
     OptionalMulti, Packet, Resp, RespCodec, RespVec,
 };
+use either::Either;
 use futures::channel::mpsc;
 use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use futures_timer::Delay;
@@ -24,7 +25,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
-use either::Either;
 
 pub type BackendResult<T> = Result<T, BackendError>;
 pub type CmdTaskResult = Result<RespVec, CommandError>;
@@ -605,9 +605,9 @@ impl<T> SenderBackendError<T> {
     }
 
     pub fn map_task<P, F>(self: Self, f: F) -> SenderBackendError<P>
-        where
-            P: CmdTask,
-            F: Fn(T) -> P,
+    where
+        P: CmdTask,
+        F: Fn(T) -> P,
     {
         match self {
             Self::Io(io_err) => SenderBackendError::Io(io_err),

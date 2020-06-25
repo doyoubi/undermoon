@@ -6,11 +6,11 @@ use super::service::ServerProxyConfig;
 use crate::common::response::ERR_BACKEND_CONNECTION;
 use crate::common::track::TrackedFutureRegistry;
 use crate::protocol::Resp;
+use either::Either;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock, Weak};
-use either::Either;
 
 pub trait CmdTaskSender {
     type Task: CmdTask;
@@ -116,7 +116,10 @@ impl<S: CmdTaskSender> CmdTaskSender for ReqAdaptorSender<S> {
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
         match cmd_task {
-            ReqTask::Simple(t) => self.sender.send(t).map_err(|err| err.map_task(ReqTask::Simple)),
+            ReqTask::Simple(t) => self
+                .sender
+                .send(t)
+                .map_err(|err| err.map_task(ReqTask::Simple)),
             ReqTask::Multi(ts) => {
                 let mut retry_tasks = vec![];
                 for t in ts.into_iter() {
@@ -124,7 +127,7 @@ impl<S: CmdTaskSender> CmdTaskSender for ReqAdaptorSender<S> {
                         match BackendError::from_sender_backend_error(err) {
                             Either::Right(retry_err) => {
                                 retry_tasks.push(retry_err.into_inner());
-                            },
+                            }
                             Either::Left(backend_err) => {
                                 return Err(SenderBackendError::from_backend_error(backend_err));
                             }

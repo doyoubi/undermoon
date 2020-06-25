@@ -1,4 +1,4 @@
-use super::backend::{CmdTask, CmdTaskFactory, ReqTask, SenderBackendError, BackendError};
+use super::backend::{BackendError, CmdTask, CmdTaskFactory, ReqTask, SenderBackendError};
 use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError};
 use super::sender::CmdTaskSender;
 use crate::common::response;
@@ -7,6 +7,7 @@ use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use atomic_option::AtomicOption;
 use dashmap::DashSet;
+use either::Either;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{select, Future, FutureExt, StreamExt};
 use futures_timer::Delay;
@@ -15,7 +16,6 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use either::Either;
 
 const KEY_NOT_EXISTS: &str = "0";
 const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access source node";
@@ -795,9 +795,7 @@ where
             let cmd_task: F::Task = state.into_inner();
 
             return match BackendError::from_sender_backend_error(err) {
-                Either::Right(_retry_err) => {
-                    Err(SenderBackendError::Retry(cmd_task))
-                }
+                Either::Right(_retry_err) => Err(SenderBackendError::Retry(cmd_task)),
                 Either::Left(BackendError::Canceled) => {
                     error!("failed to send task to exist channel: canceled");
                     Err(SenderBackendError::Retry(cmd_task))
