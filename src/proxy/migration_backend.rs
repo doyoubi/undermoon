@@ -1,4 +1,4 @@
-use super::backend::{BackendError, CmdTask, CmdTaskFactory, ReqTask, SenderBackendError};
+use super::backend::{CmdTask, CmdTaskFactory, ReqTask, SenderBackendError, BackendError};
 use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError};
 use super::sender::CmdTaskSender;
 use crate::common::response;
@@ -15,6 +15,7 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use either::Either;
 
 const KEY_NOT_EXISTS: &str = "0";
 const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access source node";
@@ -793,15 +794,21 @@ where
         if let Err(err) = dst_sender.send(task) {
             let cmd_task: F::Task = state.into_inner();
 
-            if let BackendError::Canceled = err {
-                error!("failed to send task to exist channel: canceled {:?}", err);
-                return Err(SenderBackendError::Retry(cmd_task));
-            }
-            error!("failed to send task to exist channel: {:?}", err);
-            cmd_task.set_resp_result(Ok(Resp::Error(
-                format!("Migration backend error: {:?}", err).into_bytes(),
-            )));
-            return Err(SenderBackendError::from_backend_error(err));
+            return match BackendError::from_sender_backend_error(err) {
+                Either::Right(_retry_err) => {
+                    Err(SenderBackendError::Retry(cmd_task))
+                }
+                Either::Left(BackendError::Canceled) => {
+                    error!("failed to send task to exist channel: canceled");
+                    Err(SenderBackendError::Retry(cmd_task))
+                }
+                Either::Left(backend_err) => {
+                    cmd_task.set_resp_result(Ok(Resp::Error(
+                        format!("Migration backend error: {:?}", backend_err).into_bytes(),
+                    )));
+                    Err(SenderBackendError::from_backend_error(backend_err))
+                }
+            };
         }
         Ok((state, reply_fut))
     }
@@ -920,7 +927,6 @@ impl Drop for KeyLockGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backend::BackendError;
     use super::super::command::{new_command_pair, CmdReplyReceiver, Command};
     use super::super::session::{CmdCtx, CmdCtxFactory};
     use super::*;
@@ -1058,7 +1064,7 @@ mod tests {
     impl CmdTaskSender for DummyCmdTaskSender {
         type Task = ReqTask<CmdCtx>;
 
-        fn send(&self, req_task: Self::Task) -> Result<(), BackendError> {
+        fn send(&self, req_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
             match req_task {
                 ReqTask::Simple(cmd_task) => self.handle(cmd_task),
                 ReqTask::Multi(cmd_task_arr) => {
