@@ -30,6 +30,7 @@ pub struct CoordinatorConfig {
     pub broker_addresses: BrokerAddresses,
     pub reporter_id: String,
     pub thread_number: usize,
+    pub proxy_timeout: usize,
 }
 
 impl CoordinatorConfig {

@@ -1,8 +1,8 @@
-use super::backend::{CmdTask, CmdTaskFactory, ReqTask};
+use super::backend::{BackendError, CmdTask, CmdTaskFactory, ReqTask, SenderBackendError};
 use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError};
 use super::sender::CmdTaskSender;
 use crate::common::response;
-use crate::common::utils::pretty_print_bytes;
+use crate::common::utils::{pretty_print_bytes, RetryError};
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use atomic_option::AtomicOption;
@@ -518,7 +518,7 @@ where
                         key,
                         slot,
                     } = state;
-                    let (state, reply_receiver) = match Self::send_to_exist_to_src(
+                    let (state, reply_receiver) = match Self::resend_to_exist_to_src(
                         inner_task,
                         &(*cmd_task_factory),
                         key,
@@ -531,7 +531,7 @@ where
 
                     // Just sending back (state, future::ready(resp)) could possibly result in dead loop.
                     // The whole task will just get stuck in this function.
-                    // So we have to emake the future `reply_receiver` not always ready.
+                    // So we have to make the future `reply_receiver` not always ready.
                     // And checking the key again by `EXISTS` is a good choice for reducing
                     // unnecessary DUMP and PTTL.
                     match exists_task_sender.unbounded_send((state, reply_receiver)) {
@@ -745,14 +745,14 @@ where
         }
     }
 
-    pub fn handle_cmd_task(&self, cmd_task: F::Task) {
+    pub fn handle_cmd_task(&self, cmd_task: F::Task) -> Result<(), RetryError<F::Task>> {
         let (key, slot) = match (cmd_task.get_key(), cmd_task.get_slot()) {
             (Some(key), Some(slot)) => (key.to_vec(), slot),
             _ => {
                 cmd_task.set_resp_result(Ok(Resp::Error(
                     String::from("Missing key while migrating").into_bytes(),
                 )));
-                return;
+                return Ok(());
             }
         };
 
@@ -764,18 +764,49 @@ where
             &self.dst_sender,
         ) {
             Ok(r) => r,
-            Err(()) => return,
+            Err(err) => {
+                return match err {
+                    SenderBackendError::Retry(task) => Err(RetryError::new(task)),
+                    _other_err => Ok(()),
+                }
+            }
         };
         if let Err(err) = self.exists_task_sender.unbounded_send((state, reply_fut)) {
             let (state, _) = err.into_inner();
             let cmd_task: F::Task = state.into_inner();
-            cmd_task.set_resp_result(Ok(Resp::Error(
-                String::from("Migration backend canceled").into_bytes(),
-            )));
+            warn!("Migration backend: exists task sender is canceled");
+            return Err(RetryError::new(cmd_task));
         }
+
+        Ok(())
     }
 
     fn send_to_exist_to_src(
+        cmd_task: F::Task,
+        cmd_task_factory: &F,
+        key: BinSafeStr,
+        slot: usize,
+        dst_sender: &S,
+    ) -> Result<(MgrCmdStateExists<F>, ReplyFuture), SenderBackendError<F::Task>> {
+        let (state, task, reply_fut) =
+            MgrCmdStateExists::from_task(cmd_task, key, slot, cmd_task_factory);
+        if let Err(err) = dst_sender.send(task) {
+            let cmd_task: F::Task = state.into_inner();
+
+            if let BackendError::Canceled = err {
+                error!("failed to send task to exist channel: canceled {:?}", err);
+                return Err(SenderBackendError::Retry(cmd_task));
+            }
+            error!("failed to send task to exist channel: {:?}", err);
+            cmd_task.set_resp_result(Ok(Resp::Error(
+                format!("Migration backend error: {:?}", err).into_bytes(),
+            )));
+            return Err(SenderBackendError::from_backend_error(err));
+        }
+        Ok((state, reply_fut))
+    }
+
+    fn resend_to_exist_to_src(
         cmd_task: F::Task,
         cmd_task_factory: &F,
         key: BinSafeStr,
@@ -787,7 +818,7 @@ where
         if let Err(err) = dst_sender.send(task) {
             let cmd_task: F::Task = state.into_inner();
             cmd_task.set_resp_result(Ok(Resp::Error(
-                format!("Migration backend error: {:?}", err).into_bytes(),
+                format!("Migration backend error: wait for lock {:?}", err).into_bytes(),
             )));
             return Err(());
         }
@@ -1097,7 +1128,7 @@ mod tests {
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-        handler.handle_cmd_task(cmd_ctx);
+        handler.handle_cmd_task(cmd_ctx).unwrap();
         let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1120,7 +1151,7 @@ mod tests {
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-        handler.handle_cmd_task(cmd_ctx);
+        handler.handle_cmd_task(cmd_ctx).unwrap();
         let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1146,7 +1177,7 @@ mod tests {
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-        handler.handle_cmd_task(cmd_ctx);
+        handler.handle_cmd_task(cmd_ctx).unwrap();
         let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1177,7 +1208,7 @@ mod tests {
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-            handler.handle_cmd_task(cmd_ctx);
+            handler.handle_cmd_task(cmd_ctx).unwrap();
             let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1209,7 +1240,7 @@ mod tests {
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-            handler.handle_cmd_task(cmd_ctx);
+            handler.handle_cmd_task(cmd_ctx).unwrap();
             let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1245,7 +1276,7 @@ mod tests {
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-            handler.handle_cmd_task(cmd_ctx);
+            handler.handle_cmd_task(cmd_ctx).unwrap();
             let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1277,7 +1308,7 @@ mod tests {
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-            handler.handle_cmd_task(cmd_ctx);
+            handler.handle_cmd_task(cmd_ctx).unwrap();
             let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1309,7 +1340,7 @@ mod tests {
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-            handler.handle_cmd_task(cmd_ctx);
+            handler.handle_cmd_task(cmd_ctx).unwrap();
             let s = run_future(&handler, reply_receiver).await;
 
             assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1341,7 +1372,7 @@ mod tests {
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
 
-        handler.handle_cmd_task(cmd_ctx);
+        handler.handle_cmd_task(cmd_ctx).unwrap();
         let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
@@ -1367,7 +1398,7 @@ mod tests {
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["DEL", "somekey"]);
 
-        handler.handle_cmd_task(cmd_ctx);
+        handler.handle_cmd_task(cmd_ctx).unwrap();
         let s = run_future(&handler, reply_receiver).await;
 
         assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));

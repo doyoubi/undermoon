@@ -582,6 +582,7 @@ pub enum ClusterSendError<T: CmdTask> {
         slot: usize,
         address: String,
     },
+    Retry(T),
 }
 
 impl<T: CmdTask> fmt::Display for ClusterSendError<T> {
@@ -605,6 +606,7 @@ impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
             Self::ActiveRedirection { slot, address, .. } => {
                 format!("ClusterSendError::Moved({} {})", slot, address)
             }
+            Self::Retry(_) => "ClusterSendError::Retry".to_string(),
         };
         write!(f, "{}", s)
     }
@@ -620,6 +622,7 @@ impl<T: CmdTask> Error for ClusterSendError<T> {
             Self::SlotNotCovered => None,
             Self::MigrationError => None,
             Self::ActiveRedirection { .. } => None,
+            Self::Retry(_) => None,
         }
     }
 }
@@ -649,6 +652,7 @@ impl<T: CmdTask> ClusterSendError<T> {
                 slot,
                 address,
             },
+            Self::Retry(task) => ClusterSendError::Retry(f(task)),
         }
     }
 }

@@ -4,6 +4,7 @@ use crate::protocol::{BinSafeStr, RespVec};
 use crc16::{State, XMODEM};
 use futures::{stream, Stream};
 use std::cmp::min;
+use std::fmt;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str;
 
@@ -243,6 +244,26 @@ pub fn byte_to_uppercase(b: u8) -> u8 {
         b - DELTA
     } else {
         b
+    }
+}
+
+pub struct RetryError<T> {
+    inner: T,
+}
+
+impl<T: fmt::Debug> fmt::Debug for RetryError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "RetryError({:?})", self.inner)
+    }
+}
+
+impl<T> RetryError<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.inner
     }
 }
 

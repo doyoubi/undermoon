@@ -53,11 +53,14 @@ fn gen_conf() -> CoordinatorConfig {
     let thread_number = s.get::<usize>("thread_number").unwrap_or_else(|_| 4);
     let thread_number = max(1, thread_number);
 
+    let proxy_timeout = s.get::<usize>("proxy_timeout").unwrap_or_else(|_| 2);
+
     CoordinatorConfig {
         address,
         broker_addresses: Arc::new(ArcSwap::new(Arc::new(broker_address_list))),
         reporter_id,
         thread_number,
+        proxy_timeout,
     }
 }
 
@@ -74,7 +77,7 @@ fn gen_service(
         http_client,
     ));
 
-    let timeout = Duration::new(2, 0);
+    let timeout = Duration::new(config.proxy_timeout as u64, 0);
     let pool_size = 2;
     let client_factory = PooledRedisClientFactory::new(pool_size, timeout);
 
