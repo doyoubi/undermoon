@@ -1,4 +1,4 @@
-use super::backend::{BackendError, CmdTask, IntoTask};
+use super::backend::{BackendError, CmdTask, IntoTask, SenderBackendError};
 use super::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
 use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
@@ -8,6 +8,7 @@ use crate::common::utils::gen_moved;
 use crate::migration::task::MigrationState;
 use crate::protocol::{Array, BulkStr, Resp, RespVec};
 use crc64::crc64;
+use either::Either;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -358,7 +359,9 @@ impl<S: CmdTaskSender> LocalCluster<S> {
 
         match self.local_backend.slot_map.get(slot) {
             Some(addr) => match self.local_backend.nodes.get(addr) {
-                Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::Backend),
+                Some(sender) => sender
+                    .send(cmd_task)
+                    .map_err(ClusterSendError::from_sender_backend_error),
                 None => {
                     warn!("failed to get node");
                     Err(ClusterSendError::SlotNotFound(cmd_task))
@@ -497,7 +500,9 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
     ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
         if let Some(remote_backend) = self.remote_backend.as_ref() {
             match remote_backend.nodes.get(address) {
-                Some(sender) => sender.send(cmd_task).map_err(ClusterSendError::Backend),
+                Some(sender) => sender
+                    .send(cmd_task)
+                    .map_err(ClusterSendError::from_sender_backend_error),
                 None => {
                     warn!("failed to get node");
                     Err(ClusterSendError::SlotNotFound(cmd_task))
@@ -583,6 +588,15 @@ pub enum ClusterSendError<T: CmdTask> {
         address: String,
     },
     Retry(T),
+}
+
+impl<T: CmdTask> ClusterSendError<T> {
+    fn from_sender_backend_error(err: SenderBackendError<T>) -> Self {
+        match BackendError::from_sender_backend_error(err) {
+            Either::Left(backend_err) => Self::Backend(backend_err),
+            Either::Right(retry_err) => Self::Retry(retry_err.into_inner()),
+        }
+    }
 }
 
 impl<T: CmdTask> fmt::Display for ClusterSendError<T> {

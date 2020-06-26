@@ -1,4 +1,4 @@
-use super::backend::{BackendError, CmdTask, ConnFactory, IntoTask};
+use super::backend::{CmdTask, ConnFactory, IntoTask, SenderBackendError};
 use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
     BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
@@ -557,7 +557,7 @@ impl<C: ConnFactory<Pkt = RespPacket>> BlockingTaskRetrySender<C> {
 impl<C: ConnFactory<Pkt = RespPacket>> CmdTaskSender for BlockingTaskRetrySender<C> {
     type Task = CmdCtx;
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
         loop_send_cmd_ctx(
             &self.meta_map,
             cmd_task,

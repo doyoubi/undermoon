@@ -1,11 +1,12 @@
 use super::backend::{
     BackendError, BackendNode, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory,
-    ConnFactory, ReqTask,
+    ConnFactory, ReqTask, SenderBackendError,
 };
 use super::service::ServerProxyConfig;
 use crate::common::response::ERR_BACKEND_CONNECTION;
 use crate::common::track::TrackedFutureRegistry;
 use crate::protocol::Resp;
+use either::Either;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,7 +15,7 @@ use std::sync::{Arc, RwLock, Weak};
 pub trait CmdTaskSender {
     type Task: CmdTask;
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError>;
+    fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>>;
 }
 
 pub trait CmdTaskSenderFactory {
@@ -31,14 +32,14 @@ pub struct RecoverableBackendNode<F: CmdTaskResultHandlerFactory> {
 impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F> {
     type Task = <<F as CmdTaskResultHandlerFactory>::Handler as CmdTaskResultHandler>::Task;
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
         self.node.send(cmd_task).map_err(|e| {
             let cmd_task = e.into_inner();
             cmd_task.set_resp_result(Ok(Resp::Error(
                 format!("{}: {}", ERR_BACKEND_CONNECTION, self.address).into_bytes(),
             )));
             error!("backend node is closed");
-            BackendError::Canceled
+            SenderBackendError::Canceled
         })
     }
 }
@@ -113,12 +114,28 @@ impl<S: CmdTaskSender> ReqAdaptorSender<S> {
 impl<S: CmdTaskSender> CmdTaskSender for ReqAdaptorSender<S> {
     type Task = ReqTask<S::Task>;
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
         match cmd_task {
-            ReqTask::Simple(t) => self.sender.send(t),
+            ReqTask::Simple(t) => self
+                .sender
+                .send(t)
+                .map_err(|err| err.map_task(ReqTask::Simple)),
             ReqTask::Multi(ts) => {
+                let mut retry_tasks = vec![];
                 for t in ts.into_iter() {
-                    self.sender.send(t)?;
+                    if let Err(err) = self.sender.send(t) {
+                        match BackendError::from_sender_backend_error(err) {
+                            Either::Right(retry_err) => {
+                                retry_tasks.push(retry_err.into_inner());
+                            }
+                            Either::Left(backend_err) => {
+                                return Err(SenderBackendError::from_backend_error(backend_err));
+                            }
+                        }
+                    }
+                }
+                if !retry_tasks.is_empty() {
+                    return Err(SenderBackendError::Retry(ReqTask::Multi(retry_tasks)));
                 }
                 Ok(())
             }
@@ -154,11 +171,11 @@ pub struct RRSenderGroup<S: CmdTaskSender> {
 impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
     type Task = S::Task;
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
         let index = self.cursor.fetch_add(1, Ordering::SeqCst);
         let sender = match self.senders.get(index % self.senders.len()) {
             Some(s) => s,
-            None => return Err(BackendError::NodeNotFound),
+            None => return Err(SenderBackendError::NodeNotFound),
         };
         sender.send(cmd_task)
     }
@@ -200,7 +217,7 @@ pub struct CachedSender<S: CmdTaskSender> {
 impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
     type Task = S::Task;
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
         self.inner_sender.send(cmd_task)
     }
 }

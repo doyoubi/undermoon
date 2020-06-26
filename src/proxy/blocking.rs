@@ -1,5 +1,6 @@
 use super::backend::{
-    BackendError, CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory, IntoTask,
+    CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory, IntoTask,
+    SenderBackendError,
 };
 use super::cluster::ClusterTag;
 use super::command::{CommandError, CommandResult};
@@ -203,10 +204,6 @@ impl<BS: BlockingCmdTaskSender> BlockingHandleInner<BS> {
             }
         }
     }
-
-    fn send_to_blocking_task_sender(&self, cmd_task: BS::Task) -> Result<(), BackendError> {
-        self.blocking_task_sender.send(cmd_task)
-    }
 }
 
 pub struct TaskBlockingQueue<S, BS>
@@ -240,7 +237,10 @@ where
         }
     }
 
-    fn send(&self, cmd_task: BlockingHintTask<BS::Task>) -> Result<(), BackendError> {
+    fn send(
+        &self,
+        cmd_task: BlockingHintTask<BS::Task>,
+    ) -> Result<(), SenderBackendError<BlockingHintTask<BS::Task>>> {
         // `cmd_need_blocking` is still needed even we have `self.is_blocking()` check.
         // Without it, the following case could happen:
         // (1) A command with the key should be migrated is executed.
@@ -262,13 +262,15 @@ where
         if !self.is_blocking() {
             if !cmd_need_blocking {
                 let counter_task = CounterTask::new(cmd_task, self.running_cmd.clone());
-                return self.inner_sender.send(counter_task);
+                return self.inner_sender.send(counter_task).map_err(|err| {
+                    err.map_task(|task| BlockingHintTask::new(task.into_inner(), cmd_need_blocking))
+                });
             }
-            // CAUTION: this will trigger a recursive call to the same call path
-            // and relies on the correctness on BlockingHintTask to avoid stack overflow.
-            return self
-                .blocking_handle_inner
-                .send_to_blocking_task_sender(cmd_task);
+
+            return Err(SenderBackendError::Retry(BlockingHintTask::new(
+                cmd_task,
+                cmd_need_blocking,
+            )));
         }
         drop(counter);
 
@@ -278,7 +280,7 @@ where
                 b"failed to send to blocking queue".to_vec(),
             )));
             error!("failed to send to blocking queue");
-            return Err(BackendError::Canceled);
+            return Err(SenderBackendError::Canceled);
         }
 
         if !self.is_blocking() {
@@ -327,7 +329,7 @@ where
 {
     type Task = BlockingHintTask<BS::Task>;
 
-    fn send(&self, cmd_task: Self::Task) -> Result<(), BackendError> {
+    fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
         self.queue.send(cmd_task)
     }
 }

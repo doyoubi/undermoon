@@ -2,11 +2,12 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::batch::TryChunksTimeoutStreamExt;
-use crate::common::utils::{resolve_first_address, ThreadSafe};
+use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
     OptionalMulti, Packet, Resp, RespCodec, RespVec,
 };
+use either::Either;
 use futures::channel::mpsc;
 use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use futures_timer::Delay;
@@ -548,6 +549,20 @@ pub enum BackendError {
     InvalidState,
 }
 
+impl BackendError {
+    pub fn from_sender_backend_error<T>(err: SenderBackendError<T>) -> Either<Self, RetryError<T>> {
+        match err {
+            SenderBackendError::Io(io_err) => Either::Left(BackendError::Io(io_err)),
+            SenderBackendError::NodeNotFound => Either::Left(BackendError::NodeNotFound),
+            SenderBackendError::InvalidProtocol => Either::Left(BackendError::InvalidProtocol),
+            SenderBackendError::InvalidAddress => Either::Left(BackendError::InvalidAddress),
+            SenderBackendError::Canceled => Either::Left(BackendError::Canceled),
+            SenderBackendError::InvalidState => Either::Left(BackendError::InvalidState),
+            SenderBackendError::Retry(task) => Either::Right(RetryError::new(task)),
+        }
+    }
+}
+
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
@@ -588,9 +603,25 @@ impl<T> SenderBackendError<T> {
             BackendError::InvalidState => SenderBackendError::InvalidState,
         }
     }
+
+    pub fn map_task<P, F>(self: Self, f: F) -> SenderBackendError<P>
+    where
+        P: CmdTask,
+        F: Fn(T) -> P,
+    {
+        match self {
+            Self::Io(io_err) => SenderBackendError::Io(io_err),
+            Self::NodeNotFound => SenderBackendError::NodeNotFound,
+            Self::InvalidProtocol => SenderBackendError::InvalidProtocol,
+            Self::InvalidAddress => SenderBackendError::InvalidAddress,
+            Self::Canceled => SenderBackendError::Canceled,
+            Self::InvalidState => SenderBackendError::InvalidState,
+            Self::Retry(task) => SenderBackendError::Retry(f(task)),
+        }
+    }
 }
 
-impl<T: fmt::Debug> fmt::Debug for SenderBackendError<T> {
+impl<T> fmt::Debug for SenderBackendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Io(io_err) => write!(f, "BackendError::Io({:?})", io_err),
@@ -599,18 +630,18 @@ impl<T: fmt::Debug> fmt::Debug for SenderBackendError<T> {
             Self::InvalidAddress => write!(f, "backendError::InvalidAddress"),
             Self::Canceled => write!(f, "backendError::Canceled"),
             Self::InvalidState => write!(f, "backendError::InvalidState"),
-            Self::Retry(task) => write!(f, "BackendError::Retry({:?})", task),
+            Self::Retry(_) => write!(f, "BackendError::Retry"),
         }
     }
 }
 
-impl<T: fmt::Debug> fmt::Display for SenderBackendError<T> {
+impl<T> fmt::Display for SenderBackendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl<T: fmt::Debug> Error for SenderBackendError<T> {
+impl<T> Error for SenderBackendError<T> {
     fn description(&self) -> &str {
         "sender backend error"
     }
