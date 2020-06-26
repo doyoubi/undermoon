@@ -373,6 +373,12 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         // When scaling down, the proxy is turned into not ready
         // once migration started, which could leave the time for
         // the service to remove the proxy.
+
+        // If there's only replicas, this proxy don't own any slot
+        // but should be in ready state.
+        if self.replicator_manager.get_replica_num() == 0 {
+            return true;
+        }
         let meta_map = self.meta_map.load();
         meta_map.cluster_map.is_ready(cluster_name)
     }
