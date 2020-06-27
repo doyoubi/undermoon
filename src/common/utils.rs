@@ -1,7 +1,7 @@
 use super::response::ERR_MOVED;
 use crate::protocol::{Array, BulkStr, Resp};
 use crate::protocol::{BinSafeStr, RespVec};
-use crc16::{State, XMODEM};
+use crc16::{State, ARC, XMODEM};
 use futures::{stream, Stream};
 use std::cmp::min;
 use std::fmt;
@@ -157,8 +157,16 @@ pub fn get_hash_tag(key: &[u8]) -> &[u8] {
     key
 }
 
+// Hash function for request routing.
 pub fn generate_slot(key: &[u8]) -> usize {
     State::<XMODEM>::calculate(get_hash_tag(key)) as usize % SLOT_NUM
+}
+
+// Hash function for locking in migration.
+// This should be different from `generate_slot`
+// to alleviate lock contention.
+pub fn generate_lock_slot(key: &[u8]) -> usize {
+    State::<ARC>::calculate(key) as usize % SLOT_NUM
 }
 
 pub fn same_slot<'a, It: Iterator<Item = &'a [u8]>>(mut key_iter: It) -> bool {
