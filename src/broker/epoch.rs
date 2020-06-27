@@ -41,10 +41,13 @@ const MAX_RETRY_TIMES: usize = 30;
 const RETRY_INTERVAL: u64 = 1;
 
 pub async fn wait_for_proxy_epoch(proxy_addresses: Vec<String>, epoch: u64) -> Result<(), String> {
+    let timeout = Duration::from_secs(1);
+    let client_factory = PooledRedisClientFactory::new(1, timeout);
+
     let mut i = 0;
     loop {
         Delay::new(Duration::from_secs(RETRY_INTERVAL)).await;
-        let min_epoch = match fetch_min_epoch(proxy_addresses.clone()).await {
+        let min_epoch = match fetch_min_epoch(proxy_addresses.clone(), &client_factory).await {
             Ok(min_epoch) => min_epoch,
             Err(failed_address) => {
                 if i >= MAX_RETRY_TIMES {
@@ -61,10 +64,10 @@ pub async fn wait_for_proxy_epoch(proxy_addresses: Vec<String>, epoch: u64) -> R
     }
 }
 
-async fn fetch_min_epoch(proxy_addresses: Vec<String>) -> Result<u64, String> {
-    let timeout = Duration::from_secs(1);
-    let client_factory = PooledRedisClientFactory::new(1, timeout);
-
+async fn fetch_min_epoch(
+    proxy_addresses: Vec<String>,
+    client_factory: &PooledRedisClientFactory,
+) -> Result<u64, String> {
     let futs: Vec<_> = proxy_addresses
         .into_iter()
         .map(|address| fetch_proxy_epoch(address, &client_factory))

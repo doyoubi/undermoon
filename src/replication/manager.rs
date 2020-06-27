@@ -189,6 +189,18 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         Ok(())
     }
 
+    pub fn get_replica_num(&self) -> usize {
+        let replicators = self
+            .replicators
+            .read()
+            .expect("ReplicatorManager::get_replica_num");
+        replicators
+            .1
+            .values()
+            .filter(|(replicator, _handle)| replicator.is_right())
+            .count()
+    }
+
     pub fn get_metadata(&self) -> (Vec<MasterMeta>, Vec<ReplicaMeta>) {
         let mut master_metadata = Vec::new();
         let mut replica_metadata = Vec::new();

@@ -3,7 +3,7 @@ use super::backend::{
     ConnFactory, ReqTask, SenderBackendError,
 };
 use super::service::ServerProxyConfig;
-use crate::common::response::ERR_BACKEND_CONNECTION;
+use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::protocol::Resp;
 use either::Either;
@@ -36,7 +36,7 @@ impl<F: CmdTaskResultHandlerFactory> CmdTaskSender for RecoverableBackendNode<F>
         self.node.send(cmd_task).map_err(|e| {
             let cmd_task = e.into_inner();
             cmd_task.set_resp_result(Ok(Resp::Error(
-                format!("{}: {}", ERR_BACKEND_CONNECTION, self.address).into_bytes(),
+                format!("{}: {}", response::ERR_BACKEND_CONNECTION, self.address).into_bytes(),
             )));
             error!("backend node is closed");
             SenderBackendError::Canceled
@@ -122,13 +122,26 @@ impl<S: CmdTaskSender> CmdTaskSender for ReqAdaptorSender<S> {
                 .map_err(|err| err.map_task(ReqTask::Simple)),
             ReqTask::Multi(ts) => {
                 let mut retry_tasks = vec![];
-                for t in ts.into_iter() {
+                let mut it = ts.into_iter();
+                while let Some(t) = it.next() {
                     if let Err(err) = self.sender.send(t) {
                         match BackendError::from_sender_backend_error(err) {
                             Either::Right(retry_err) => {
                                 retry_tasks.push(retry_err.into_inner());
                             }
                             Either::Left(backend_err) => {
+                                let err_str = format!(
+                                    "{}: {}",
+                                    response::ERR_MULTI_KEY_PARTIAL_ERROR,
+                                    backend_err
+                                );
+                                // Explicitly set result for the remaining commands
+                                // so that they won't be dropped implicitly.
+                                for t in it.chain(retry_tasks.into_iter()) {
+                                    t.set_resp_result(Ok(Resp::Error(
+                                        err_str.clone().into_bytes(),
+                                    )));
+                                }
                                 return Err(SenderBackendError::from_backend_error(backend_err));
                             }
                         }
