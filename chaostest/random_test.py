@@ -7,7 +7,7 @@ from loguru import logger
 from redis import StrictRedis
 
 import config
-from utils import OvermoonClient, ServerProxy, OVERMOON_ENDPOINT, RedisClusterClient
+from utils import BrokerClient, ServerProxy, BROKER_ENDPOINT, RedisClusterClient
 
 
 exit_on_error = True
@@ -32,14 +32,14 @@ def gen_server_proxy_list():
 class KeyValueTester:
     MAX_KVS = 1000
 
-    def __init__(self, cluster_name, overmoon_client):
+    def __init__(self, cluster_name, broker_client):
         self.cluster_name = cluster_name
-        self.overmoon_client = overmoon_client
+        self.broker_client = broker_client
         self.kvs = set()
         self.deleted_kvs = set()
 
     def get_proxies(self):
-        cluster = self.overmoon_client.get_cluster(self.cluster_name)
+        cluster = self.broker_client.get_cluster(self.cluster_name)
         if cluster is None:
             return None
 
@@ -98,7 +98,7 @@ class KeyValueTester:
                 self.test_del(proxies)
         except Exception as e:
             logger.error('REDIS_TEST_FAILED: {} {}', self.cluster_name, e)
-            logger.error('REDIS_TEST_FAILED: {} ', self.overmoon_client.get_cluster(self.cluster_name))
+            logger.error('REDIS_TEST_FAILED: {} ', self.broker_client.get_cluster(self.cluster_name))
             raise
 
     def test_set(self, proxies, cluster_name):
@@ -161,8 +161,8 @@ class KeyValueTester:
 
 
 class RandomTester:
-    def __init__(self, overmoon_client):
-        self.overmoon_client = overmoon_client
+    def __init__(self, broker_client):
+        self.broker_client = broker_client
         self.server_proxy_list = gen_server_proxy_list()
         self.stopped = False
         self.kvs_tester = {}
@@ -183,7 +183,7 @@ class RandomTester:
         return random.choice(names)
 
     def test_data(self):
-        names = self.overmoon_client.get_cluster_names()
+        names = self.broker_client.get_cluster_names()
         if not names:
             return
 
@@ -192,7 +192,7 @@ class RandomTester:
             if cluster_name in self.kvs_tester:
                 new_kvs_tester[cluster_name] = self.kvs_tester[cluster_name]
             else:
-                new_kvs_tester[cluster_name] = KeyValueTester(cluster_name, self.overmoon_client)
+                new_kvs_tester[cluster_name] = KeyValueTester(cluster_name, self.broker_client)
         self.kvs_tester = new_kvs_tester
         cluster_name = random.choice(list(self.kvs_tester.keys()))
         logger.info('test data of: {}', cluster_name)
@@ -201,34 +201,34 @@ class RandomTester:
 
     def loop_test(self):
         while not self.stopped:
-            self.overmoon_client.sync_all_server_proxy(self.server_proxy_list)
-            if not self.overmoon_client.get_free_proxies():
+            self.broker_client.sync_all_server_proxy(self.server_proxy_list)
+            if not self.broker_client.get_free_proxies():
                 logger.warning("no free proxy found")
 
-            names = self.overmoon_client.get_cluster_names()
+            names = self.broker_client.get_cluster_names()
             if names:
                 logger.info('clusters: {}', names)
 
             if not names or random.randint(0, 10) < 2:
                 node_number = random.randint(0, 40)
-                self.overmoon_client.create_cluster(self.gen_cluster_name(), node_number)
+                self.broker_client.create_cluster(self.gen_cluster_name(), node_number)
 
             if names and random.randint(0, 10) < 8:
                 cluster_name = random.choice(names)
-                cluster = self.overmoon_client.get_cluster(cluster_name)
+                cluster = self.broker_client.get_cluster(cluster_name)
                 existing_node_num = len(cluster['nodes'])
                 max_chunk_num = (config.REDIS_NUM - existing_node_num) / 4
                 node_number = random.randint(0, max_chunk_num + 1) * 4
-                self.overmoon_client.add_nodes(cluster_name, node_number)
+                self.broker_client.add_nodes(cluster_name, node_number)
                 if random.randint(0, 10) < 7:
                     if random.randint(0, 10) % 2 == 0:
-                        self.overmoon_client.scale_cluster(cluster_name)
+                        self.broker_client.scale_cluster(cluster_name)
                     else:
                         new_node_num = random.randint(0, existing_node_num / 4 + 1) * 4
-                        self.overmoon_client.scale_down_cluster(cluster_name, new_node_num)
+                        self.broker_client.scale_down_cluster(cluster_name, new_node_num)
 
             if names and random.randint(0, 10) < 6:
-                if self.overmoon_client.remove_unused_nodes(random.choice(names)):
+                if self.broker_client.remove_unused_nodes(random.choice(names)):
                     logger.info("Removed nodes. Need to wait or the commands will be sent to removed nodes")
                     # TODO: get proxies not directly by the api to avoid this.
                     time.sleep(10)
@@ -241,7 +241,7 @@ class RandomTester:
 
             if names and random.randint(0, 600) < 1:
                 cluster_name = random.choice(names)
-                self.overmoon_client.delete_cluster(cluster_name)
+                self.broker_client.delete_cluster(cluster_name)
                 self.kvs_tester.pop(cluster_name, None)
 
             time.sleep(0.1)
@@ -263,4 +263,4 @@ if __name__ == '__main__':
         print("Will exit on error")
     else:
         print("Will not exit on error")
-    RandomTester(OvermoonClient(OVERMOON_ENDPOINT)).keep_testing()
+    RandomTester(BrokerClient(BROKER_ENDPOINT)).keep_testing()
