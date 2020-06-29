@@ -376,7 +376,8 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
 
         // If there's only replicas, this proxy don't own any slot
         // but should be in ready state.
-        if self.replicator_manager.get_replica_num() == 0 {
+        let (master_num, replica_num) = self.replicator_manager.get_role_num();
+        if master_num == 0 && replica_num > 0 {
             return true;
         }
         let meta_map = self.meta_map.load();
@@ -391,7 +392,7 @@ pub fn loop_send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     default_redirection_address: Option<&String>,
 ) {
     let mut cmd_ctx = cmd_ctx;
-    const MAX_RETRY_NUM: usize = 10;
+    const MAX_RETRY_NUM: usize = 3;
     for i in 0..MAX_RETRY_NUM {
         cmd_ctx = match send_cmd_ctx(
             meta_map,

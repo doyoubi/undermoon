@@ -22,7 +22,7 @@ mod tests {
         ClusterName, MigrationMeta, MigrationTaskMeta, Range, RangeList, SlotRange, SlotRangeTag,
     };
     use undermoon::common::config::ClusterConfig;
-    use undermoon::common::proto::ProxyClusterMeta;
+    use undermoon::common::proto::{ClusterMapFlags, ProxyClusterMeta};
     use undermoon::common::response::{
         ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, ERR_TOO_MANY_REDIRECTIONS,
         OK_REPLY,
@@ -37,6 +37,7 @@ mod tests {
     use undermoon::proxy::manager::MetaMap;
     use undermoon::proxy::service::ServerProxyConfig;
     use undermoon::proxy::session::CmdCtx;
+    use undermoon::replication::replicator::{MasterMeta, ReplicaMeta, ReplicatorMeta};
 
     const TEST_CLUSTER: &str = "test_cluster";
     type TestMetaManager = MetaManager<DummyClientFactory, DummyOkConnFactory>;
@@ -107,6 +108,55 @@ mod tests {
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
+    }
+
+    fn gen_repl_meta_with_both_master_and_replica() -> ReplicatorMeta {
+        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
+
+        ReplicatorMeta {
+            epoch: 233,
+            flags: ClusterMapFlags { force: false },
+            masters: vec![MasterMeta {
+                cluster_name: cluster_name.clone(),
+                master_node_address: "127.0.0.1:6379".to_string(),
+                replicas: vec![],
+            }],
+            replicas: vec![ReplicaMeta {
+                cluster_name: cluster_name.clone(),
+                replica_node_address: "127.0.0.1:7001".to_string(),
+                masters: vec![],
+            }],
+        }
+    }
+
+    fn gen_repl_meta_with_all_masters() -> ReplicatorMeta {
+        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
+
+        ReplicatorMeta {
+            epoch: 233,
+            flags: ClusterMapFlags { force: false },
+            masters: vec![MasterMeta {
+                cluster_name: cluster_name.clone(),
+                master_node_address: "127.0.0.1:6379".to_string(),
+                replicas: vec![],
+            }],
+            replicas: vec![],
+        }
+    }
+
+    fn gen_repl_meta_with_all_replicas() -> ReplicatorMeta {
+        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
+
+        ReplicatorMeta {
+            epoch: 233,
+            flags: ClusterMapFlags { force: false },
+            masters: vec![],
+            replicas: vec![ReplicaMeta {
+                cluster_name: cluster_name.clone(),
+                replica_node_address: "127.0.0.1:7001".to_string(),
+                masters: vec![],
+            }],
+        }
     }
 
     async fn assert_ok_reply(reply_receiver: CmdReplyReceiver) {
@@ -788,5 +838,45 @@ mod tests {
             )),
         };
         assert_eq!(s, ERR_TOO_MANY_REDIRECTIONS.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_readiness_stable_slots() {
+        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
+
+        let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
+        assert!(!manager.is_ready(cluster_name.clone()));
+
+        let meta = gen_repl_meta_with_both_master_and_replica();
+        manager.update_replicators(meta).unwrap();
+        assert!(!manager.is_ready(cluster_name.clone()));
+
+        let meta = gen_proxy_cluster_meta();
+        manager.set_meta(meta).unwrap();
+        assert!(manager.is_ready(cluster_name));
+    }
+
+    #[tokio::test]
+    async fn test_readiness_all_masters() {
+        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
+
+        let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
+        assert!(!manager.is_ready(cluster_name.clone()));
+
+        let meta = gen_repl_meta_with_all_masters();
+        manager.update_replicators(meta).unwrap();
+        assert!(!manager.is_ready(cluster_name));
+    }
+
+    #[tokio::test]
+    async fn test_readiness_all_replicas() {
+        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
+
+        let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
+        assert!(!manager.is_ready(cluster_name.clone()));
+
+        let meta = gen_repl_meta_with_all_replicas();
+        manager.update_replicators(meta).unwrap();
+        assert!(manager.is_ready(cluster_name));
     }
 }

@@ -167,7 +167,6 @@ HTTP 409
 
 ##### (8) PUT /api/v2/clusters/migrations
 Try to commit the migration.
-The memory broker implementation also cleans up the free nodes after the migration is done.
 ```
 Request:
 {
