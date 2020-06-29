@@ -189,16 +189,23 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         Ok(())
     }
 
-    pub fn get_replica_num(&self) -> usize {
+    // Returns (master number, replica number)
+    pub fn get_role_num(&self) -> (usize, usize) {
         let replicators = self
             .replicators
             .read()
             .expect("ReplicatorManager::get_replica_num");
-        replicators
+        let master_num = replicators
+            .1
+            .values()
+            .filter(|(replicator, _handle)| replicator.is_left())
+            .count();
+        let replica_num = replicators
             .1
             .values()
             .filter(|(replicator, _handle)| replicator.is_right())
-            .count()
+            .count();
+        (master_num, replica_num)
     }
 
     pub fn get_metadata(&self) -> (Vec<MasterMeta>, Vec<ReplicaMeta>) {
