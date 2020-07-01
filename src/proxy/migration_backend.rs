@@ -795,7 +795,10 @@ where
             let cmd_task: F::Task = state.into_inner();
 
             return match BackendError::from_sender_backend_error(err) {
-                Either::Right(_retry_err) => Err(SenderBackendError::Retry(cmd_task)),
+                Either::Right(_retry_err) => {
+                    error!("failed to send task to exist channel: retry");
+                    Err(SenderBackendError::Retry(cmd_task))
+                },
                 Either::Left(BackendError::Canceled) => {
                     error!("failed to send task to exist channel: canceled");
                     Err(SenderBackendError::Retry(cmd_task))
