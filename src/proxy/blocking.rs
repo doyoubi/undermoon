@@ -10,20 +10,36 @@ use super::sender::{
 };
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
+use crate::common::biatomic::BiAtomicU32;
 use crate::common::cluster::ClusterName;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Weak};
+
+pub type BlockingTerm = u32;
+
+pub struct BlockingState {
+    pub blocking: bool,
+    pub term: BlockingTerm,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BlockingHint {
+    NotBlocking,
+    NotBlockingInMigration(BlockingTerm),
+    Blocking,
+}
 
 pub trait TaskBlockingController: ThreadSafe {
     type Sender: BlockingCmdTaskSender;
 
     fn blocking_done(&self) -> bool;
-    fn is_blocking(&self) -> bool;
+    // Returns the current blocking state and term
+    fn get_blocking_state(&self) -> BlockingState;
     fn start_blocking(&self) -> BlockingHandle<Self::Sender>;
     fn stop_blocking(&self);
 }
@@ -159,7 +175,9 @@ pub struct BlockingHandle<BS: BlockingCmdTaskSender> {
 
 impl<BS: BlockingCmdTaskSender> BlockingHandle<BS> {
     fn new(inner: Arc<BlockingHandleInner<BS>>) -> Self {
-        inner.blocking.fetch_add(1, Ordering::SeqCst);
+        inner
+            .blocking_state
+            .compare_and_apply(|blocking_count| blocking_count + 1, |term| term + 1);
         info!("migration start blocking");
         Self { inner }
     }
@@ -170,8 +188,11 @@ impl<BS: BlockingCmdTaskSender> BlockingHandle<BS> {
 impl<BS: BlockingCmdTaskSender> Drop for BlockingHandle<BS> {
     fn drop(&mut self) {
         info!("blocking handle is dropped");
-        let previous = self.inner.blocking.fetch_sub(1, Ordering::SeqCst);
-        if previous == 1 {
+        let (prev_blocking_count, _prev_term) = self
+            .inner
+            .blocking_state
+            .compare_and_apply(|blocking_count| blocking_count - 1, |term| term + 1);
+        if prev_blocking_count == 1 {
             info!("migraition stop blocking");
             self.inner.release_all();
         }
@@ -179,7 +200,7 @@ impl<BS: BlockingCmdTaskSender> Drop for BlockingHandle<BS> {
 }
 
 struct BlockingHandleInner<BS: BlockingCmdTaskSender> {
-    blocking: AtomicUsize,
+    blocking_state: BiAtomicU32,
     queue_receiver: crossbeam_channel::Receiver<BS::Task>,
     blocking_task_sender: Arc<BS>,
 }
@@ -225,7 +246,7 @@ where
     pub fn new(inner_sender: S, blocking_task_sender: Arc<BS>) -> Self {
         let (queue_sender, queue_receiver) = crossbeam_channel::unbounded();
         let blocking_handle_inner = Arc::new(BlockingHandleInner {
-            blocking: AtomicUsize::new(0),
+            blocking_state: BiAtomicU32::new(0, 0),
             queue_receiver,
             blocking_task_sender,
         });
@@ -241,7 +262,7 @@ where
         &self,
         cmd_task: BlockingHintTask<BS::Task>,
     ) -> Result<(), SenderBackendError<BlockingHintTask<BS::Task>>> {
-        // `cmd_need_blocking` is still needed even we have `self.is_blocking()` check.
+        // `cmd_blocking_hint` is still needed even we have `self.get_blocking_state().blocking` check.
         // Without it, the following case could happen:
         // (1) A command with the key should be migrated is executed.
         // (2) The migration manager check that it should be sent to the blocking queue.
@@ -249,27 +270,43 @@ where
         // (4) The blocking is done, this function will forward all the commands to the backend node.
         // (5) This command is sent to the backend, which is not correct.
         // Thus we need a blocking hint for consistency.
-        let cmd_need_blocking = cmd_task.get_blocking();
+        let cmd_blocking_hint = cmd_task.get_blocking_hint();
         let cmd_task = cmd_task.into_inner();
 
-        // The `waiting for blocking` operation could happen between `is_blocking()` and `running_cmd.fetch_add()`,
+        // The `waiting for blocking` operation could happen between `get_blocking_state()` and `running_cmd.fetch_add()`,
         // which could result in leaking some commands even after blocking has already started.
         // We need something like RwLock to protect this critical section.
         // Since CmdTaskSender::send has to be `&self`, we have to implement something similar ourselves.
         // Add `running_cmd` anyway to hold this "lock".
         // TODO: this counter increment (reader lock) might starve the waiting side (writer lock).
         let counter = RefAutoCounter::new(&(*self.running_cmd));
-        if !self.is_blocking() {
-            if !cmd_need_blocking {
+        let BlockingState { blocking, term } = self.get_blocking_state();
+        if !blocking {
+            let blocking = match cmd_blocking_hint {
+                BlockingHint::NotBlocking => false,
+                BlockingHint::NotBlockingInMigration(cmd_term) if term <= cmd_term => {
+                    if term < cmd_term {
+                        error!(
+                            "invalid state: current term {} < cmd term {}",
+                            term, cmd_term
+                        );
+                    }
+                    false
+                }
+                BlockingHint::NotBlockingInMigration(_) => true,
+                BlockingHint::Blocking => true,
+            };
+            if !blocking {
                 let counter_task = CounterTask::new(cmd_task, self.running_cmd.clone());
                 return self.inner_sender.send(counter_task).map_err(|err| {
-                    err.map_task(|task| BlockingHintTask::new(task.into_inner(), cmd_need_blocking))
+                    err.map_task(|task| BlockingHintTask::new(task.into_inner(), cmd_blocking_hint))
                 });
             }
 
+            info!("retry for blocking command");
             return Err(SenderBackendError::Retry(BlockingHintTask::new(
                 cmd_task,
-                cmd_need_blocking,
+                cmd_blocking_hint,
             )));
         }
         drop(counter);
@@ -283,7 +320,8 @@ where
             return Err(SenderBackendError::Canceled);
         }
 
-        if !self.is_blocking() {
+        let BlockingState { blocking, .. } = self.get_blocking_state();
+        if !blocking {
             self.blocking_handle_inner.release_all();
         }
         Ok(())
@@ -301,8 +339,12 @@ where
         self.running_cmd.load(Ordering::SeqCst) == 0
     }
 
-    fn is_blocking(&self) -> bool {
-        self.blocking_handle_inner.blocking.load(Ordering::SeqCst) > 0
+    fn get_blocking_state(&self) -> BlockingState {
+        let (blocking_count, term) = self.blocking_handle_inner.blocking_state.load();
+        BlockingState {
+            blocking: blocking_count > 0,
+            term,
+        }
     }
 
     fn start_blocking(&self) -> BlockingHandle<Self::Sender> {
@@ -478,14 +520,14 @@ impl<T: CmdTask> CmdTask for CounterTask<T> {
 
 pub struct BlockingHintTask<T: CmdTask> {
     inner: T,
-    need_blocking: bool,
+    blocking_hint: BlockingHint,
 }
 
 impl<T: CmdTask> BlockingHintTask<T> {
-    pub fn new(inner: T, need_blocking: bool) -> Self {
+    pub fn new(inner: T, blocking_hint: BlockingHint) -> Self {
         Self {
             inner,
-            need_blocking,
+            blocking_hint,
         }
     }
 
@@ -493,8 +535,8 @@ impl<T: CmdTask> BlockingHintTask<T> {
         self.inner
     }
 
-    pub fn get_blocking(&self) -> bool {
-        self.need_blocking
+    pub fn get_blocking_hint(&self) -> BlockingHint {
+        self.blocking_hint
     }
 }
 

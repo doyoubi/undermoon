@@ -1,5 +1,6 @@
 pub mod atomic_lock;
 pub mod batch;
+pub mod biatomic;
 pub mod cluster;
 pub mod config;
 pub mod future_group;

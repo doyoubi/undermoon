@@ -15,7 +15,9 @@ use crate::protocol::{
     PreCheckRedisClientFactory, RedisClientError, RedisClientFactory, Resp, RespVec,
 };
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
-use crate::proxy::blocking::{BlockingHandle, BlockingHintTask, TaskBlockingController};
+use crate::proxy::blocking::{
+    BlockingHandle, BlockingHint, BlockingHintTask, BlockingState, TaskBlockingController,
+};
 use crate::proxy::cluster::ClusterSendError;
 use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
@@ -392,17 +394,23 @@ where
         cmd_task: Self::Task,
     ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>> {
         let state = self.state.get_state();
+        let BlockingState { blocking, term } = self.blocking_ctrl.get_blocking_state();
         match state {
             MigrationState::PreCheck => {
                 return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                    cmd_task, false,
+                    cmd_task,
+                    BlockingHint::NotBlockingInMigration(term),
                 )))
             }
             MigrationState::PreBlocking | MigrationState::PreSwitch => {
-                let need_blocking = self.blocking_ctrl.is_blocking();
+                let blocking_hint = if blocking {
+                    BlockingHint::Blocking
+                } else {
+                    BlockingHint::NotBlockingInMigration(term)
+                };
                 return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
                     cmd_task,
-                    need_blocking,
+                    blocking_hint,
                 )));
             }
             _ => (),
@@ -599,7 +607,7 @@ where
         if let Err(retry_err) = self.cmd_handler.handle_cmd_task(cmd_task) {
             return Err(ClusterSendError::Retry(BlockingHintTask::new(
                 retry_err.into_inner(),
-                false,
+                BlockingHint::NotBlocking,
             )));
         }
         Ok(())
@@ -676,7 +684,7 @@ fn handle_redirection<T: CmdTask>(
     };
 
     if active_redirection {
-        let cmd_task = BlockingHintTask::new(cmd_task, false);
+        let cmd_task = BlockingHintTask::new(cmd_task, BlockingHint::NotBlocking);
         // Proceed the command inside this proxy.
         Err(ClusterSendError::ActiveRedirection {
             task: cmd_task,

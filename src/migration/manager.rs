@@ -9,7 +9,7 @@ use crate::migration::task::MgrSubCmd;
 use crate::protocol::Resp;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, RespVec};
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
-use crate::proxy::blocking::{BlockingHintTask, TaskBlockingControllerFactory};
+use crate::proxy::blocking::{BlockingHint, BlockingHintTask, TaskBlockingControllerFactory};
 use crate::proxy::cluster::{ClusterSendError, ClusterTag};
 use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
@@ -252,7 +252,8 @@ where
         // Optimization for not having any migration.
         if self.empty {
             return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                cmd_task, false,
+                cmd_task,
+                BlockingHint::NotBlocking,
             )));
         }
 
@@ -288,11 +289,13 @@ where
                 }
 
                 Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                    cmd_task, false,
+                    cmd_task,
+                    BlockingHint::NotBlocking,
                 )))
             }
             None => Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                cmd_task, false,
+                cmd_task,
+                BlockingHint::NotBlocking,
             ))),
         }
     }
@@ -306,7 +309,8 @@ where
         // Optimization for not having any migration.
         if self.empty {
             return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                cmd_task, false,
+                cmd_task,
+                BlockingHint::NotBlocking,
             )));
         }
 
@@ -332,7 +336,8 @@ where
         }
 
         Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-            cmd_task, false,
+            cmd_task,
+            BlockingHint::NotBlocking,
         )))
     }
 
