@@ -798,7 +798,7 @@ where
                 Either::Right(_retry_err) => {
                     error!("failed to send task to exist channel: retry");
                     Err(SenderBackendError::Retry(cmd_task))
-                },
+                }
                 Either::Left(BackendError::Canceled) => {
                     error!("failed to send task to exist channel: canceled");
                     Err(SenderBackendError::Retry(cmd_task))

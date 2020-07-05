@@ -181,7 +181,7 @@ impl<'a> MetaStoreQuery<'a> {
                     let (first_slot_index, second_slot_index) = match chunk.role_position {
                         ChunkRolePosition::Normal => (0, 2),
                         ChunkRolePosition::FirstChunkMaster => (0, 1),
-                        ChunkRolePosition::SecondChunkMaster => (2, 3),
+                        ChunkRolePosition::SecondChunkMaster => (3, 2),
                     };
                     if i == first_slot_index {
                         let mut first_slots = vec![];
