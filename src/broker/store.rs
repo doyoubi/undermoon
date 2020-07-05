@@ -480,6 +480,12 @@ impl MetaStore {
         }
     }
 
+    // Returns on success:
+    // (
+    //   scaling operation,
+    //   all the proxies of the cluster,
+    //   epoch that the proxies of cluster need to get updated,
+    // )
     pub fn auto_change_node_number(
         &mut self,
         cluster_name: String,
@@ -488,12 +494,9 @@ impl MetaStore {
         let name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
 
-        let (existing_node_num, is_migrating) = match self.clusters.get(&name) {
+        let is_migrating = match self.clusters.get(&name) {
             None => return Err(MetaStoreError::ClusterNotFound),
-            Some(cluster) => (
-                cluster.chunks.len() * CHUNK_NODE_NUM,
-                cluster.is_migrating(),
-            ),
+            Some(cluster) => cluster.is_migrating(),
         };
 
         if is_migrating {
@@ -506,6 +509,11 @@ impl MetaStore {
                 return Err(err);
             }
         }
+
+        let existing_node_num = match self.clusters.get(&name) {
+            None => return Err(MetaStoreError::ClusterNotFound),
+            Some(cluster) => cluster.chunks.len() * CHUNK_NODE_NUM,
+        };
 
         let scale_op = match existing_node_num.cmp(&expected_num) {
             Ordering::Equal => ScaleOp::NoOp,
@@ -2035,5 +2043,46 @@ mod tests {
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
         assert!(new_epoch <= store.get_global_epoch());
         assert_eq!(cluster.get_epoch(), store.get_global_epoch());
+    }
+
+    #[test]
+    fn test_auto_change_node_number_for_no_op() {
+        let migration_limit = 0;
+
+        let mut store = MetaStore::new(false);
+        let host_num = 4;
+        let proxy_per_host = 3;
+        let all_proxy_num = host_num * proxy_per_host;
+        add_testing_proxies(&mut store, host_num, proxy_per_host);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        check_cluster_and_proxy(&store);
+
+        store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num - 4);
+        assert_eq!(
+            store
+                .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            8
+        );
+        check_cluster_and_proxy(&store);
+
+        let (op, _, _) = store.auto_change_node_number(cluster_name.clone(), 4).unwrap();
+        assert!(matches!(op, ScaleOp::NoOp));
+        assert_eq!(
+            store
+                .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
+                .get_nodes()
+                .len(),
+            4
+        );
+        check_cluster_and_proxy(&store);
     }
 }
