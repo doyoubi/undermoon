@@ -2073,7 +2073,9 @@ mod tests {
         );
         check_cluster_and_proxy(&store);
 
-        let (op, _, _) = store.auto_change_node_number(cluster_name.clone(), 4).unwrap();
+        let (op, _, _) = store
+            .auto_change_node_number(cluster_name.clone(), 4)
+            .unwrap();
         assert!(matches!(op, ScaleOp::NoOp));
         assert_eq!(
             store
@@ -2084,5 +2086,91 @@ mod tests {
             4
         );
         check_cluster_and_proxy(&store);
+    }
+
+    #[test]
+    fn test_failover_slots() {
+        let migration_limit = 0;
+
+        let mut store = MetaStore::new(false);
+        let host_num = 4;
+        let proxy_per_host = 3;
+        let all_proxy_num = host_num * proxy_per_host;
+        add_testing_proxies(&mut store, host_num, proxy_per_host);
+        assert_eq!(store.get_free_proxies().len(), all_proxy_num);
+
+        let cluster_name = CLUSTER_NAME.to_string();
+
+        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        check_cluster_and_proxy(&store);
+
+        let (first_master_proxy, second_master_proxy) = {
+            let cluster = store
+                .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap();
+            let first_master = &cluster.get_nodes()[0];
+            assert_eq!(first_master.get_role(), Role::Master);
+            let first_slots = first_master.get_slots();
+            assert_eq!(first_slots.len(), 1);
+            let first_slots_str = first_slots[0].clone().into_strings().join(" ");
+            assert_eq!(first_slots_str, "1 0-8191");
+
+            let second_master = &cluster.get_nodes()[2];
+            assert_eq!(second_master.get_role(), Role::Master);
+            let second_slots = second_master.get_slots();
+            assert_eq!(second_slots.len(), 1);
+            let second_slots_str = second_slots[0].clone().into_strings().join(" ");
+            assert_eq!(second_slots_str, "1 8192-16383");
+            (
+                first_master.get_proxy_address().to_string(),
+                second_master.get_proxy_address().to_string(),
+            )
+        };
+
+        store
+            .replace_failed_proxy(first_master_proxy, migration_limit)
+            .unwrap()
+            .unwrap();
+        {
+            let cluster = store
+                .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap();
+            let first_master = &cluster.get_nodes()[3];
+            assert_eq!(first_master.get_role(), Role::Master);
+            let first_slots = first_master.get_slots();
+            assert_eq!(first_slots.len(), 1);
+            let first_slots_str = first_slots[0].clone().into_strings().join(" ");
+            assert_eq!(first_slots_str, "1 0-8191");
+
+            let second_master = &cluster.get_nodes()[2];
+            assert_eq!(second_master.get_role(), Role::Master);
+            let second_slots = second_master.get_slots();
+            assert_eq!(second_slots.len(), 1);
+            let second_slots_str = second_slots[0].clone().into_strings().join(" ");
+            assert_eq!(second_slots_str, "1 8192-16383");
+        }
+
+        store
+            .replace_failed_proxy(second_master_proxy, migration_limit)
+            .unwrap()
+            .unwrap();
+        {
+            let cluster = store
+                .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap();
+            let first_master = &cluster.get_nodes()[0];
+            assert_eq!(first_master.get_role(), Role::Master);
+            let first_slots = first_master.get_slots();
+            assert_eq!(first_slots.len(), 1);
+            let first_slots_str = first_slots[0].clone().into_strings().join(" ");
+            assert_eq!(first_slots_str, "1 0-8191");
+
+            let second_master = &cluster.get_nodes()[1];
+            assert_eq!(second_master.get_role(), Role::Master);
+            let second_slots = second_master.get_slots();
+            assert_eq!(second_slots.len(), 1);
+            let second_slots_str = second_slots[0].clone().into_strings().join(" ");
+            assert_eq!(second_slots_str, "1 8192-16383");
+        }
     }
 }
