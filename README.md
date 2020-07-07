@@ -42,6 +42,14 @@ So the node number of each Redis cluster will be the multiples of 4 with half ma
 The design of chunk makes it very easy to build a cluster with a good topology for **workload balancing**.
 
 ## Getting Started
+### Run Undermoon in Kubernetes
+Using [undermoon-operator](https://github.com/doyoubi/undermoon-operator)
+is the easiest way to create Redis clusters if you have Kubernetes.
+
+See the `README.md` of [undermoon-operator](https://github.com/doyoubi/undermoon-operator)
+for more how to use it.
+
+### Run Undermoon using Docker Compose
 The following examples use docker to create an `undermoon` cluster.
 
 Or you can set them up without docker following this docs: [setting up undermoon manually](docs/set_up_manually.md).
