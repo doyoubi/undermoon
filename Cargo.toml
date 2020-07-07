@@ -1,6 +1,6 @@
 [package]
 name = "undermoon"
-version = "0.3.1-alpha.0"
+version = "0.3.1"
 authors = ["doyoubi"]
 edition = "2018"
 
