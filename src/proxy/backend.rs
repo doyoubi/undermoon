@@ -325,6 +325,11 @@ where
         }
     };
 
+    if let Err(err) = socket.set_nodelay(true) {
+        error!("failed to set TCP_NODELAY for backend: {:?}", err);
+        return Err(BackendError::Io(err));
+    }
+
     let (encoder, decoder) = new_simple_packet_codec::<T, T>();
 
     let frame = RespCodec::new(encoder, decoder).framed(socket);
