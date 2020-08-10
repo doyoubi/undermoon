@@ -173,19 +173,10 @@ pub struct I64Retriever<F: RedisClientFactory> {
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
     client_factory: Arc<F>,
-    address: String,
-    cmd: Vec<Vec<u8>>,
-    interval: Duration,
 }
 
 impl<F: RedisClientFactory> I64Retriever<F> {
-    pub fn new(
-        init_data: i64,
-        client_factory: Arc<F>,
-        address: String,
-        cmd: Vec<String>,
-        interval: Duration,
-    ) -> Self {
+    pub fn new(init_data: i64, client_factory: Arc<F>) -> Self {
         let (sender, receiver) = oneshot::channel();
         let data = Arc::new(atomic::AtomicI64::new(init_data));
 
@@ -196,9 +187,6 @@ impl<F: RedisClientFactory> I64Retriever<F> {
             stop_signal_sender,
             stop_signal_receiver,
             client_factory,
-            address,
-            cmd: cmd.into_iter().map(|e| e.into_bytes()).collect(),
-            interval,
         }
     }
 
@@ -206,7 +194,13 @@ impl<F: RedisClientFactory> I64Retriever<F> {
         self.data.load(atomic::Ordering::SeqCst)
     }
 
-    pub fn start<Func>(&self, handle_func: Func) -> Option<RetrieverFut>
+    pub fn start<Func>(
+        &self,
+        handle_func: Func,
+        address: String,
+        cmd: Vec<String>,
+        interval: Duration,
+    ) -> Option<RetrieverFut>
     where
         Func: Fn(RespVec, &Arc<atomic::AtomicI64>) -> Result<(), RedisClientError>
             + Clone
@@ -220,11 +214,12 @@ impl<F: RedisClientFactory> I64Retriever<F> {
             let handle_result = move |resp: RespVec| -> Result<(), RedisClientError> {
                 handle_func(resp, &data_clone)
             };
+            let cmd: Vec<Vec<u8>> = cmd.into_iter().map(|e| e.into_bytes()).collect();
             let sending = keep_connecting_and_sending_cmd(
                 self.client_factory.clone(),
-                self.address.clone(),
-                self.cmd.clone(),
-                self.interval,
+                address,
+                cmd,
+                interval,
                 handle_result,
             );
             let fut = async {

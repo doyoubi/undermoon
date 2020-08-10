@@ -5,8 +5,9 @@ use crc16::{State, ARC, XMODEM};
 use futures::{stream, Stream};
 use std::cmp::min;
 use std::fmt;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::str;
+use tokio::net::lookup_host;
 
 pub trait ThreadSafe: Send + Sync + 'static {}
 
@@ -20,8 +21,8 @@ pub fn has_flags(s: &str, delimiter: char, flag: &'static str) -> bool {
         .any(|s| str_ascii_case_insensitive_eq(s, flag))
 }
 
-pub fn resolve_first_address(address: &str) -> Option<SocketAddr> {
-    match address.to_socket_addrs() {
+pub async fn resolve_first_address(address: &str) -> Option<SocketAddr> {
+    match lookup_host(address).await {
         Ok(mut address_list) => match address_list.next() {
             Some(address) => Some(address),
             None => {

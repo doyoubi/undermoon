@@ -144,13 +144,11 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 let key_clone = key.clone();
 
                 let fut = async move {
-                    if let Some(fut) = master_clone.start() {
-                        if let Err(err) = fut.await {
-                            error!(
-                                "master replicator {} {} exit {:?}",
-                                key_clone.0, key_clone.1, err
-                            );
-                        }
+                    if let Err(err) = master_clone.start().await {
+                        error!(
+                            "master replicator {} {} exit {:?}",
+                            key_clone.0, key_clone.1, err
+                        );
                     }
                 };
                 let (fut, handle) = new_auto_drop_future(fut);
@@ -169,13 +167,11 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 let key_clone = key.clone();
 
                 let fut = async move {
-                    if let Some(fut) = replica_clone.start() {
-                        if let Err(err) = fut.await {
-                            error!(
-                                "replica replicator {} {} exit {:?}",
-                                key_clone.0, key_clone.1, err
-                            );
-                        }
+                    if let Err(err) = replica_clone.start().await {
+                        error!(
+                            "replica replicator {} {} exit {:?}",
+                            key_clone.0, key_clone.1, err
+                        );
                     }
                 };
                 let (fut, handle) = new_auto_drop_future(fut);

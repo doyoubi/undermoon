@@ -480,7 +480,7 @@ impl SimpleRedisClientFactory {
     }
 
     async fn create_conn(&self, address: String) -> Result<TcpStream, RedisClientError> {
-        let sock_address = match resolve_first_address(&address) {
+        let sock_address = match resolve_first_address(&address).await {
             Some(address) => address,
             None => return Err(RedisClientError::InvalidAddress),
         };

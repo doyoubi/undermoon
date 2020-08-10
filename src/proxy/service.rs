@@ -144,7 +144,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
 
     pub async fn run(&self) -> Result<(), Box<dyn Error>> {
         let address = self.config.address.clone();
-        let address = resolve_first_address(&address).ok_or_else(|| {
+        let address = resolve_first_address(&address).await.ok_or_else(|| {
             let err_str = format!("failed to resolve address: {}", address);
             error!("{}", err_str);
             into_err(err_str)

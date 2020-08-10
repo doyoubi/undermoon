@@ -375,7 +375,7 @@ where
     F: ConnFactory<Pkt = <H::Task as CmdTask>::Pkt> + Send + Sync + 'static,
 {
     // TODO: move this to upper layer.
-    let sock_address = match resolve_first_address(&address) {
+    let sock_address = match resolve_first_address(&address).await {
         Some(addr) => addr,
         None => {
             error!("invalid address: {:?}", address);
