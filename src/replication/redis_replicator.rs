@@ -19,13 +19,9 @@ pub struct RedisMasterReplicator<F: RedisClientFactory> {
 
 impl<F: RedisClientFactory> RedisMasterReplicator<F> {
     pub fn new(meta: MasterMeta, client_factory: Arc<F>) -> Self {
-        let address = meta.master_node_address.clone();
-        let interval = Duration::new(5, 0);
-        let cmd = vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()];
-
         Self {
             meta,
-            role_sync: I64Retriever::new(0, client_factory, address, cmd, interval),
+            role_sync: I64Retriever::new(0, client_factory),
         }
     }
 
@@ -51,16 +47,25 @@ impl<F: RedisClientFactory> RedisMasterReplicator<F> {
 }
 
 impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
-    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>> {
+    fn start<'s>(&'s self) -> Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>> {
         let meta = self.meta.clone();
-        self.role_sync.start(Self::handle_result).map(|f| {
-            let fut: Pin<Box<dyn Future<Output = Result<(), ReplicatorError>> + Send + 's>> =
-                Box::pin(f.map_err(ReplicatorError::RedisError).then(move |r| {
-                    warn!("RedisMasterReplicator {:?} stopped {:?}", meta, r);
-                    future::ok(())
-                }));
-            fut
-        })
+        let address = meta.master_node_address.clone();
+        let interval = Duration::new(5, 0);
+        let cmd = vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()];
+        self.role_sync
+            .start(Self::handle_result, address, cmd, interval)
+            .map(|f| {
+                let fut: Pin<Box<dyn Future<Output = Result<(), ReplicatorError>> + Send + 's>> =
+                    Box::pin(f.map_err(ReplicatorError::RedisError).then(move |r| {
+                        warn!("RedisMasterReplicator {:?} stopped {:?}", meta, r);
+                        future::ok(())
+                    }));
+                fut
+            })
+            .unwrap_or_else(|| {
+                error!("FATAL ERROR: RedisMasterReplicator has already started");
+                Box::pin(async { Err(ReplicatorError::AlreadyStarted) })
+            })
     }
 
     fn stop(&self) -> Result<(), ReplicatorError> {
@@ -79,27 +84,13 @@ pub struct RedisReplicaReplicator<F: RedisClientFactory> {
 
 impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
     pub fn new(meta: ReplicaMeta, client_factory: Arc<F>) -> Self {
-        // Just get the first one.
-        let cmd = match Self::gen_cmd(&meta) {
-            Ok(cmd) => cmd,
-            Err(err) => {
-                error!(
-                    "FATAL ERROR: invalid meta {:?}, will see it as master.",
-                    err
-                );
-                vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()]
-            }
-        };
-        let address = meta.replica_node_address.clone();
-        let interval = Duration::new(5, 0);
-
         Self {
             meta,
-            role_sync: I64Retriever::new(0, client_factory, address, cmd, interval),
+            role_sync: I64Retriever::new(0, client_factory),
         }
     }
 
-    fn gen_cmd(meta: &ReplicaMeta) -> Result<Vec<String>, ReplicatorError> {
+    async fn gen_cmd(meta: &ReplicaMeta) -> Result<Vec<String>, ReplicatorError> {
         let master_node_address = match meta.masters.get(0) {
             Some(repl_meta) => &repl_meta.node_address,
             None => {
@@ -108,7 +99,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
             }
         };
 
-        match resolve_first_address(master_node_address) {
+        match resolve_first_address(master_node_address).await {
             Some(address) => {
                 let host = address.ip().to_string();
                 let port = address.port().to_string();
@@ -129,19 +120,44 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
     fn handle_result(resp: RespVec, _data: &Arc<AtomicI64>) -> Result<(), RedisClientError> {
         retry_handle_func(OptionalMulti::Single(resp))
     }
+
+    async fn start_impl(&self) -> ReplicatorResult {
+        let meta = self.meta.clone();
+
+        // Just get the first one.
+        let cmd = match Self::gen_cmd(&meta).await {
+            Ok(cmd) => cmd,
+            Err(err) => {
+                error!(
+                    "FATAL ERROR: invalid meta {:?}, will see it as master.",
+                    err
+                );
+                return Err(err);
+            }
+        };
+        let address = meta.replica_node_address.clone();
+        let interval = Duration::new(5, 0);
+
+        match self
+            .role_sync
+            .start(Self::handle_result, address, cmd, interval)
+        {
+            Some(fut) => {
+                let res = fut.await;
+                warn!("RedisReplicaReplicator {:?} stopped {:?}", meta, res);
+                res.map_err(ReplicatorError::RedisError)
+            }
+            None => {
+                error!("FATAL ERROR: RedisReplicaReplicator has already started");
+                Err(ReplicatorError::AlreadyStarted)
+            }
+        }
+    }
 }
 
 impl<F: RedisClientFactory> ReplicaReplicator for RedisReplicaReplicator<F> {
-    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>> {
-        let meta = self.meta.clone();
-        self.role_sync.start(Self::handle_result).map(|f| {
-            let fut: Pin<Box<dyn Future<Output = Result<(), ReplicatorError>> + Send + 's>> =
-                Box::pin(f.map_err(ReplicatorError::RedisError).then(move |r| {
-                    warn!("RedisReplicaReplicator {:?} stopped {:?}", meta, r);
-                    future::ok(())
-                }));
-            fut
-        })
+    fn start<'s>(&'s self) -> Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>> {
+        Box::pin(self.start_impl())
     }
 
     fn stop(&self) -> Result<(), ReplicatorError> {

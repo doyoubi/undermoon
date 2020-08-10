@@ -15,13 +15,13 @@ pub type ReplicatorResult = Result<(), ReplicatorError>;
 // MasterReplicator and ReplicaReplicator work together remotely to manage the replication.
 
 pub trait MasterReplicator: ThreadSafe {
-    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>>;
+    fn start<'s>(&'s self) -> Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>;
     fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &MasterMeta;
 }
 
 pub trait ReplicaReplicator: ThreadSafe {
-    fn start<'s>(&'s self) -> Option<Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>>;
+    fn start<'s>(&'s self) -> Pin<Box<dyn Future<Output = ReplicatorResult> + Send + 's>>;
     fn stop(&self) -> Result<(), ReplicatorError>;
     fn get_meta(&self) -> &ReplicaMeta;
 }
