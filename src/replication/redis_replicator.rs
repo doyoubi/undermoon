@@ -64,7 +64,7 @@ impl<F: RedisClientFactory> MasterReplicator for RedisMasterReplicator<F> {
             })
             .unwrap_or_else(|| {
                 error!("FATAL ERROR: RedisMasterReplicator has already started");
-                Box::pin(async { Ok(()) })
+                Box::pin(async { Err(ReplicatorError::AlreadyStarted) })
             })
     }
 
@@ -132,7 +132,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
                     "FATAL ERROR: invalid meta {:?}, will see it as master.",
                     err
                 );
-                vec!["SLAVEOF".to_string(), "NO".to_string(), "ONE".to_string()]
+                return Err(err);
             }
         };
         let address = meta.replica_node_address.clone();
@@ -149,7 +149,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
             }
             None => {
                 error!("FATAL ERROR: RedisReplicaReplicator has already started");
-                Ok(())
+                Err(ReplicatorError::AlreadyStarted)
             }
         }
     }
