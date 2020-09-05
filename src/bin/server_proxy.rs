@@ -25,6 +25,9 @@ use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
 use undermoon::proxy::slowlog::SlowRequestLogger;
 use undermoon::MAX_REDIRECTIONS;
 
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     let mut s = config::Config::new();
     // If config file is specified, load it.

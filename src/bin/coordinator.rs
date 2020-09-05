@@ -17,6 +17,9 @@ use undermoon::coordinator::http_meta_broker::HttpMetaBroker;
 use undermoon::coordinator::service::{CoordinatorConfig, CoordinatorService};
 use undermoon::protocol::PooledRedisClientFactory;
 
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 fn gen_conf() -> CoordinatorConfig {
     let mut s = config::Config::new();
     // If config file is specified, load it.

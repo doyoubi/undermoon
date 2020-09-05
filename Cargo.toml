@@ -55,6 +55,7 @@ arrayvec = "0.5.1"
 either = "1.5.3"
 mockall = "0.6.0"
 backtrace = "0.3"
+jemallocator = "0.3.0"
 
 [profile.release]
 debug = true

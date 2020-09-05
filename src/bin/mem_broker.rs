@@ -16,6 +16,9 @@ use undermoon::broker::{
     MetaStorage, MetaStoreError, MetaSyncError,
 };
 
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 fn gen_conf() -> MemBrokerConfig {
     let mut s = config::Config::new();
     if let Some(conf_file_path) = env::args().nth(1) {
