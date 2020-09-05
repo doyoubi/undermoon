@@ -563,7 +563,10 @@ where
         for sub_result in res.into_iter() {
             let reply = match sub_result {
                 Ok(reply) => reply,
-                Err(err) => return Err(err),
+                Err(err) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(format!("ERR: {}", err).into_bytes())));
+                    return Err(err);
+                },
             };
             if let Resp::Error(err) = &reply {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err.clone())));
@@ -630,7 +633,10 @@ where
         for sub_result in res.into_iter() {
             let reply = match sub_result {
                 Ok(reply) => reply,
-                Err(err) => return Err(err),
+                Err(err) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(format!("ERR: {}", err).into_bytes())));
+                    return Err(err)
+                },
             };
             if let Resp::Error(err) = reply {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err)));
@@ -691,7 +697,10 @@ where
         for sub_result in res.into_iter() {
             let reply = match sub_result {
                 Ok(reply) => reply,
-                Err(err) => return Err(err),
+                Err(err) => {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(format!("ERR: {}", err).into_bytes())));
+                    return Err(err)
+                },
             };
             match reply {
                 Resp::Error(err) => {
