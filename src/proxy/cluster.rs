@@ -400,7 +400,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
-        gen_cluster_slots_helper(&slot_ranges, migration_states)
+        gen_cluster_slots_helper(&self.name, &slot_ranges, migration_states)
     }
 
     pub fn is_ready(&self) -> bool {
@@ -532,7 +532,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
         &self,
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> Result<Vec<RespVec>, String> {
-        gen_cluster_slots_helper(&self.slot_ranges, migration_states)
+        gen_cluster_slots_helper(&self.name, &self.slot_ranges, migration_states)
     }
 }
 
@@ -679,12 +679,9 @@ fn gen_cluster_nodes_helper(
     local: bool,
 ) -> String {
     let mut cluster_nodes = String::from("");
-    let mut name_seg = format!("{:_<20}", name.to_string());
-    name_seg.truncate(20);
+    let name_seg = gen_cluster_name_seg(name);
     for (addr, ranges) in slot_ranges {
-        let mut addr_hash_seg = format!("{:_<20x}", crc64(0, addr.as_bytes()));
-        addr_hash_seg.truncate(20);
-        let id = format!("{}{}", name_seg, addr_hash_seg);
+        let id = gen_node_id(name_seg.as_str(), addr.as_str());
 
         let mut slot_range_str = String::new();
         let slot_range = ranges
@@ -728,6 +725,20 @@ fn gen_cluster_nodes_helper(
     cluster_nodes
 }
 
+#[inline]
+fn gen_cluster_name_seg(cluster_name: &ClusterName) -> String {
+    let mut name_seg = format!("{:_<20}", cluster_name.to_string());
+    name_seg.truncate(20);
+    name_seg
+}
+
+#[inline]
+fn gen_node_id(cluster_name_seg: &str, addr: &str) -> String {
+    let mut addr_hash_seg = format!("{:_<20x}", crc64(0, addr.as_bytes()));
+    addr_hash_seg.truncate(20);
+    format!("{}{}", cluster_name_seg, addr_hash_seg)
+}
+
 fn should_ignore_slots(
     range: &SlotRange,
     migration_states: &HashMap<RangeList, MigrationState>,
@@ -750,9 +761,12 @@ fn should_ignore_slots(
 }
 
 fn gen_cluster_slots_helper(
+    name: &ClusterName,
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<RangeList, MigrationState>,
 ) -> Result<Vec<RespVec>, String> {
+    let name_seg = gen_cluster_name_seg(name);
+
     let mut slot_range_element = Vec::new();
     for (addr, ranges) in slot_ranges {
         let mut segs = addr.split(':');
@@ -768,9 +782,11 @@ fn gen_cluster_slots_helper(
                 continue;
             }
 
+            let node_id = gen_node_id(name_seg.as_str(), addr.as_str());
             let ip_port_array = Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str(host.as_bytes().to_vec())),
                 Resp::Integer(port.as_bytes().to_vec()),
+                Resp::Bulk(BulkStr::Str(node_id.into_bytes())),
             ]));
 
             for range in slot_range.get_range_list().get_ranges().iter() {
@@ -993,15 +1009,17 @@ mod tests {
 
     #[test]
     fn test_gen_cluster_slots() {
+        let cluster_name = ClusterName::try_from("test_cluster_name").unwrap();
         let m = HashMap::new();
         let slot_ranges = gen_testing_slot_ranges("127.0.0.1:5299");
-        let output = gen_cluster_slots_helper(&slot_ranges, &m).unwrap();
+        let output = gen_cluster_slots_helper(&cluster_name, &slot_ranges, &m).unwrap();
         let slot_range1 = Resp::Arr(Array::Arr(vec![
             Resp::Integer(0.to_string().into_bytes()),
             Resp::Integer(100.to_string().into_bytes()),
             Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
                 Resp::Integer(5299.to_string().into_bytes()),
+                Resp::Bulk(BulkStr::Str(b"test_cluster_name___9f8fca2805923328____".to_vec())),
             ])),
         ]));
         let slot_range2 = Resp::Arr(Array::Arr(vec![
@@ -1010,6 +1028,7 @@ mod tests {
             Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
                 Resp::Integer(5299.to_string().into_bytes()),
+                Resp::Bulk(BulkStr::Str(b"test_cluster_name___9f8fca2805923328____".to_vec())),
             ])),
         ]));
         if output != vec![slot_range2.clone(), slot_range1.clone()] {
@@ -1019,17 +1038,19 @@ mod tests {
 
     #[test]
     fn test_gen_importing_cluster_slots() {
+        let cluster_name = ClusterName::try_from("test_cluster_name").unwrap();
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(false);
-        let output = gen_cluster_slots_helper(&slot_ranges, &m).unwrap();
+        let output = gen_cluster_slots_helper(&cluster_name, &slot_ranges, &m).unwrap();
         assert_eq!(output.len(), 1);
     }
 
     #[test]
     fn test_gen_migrating_cluster_slots() {
+        let cluster_name = ClusterName::try_from("test_cluster_name").unwrap();
         let m = HashMap::new();
         let slot_ranges = gen_testing_migration_slot_ranges(true);
-        let output = gen_cluster_slots_helper(&slot_ranges, &m).unwrap();
+        let output = gen_cluster_slots_helper(&cluster_name, &slot_ranges, &m).unwrap();
         assert_eq!(output.len(), 0);
     }
 
