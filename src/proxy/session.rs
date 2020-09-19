@@ -6,16 +6,15 @@ use super::command::{
 };
 use super::service::ServerProxyConfig;
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
-use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::cluster::ClusterName;
 use crate::protocol::{
     new_simple_packet_codec, BinSafeStr, DecodeError, EncodeError, Resp, RespCodec, RespPacket,
     RespVec,
 };
-use futures::{future, stream, Future, TryFutureExt};
+use futures::task::{Context, Poll};
+use futures::{future, Future, Sink, Stream, TryFutureExt};
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use std::boxed::Box;
-use std::cmp::min;
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::error::Error;
@@ -25,7 +24,6 @@ use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 
@@ -289,104 +287,107 @@ where
 {
     let (encoder, decoder) = new_simple_packet_codec::<Box<RespPacket>, Box<RespPacket>>();
     let (mut writer, reader) = RespCodec::new(encoder, decoder).framed(sock).split();
-    let mut reader = reader
-        .map_err(|e| match e {
-            DecodeError::Io(e) => SessionError::Io(e),
-            DecodeError::InvalidProtocol => SessionError::Canceled,
-        })
-        .try_chunks_timeout(
-            session_batch_buf,
-            Duration::from_nanos(session_batch_min_time as u64),
-            Duration::from_nanos(session_batch_max_time as u64),
-        );
+    let mut reader = reader.map_err(|e| match e {
+        DecodeError::Io(e) => SessionError::Io(e),
+        DecodeError::InvalidProtocol => SessionError::Canceled,
+    });
 
-    let mut reply_receiver_list = Vec::with_capacity(session_batch_buf.get());
-    let mut replies = Vec::with_capacity(session_batch_buf.get());
-    let mut read_buf = VecDeque::with_capacity(session_batch_buf.get());
+    let mut reply_receiver_list =
+        VecDeque::<CmdReplyFuture>::with_capacity(session_batch_buf.get());
+    let mut replies = VecDeque::<Box<RespPacket>>::with_capacity(session_batch_buf.get());
 
-    loop {
-        let reqs = if read_buf.is_empty() {
-            match reader.next().await {
-                Some(reqs) => reqs,
-                None => return Ok(()),
+    future::poll_fn(|cx: &mut Context<'_>| -> Poll<Result<(), SessionError>> {
+        loop {
+            match Pin::new(&mut reader).poll_next(cx) {
+                Poll::Ready(None) => {
+                    info!("Session is closed by peer");
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Ready(Some(req)) => {
+                    let packet = match req {
+                        Ok(packet) => packet,
+                        Err(err) => {
+                            error!("session reader error {:?}", err);
+                            return Poll::Ready(Err(err));
+                        }
+                    };
+                    let cmd = Command::new(packet);
+
+                    let fut = handler.handle_cmd(cmd);
+                    reply_receiver_list.push_back(fut);
+                }
+                Poll::Pending => {
+                    break;
+                }
             }
-        } else {
-            read_buf
-                .drain(..min(read_buf.len(), session_batch_buf.get()))
-                .collect()
+        }
+
+        // For blocking commands, any later command won't run until the blocking commands finish.
+        while let Some(reply_receiver) = reply_receiver_list.front_mut() {
+            match Pin::new(reply_receiver).poll(cx) {
+                Poll::Pending => {
+                    break;
+                }
+                Poll::Ready(res) => {
+                    if reply_receiver_list.pop_front().is_none() {
+                        error!("invalid state when popping reply_receiver_list");
+                        return Poll::Ready(Err(SessionError::InvalidState));
+                    }
+
+                    let packet = match res {
+                        Ok(task_reply) => {
+                            let (request, packet, mut slowlog) = (*task_reply).into_inner();
+                            slowlog.log_event(TaskEvent::WaitDone);
+                            handler.handle_slowlog(request, slowlog);
+                            packet
+                        }
+                        Err(e) => {
+                            let err_msg = format!("Err cmd error {:?}", e);
+                            error!("{}", err_msg);
+                            let resp = Resp::Error(err_msg.into_bytes());
+                            Box::new(RespPacket::from_resp_vec(resp))
+                        }
+                    };
+
+                    replies.push_back(packet);
+                }
+            }
+        }
+
+        let poll_res = loop {
+            match Pin::new(&mut writer).poll_ready(cx) {
+                Poll::Pending => break Poll::Pending,
+                Poll::Ready(Ok(())) => (),
+                Poll::Ready(Err(err)) => break Poll::Ready(Err(err)),
+            }
+
+            match replies.pop_front() {
+                Some(reply) => {
+                    if let Err(err) = Pin::new(&mut writer).start_send(reply) {
+                        break Poll::Ready(Err(err));
+                    }
+                }
+                None => {
+                    // Even we don't call `start_send` this time,
+                    // the former execution of this polling function may have
+                    // a Pending result for poll_flush. We need to flush anyway.
+                    break Pin::new(&mut writer).poll_flush(cx);
+                }
+            };
         };
 
-        for req in reqs.into_iter() {
-            let packet = match req {
-                Ok(packet) => packet,
-                Err(err) => {
-                    error!("session reader error {:?}", err);
-                    return Err(err);
-                }
-            };
-            let cmd = Command::new(packet);
-
-            let fut = handler.handle_cmd(cmd);
-            reply_receiver_list.push(fut);
-        }
-
-        for reply_receiver in reply_receiver_list.drain(..) {
-            let res = {
-                // reply_fut may block forever for some commands, such as BLPOP, BRPOP, BRPOPLPUSH.
-                // Then even the connection is closed, this future won't exit.
-                // We need to select it with tcp stream read to detect closed connection.
-                let mut reply_fut = Some(reply_receiver);
-                let res = loop {
-                    let fut = reply_fut.take().ok_or_else(|| {
-                        error!("session invalid state: cannot get reply_fut.");
-                        SessionError::InvalidState
-                    })?;
-                    match future::select(fut, reader.next()).await {
-                        future::Either::Left((res, read_fut)) => {
-                            let _ = read_fut; // can be dropped without losing any item.
-                            break res;
-                        }
-                        future::Either::Right((read_result, fut)) => {
-                            reply_fut = Some(fut);
-                            match read_result {
-                                Some(reqs) => read_buf.extend(reqs),
-                                None => return Ok(()),
-                            }
-                            continue;
-                        }
-                    }
+        match poll_res {
+            Poll::Pending | Poll::Ready(Ok(())) => Poll::Pending,
+            Poll::Ready(Err(err)) => {
+                let err = match err {
+                    EncodeError::Io(err) => SessionError::Io(err),
+                    EncodeError::NotReady(_) => SessionError::InvalidState,
                 };
-                res.map_err(SessionError::CmdErr)
-            };
-
-            let packet = match res {
-                Ok(task_reply) => {
-                    let (request, packet, mut slowlog) = (*task_reply).into_inner();
-                    slowlog.log_event(TaskEvent::WaitDone);
-                    handler.handle_slowlog(request, slowlog);
-                    packet
-                }
-                Err(e) => {
-                    let err_msg = format!("Err cmd error {:?}", e);
-                    error!("{}", err_msg);
-                    let resp = Resp::Error(err_msg.into_bytes());
-                    Box::new(RespPacket::from_resp_vec(resp))
-                }
-            };
-
-            replies.push(packet);
+                Poll::Ready(Err(err))
+            }
         }
-
-        let mut batch = stream::iter(replies.drain(..)).map(Ok);
-        if let Err(err) = writer.send_all(&mut batch).await {
-            error!("writer error: {}", err);
-            let err = match err {
-                EncodeError::Io(err) => SessionError::Io(err),
-                EncodeError::NotReady(_) => SessionError::InvalidState,
-            };
-            return Err(err);
-        }
-    }
+    })
+    .await
 }
 
 #[derive(Debug)]
