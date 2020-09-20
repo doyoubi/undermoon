@@ -8,16 +8,10 @@ use crate::proxy::command::{new_command_pair, CmdType, Command, TaskReply};
 use crate::proxy::session::{handle_session, CmdHandler, CmdReplyFuture};
 use crate::proxy::slowlog::Slowlog;
 use futures::{FutureExt, StreamExt};
-use std::num::NonZeroUsize;
 use std::str;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-
-const SESSION_CHANNEL_SIZE: usize = 1024;
-const SESSION_BATCH_MIN_TIME: usize = 0;
-const SESSION_BATCH_MAX_TIME: usize = 10000;
-const SESSION_BATCH_BUF: usize = 1;
 
 pub struct ApiService {
     config: Arc<CoordinatorConfig>,
@@ -50,8 +44,6 @@ impl ApiService {
 
         let session_id = AtomicUsize::new(0);
         let config = self.config.clone();
-        let session_batch_buf =
-            NonZeroUsize::new(SESSION_BATCH_BUF).ok_or_else(|| CoordinateError::InvalidConfig)?;
 
         let future_registry = self.future_registry.clone();
 
@@ -78,10 +70,6 @@ impl ApiService {
                     future_registry.clone(),
                 )),
                 sock,
-                SESSION_CHANNEL_SIZE,
-                SESSION_BATCH_MIN_TIME,
-                SESSION_BATCH_MAX_TIME,
-                session_batch_buf,
             );
 
             let desc = format!("session: session_id={} peer={}", curr_session_id, peer);

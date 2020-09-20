@@ -13,14 +13,13 @@ use crate::protocol::{
 };
 use futures::task::{Context, Poll};
 use futures::{future, Future, Sink, Stream, TryFutureExt};
-use futures::{SinkExt, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use std::boxed::Box;
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync;
 use std::sync::Arc;
@@ -274,14 +273,7 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     }
 }
 
-pub async fn handle_session<H>(
-    handler: sync::Arc<H>,
-    sock: TcpStream,
-    _channel_size: usize,
-    session_batch_min_time: usize,
-    session_batch_max_time: usize,
-    session_batch_buf: NonZeroUsize,
-) -> Result<(), SessionError>
+pub async fn handle_session<H>(handler: sync::Arc<H>, sock: TcpStream) -> Result<(), SessionError>
 where
     H: CmdHandler + Send + Sync + 'static,
 {
@@ -292,9 +284,9 @@ where
         DecodeError::InvalidProtocol => SessionError::Canceled,
     });
 
-    let mut reply_receiver_list =
-        VecDeque::<CmdReplyFuture>::with_capacity(session_batch_buf.get());
-    let mut replies = VecDeque::<Box<RespPacket>>::with_capacity(session_batch_buf.get());
+    const SESSION_BATCH_BUF: usize = 64;
+    let mut reply_receiver_list = VecDeque::<CmdReplyFuture>::with_capacity(SESSION_BATCH_BUF);
+    let mut replies = VecDeque::<Box<RespPacket>>::with_capacity(SESSION_BATCH_BUF);
 
     future::poll_fn(|cx: &mut Context<'_>| -> Poll<Result<(), SessionError>> {
         loop {

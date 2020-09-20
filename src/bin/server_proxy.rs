@@ -55,9 +55,6 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     let backend_batch_buf =
         NonZeroUsize::new(s.get::<usize>("backend_batch_buf").unwrap_or_else(|_| 10))
             .ok_or_else(|| "backend_batch_buf")?;
-    let session_batch_buf =
-        NonZeroUsize::new(s.get::<usize>("session_batch_buf").unwrap_or_else(|_| 10))
-            .ok_or_else(|| "session_batch_buf")?;
 
     let mut max_redirections = s.get::<usize>("max_redirections").unwrap_or_else(|_| 0);
     if max_redirections != 0 {
@@ -91,9 +88,6 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
             s.get::<u64>("slowlog_sample_rate").unwrap_or_else(|_| 1000),
         ),
         thread_number,
-        session_channel_size: s
-            .get::<usize>("session_channel_size")
-            .unwrap_or_else(|_| 4096),
         backend_channel_size: s
             .get::<usize>("backend_channel_size")
             .unwrap_or_else(|_| 4096),
@@ -105,13 +99,6 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
             .get::<usize>("backend_batch_max_time")
             .unwrap_or_else(|_| 400_000),
         backend_batch_buf,
-        session_batch_min_time: s
-            .get::<usize>("session_batch_min_time")
-            .unwrap_or_else(|_| 20000),
-        session_batch_max_time: s
-            .get::<usize>("session_batch_max_time")
-            .unwrap_or_else(|_| 400_000),
-        session_batch_buf,
         active_redirection: s
             .get::<bool>("active_redirection")
             .unwrap_or_else(|_| false),

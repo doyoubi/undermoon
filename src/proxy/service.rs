@@ -21,15 +21,11 @@ pub struct ServerProxyConfig {
     pub slowlog_log_slower_than: AtomicI64,
     pub slowlog_sample_rate: AtomicU64,
     pub thread_number: NonZeroUsize,
-    pub session_channel_size: usize,
     pub backend_channel_size: usize,
     pub backend_conn_num: NonZeroUsize,
     pub backend_batch_min_time: usize,
     pub backend_batch_max_time: usize,
     pub backend_batch_buf: NonZeroUsize,
-    pub session_batch_min_time: usize,
-    pub session_batch_max_time: usize,
-    pub session_batch_buf: NonZeroUsize,
     pub active_redirection: bool,
     pub max_redirections: Option<NonZeroUsize>,
     pub default_redirection_address: Option<String>,
@@ -62,7 +58,6 @@ impl ServerProxyConfig {
             "auto_select_cluster" => Ok(self.auto_select_cluster.to_string()),
             "slowlog_len" => Ok(self.slowlog_len.to_string()),
             "thread_number" => Ok(self.thread_number.to_string()),
-            "session_channel_size" => Ok(self.session_channel_size.to_string()),
             "backend_channel_size" => Ok(self.backend_channel_size.to_string()),
             "backend_conn_num" => Ok(self.backend_conn_num.to_string()),
             "slowlog_log_slower_than" => Ok(self.get_slowlog_log_slower_than().to_string()),
@@ -70,9 +65,6 @@ impl ServerProxyConfig {
             "backend_batch_min_time" => Ok(self.backend_batch_min_time.to_string()),
             "backend_batch_max_time" => Ok(self.backend_batch_max_time.to_string()),
             "backend_batch_buf" => Ok(self.backend_batch_buf.to_string()),
-            "session_batch_min_time" => Ok(self.session_batch_min_time.to_string()),
-            "session_batch_max_time" => Ok(self.session_batch_max_time.to_string()),
-            "session_batch_buf" => Ok(self.session_batch_buf.to_string()),
             "active_redirection" => Ok(self.active_redirection.to_string()),
             "max_redirections" => Ok(self
                 .max_redirections
@@ -190,10 +182,6 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                     config.clone(),
                 )),
                 sock,
-                config.session_channel_size,
-                config.session_batch_min_time,
-                config.session_batch_max_time,
-                config.session_batch_buf,
             );
 
             let desc = format!("session: session_id={} peer={}", curr_session_id, peer);
