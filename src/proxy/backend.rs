@@ -1,7 +1,6 @@
 use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::batch::TryChunksTimeoutStreamExt;
 use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
@@ -9,7 +8,8 @@ use crate::protocol::{
 };
 use either::Either;
 use futures::channel::mpsc;
-use futures::{select, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::task::{Context, Poll};
+use futures::{select, future, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use futures_timer::Delay;
 use std::boxed::Box;
 use std::error::Error;
@@ -17,7 +17,6 @@ use std::fmt;
 use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
+use std::collections::VecDeque;
 
 pub type BackendResult<T> = Result<T, BackendError>;
 pub type CmdTaskResult = Result<RespVec, CommandError>;
@@ -257,9 +257,6 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
             rx,
             conn_failed.clone(),
             address,
-            config.backend_batch_min_time,
-            config.backend_batch_max_time,
-            config.backend_batch_buf,
             conn_factory,
         );
         (Self { tx, conn_failed }, handle_backend_fut)
@@ -362,12 +359,9 @@ struct RetryState<T: CmdTask> {
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_backend<H, F>(
     handler: Arc<H>,
-    task_receiver: mpsc::UnboundedReceiver<H::Task>,
+    mut task_receiver: mpsc::UnboundedReceiver<H::Task>,
     conn_failed: Arc<AtomicBool>,
     address: String,
-    backend_batch_min_time: usize,
-    backend_batch_max_time: usize,
-    backend_batch_buf: NonZeroUsize,
     conn_factory: Arc<F>,
 ) -> Result<(), BackendError>
 where
@@ -385,12 +379,6 @@ where
 
     let mut retry_state: Option<RetryState<H::Task>> = None;
 
-    let batch_min_time = Duration::from_nanos(backend_batch_min_time as u64);
-    let batch_max_time = Duration::from_nanos(backend_batch_max_time as u64);
-    let mut task_receiver = task_receiver
-        .try_chunks_timeout(backend_batch_buf, batch_min_time, batch_max_time)
-        .fuse();
-
     loop {
         let (writer, reader) = match conn_factory.create_conn(sock_address).await {
             Ok(conn) => conn,
@@ -402,22 +390,20 @@ where
                 let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
                 loop {
                     let mut tasks_fut = task_receiver.next().fuse();
-                    let tasks_opt = select! {
+                    let task_opt = select! {
                         () = timeout_fut => break,
-                        tasks_opt = tasks_fut => tasks_opt,
+                        task_opt = tasks_fut => task_opt,
                     };
-                    let tasks = match tasks_opt {
-                        Some(tasks) => tasks,
+                    let task = match task_opt {
+                        Some(task) => task,
                         None => {
                             warn!("backend sender is closed. Exit backend connection handling.");
                             return Err(BackendError::Canceled);
                         }
                     };
-                    for task in tasks.into_iter() {
                         task.set_resp_result(Ok(Resp::Error(
                             format!("failed to connect to {}", address).into_bytes(),
                         )))
-                    }
                 }
                 continue;
             }
@@ -429,7 +415,6 @@ where
             reader,
             &mut task_receiver,
             handler.clone(),
-            backend_batch_buf,
             retry_state.take(),
         )
         .await;
@@ -450,71 +435,112 @@ where
 async fn handle_conn<H, S>(
     mut writer: ConnSink<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
     mut reader: ConnStream<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
-    task_receiver: &mut S,
+    mut task_receiver: &mut S,
     handler: Arc<H>,
-    backend_batch_buf: NonZeroUsize,
     mut retry_state_opt: Option<RetryState<H::Task>>,
 ) -> Result<(), (BackendError, Option<RetryState<H::Task>>)>
 where
     H: CmdTaskResultHandler,
-    S: Stream<Item = Vec<H::Task>> + Unpin,
+    S: Stream<Item = H::Task> + Unpin,
 {
-    let mut packets = Vec::with_capacity(backend_batch_buf.get());
+    const BUF_SIZE: usize = 64;
+    let mut tasks = VecDeque::with_capacity(BUF_SIZE);
+    let mut packets = VecDeque::with_capacity(BUF_SIZE);
 
-    loop {
-        let (retry_times_opt, mut tasks) = match retry_state_opt.take() {
-            Some(RetryState { retry_times, tasks }) => (Some(retry_times), tasks),
-            None => {
-                let tasks = match task_receiver.next().await {
-                    Some(tasks) => tasks,
-                    None => return Ok(()),
-                };
-                (None, tasks)
+    future::poll_fn(|cx: &mut Context<'_>| -> Poll<Result<(), (BackendError, Option<RetryState<H::Task>>)>> {
+        let retry_times_opt = match retry_state_opt.take() {
+            Some(RetryState { retry_times, tasks: mut retry_tasks }) => {
+                tasks.extend(retry_tasks.drain(..));
+                Some(retry_times)
             }
+            None => None,
         };
 
-        for task in tasks.iter_mut() {
-            task.log_event(TaskEvent::WritingQueueReceived);
-            packets.push(task.get_packet());
-        }
-
-        let mut batch = stream::iter(packets.drain(..)).map(Ok);
-        let res = writer.send_all(&mut batch).await;
-
-        for task in tasks.iter_mut() {
-            task.log_event(TaskEvent::SentToBackend);
-        }
-
-        if let Err(err) = res {
-            error!("backend write error: {}", err);
-            let retry_state = handle_conn_err(retry_times_opt, tasks, &err);
-            return Err((err, retry_state));
-        }
-
-        let mut tasks_iter = tasks.into_iter();
-        // `while let` will consume ownership.
-        #[allow(clippy::while_let_loop)]
-        loop {
-            let mut task = match tasks_iter.next() {
-                Some(task) => task,
-                None => break,
-            };
-            let packet_res = match reader.next().await {
-                Some(pkt) => pkt,
+        while let Poll::Ready(task_opt) = Pin::new(&mut task_receiver).poll_next(cx) {
+            match task_opt {
+                Some(mut task) => {
+                    task.log_event(TaskEvent::WritingQueueReceived);
+                    packets.push_back(task.get_packet());
+                    tasks.push_back(task);
+                },
                 None => {
-                    error!("Failed to read packet. Connection is closed.");
-                    let mut failed_tasks = vec![task];
-                    failed_tasks.extend(tasks_iter);
-                    let err = BackendError::Io(io::Error::from(io::ErrorKind::BrokenPipe));
-                    let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
-                    return Err((err, retry_state));
+                    info!("backend task_receiver is closed");
+                    return Poll::Ready(Ok(()));
+                }
+            }
+        }
+
+        let write_res = loop {
+            match writer.as_mut().poll_ready(cx) {
+                Poll::Pending => break Ok(()),
+                Poll::Ready(Ok(())) => (),
+                Poll::Ready(Err(err)) => break Err(err),
+            }
+
+            match packets.pop_front() {
+                Some(packet) => {
+                    if let Err(err) = writer.as_mut().start_send(packet) {
+                        break Err(err);
+                    }
+
+                    let task_index_opt = tasks.len().checked_sub(packets.len() + 1);
+                    match task_index_opt.and_then(|index| tasks.get_mut(index)) {
+                        Some(task) => task.log_event(TaskEvent::SentToBackend),
+                        None => {
+                            error!("InvalidState: invalid task index {} - {} - 1", tasks.len(), packets.len());
+                            break Err(BackendError::InvalidState);
+                        }
+                    }
+                }
+                None => {
+                    // Even we don't call `start_send` this time,
+                    // the former execution of this polling function may have
+                    // a Pending result for poll_flush. We need to flush anyway.
+                    match writer.as_mut().poll_flush(cx) {
+                        Poll::Pending | Poll::Ready(Ok(())) => break Ok(()),
+                        Poll::Ready(Err(err)) => break Err(err),
+                    }
                 }
             };
+        };
 
+        if let Err(err) = write_res {
+            error!("backend write error: {}", err);
+            let failed_tasks = tasks.drain(..).collect();
+            let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
+            return Poll::Ready(Err((err, retry_state)));
+        }
+
+        let read_res = loop {
+            let packet_res = match Pin::new(&mut reader).poll_next(cx) {
+                Poll::Ready(None) => {
+                    info!("backend is closed by peer");
+                    break Err(BackendError::Canceled);
+                }
+                Poll::Ready(Some(packet_res)) => packet_res,
+                Poll::Pending => break Ok(()),
+            };
+
+            let mut task = match tasks.pop_front() {
+                Some(task) => task,
+                None => {
+                    error!("Invalid state, can't get task when reading");
+                    break Err(BackendError::InvalidState);
+                }
+            };
             task.log_event(TaskEvent::ReceivedFromBackend);
             handler.handle_task(task, packet_res);
+        };
+
+        if let Err(err) = read_res {
+            error!("Failed to read packet. Connection is closed.");
+            let failed_tasks = tasks.drain(..).collect();
+            let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
+            return Poll::Ready(Err((err, retry_state)));
         }
-    }
+
+        Poll::Pending
+    }).await
 }
 
 fn handle_conn_err<T: CmdTask>(
