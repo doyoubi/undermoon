@@ -21,11 +21,7 @@ pub struct ServerProxyConfig {
     pub slowlog_log_slower_than: AtomicI64,
     pub slowlog_sample_rate: AtomicU64,
     pub thread_number: NonZeroUsize,
-    pub backend_channel_size: usize,
     pub backend_conn_num: NonZeroUsize,
-    pub backend_batch_min_time: usize,
-    pub backend_batch_max_time: usize,
-    pub backend_batch_buf: NonZeroUsize,
     pub active_redirection: bool,
     pub max_redirections: Option<NonZeroUsize>,
     pub default_redirection_address: Option<String>,
@@ -58,13 +54,9 @@ impl ServerProxyConfig {
             "auto_select_cluster" => Ok(self.auto_select_cluster.to_string()),
             "slowlog_len" => Ok(self.slowlog_len.to_string()),
             "thread_number" => Ok(self.thread_number.to_string()),
-            "backend_channel_size" => Ok(self.backend_channel_size.to_string()),
             "backend_conn_num" => Ok(self.backend_conn_num.to_string()),
             "slowlog_log_slower_than" => Ok(self.get_slowlog_log_slower_than().to_string()),
             "slowlog_sample_rate" => Ok(self.get_slowlog_sample_rate().to_string()),
-            "backend_batch_min_time" => Ok(self.backend_batch_min_time.to_string()),
-            "backend_batch_max_time" => Ok(self.backend_batch_max_time.to_string()),
-            "backend_batch_buf" => Ok(self.backend_batch_buf.to_string()),
             "active_redirection" => Ok(self.active_redirection.to_string()),
             "max_redirections" => Ok(self
                 .max_redirections
@@ -81,8 +73,6 @@ impl ServerProxyConfig {
             "auto_select_cluster" => Err(ConfigError::ReadonlyField),
             "slowlog_len" => Err(ConfigError::ReadonlyField),
             "thread_number" => Err(ConfigError::ReadonlyField),
-            "session_channel_size" => Err(ConfigError::ReadonlyField),
-            "backend_channel_size" => Err(ConfigError::ReadonlyField),
             "backend_conn_num" => Err(ConfigError::ReadonlyField),
             "slowlog_log_slower_than" => {
                 let int_value = value
@@ -98,12 +88,6 @@ impl ServerProxyConfig {
                 self.set_slowlog_sample_rate(int_value);
                 Ok(())
             }
-            "backend_batch_max_time" => Err(ConfigError::ReadonlyField),
-            "backend_batch_min_time" => Err(ConfigError::ReadonlyField),
-            "backend_batch_buf" => Err(ConfigError::ReadonlyField),
-            "session_batch_min_time" => Err(ConfigError::ReadonlyField),
-            "session_batch_max_time" => Err(ConfigError::ReadonlyField),
-            "session_batch_buf" => Err(ConfigError::ReadonlyField),
             "active_redirection" => Err(ConfigError::ReadonlyField),
             "max_redirections" => Err(ConfigError::ReadonlyField),
             _ => Err(ConfigError::FieldNotFound),
