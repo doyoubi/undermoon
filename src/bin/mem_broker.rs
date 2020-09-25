@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use undermoon::broker::{
     configure_app, JsonFileStorage, JsonMetaReplicator, MemBrokerConfig, MemBrokerService,
-    MetaStorage, MetaStoreError, MetaSyncError,
+    MetaPersistence, MetaStoreError, MetaSyncError,
 };
 
 #[global_allocator]

@@ -439,7 +439,7 @@ impl<'a> MetaStoreUpdate<'a> {
         &mut self,
         cluster_name: String,
     ) -> Result<(), MetaStoreError> {
-        match self.audo_delete_free_nodes(cluster_name) {
+        match self.auto_delete_free_nodes(cluster_name) {
             Ok(()) => Ok(()),
             Err(err) => match err {
                 MetaStoreError::MigrationRunning | MetaStoreError::FreeNodeNotFound => Ok(()),
@@ -448,7 +448,7 @@ impl<'a> MetaStoreUpdate<'a> {
         }
     }
 
-    pub fn audo_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+    pub fn auto_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
         let new_epoch = self.store.bump_global_epoch();

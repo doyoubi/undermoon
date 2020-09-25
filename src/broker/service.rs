@@ -1,4 +1,4 @@
-use super::persistence::{MetaStorage, MetaSyncError};
+use super::persistence::{MetaPersistence, MetaSyncError};
 use super::replication::MetaReplicator;
 use super::resource::ResourceChecker;
 use super::store::{ClusterInfo, MetaStore, MetaStoreError, ScaleOp, CHUNK_HALF_NODE_NUM};
@@ -94,7 +94,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 "/clusters/nodes/{cluster_name}",
                 web::put().to(auto_scale_up_nodes),
             )
-            .route("/clusters/free_nodes/{cluster_name}", web::delete().to(audo_delete_free_nodes))
+            .route("/clusters/free_nodes/{cluster_name}", web::delete().to(auto_delete_free_nodes))
             .route(
                 "/clusters/migrations/shrink/{cluster_name}/{node_number}",
                 web::post().to(migrate_slots_to_scale_down),
@@ -152,7 +152,7 @@ pub struct MemBrokerConfigPayload {
 pub struct MemBrokerService {
     config: MemBrokerConfig,
     store: Arc<RwLock<MetaStore>>,
-    meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
+    meta_storage: Arc<dyn MetaPersistence + Send + Sync + 'static>,
     meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
     scale_lock: AtomicLock,
 }
@@ -160,7 +160,7 @@ pub struct MemBrokerService {
 impl MemBrokerService {
     pub fn new(
         config: MemBrokerConfig,
-        meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
+        meta_storage: Arc<dyn MetaPersistence + Send + Sync + 'static>,
         meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
         last_meta_store: Option<MetaStore>,
     ) -> Result<Self, MetaStoreError> {
@@ -320,7 +320,7 @@ impl MemBrokerService {
             .auto_scale_up_nodes(cluster_name, cluster_node_num)
     }
 
-    pub fn audo_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+    pub fn auto_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         let _guard = self
             .scale_lock
             .lock()
@@ -328,8 +328,8 @@ impl MemBrokerService {
 
         self.store
             .write()
-            .expect("MemBrokerService::audo_delete_free_nodes")
-            .audo_delete_free_nodes(cluster_name)
+            .expect("MemBrokerService::auto_delete_free_nodes")
+            .auto_delete_free_nodes(cluster_name)
     }
 
     pub fn change_config(
@@ -690,11 +690,11 @@ async fn auto_add_nodes(
     Ok(res)
 }
 
-async fn audo_delete_free_nodes(
+async fn auto_delete_free_nodes(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    let res = state.audo_delete_free_nodes(cluster_name).map(|()| "")?;
+    let res = state.auto_delete_free_nodes(cluster_name).map(|()| "")?;
     state.trigger_update().await?;
     Ok(res)
 }

@@ -12,7 +12,7 @@ use tokio::fs::{rename, File};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-pub trait MetaStorage {
+pub trait MetaPersistence {
     fn store<'s>(
         &'s self,
         store: Arc<RwLock<MetaStore>>,
@@ -46,7 +46,7 @@ impl JsonFileStorage {
     }
 }
 
-impl MetaStorage for JsonFileStorage {
+impl MetaPersistence for JsonFileStorage {
     fn store<'s>(
         &'s self,
         store: Arc<RwLock<MetaStore>>,

@@ -1019,7 +1019,9 @@ mod tests {
             Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
                 Resp::Integer(5299.to_string().into_bytes()),
-                Resp::Bulk(BulkStr::Str(b"test_cluster_name___9f8fca2805923328____".to_vec())),
+                Resp::Bulk(BulkStr::Str(
+                    b"test_cluster_name___9f8fca2805923328____".to_vec(),
+                )),
             ])),
         ]));
         let slot_range2 = Resp::Arr(Array::Arr(vec![
@@ -1028,7 +1030,9 @@ mod tests {
             Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
                 Resp::Integer(5299.to_string().into_bytes()),
-                Resp::Bulk(BulkStr::Str(b"test_cluster_name___9f8fca2805923328____".to_vec())),
+                Resp::Bulk(BulkStr::Str(
+                    b"test_cluster_name___9f8fca2805923328____".to_vec(),
+                )),
             ])),
         ]));
         if output != vec![slot_range2.clone(), slot_range1.clone()] {

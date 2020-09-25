@@ -566,7 +566,7 @@ where
                 Err(err) => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(format!("ERR: {}", err).into_bytes())));
                     return Err(err);
-                },
+                }
             };
             if let Resp::Error(err) = &reply {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err.clone())));
@@ -635,8 +635,8 @@ where
                 Ok(reply) => reply,
                 Err(err) => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(format!("ERR: {}", err).into_bytes())));
-                    return Err(err)
-                },
+                    return Err(err);
+                }
             };
             if let Resp::Error(err) = reply {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err)));
@@ -699,8 +699,8 @@ where
                 Ok(reply) => reply,
                 Err(err) => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(format!("ERR: {}", err).into_bytes())));
-                    return Err(err)
-                },
+                    return Err(err);
+                }
             };
             match reply {
                 Resp::Error(err) => {

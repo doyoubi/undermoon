@@ -367,7 +367,7 @@ mod tests {
             .unwrap();
         check_cluster_proxy_order(&cluster);
 
-        store.audo_delete_free_nodes(cluster_name.clone()).unwrap();
+        store.auto_delete_free_nodes(cluster_name.clone()).unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
         assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
