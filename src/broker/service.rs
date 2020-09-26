@@ -50,8 +50,14 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                             Err(err) => info!("{} err {}", req_str, err)
                         }
                     } else if let Some(service) = service {
-                        if let Err(invalid_meta_store) = service.check_metadata().await {
-                            error!("Invalid meta store: {:?}", invalid_meta_store);
+                        match service.check_metadata().await {
+                            Err(err) => {
+                                error!("failed to check metadata: {:?}", err);
+                            }
+                            Ok(None) => (),
+                            Ok(Some(invalid_meta_store)) => {
+                                error!("Invalid meta store: {:?}", invalid_meta_store);
+                            }
                         }
                     }
                     res
@@ -483,7 +489,7 @@ impl MemBrokerService {
         Ok(failed_addresses)
     }
 
-    pub async fn check_metadata(&self) -> Result<(), MetaStore> {
+    pub async fn check_metadata(&self) -> Result<Option<MetaStore>, MetaStoreError> {
         self.storage.check_metadata().await
     }
 }

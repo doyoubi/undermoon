@@ -104,7 +104,7 @@ pub trait MetaStorage: Send + Sync + 'static {
     async fn get_global_epoch(&self) -> Result<u64, MetaStoreError>;
     async fn recover_epoch(&self, exsting_largest_epoch: u64) -> Result<(), MetaStoreError>;
     async fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError>;
-    async fn check_metadata(&self) -> Result<(), MetaStore>;
+    async fn check_metadata(&self) -> Result<Option<MetaStore>, MetaStoreError>;
 }
 
 pub struct MemoryStorage {
@@ -406,10 +406,15 @@ impl MetaStorage for MemoryStorage {
             .force_bump_all_epoch(new_epoch)
     }
 
-    async fn check_metadata(&self) -> Result<(), MetaStore> {
-        self.store
+    async fn check_metadata(&self) -> Result<Option<MetaStore>, MetaStoreError> {
+        let check_res = self
+            .store
             .read()
             .expect("MemoryStorage::check_metadata")
-            .check()
+            .check();
+        match check_res {
+            Ok(()) => Ok(None),
+            Err(store) => Ok(Some(store)),
+        }
     }
 }
