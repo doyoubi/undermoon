@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-pub trait MetaStorage {
+pub trait MetaStorage: Send + Sync + 'static {
     fn get_all_metadata<'s>(
         &'s self,
     ) -> Pin<Box<dyn Future<Output = Result<MetaStore, MetaStoreError>> + Send + 's>>;
@@ -128,7 +128,7 @@ pub trait MetaStorage {
         &'s self,
         proxy_address: String,
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn get_epoch<'s>(
+    fn get_global_epoch<'s>(
         &'s self,
     ) -> Pin<Box<dyn Future<Output = Result<u64, MetaStoreError>> + Send + 's>>;
     fn recover_epoch<'s>(
@@ -139,10 +139,19 @@ pub trait MetaStorage {
         &'s self,
         new_epoch: u64,
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
+    fn check_metadata<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStore>> + Send + 's>>;
 }
 
 pub struct MemoryStorage {
     store: Arc<RwLock<MetaStore>>,
+}
+
+impl MemoryStorage {
+    pub fn new(store: Arc<RwLock<MetaStore>>) -> Self {
+        Self { store }
+    }
 }
 
 impl MetaStorage for MemoryStorage {
@@ -466,13 +475,13 @@ impl MetaStorage for MemoryStorage {
         Box::pin(future::ready(res))
     }
 
-    fn get_epoch<'s>(
+    fn get_global_epoch<'s>(
         &'s self,
     ) -> Pin<Box<dyn Future<Output = Result<u64, MetaStoreError>> + Send + 's>> {
         let epoch = self
             .store
             .read()
-            .expect("MemoryStorage::get_epoch")
+            .expect("MemoryStorage::get_global_epoch")
             .get_global_epoch();
         Box::pin(future::ok(epoch))
     }
@@ -497,6 +506,17 @@ impl MetaStorage for MemoryStorage {
             .write()
             .expect("MemoryStorage::force_bump_all_epoch")
             .force_bump_all_epoch(new_epoch);
+        Box::pin(future::ready(res))
+    }
+
+    fn check_metadata<'s>(
+        &'s self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStore>> + Send + 's>> {
+        let res = self
+            .store
+            .read()
+            .expect("MemoryStorage::check_metadata")
+            .check();
         Box::pin(future::ready(res))
     }
 }
