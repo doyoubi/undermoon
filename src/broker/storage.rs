@@ -2,146 +2,109 @@ use super::store::{ClusterInfo, MetaStoreError};
 use super::store::{MetaStore, NODES_PER_PROXY};
 use crate::broker::store::ScaleOp;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
-use futures::{future, Future};
+use async_trait::async_trait;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
+#[async_trait]
 pub trait MetaStorage: Send + Sync + 'static {
-    fn get_all_metadata<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<MetaStore, MetaStoreError>> + Send + 's>>;
-    fn restore_metadata<'s>(
-        &'s self,
-        meta_store: MetaStore,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn get_cluster_names<'s>(
-        &'s self,
+    async fn get_all_metadata(&self) -> Result<MetaStore, MetaStoreError>;
+    async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError>;
+    async fn get_cluster_names(
+        &self,
         offset: Option<usize>,
         limit: Option<usize>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<ClusterName>, MetaStoreError>> + Send + 's>>;
-    fn get_cluster_by_name<'s>(
-        &'s self,
+    ) -> Result<Vec<ClusterName>, MetaStoreError>;
+    async fn get_cluster_by_name(
+        &self,
         name: &str,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaStoreError>> + Send + 's>>;
-    fn get_proxy_addresses<'s>(
-        &'s self,
+    ) -> Result<Option<Cluster>, MetaStoreError>;
+    async fn get_proxy_addresses(
+        &self,
         offset: Option<usize>,
         limit: Option<usize>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, MetaStoreError>> + Send + 's>>;
-    fn get_proxy_by_address<'s>(
-        &'s self,
+    ) -> Result<Vec<String>, MetaStoreError>;
+    async fn get_proxy_by_address(
+        &self,
         address: &str,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaStoreError>> + Send + 's>>;
-    fn get_failures<'s>(
-        &'s self,
-        falure_ttl: chrono::Duration,
+    ) -> Result<Option<Proxy>, MetaStoreError>;
+    async fn get_failures(
+        &self,
+        failure_ttl: chrono::Duration,
         failure_quorum: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, MetaStoreError>> + Send + 's>>;
-    fn add_failure<'s>(
-        &'s self,
-        address: String,
-        reporter_id: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn replace_failed_proxy<'s>(
-        &'s self,
+    ) -> Result<Vec<String>, MetaStoreError>;
+    async fn add_failure(&self, address: String, reporter_id: String)
+        -> Result<(), MetaStoreError>;
+    async fn replace_failed_proxy(
+        &self,
         failed_proxy_address: String,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaStoreError>> + Send + 's>>;
-    fn commit_migration<'s>(
-        &'s self,
+    ) -> Result<Option<Proxy>, MetaStoreError>;
+    async fn commit_migration(
+        &self,
         task: MigrationTaskMeta,
         clear_free_nodes: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn get_failed_proxies<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, MetaStoreError>> + Send + 's>>;
-    fn get_cluster_info_by_name<'s>(
-        &'s self,
+    ) -> Result<(), MetaStoreError>;
+    async fn get_failed_proxies(&self) -> Result<Vec<String>, MetaStoreError>;
+    async fn get_cluster_info_by_name(
+        &self,
         cluster_name: &str,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<ClusterInfo>, MetaStoreError>> + Send + 's>>;
-    fn add_cluster<'s>(
-        &'s self,
+    ) -> Result<Option<ClusterInfo>, MetaStoreError>;
+    async fn add_cluster(
+        &self,
         cluster_name: String,
         node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn remove_cluster<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn auto_add_node<'s>(
-        &'s self,
+    ) -> Result<(), MetaStoreError>;
+    async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError>;
+    async fn auto_add_node(
+        &self,
         cluster_name: String,
         node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Node>, MetaStoreError>> + Send + 's>>;
-    fn auto_scale_up_nodes<'s>(
-        &'s self,
+    ) -> Result<Vec<Node>, MetaStoreError>;
+    async fn auto_scale_up_nodes(
+        &self,
         cluster_name: String,
         cluster_node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Node>, MetaStoreError>> + Send + 's>>;
-    fn auto_delete_free_nodes<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn migrate_slots_to_scale_down<'s>(
-        &'s self,
+    ) -> Result<Vec<Node>, MetaStoreError>;
+    async fn auto_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError>;
+    async fn migrate_slots_to_scale_down(
+        &self,
         cluster_name: String,
         new_node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn migrate_slots<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
+    ) -> Result<(), MetaStoreError>;
+    async fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError>;
     #[allow(clippy::type_complexity)]
-    fn auto_change_node_number<'s>(
-        &'s self,
+    async fn auto_change_node_number(
+        &self,
         cluster_name: String,
         expected_num: usize,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<(ScaleOp, Vec<String>, u64), MetaStoreError>> + Send + 's>,
-    >;
-    fn auto_scale_out_node_number<'s>(
-        &'s self,
+    ) -> Result<(ScaleOp, Vec<String>, u64), MetaStoreError>;
+    async fn auto_scale_out_node_number(
+        &self,
         cluster_name: String,
         expected_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn change_config<'s>(
-        &'s self,
+    ) -> Result<(), MetaStoreError>;
+    async fn change_config(
+        &self,
         cluster_name: String,
         config: HashMap<String, String>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn balance_masters<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn add_proxy<'s>(
-        &'s self,
+    ) -> Result<(), MetaStoreError>;
+    async fn balance_masters(&self, cluster_name: String) -> Result<(), MetaStoreError>;
+    async fn add_proxy(
+        &self,
         proxy_address: String,
         nodes: [String; NODES_PER_PROXY],
         host: Option<String>,
         index: Option<usize>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn remove_proxy<'s>(
-        &'s self,
-        proxy_address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn get_global_epoch<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<u64, MetaStoreError>> + Send + 's>>;
-    fn recover_epoch<'s>(
-        &'s self,
-        exsting_largest_epoch: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn force_bump_all_epoch<'s>(
-        &'s self,
-        new_epoch: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>>;
-    fn check_metadata<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStore>> + Send + 's>>;
+    ) -> Result<(), MetaStoreError>;
+    async fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError>;
+    async fn get_global_epoch(&self) -> Result<u64, MetaStoreError>;
+    async fn recover_epoch(&self, exsting_largest_epoch: u64) -> Result<(), MetaStoreError>;
+    async fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError>;
+    async fn check_metadata(&self) -> Result<(), MetaStore>;
 }
 
 pub struct MemoryStorage {
@@ -154,369 +117,299 @@ impl MemoryStorage {
     }
 }
 
+#[async_trait]
 impl MetaStorage for MemoryStorage {
-    fn get_all_metadata<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<MetaStore, MetaStoreError>> + Send + 's>> {
-        let res = self
+    async fn get_all_metadata(&self) -> Result<MetaStore, MetaStoreError> {
+        let store = self
             .store
             .read()
             .expect("MemoryStorage::get_all_data")
             .clone();
-        Box::pin(future::ok(res))
+        Ok(store)
     }
 
-    fn restore_metadata<'s>(
-        &'s self,
-        meta_store: MetaStore,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::restore_metadata")
-            .restore(meta_store);
-        Box::pin(future::ready(res))
+            .restore(meta_store)
     }
 
-    fn get_cluster_names<'s>(
-        &'s self,
+    async fn get_cluster_names(
+        &self,
         offset: Option<usize>,
         limit: Option<usize>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<ClusterName>, MetaStoreError>> + Send + 's>> {
+    ) -> Result<Vec<ClusterName>, MetaStoreError> {
         let names = self
             .store
             .read()
             .expect("MemoryStorage::get_cluster_names")
             .get_cluster_names_with_pagination(offset, limit);
-        Box::pin(future::ok(names))
+        Ok(names)
     }
 
-    fn get_cluster_by_name<'s>(
-        &'s self,
+    async fn get_cluster_by_name(
+        &self,
         name: &str,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Cluster>, MetaStoreError>> + Send + 's>> {
+    ) -> Result<Option<Cluster>, MetaStoreError> {
         let cluster = self
             .store
             .read()
             .expect("MemoryStorage::get_cluster_by_name")
             .get_cluster_by_name(name, migration_limit);
-        Box::pin(future::ok(cluster))
+        Ok(cluster)
     }
 
-    fn get_proxy_addresses<'s>(
-        &'s self,
+    async fn get_proxy_addresses(
+        &self,
         offset: Option<usize>,
         limit: Option<usize>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, MetaStoreError>> + Send + 's>> {
+    ) -> Result<Vec<String>, MetaStoreError> {
         let addresses = self
             .store
             .read()
             .expect("MemoryStorage::get_proxy_addresses")
             .get_proxies_with_pagination(offset, limit);
-        Box::pin(future::ok(addresses))
+        Ok(addresses)
     }
 
-    fn get_proxy_by_address<'s>(
-        &'s self,
+    async fn get_proxy_by_address(
+        &self,
         address: &str,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaStoreError>> + Send + 's>> {
+    ) -> Result<Option<Proxy>, MetaStoreError> {
         let proxy = self
             .store
             .read()
             .expect("MemoryStorage::get_proxy_by_address")
             .get_proxy_by_address(address, migration_limit);
-        Box::pin(future::ok(proxy))
+        Ok(proxy)
     }
 
-    fn get_failures<'s>(
-        &'s self,
+    async fn get_failures(
+        &self,
         failure_ttl: chrono::Duration,
         failure_quorum: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, MetaStoreError>> + Send + 's>> {
+    ) -> Result<Vec<String>, MetaStoreError> {
         let failures = self
             .store
             .write()
             .expect("MemoryStorage::get_failures")
             .get_failures(failure_ttl, failure_quorum);
-        Box::pin(future::ok(failures))
+        Ok(failures)
     }
 
-    fn add_failure<'s>(
-        &'s self,
+    async fn add_failure(
+        &self,
         address: String,
         reporter_id: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
+    ) -> Result<(), MetaStoreError> {
         self.store
             .write()
             .expect("MemoryStorage::add_failure")
             .add_failure(address, reporter_id);
-        Box::pin(future::ok(()))
+        Ok(())
     }
 
-    fn replace_failed_proxy<'s>(
-        &'s self,
+    async fn replace_failed_proxy(
+        &self,
         failed_proxy_address: String,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Proxy>, MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<Option<Proxy>, MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::replace_failed_node")
-            .replace_failed_proxy(failed_proxy_address, migration_limit);
-        Box::pin(future::ready(res))
+            .replace_failed_proxy(failed_proxy_address, migration_limit)
     }
 
-    fn commit_migration<'s>(
-        &'s self,
+    async fn commit_migration(
+        &self,
         task: MigrationTaskMeta,
         clear_free_nodes: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::commit_migration")
-            .commit_migration(task, clear_free_nodes);
-        Box::pin(future::ready(res))
+            .commit_migration(task, clear_free_nodes)
     }
 
-    fn get_failed_proxies<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, MetaStoreError>> + Send + 's>> {
+    async fn get_failed_proxies(&self) -> Result<Vec<String>, MetaStoreError> {
         let failures = self
             .store
             .read()
             .expect("MemoryStorage::get_failed_proxies")
             .get_failed_proxies();
-        Box::pin(future::ok(failures))
+        Ok(failures)
     }
 
-    fn get_cluster_info_by_name<'s>(
-        &'s self,
+    async fn get_cluster_info_by_name(
+        &self,
         cluster_name: &str,
         migration_limit: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<ClusterInfo>, MetaStoreError>> + Send + 's>>
-    {
+    ) -> Result<Option<ClusterInfo>, MetaStoreError> {
         let cluster = self
             .store
             .read()
             .expect("MemoryStorage::get_cluster_info_by_name")
             .get_cluster_info_by_name(cluster_name, migration_limit);
-        Box::pin(future::ok(cluster))
+        Ok(cluster)
     }
 
-    fn add_cluster<'s>(
-        &'s self,
+    async fn add_cluster(
+        &self,
         cluster_name: String,
         node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::add_cluster")
-            .add_cluster(cluster_name, node_num);
-        Box::pin(future::ready(res))
+            .add_cluster(cluster_name, node_num)
     }
 
-    fn remove_cluster<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::remove_cluster")
-            .remove_cluster(cluster_name);
-        Box::pin(future::ready(res))
+            .remove_cluster(cluster_name)
     }
 
-    fn auto_add_node<'s>(
-        &'s self,
+    async fn auto_add_node(
+        &self,
         cluster_name: String,
         node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Node>, MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<Vec<Node>, MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::auto_add_node")
-            .auto_add_nodes(cluster_name, node_num);
-        Box::pin(future::ready(res))
+            .auto_add_nodes(cluster_name, node_num)
     }
 
-    fn auto_scale_up_nodes<'s>(
-        &'s self,
+    async fn auto_scale_up_nodes(
+        &self,
         cluster_name: String,
         cluster_node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Node>, MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<Vec<Node>, MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::auto_scale_up_nodes")
-            .auto_scale_up_nodes(cluster_name, cluster_node_num);
-        Box::pin(future::ready(res))
+            .auto_scale_up_nodes(cluster_name, cluster_node_num)
     }
 
-    fn auto_delete_free_nodes<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    async fn auto_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::auto_delete_free_nodes")
-            .auto_delete_free_nodes(cluster_name);
-        Box::pin(future::ready(res))
+            .auto_delete_free_nodes(cluster_name)
     }
 
-    fn migrate_slots_to_scale_down<'s>(
-        &'s self,
+    async fn migrate_slots_to_scale_down(
+        &self,
         cluster_name: String,
         new_node_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::migrate_slots_to_scale_down")
-            .migrate_slots_to_scale_down(cluster_name, new_node_num);
-        Box::pin(future::ready(res))
+            .migrate_slots_to_scale_down(cluster_name, new_node_num)
     }
 
-    fn migrate_slots<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    async fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::migrate_slots")
-            .migrate_slots(cluster_name);
-        Box::pin(future::ready(res))
+            .migrate_slots(cluster_name)
     }
 
     #[allow(clippy::type_complexity)]
-    fn auto_change_node_number<'s>(
-        &'s self,
+    async fn auto_change_node_number(
+        &self,
         cluster_name: String,
         expected_num: usize,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<(ScaleOp, Vec<String>, u64), MetaStoreError>> + Send + 's>,
-    > {
-        let res = self
-            .store
+    ) -> Result<(ScaleOp, Vec<String>, u64), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::auto_scale_node_number")
-            .auto_change_node_number(cluster_name, expected_num);
-        Box::pin(future::ready(res))
+            .auto_change_node_number(cluster_name, expected_num)
     }
 
-    fn auto_scale_out_node_number<'s>(
-        &'s self,
+    async fn auto_scale_out_node_number(
+        &self,
         cluster_name: String,
         expected_num: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::auto_scale_node_number")
-            .auto_scale_out_node_number(cluster_name, expected_num);
-        Box::pin(future::ready(res))
+            .auto_scale_out_node_number(cluster_name, expected_num)
     }
 
-    fn change_config<'s>(
-        &'s self,
+    async fn change_config(
+        &self,
         cluster_name: String,
         config: HashMap<String, String>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::change_config")
-            .change_config(cluster_name, config);
-        Box::pin(future::ready(res))
+            .change_config(cluster_name, config)
     }
 
-    fn balance_masters<'s>(
-        &'s self,
-        cluster_name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    async fn balance_masters(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::balance_masters")
-            .balance_masters(cluster_name);
-        Box::pin(future::ready(res))
+            .balance_masters(cluster_name)
     }
 
-    fn add_proxy<'s>(
-        &'s self,
+    async fn add_proxy(
+        &self,
         proxy_address: String,
         nodes: [String; NODES_PER_PROXY],
         host: Option<String>,
         index: Option<usize>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    ) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::add_proxy")
-            .add_proxy(proxy_address, nodes, host, index);
-        Box::pin(future::ready(res))
+            .add_proxy(proxy_address, nodes, host, index)
     }
 
-    fn remove_proxy<'s>(
-        &'s self,
-        proxy_address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    async fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::remove_proxy")
-            .remove_proxy(proxy_address);
-        Box::pin(future::ready(res))
+            .remove_proxy(proxy_address)
     }
 
-    fn get_global_epoch<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<u64, MetaStoreError>> + Send + 's>> {
+    async fn get_global_epoch(&self) -> Result<u64, MetaStoreError> {
         let epoch = self
             .store
             .read()
             .expect("MemoryStorage::get_global_epoch")
             .get_global_epoch();
-        Box::pin(future::ok(epoch))
+        Ok(epoch)
     }
 
-    fn recover_epoch<'s>(
-        &'s self,
-        exsting_largest_epoch: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
+    async fn recover_epoch(&self, exsting_largest_epoch: u64) -> Result<(), MetaStoreError> {
         self.store
             .write()
             .expect("MemoryStorage::recover_epoch")
             .recover_epoch(exsting_largest_epoch + 1);
-        Box::pin(future::ok(()))
+        Ok(())
     }
 
-    fn force_bump_all_epoch<'s>(
-        &'s self,
-        new_epoch: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStoreError>> + Send + 's>> {
-        let res = self
-            .store
+    async fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError> {
+        self.store
             .write()
             .expect("MemoryStorage::force_bump_all_epoch")
-            .force_bump_all_epoch(new_epoch);
-        Box::pin(future::ready(res))
+            .force_bump_all_epoch(new_epoch)
     }
 
-    fn check_metadata<'s>(
-        &'s self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), MetaStore>> + Send + 's>> {
-        let res = self
-            .store
+    async fn check_metadata(&self) -> Result<(), MetaStore> {
+        self.store
             .read()
             .expect("MemoryStorage::check_metadata")
-            .check();
-        Box::pin(future::ready(res))
+            .check()
     }
 }

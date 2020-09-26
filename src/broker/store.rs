@@ -652,6 +652,8 @@ pub enum MetaStoreError {
     OneClusterAlreadyExisted,
     ProxyNotSync,
     NodeNumberChanging,
+    External,
+    Retry,
 }
 
 impl MetaStoreError {
@@ -684,6 +686,8 @@ impl MetaStoreError {
             Self::OneClusterAlreadyExisted => "ONE_CLUSTER_ALREADY_EXISTED",
             Self::ProxyNotSync => "PROXY_NOT_SYNC",
             Self::NodeNumberChanging => "NODE_NUMBER_CHANGING",
+            Self::External => "EXTERNAL",
+            Self::Retry => "RETRY",
         }
     }
 }

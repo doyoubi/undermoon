@@ -843,6 +843,8 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::OneClusterAlreadyExisted => http::StatusCode::CONFLICT,
             MetaStoreError::ProxyNotSync => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::NodeNumberChanging => http::StatusCode::CONFLICT,
+            MetaStoreError::External => http::StatusCode::INTERNAL_SERVER_ERROR,
+            MetaStoreError::Retry => http::StatusCode::CONFLICT,
         }
     }
 
