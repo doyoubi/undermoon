@@ -83,13 +83,6 @@ impl ExternalHttpStorage {
         }
     }
 
-    async fn get_external_store_and_refresh_cache(&self) -> Result<ExternalStore, MetaStoreError> {
-        let external_store = self.get_external_store().await?;
-        self.cached_store
-            .swap(Arc::new(external_store.store.clone()));
-        Ok(external_store)
-    }
-
     async fn update_external_store(
         &self,
         external_store: ExternalStore,
@@ -98,7 +91,7 @@ impl ExternalHttpStorage {
         // Request: ExternalStore json
         // Response:
         //     HTTP 200 for success
-        //     HTTP 400 for version conflict
+        //     HTTP 409 for version conflict
         let url = self.gen_url();
         let response = self
             .client
@@ -115,10 +108,10 @@ impl ExternalHttpStorage {
 
         if status.is_success() {
             Ok(())
-        } else if status == reqwest::StatusCode::BAD_REQUEST {
+        } else if status == reqwest::StatusCode::CONFLICT {
             // The external http service should perform version check
             // for consistency.
-            error!("update_external_store get conflict version");
+            warn!("update_external_store get conflict version");
             Err(MetaStoreError::Retry)
         } else {
             error!(
@@ -147,6 +140,18 @@ impl ExternalHttpStorage {
         self.cached_store.swap(Arc::new(external_store.store));
         Ok(())
     }
+
+    pub async fn refresh_cache(
+        &self,
+        failure_ttl: chrono::Duration,
+        failure_quorum: u64,
+    ) -> Result<(), MetaStoreError> {
+        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        // Cleanup the failures map
+        store.get_failures(failure_ttl, failure_quorum);
+        self.update_external_store_and_cache(ExternalStore { store, version })
+            .await
+    }
 }
 
 #[async_trait]
@@ -157,6 +162,12 @@ impl MetaStorage for ExternalHttpStorage {
     }
 
     async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
+        // Avoid updating the store frequently.
+        let store = self.cached_store.lease();
+        if store.get_global_epoch() >= meta_store.get_global_epoch() {
+            return Ok(());
+        }
+
         self.update_external_store_and_cache(ExternalStore {
             store: meta_store,
             version: None,
@@ -209,10 +220,9 @@ impl MetaStorage for ExternalHttpStorage {
         failure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Result<Vec<String>, MetaStoreError> {
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let mut store = self.cached_store.lease().clone();
+        // Move to periodic update `refresh_cache`
         let failures = store.get_failures(failure_ttl, failure_quorum);
-        self.update_external_store_and_cache(ExternalStore { store, version })
-            .await?;
         Ok(failures)
     }
 
@@ -341,7 +351,6 @@ impl MetaStorage for ExternalHttpStorage {
         Ok(())
     }
 
-    #[allow(clippy::type_complexity)]
     async fn auto_change_node_number(
         &self,
         cluster_name: String,
