@@ -64,6 +64,7 @@ impl ExternalHttpStorage {
                 error!("Failed to get json payload {:?}", e);
                 MetaStoreError::External
             })?;
+            debug!("Query store {:?}", store);
             Ok(store)
         } else {
             error!(
@@ -93,6 +94,7 @@ impl ExternalHttpStorage {
         // Response:
         //     HTTP 200 for success
         //     HTTP 409 for version conflict
+        debug!("Update json {:?}", serde_json::to_string(&external_store));
         let url = self.gen_url();
         let response = self
             .client
@@ -147,6 +149,8 @@ impl ExternalHttpStorage {
         config: MemBrokerConfig,
         refresh_interval: Duration,
     ) {
+        info!("try initializing the data");
+        self.try_init().await;
         info!("external http storage start refreshing task");
         let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
         loop {
@@ -167,6 +171,15 @@ impl ExternalHttpStorage {
         store.get_failures(failure_ttl, failure_quorum);
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await
+    }
+
+    async fn try_init(&self) {
+        let store = self.cached_store.lease().clone();
+        // The external HTTP service should ignore this None version request
+        // if there're already data.
+        if let Err(err) = self.update_external_store(ExternalStore{version: None, store}).await {
+            warn!("failed to set init store: {:?}", err);
+        }
     }
 }
 
