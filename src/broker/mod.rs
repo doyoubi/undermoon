@@ -16,6 +16,6 @@ mod utils;
 pub use self::persistence::{JsonFileStorage, MetaPersistence, MetaSyncError};
 pub use self::replication::{JsonMetaReplicator, MetaReplicator};
 pub use self::service::{
-    configure_app, MemBrokerConfig, MemBrokerService, ReplicaAddresses, MEM_BROKER_API_VERSION,
+    configure_app, MemBrokerConfig, MemBrokerService, ReplicaAddresses, MEM_BROKER_API_VERSION, StorageConfig,
 };
 pub use self::store::MetaStoreError;

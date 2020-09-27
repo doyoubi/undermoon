@@ -7,7 +7,6 @@ use std::io;
 use std::path::Path;
 use std::pin::Pin;
 use std::str;
-use std::sync::{Arc, RwLock};
 use tokio::fs::{rename, File};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -15,7 +14,7 @@ use tokio::sync::Mutex;
 pub trait MetaPersistence {
     fn store<'s>(
         &'s self,
-        store: Arc<RwLock<MetaStore>>,
+        store: MetaStore,
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaSyncError>> + Send + 's>>;
     fn load<'s>(
         &'s self,
@@ -35,7 +34,7 @@ impl JsonFileStorage {
         }
     }
 
-    async fn store_impl(&self, store: Arc<RwLock<MetaStore>>) -> Result<(), MetaSyncError> {
+    async fn store_impl(&self, store: MetaStore) -> Result<(), MetaSyncError> {
         let _guard = self.lock.lock().await;
         self.json_file.store(store).await
     }
@@ -49,7 +48,7 @@ impl JsonFileStorage {
 impl MetaPersistence for JsonFileStorage {
     fn store<'s>(
         &'s self,
-        store: Arc<RwLock<MetaStore>>,
+        store: MetaStore,
     ) -> Pin<Box<dyn Future<Output = Result<(), MetaSyncError>> + Send + 's>> {
         Box::pin(self.store_impl(store))
     }
@@ -70,11 +69,9 @@ impl JsonFile {
         Self { filename }
     }
 
-    async fn store(&self, store: Arc<RwLock<MetaStore>>) -> Result<(), MetaSyncError> {
+    async fn store(&self, store: MetaStore) -> Result<(), MetaSyncError> {
         let json_str = {
-            let store = store.read().map_err(|_| MetaSyncError::Lock)?;
-
-            serde_json::to_string(&(*store)).map_err(|err| {
+            serde_json::to_string(&store).map_err(|err| {
                 error!("failed to convert MetaStore to json {}", err);
                 MetaSyncError::Json
             })?

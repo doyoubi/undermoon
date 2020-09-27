@@ -1,13 +1,14 @@
 use super::storage::MetaStorage;
-use super::store::ClusterInfo;
-use super::store::MetaStore;
 use super::MetaStoreError;
-use crate::broker::store::{ScaleOp, NODES_PER_PROXY};
+use super::store::{ScaleOp, NODES_PER_PROXY, ClusterInfo, MetaStore};
+use super::service::MemBrokerConfig;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use futures_timer::Delay;
+use std::time::Duration;
 
 const EXTERNAL_HTTP_STORE_API_PATH: &str = "/api/v1/store";
 
@@ -141,7 +142,22 @@ impl ExternalHttpStorage {
         Ok(())
     }
 
-    pub async fn refresh_cache(
+    pub async fn keep_refreshing_cache(
+        &self,
+        config: MemBrokerConfig,
+        refresh_interval: Duration,
+    ) {
+        info!("external http storage start refreshing task");
+        let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
+        loop {
+            Delay::new(refresh_interval).await;
+            if let Err(err) = self.refresh_cache(failure_ttl, config.failure_quorum).await {
+                error!("failed to refresh cache: {:?}", err);
+            }
+        }
+    }
+
+    async fn refresh_cache(
         &self,
         failure_ttl: chrono::Duration,
         failure_quorum: u64,
@@ -157,8 +173,8 @@ impl ExternalHttpStorage {
 #[async_trait]
 impl MetaStorage for ExternalHttpStorage {
     async fn get_all_metadata(&self) -> Result<MetaStore, MetaStoreError> {
-        let external_store = self.get_external_store().await?;
-        Ok(external_store.store)
+        let store = self.cached_store.lease();
+        Ok(store.clone())
     }
 
     async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
@@ -299,7 +315,7 @@ impl MetaStorage for ExternalHttpStorage {
         Ok(())
     }
 
-    async fn auto_add_node(
+    async fn auto_add_nodes(
         &self,
         cluster_name: String,
         node_num: usize,

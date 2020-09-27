@@ -142,7 +142,7 @@ impl<'a> MetaStoreUpdate<'a> {
 
     pub fn get_failures(
         &mut self,
-        falure_ttl: chrono::Duration,
+        failure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Vec<String> {
         let now = Utc::now();
@@ -150,7 +150,7 @@ impl<'a> MetaStoreUpdate<'a> {
             reporter_map.retain(|_, report_time| {
                 let report_datetime =
                     DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(*report_time, 0), Utc);
-                now - report_datetime < falure_ttl
+                now - report_datetime < failure_ttl
             });
         }
         self.store
@@ -1016,7 +1016,7 @@ impl<'a> MetaStoreUpdate<'a> {
     pub fn balance_masters(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.store.bump_global_epoch();
+        let new_epoch = self.store.get_global_epoch() + 1;
 
         let failed_proxies = &self.store.failed_proxies;
         let failures = &self.store.failures;
@@ -1043,6 +1043,7 @@ impl<'a> MetaStoreUpdate<'a> {
             }
         }
 
+        self.store.bump_global_epoch();
         Ok(())
     }
 

@@ -19,6 +19,8 @@ use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};
+use crate::broker::external::ExternalHttpStorage;
+use std::time::Duration;
 
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
 
@@ -128,6 +130,12 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
 pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 
 #[derive(Debug, Clone)]
+pub enum StorageConfig {
+    Memory,
+    ExternalHTTP{address: String, refresh_interval: Duration},
+}
+
+#[derive(Debug, Clone)]
 pub struct MemBrokerConfig {
     pub address: String,
     pub failure_ttl: u64, // in seconds
@@ -140,6 +148,7 @@ pub struct MemBrokerConfig {
     pub replica_addresses: ReplicaAddresses,
     pub sync_meta_interval: Option<NonZeroU64>,
     pub enable_ordered_proxy: bool,
+    pub storage: StorageConfig,
     pub debug: bool,
 }
 
@@ -181,7 +190,20 @@ impl MemBrokerService {
             meta_store.restore(last)?;
         }
 
-        let storage = Arc::new(MemoryStorage::new(Arc::new(RwLock::new(meta_store))));
+        let storage: Arc<dyn MetaStorage> = match config.storage.clone() {
+            StorageConfig::Memory => {
+                Arc::new(MemoryStorage::new(Arc::new(RwLock::new(meta_store))))
+            }
+            StorageConfig::ExternalHTTP{address, refresh_interval} => {
+                let config_clone = config.clone();
+                let http_storage = Arc::new(ExternalHttpStorage::new(address, config.enable_ordered_proxy));
+                let http_storage_clone = http_storage.clone();
+                tokio::spawn(async move {
+                    http_storage_clone.keep_refreshing_cache(config_clone, refresh_interval).await;
+                });
+                http_storage
+            }
+        };
 
         let service = Self {
             config,
@@ -202,7 +224,6 @@ impl MemBrokerService {
 
     pub async fn update_meta_file(&self) -> Result<(), MetaStoreError> {
         let store = self.storage.get_all_metadata().await?;
-        let store = Arc::new(RwLock::new(store));
         self.meta_persistence
             .store(store)
             .await
@@ -299,7 +320,7 @@ impl MemBrokerService {
         self.storage.remove_cluster(cluster_name).await
     }
 
-    pub async fn auto_add_node(
+    pub async fn auto_add_nodes(
         &self,
         cluster_name: String,
         node_num: usize,
@@ -309,7 +330,7 @@ impl MemBrokerService {
             .lock()
             .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
-        self.storage.auto_add_node(cluster_name, node_num).await
+        self.storage.auto_add_nodes(cluster_name, node_num).await
     }
 
     pub async fn auto_scale_up_nodes(
@@ -649,7 +670,7 @@ async fn auto_add_nodes(
     let cluster_name = path.into_inner().0;
     let node_num = payload.into_inner().node_number;
     let res = state
-        .auto_add_node(cluster_name, node_num)
+        .auto_add_nodes(cluster_name, node_num)
         .await
         .map(web::Json)?;
     state.trigger_update().await?;
@@ -684,11 +705,8 @@ async fn balance_masters(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    let res = state.balance_masters(cluster_name).await;
-    let sync_res = state.trigger_update().await;
-    // There's still change on error so we also need to replicate update.
-    res?;
-    sync_res?;
+    state.balance_masters(cluster_name).await?;
+    state.trigger_update().await?;
     Ok("")
 }
 

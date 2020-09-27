@@ -59,7 +59,7 @@ pub trait MetaStorage: Send + Sync + 'static {
         node_num: usize,
     ) -> Result<(), MetaStoreError>;
     async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError>;
-    async fn auto_add_node(
+    async fn auto_add_nodes(
         &self,
         cluster_name: String,
         node_num: usize,
@@ -274,7 +274,7 @@ impl MetaStorage for MemoryStorage {
             .remove_cluster(cluster_name)
     }
 
-    async fn auto_add_node(
+    async fn auto_add_nodes(
         &self,
         cluster_name: String,
         node_num: usize,
