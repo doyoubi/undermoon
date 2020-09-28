@@ -54,7 +54,14 @@ fn gen_conf() -> MemBrokerConfig {
                 refresh_interval,
             }
         }
-        _ => StorageConfig::Memory,
+        Ok(t) if t.to_lowercase() == "memory" => StorageConfig::Memory,
+        others => {
+            error!(
+                "unexpected storage_type: {:?}. Will fall back to memory.",
+                others
+            );
+            StorageConfig::Memory
+        }
     };
 
     let debug = s.get::<bool>("debug").unwrap_or(false);

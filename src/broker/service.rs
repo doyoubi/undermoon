@@ -179,7 +179,7 @@ pub struct MemBrokerService {
 impl MemBrokerService {
     pub fn new(
         config: MemBrokerConfig,
-        meta_storage: Arc<dyn MetaPersistence + Send + Sync + 'static>,
+        meta_persistence: Arc<dyn MetaPersistence + Send + Sync + 'static>,
         meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
         last_meta_store: Option<MetaStore>,
     ) -> Result<Self, MetaStoreError> {
@@ -219,7 +219,7 @@ impl MemBrokerService {
         let service = Self {
             config,
             storage,
-            meta_persistence: meta_storage,
+            meta_persistence,
             meta_replicator,
             scale_lock: AtomicLock::default(),
         };
@@ -611,9 +611,10 @@ pub struct ProxyResourcePayload {
 async fn add_proxy(
     (proxy_resource, state): (web::Json<ProxyResourcePayload>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    state.add_proxy(proxy_resource.into_inner()).await?;
+    // This may still successfully update the store even on error.
+    let res = state.add_proxy(proxy_resource.into_inner()).await;
     state.trigger_update().await?;
-    Ok("")
+    res.map(|()| "")
 }
 
 #[derive(Deserialize, Serialize)]

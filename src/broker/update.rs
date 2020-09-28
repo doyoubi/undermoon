@@ -451,7 +451,8 @@ impl<'a> MetaStoreUpdate<'a> {
     pub fn auto_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.store.bump_global_epoch();
+        // Will bump epoch later on success.
+        let new_epoch = self.store.get_global_epoch() + 1;
 
         let removed_chunks = match self.store.clusters.get_mut(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
@@ -497,6 +498,7 @@ impl<'a> MetaStoreUpdate<'a> {
             }
         }
 
+        self.store.bump_global_epoch();
         Ok(())
     }
 
@@ -1054,7 +1056,8 @@ impl<'a> MetaStoreUpdate<'a> {
     ) -> Result<(), MetaStoreError> {
         let cluster_name = ClusterName::try_from(cluster_name.as_str())
             .map_err(|_| MetaStoreError::InvalidClusterName)?;
-        let new_epoch = self.store.bump_global_epoch();
+        // Will bump epoch later on success.
+        let new_epoch = self.store.get_global_epoch() + 1;
         match self.store.clusters.get_mut(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
             Some(ref mut cluster) => {
@@ -1073,6 +1076,7 @@ impl<'a> MetaStoreUpdate<'a> {
             }
         }
 
+        self.store.bump_global_epoch();
         Ok(())
     }
 }
