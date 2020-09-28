@@ -4,6 +4,7 @@ use super::resource::ResourceChecker;
 use super::storage::{MemoryStorage, MetaStorage};
 use super::store::{ClusterInfo, MetaStore, MetaStoreError, ScaleOp, CHUNK_HALF_NODE_NUM};
 use crate::broker::epoch::{fetch_max_epoch, wait_for_proxy_epoch, EpochFetchResult};
+use crate::broker::external::ExternalHttpStorage;
 use crate::common::atomic_lock::AtomicLock;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
@@ -14,12 +15,11 @@ use crate::coordinator::http_meta_broker::{
 };
 use actix_http::ResponseBuilder;
 use actix_web::dev::Service;
-use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
+use actix_web::{error, http, web, HttpRequest, HttpResponse};
 use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};
-use crate::broker::external::ExternalHttpStorage;
 use std::time::Duration;
 
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
@@ -132,7 +132,10 @@ pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 #[derive(Debug, Clone)]
 pub enum StorageConfig {
     Memory,
-    ExternalHTTP{address: String, refresh_interval: Duration},
+    ExternalHTTP {
+        address: String,
+        refresh_interval: Duration,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -194,12 +197,20 @@ impl MemBrokerService {
             StorageConfig::Memory => {
                 Arc::new(MemoryStorage::new(Arc::new(RwLock::new(meta_store))))
             }
-            StorageConfig::ExternalHTTP{address, refresh_interval} => {
+            StorageConfig::ExternalHTTP {
+                address,
+                refresh_interval,
+            } => {
                 let config_clone = config.clone();
-                let http_storage = Arc::new(ExternalHttpStorage::new(address, config.enable_ordered_proxy));
+                let http_storage = Arc::new(ExternalHttpStorage::new(
+                    address,
+                    config.enable_ordered_proxy,
+                ));
                 let http_storage_clone = http_storage.clone();
                 tokio::spawn(async move {
-                    http_storage_clone.keep_refreshing_cache(config_clone, refresh_interval).await;
+                    http_storage_clone
+                        .keep_refreshing_cache(config_clone, refresh_interval)
+                        .await;
                 });
                 http_storage
             }
@@ -521,9 +532,9 @@ async fn get_version(_req: HttpRequest) -> &'static str {
     UNDERMOON_VERSION
 }
 
-async fn get_all_metadata(state: ServiceState) -> impl Responder {
-    let metadata = state.get_all_data().await;
-    web::Json(metadata)
+async fn get_all_metadata(state: ServiceState) -> Result<web::Json<MetaStore>, MetaStoreError> {
+    let metadata = state.get_all_data().await?;
+    Ok(web::Json(metadata))
 }
 
 async fn restore_metadata(
@@ -543,34 +554,34 @@ struct Pagination {
 
 async fn get_proxy_addresses(
     (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ProxyAddressesPayload>, MetaStoreError> {
     let Pagination { offset, limit } = pagination;
-    let res = state.get_proxy_addresses(offset, limit).await;
-    res.map(|addresses| web::Json(ProxyAddressesPayload { addresses }))
+    let addresses = state.get_proxy_addresses(offset, limit).await?;
+    Ok(web::Json(ProxyAddressesPayload { addresses }))
 }
 
 async fn get_proxy_by_address(
     (path, state): (web::Path<(String,)>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ProxyPayload>, MetaStoreError> {
     let name = path.into_inner().0;
-    let res = state.get_proxy_by_address(&name).await;
-    res.map(|proxy| web::Json(ProxyPayload { proxy }))
+    let proxy = state.get_proxy_by_address(&name).await?;
+    Ok(web::Json(ProxyPayload { proxy }))
 }
 
 async fn get_cluster_names(
     (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ClusterNamesPayload>, MetaStoreError> {
     let Pagination { offset, limit } = pagination;
-    let res = state.get_cluster_names(offset, limit).await;
-    res.map(|names| web::Json(ClusterNamesPayload { names }))
+    let names = state.get_cluster_names(offset, limit).await?;
+    Ok(web::Json(ClusterNamesPayload { names }))
 }
 
 async fn get_cluster_by_name(
     (path, state): (web::Path<(String,)>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ClusterPayload>, MetaStoreError> {
     let name = path.into_inner().0;
-    let res = state.get_cluster_by_name(&name).await;
-    res.map(|cluster| web::Json(ClusterPayload { cluster }))
+    let cluster = state.get_cluster_by_name(&name).await?;
+    Ok(web::Json(ClusterPayload { cluster }))
 }
 
 async fn get_cluster_info_by_name(
@@ -584,9 +595,9 @@ async fn get_cluster_info_by_name(
     }
 }
 
-async fn get_failures(state: ServiceState) -> impl Responder {
-    let res = state.get_failures().await;
-    res.map(|addresses| web::Json(FailuresPayload { addresses }))
+async fn get_failures(state: ServiceState) -> Result<web::Json<FailuresPayload>, MetaStoreError> {
+    let addresses = state.get_failures().await?;
+    Ok(web::Json(FailuresPayload { addresses }))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -815,9 +826,11 @@ async fn replace_failed_node(
     Ok(res)
 }
 
-async fn get_failed_proxies(state: ServiceState) -> impl Responder {
-    let res = state.get_failed_proxies().await;
-    res.map(|addresses| web::Json(FailedProxiesPayload { addresses }))
+async fn get_failed_proxies(
+    state: ServiceState,
+) -> Result<web::Json<FailedProxiesPayload>, MetaStoreError> {
+    let addresses = state.get_failed_proxies().await?;
+    Ok(web::Json(FailedProxiesPayload { addresses }))
 }
 
 async fn get_epoch(state: ServiceState) -> Result<String, MetaStoreError> {

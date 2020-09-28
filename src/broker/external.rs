@@ -1,13 +1,13 @@
-use super::storage::MetaStorage;
-use super::MetaStoreError;
-use super::store::{ScaleOp, NODES_PER_PROXY, ClusterInfo, MetaStore};
 use super::service::MemBrokerConfig;
+use super::storage::MetaStorage;
+use super::store::{ClusterInfo, MetaStore, ScaleOp, NODES_PER_PROXY};
+use super::MetaStoreError;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use futures_timer::Delay;
 use std::collections::HashMap;
 use std::sync::Arc;
-use futures_timer::Delay;
 use std::time::Duration;
 
 const EXTERNAL_HTTP_STORE_API_PATH: &str = "/api/v1/store";
@@ -64,7 +64,7 @@ impl ExternalHttpStorage {
                 error!("Failed to get json payload {:?}", e);
                 MetaStoreError::External
             })?;
-            debug!("Query store {:?}", store);
+            trace!("Query store {:?}", store);
             Ok(store)
         } else {
             error!(
@@ -94,7 +94,7 @@ impl ExternalHttpStorage {
         // Response:
         //     HTTP 200 for success
         //     HTTP 409 for version conflict
-        debug!("Update json {:?}", serde_json::to_string(&external_store));
+        trace!("Update json {:?}", serde_json::to_string(&external_store));
         let url = self.gen_url();
         let response = self
             .client
@@ -144,40 +144,53 @@ impl ExternalHttpStorage {
         Ok(())
     }
 
-    pub async fn keep_refreshing_cache(
-        &self,
-        config: MemBrokerConfig,
-        refresh_interval: Duration,
-    ) {
+    pub async fn keep_refreshing_cache(&self, config: MemBrokerConfig, refresh_interval: Duration) {
         info!("try initializing the data");
         self.try_init().await;
         info!("external http storage start refreshing task");
         let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
+        let mut update_failures_count = 0;
         loop {
             Delay::new(refresh_interval).await;
-            if let Err(err) = self.refresh_cache(failure_ttl, config.failure_quorum).await {
+            let ExternalStore { mut store, version } = match self.get_external_store().await {
+                Ok(data) => data,
+                Err(err) => {
+                    error!(
+                        "keep_refreshing_cache failed to get data from external store: {:?}",
+                        err
+                    );
+                    continue;
+                }
+            };
+
+            // Cleanup the failures map
+            store.get_failures(failure_ttl, config.failure_quorum);
+            let res = if update_failures_count > 10 {
+                update_failures_count = 0;
+                self.update_external_store_and_cache(ExternalStore { store, version })
+                    .await
+            } else {
+                update_failures_count += 1;
+                self.cached_store.swap(Arc::new(store));
+                Ok(())
+            };
+            if let Err(err) = res {
                 error!("failed to refresh cache: {:?}", err);
             }
         }
-    }
-
-    async fn refresh_cache(
-        &self,
-        failure_ttl: chrono::Duration,
-        failure_quorum: u64,
-    ) -> Result<(), MetaStoreError> {
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
-        // Cleanup the failures map
-        store.get_failures(failure_ttl, failure_quorum);
-        self.update_external_store_and_cache(ExternalStore { store, version })
-            .await
     }
 
     async fn try_init(&self) {
         let store = self.cached_store.lease().clone();
         // The external HTTP service should ignore this None version request
         // if there're already data.
-        if let Err(err) = self.update_external_store(ExternalStore{version: None, store}).await {
+        if let Err(err) = self
+            .update_external_store(ExternalStore {
+                version: None,
+                store,
+            })
+            .await
+        {
             warn!("failed to set init store: {:?}", err);
         }
     }

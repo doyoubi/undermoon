@@ -44,10 +44,15 @@ fn gen_conf() -> MemBrokerConfig {
 
     let storage = match s.get::<String>("storage_type") {
         Ok(t) if t.to_lowercase() == "http" => {
-            let address = s.get::<String>("http_storage_address").unwrap_or_else(|_| "localhost:9999".to_string());
+            let address = s
+                .get::<String>("http_storage_address")
+                .unwrap_or_else(|_| "localhost:9999".to_string());
             let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or_else(|_| 5);
             let refresh_interval = Duration::from_secs(refresh_interval);
-            StorageConfig::ExternalHTTP{address, refresh_interval}
+            StorageConfig::ExternalHTTP {
+                address,
+                refresh_interval,
+            }
         }
         _ => StorageConfig::Memory,
     };

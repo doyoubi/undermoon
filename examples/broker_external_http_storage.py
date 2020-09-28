@@ -1,3 +1,5 @@
+# FLASK_APP=examples/broker_external_http_storage.py FLASK_RUN_PORT=9999 flask run
+
 import json
 
 from flask import Flask, request, jsonify, abort
