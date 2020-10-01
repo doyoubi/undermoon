@@ -238,6 +238,7 @@ See more in the [development guide](./docs/development.md).
 - [Command Table](./docs/command_table.md)
 - [Performance](./docs/performance.md)
 - [Best Practice](./docs/best_practice.md)
+- [Broker External Storage](./docs/broker_external_storage.md)
 
 ## API
 - [Proxy UMCTL command](./docs/meta_command.md)

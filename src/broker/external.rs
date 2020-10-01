@@ -23,6 +23,10 @@ pub struct ExternalStore {
 }
 
 pub struct ExternalHttpStorage {
+    // This name is used for the external storage
+    // to differentiate different undermoon clusters.
+    undermoon_name: String,
+
     http_service_address: String,
     client: reqwest::Client,
 
@@ -32,8 +36,9 @@ pub struct ExternalHttpStorage {
 }
 
 impl ExternalHttpStorage {
-    pub fn new(http_service_address: String, enable_ordered_proxy: bool) -> Self {
+    pub fn new(undermoon_name: String, http_service_address: String, enable_ordered_proxy: bool) -> Self {
         Self {
+            undermoon_name,
             http_service_address,
             client: reqwest::Client::new(),
             cached_store: ArcSwap::new(Arc::new(MetaStore::new(enable_ordered_proxy))),
@@ -42,8 +47,8 @@ impl ExternalHttpStorage {
 
     fn gen_url(&self) -> String {
         format!(
-            "http://{}{}",
-            self.http_service_address, EXTERNAL_HTTP_STORE_API_PATH
+            "http://{}{}/{}",
+            self.http_service_address, EXTERNAL_HTTP_STORE_API_PATH, self.undermoon_name,
         )
     }
 

@@ -49,7 +49,11 @@ fn gen_conf() -> MemBrokerConfig {
                 .unwrap_or_else(|_| "localhost:9999".to_string());
             let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or_else(|_| 5);
             let refresh_interval = Duration::from_secs(refresh_interval);
+            let undermoon_name = s
+                .get::<String>("undermoon_name")
+                .unwrap_or_else(|_| "my_undermoon_name".to_string());
             StorageConfig::ExternalHTTP {
+                undermoon_name,
                 address,
                 refresh_interval,
             }

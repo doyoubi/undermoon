@@ -133,6 +133,9 @@ pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 pub enum StorageConfig {
     Memory,
     ExternalHTTP {
+        // This name is used for the external storage
+        // to differentiate different undermoon clusters.
+        undermoon_name: String,
         address: String,
         refresh_interval: Duration,
     },
@@ -198,11 +201,13 @@ impl MemBrokerService {
                 Arc::new(MemoryStorage::new(Arc::new(RwLock::new(meta_store))))
             }
             StorageConfig::ExternalHTTP {
+                undermoon_name,
                 address,
                 refresh_interval,
             } => {
                 let config_clone = config.clone();
                 let http_storage = Arc::new(ExternalHttpStorage::new(
+                    undermoon_name,
                     address,
                     config.enable_ordered_proxy,
                 ));

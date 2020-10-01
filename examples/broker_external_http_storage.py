@@ -7,14 +7,14 @@ from flask import Flask, request, jsonify, abort
 
 app = Flask(__name__)
 
-STORE_PATH = '/api/v1/store'
+STORE_PATH = '/api/v1/store/<name>'
 
 version = 0
 store = None
 
 
 @app.route(STORE_PATH, methods=['GET'])
-def get():
+def get(name):
     response = {
         'version': str(version) if version is not None else None,
         'store': store,
@@ -23,7 +23,7 @@ def get():
 
 
 @app.route(STORE_PATH, methods=['PUT'])
-def update():
+def update(name):
     content = request.get_json()
     global version, store
     v = content['version']
