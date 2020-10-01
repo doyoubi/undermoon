@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use undermoon::broker::{
     configure_app, JsonFileStorage, JsonMetaReplicator, MemBrokerConfig, MemBrokerService,
-    MetaStorage, MetaStoreError, MetaSyncError,
+    MetaPersistence, MetaStoreError, MetaSyncError, StorageConfig,
 };
 
 #[global_allocator]
@@ -41,6 +41,28 @@ fn gen_conf() -> MemBrokerConfig {
                 .collect()
         });
     let replica_addresses = Arc::new(ArcSwap::new(Arc::new(replica_addresses)));
+
+    let storage = match s.get::<String>("storage_type") {
+        Ok(t) if t.to_lowercase() == "http" => {
+            let address = s
+                .get::<String>("http_storage_address")
+                .unwrap_or_else(|_| "localhost:9999".to_string());
+            let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or_else(|_| 5);
+            let refresh_interval = Duration::from_secs(refresh_interval);
+            StorageConfig::ExternalHTTP {
+                address,
+                refresh_interval,
+            }
+        }
+        Ok(t) if t.to_lowercase() == "memory" => StorageConfig::Memory,
+        others => {
+            error!(
+                "unexpected storage_type: {:?}. Will fall back to memory.",
+                others
+            );
+            StorageConfig::Memory
+        }
+    };
 
     let debug = s.get::<bool>("debug").unwrap_or(false);
 
@@ -71,6 +93,7 @@ fn gen_conf() -> MemBrokerConfig {
         enable_ordered_proxy: s
             .get::<bool>("enable_ordered_proxy")
             .unwrap_or_else(|_| false),
+        storage,
         debug,
     }
 }

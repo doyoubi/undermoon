@@ -31,4 +31,12 @@ sync_meta_interval = 10
 # (3) the whole undermoon cluster can only create one Redis cluster.
 enable_ordered_proxy = false
 
+storage_type = "memory"
+
+# Use the following config to enable external http storage.
+#
+# storage_type = "http"
+# http_storage_address = "localhost:9999"
+# refresh_interval = 5
+
 debug = false

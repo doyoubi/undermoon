@@ -402,10 +402,10 @@ impl MetaStore {
 
     pub fn get_failures(
         &mut self,
-        falure_ttl: chrono::Duration,
+        failure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Vec<String> {
-        MetaStoreUpdate::new(self).get_failures(falure_ttl, failure_quorum)
+        MetaStoreUpdate::new(self).get_failures(failure_ttl, failure_quorum)
     }
 
     pub fn add_proxy(
@@ -446,8 +446,8 @@ impl MetaStore {
         MetaStoreUpdate::new(self).auto_add_nodes(cluster_name, num)
     }
 
-    pub fn audo_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
-        MetaStoreUpdate::new(self).audo_delete_free_nodes(cluster_name)
+    pub fn auto_delete_free_nodes(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {
+        MetaStoreUpdate::new(self).auto_delete_free_nodes(cluster_name)
     }
 
     pub fn remove_proxy(&mut self, proxy_address: String) -> Result<(), MetaStoreError> {
@@ -504,7 +504,7 @@ impl MetaStore {
         }
 
         // Remove the free nodes first so that this API could be easy to retry.
-        if let Err(err) = self.audo_delete_free_nodes(cluster_name.clone()) {
+        if let Err(err) = self.auto_delete_free_nodes(cluster_name.clone()) {
             if err != MetaStoreError::FreeNodeNotFound {
                 return Err(err);
             }
@@ -652,6 +652,8 @@ pub enum MetaStoreError {
     OneClusterAlreadyExisted,
     ProxyNotSync,
     NodeNumberChanging,
+    External,
+    Retry,
 }
 
 impl MetaStoreError {
@@ -684,6 +686,8 @@ impl MetaStoreError {
             Self::OneClusterAlreadyExisted => "ONE_CLUSTER_ALREADY_EXISTED",
             Self::ProxyNotSync => "PROXY_NOT_SYNC",
             Self::NodeNumberChanging => "NODE_NUMBER_CHANGING",
+            Self::External => "EXTERNAL",
+            Self::Retry => "RETRY",
         }
     }
 }
@@ -1164,7 +1168,7 @@ mod tests {
         );
         check_cluster_and_proxy(&store);
 
-        store.audo_delete_free_nodes(cluster_name.clone()).unwrap();
+        store.auto_delete_free_nodes(cluster_name.clone()).unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
         assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
@@ -1585,7 +1589,7 @@ mod tests {
             }
         }
 
-        store.audo_delete_free_nodes(cluster_name.clone()).unwrap();
+        store.auto_delete_free_nodes(cluster_name.clone()).unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 < epoch3);
 

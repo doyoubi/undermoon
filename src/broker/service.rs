@@ -1,8 +1,10 @@
-use super::persistence::{MetaStorage, MetaSyncError};
+use super::persistence::MetaPersistence;
 use super::replication::MetaReplicator;
 use super::resource::ResourceChecker;
+use super::storage::{MemoryStorage, MetaStorage};
 use super::store::{ClusterInfo, MetaStore, MetaStoreError, ScaleOp, CHUNK_HALF_NODE_NUM};
 use crate::broker::epoch::{fetch_max_epoch, wait_for_proxy_epoch, EpochFetchResult};
+use crate::broker::external::ExternalHttpStorage;
 use crate::common::atomic_lock::AtomicLock;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
@@ -13,11 +15,12 @@ use crate::coordinator::http_meta_broker::{
 };
 use actix_http::ResponseBuilder;
 use actix_web::dev::Service;
-use actix_web::{error, http, web, HttpRequest, HttpResponse, Responder};
+use actix_web::{error, http, web, HttpRequest, HttpResponse};
 use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
 
@@ -49,8 +52,14 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                             Err(err) => info!("{} err {}", req_str, err)
                         }
                     } else if let Some(service) = service {
-                        if let Err(invalid_meta_store) = service.check_metadata() {
-                            error!("Invalid meta store: {:?}", invalid_meta_store);
+                        match service.check_metadata().await {
+                            Err(err) => {
+                                error!("failed to check metadata: {:?}", err);
+                            }
+                            Ok(None) => (),
+                            Ok(Some(invalid_meta_store)) => {
+                                error!("Invalid meta store: {:?}", invalid_meta_store);
+                            }
                         }
                     }
                     res
@@ -94,7 +103,7 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
                 "/clusters/nodes/{cluster_name}",
                 web::put().to(auto_scale_up_nodes),
             )
-            .route("/clusters/free_nodes/{cluster_name}", web::delete().to(audo_delete_free_nodes))
+            .route("/clusters/free_nodes/{cluster_name}", web::delete().to(auto_delete_free_nodes))
             .route(
                 "/clusters/migrations/shrink/{cluster_name}/{node_number}",
                 web::post().to(migrate_slots_to_scale_down),
@@ -121,6 +130,15 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
 pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 
 #[derive(Debug, Clone)]
+pub enum StorageConfig {
+    Memory,
+    ExternalHTTP {
+        address: String,
+        refresh_interval: Duration,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub struct MemBrokerConfig {
     pub address: String,
     pub failure_ttl: u64, // in seconds
@@ -133,6 +151,7 @@ pub struct MemBrokerConfig {
     pub replica_addresses: ReplicaAddresses,
     pub sync_meta_interval: Option<NonZeroU64>,
     pub enable_ordered_proxy: bool,
+    pub storage: StorageConfig,
     pub debug: bool,
 }
 
@@ -151,8 +170,8 @@ pub struct MemBrokerConfigPayload {
 
 pub struct MemBrokerService {
     config: MemBrokerConfig,
-    store: Arc<RwLock<MetaStore>>,
-    meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
+    storage: Arc<dyn MetaStorage>,
+    meta_persistence: Arc<dyn MetaPersistence + Send + Sync + 'static>,
     meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
     scale_lock: AtomicLock,
 }
@@ -160,7 +179,7 @@ pub struct MemBrokerService {
 impl MemBrokerService {
     pub fn new(
         config: MemBrokerConfig,
-        meta_storage: Arc<dyn MetaStorage + Send + Sync + 'static>,
+        meta_persistence: Arc<dyn MetaPersistence + Send + Sync + 'static>,
         meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
         last_meta_store: Option<MetaStore>,
     ) -> Result<Self, MetaStoreError> {
@@ -174,121 +193,145 @@ impl MemBrokerService {
             meta_store.restore(last)?;
         }
 
+        let storage: Arc<dyn MetaStorage> = match config.storage.clone() {
+            StorageConfig::Memory => {
+                Arc::new(MemoryStorage::new(Arc::new(RwLock::new(meta_store))))
+            }
+            StorageConfig::ExternalHTTP {
+                address,
+                refresh_interval,
+            } => {
+                let config_clone = config.clone();
+                let http_storage = Arc::new(ExternalHttpStorage::new(
+                    address,
+                    config.enable_ordered_proxy,
+                ));
+                let http_storage_clone = http_storage.clone();
+                tokio::spawn(async move {
+                    http_storage_clone
+                        .keep_refreshing_cache(config_clone, refresh_interval)
+                        .await;
+                });
+                http_storage
+            }
+        };
+
         let service = Self {
             config,
-            store: Arc::new(RwLock::new(meta_store)),
-            meta_storage,
+            storage,
+            meta_persistence,
             meta_replicator,
             scale_lock: AtomicLock::default(),
         };
         Ok(service)
     }
 
-    async fn trigger_update(&self) -> Result<(), MetaSyncError> {
+    async fn trigger_update(&self) -> Result<(), MetaStoreError> {
         if self.config.auto_update_meta_file {
             self.update_meta_file().await?;
         }
         Ok(())
     }
 
-    pub async fn update_meta_file(&self) -> Result<(), MetaSyncError> {
-        let store = self.store.clone();
-        self.meta_storage.store(store).await
+    pub async fn update_meta_file(&self) -> Result<(), MetaStoreError> {
+        let store = self.storage.get_all_metadata().await?;
+        self.meta_persistence
+            .store(store)
+            .await
+            .map_err(MetaStoreError::SyncError)
     }
 
-    pub async fn sync_meta(&self) -> Result<(), MetaSyncError> {
+    pub async fn sync_meta(&self) -> Result<(), MetaStoreError> {
         if self.config.replica_addresses.lease().is_empty() {
             return Ok(());
         }
-        let store = self.store.read().map_err(|_| MetaSyncError::Lock)?.clone();
+        let store = self.storage.get_all_metadata().await?;
         let store = Arc::new(store);
-        self.meta_replicator.sync_meta(store).await
+        self.meta_replicator
+            .sync_meta(store)
+            .await
+            .map_err(MetaStoreError::SyncError)
     }
 
-    pub fn get_all_data(&self) -> MetaStore {
-        self.store
-            .read()
-            .expect("MemBrokerService::get_all_data")
-            .clone()
+    pub async fn get_all_data(&self) -> Result<MetaStore, MetaStoreError> {
+        self.storage.get_all_metadata().await
     }
 
-    pub fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemBrokerService::restore_metadata")
-            .restore(meta_store)
+    pub async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
+        self.storage.restore_metadata(meta_store).await
     }
 
-    pub fn get_proxy_addresses(&self, offset: Option<usize>, limit: Option<usize>) -> Vec<String> {
-        self.store
-            .read()
-            .expect("MemBrokerService::get_proxy_addresses")
-            .get_proxies_with_pagination(offset, limit)
-    }
-
-    pub fn get_proxy_by_address(&self, address: &str) -> Option<Proxy> {
-        let migration_limit = self.config.migration_limit;
-        self.store
-            .read()
-            .expect("MemBrokerService::get_proxy_by_address")
-            .get_proxy_by_address(address, migration_limit)
-    }
-
-    pub fn get_cluster_names(
+    pub async fn get_proxy_addresses(
         &self,
         offset: Option<usize>,
         limit: Option<usize>,
-    ) -> Vec<ClusterName> {
-        self.store
-            .read()
-            .expect("MemBrokerService::get_cluster_names")
-            .get_cluster_names_with_pagination(offset, limit)
+    ) -> Result<Vec<String>, MetaStoreError> {
+        self.storage.get_proxy_addresses(offset, limit).await
     }
 
-    pub fn get_cluster_by_name(&self, name: &str) -> Option<Cluster> {
+    pub async fn get_proxy_by_address(
+        &self,
+        address: &str,
+    ) -> Result<Option<Proxy>, MetaStoreError> {
         let migration_limit = self.config.migration_limit;
-        self.store
-            .read()
-            .expect("MemBrokerService::get_cluster_by_name")
+        self.storage
+            .get_proxy_by_address(address, migration_limit)
+            .await
+    }
+
+    pub async fn get_cluster_names(
+        &self,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> Result<Vec<ClusterName>, MetaStoreError> {
+        self.storage.get_cluster_names(offset, limit).await
+    }
+
+    pub async fn get_cluster_by_name(&self, name: &str) -> Result<Option<Cluster>, MetaStoreError> {
+        let migration_limit = self.config.migration_limit;
+        self.storage
             .get_cluster_by_name(name, migration_limit)
+            .await
     }
 
-    pub fn get_cluster_info_by_name(&self, name: &str) -> Option<ClusterInfo> {
+    pub async fn get_cluster_info_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<ClusterInfo>, MetaStoreError> {
         let migration_limit = self.config.migration_limit;
-        self.store
-            .read()
-            .expect("MemBrokerService::get_cluster_info_by_name")
+        self.storage
             .get_cluster_info_by_name(name, migration_limit)
+            .await
     }
 
-    pub fn add_proxy(&self, proxy_resource: ProxyResourcePayload) -> Result<(), MetaStoreError> {
+    pub async fn add_proxy(
+        &self,
+        proxy_resource: ProxyResourcePayload,
+    ) -> Result<(), MetaStoreError> {
         let ProxyResourcePayload {
             proxy_address,
             nodes,
             host,
             index,
         } = proxy_resource;
-        self.store
-            .write()
-            .expect("MemBrokerService::add_proxy")
+        self.storage
             .add_proxy(proxy_address, nodes, host, index)
+            .await
     }
 
-    pub fn add_cluster(&self, cluster_name: String, node_num: usize) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemBrokerService::add_cluster")
-            .add_cluster(cluster_name, node_num)
+    pub async fn add_cluster(
+        &self,
+        cluster_name: String,
+        node_num: usize,
+    ) -> Result<(), MetaStoreError> {
+        self.storage.add_cluster(cluster_name, node_num).await
     }
 
-    pub fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemBrokerService::remove_cluster")
-            .remove_cluster(cluster_name)
+    pub async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.storage.remove_cluster(cluster_name).await
     }
 
-    pub fn auto_add_node(
+    pub async fn auto_add_nodes(
         &self,
         cluster_name: String,
         node_num: usize,
@@ -298,13 +341,10 @@ impl MemBrokerService {
             .lock()
             .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
-        self.store
-            .write()
-            .expect("MemBrokerService::auto_add_node")
-            .auto_add_nodes(cluster_name, node_num)
+        self.storage.auto_add_nodes(cluster_name, node_num).await
     }
 
-    pub fn auto_scale_up_nodes(
+    pub async fn auto_scale_up_nodes(
         &self,
         cluster_name: String,
         cluster_node_num: usize,
@@ -314,56 +354,39 @@ impl MemBrokerService {
             .lock()
             .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
-        self.store
-            .write()
-            .expect("MemBrokerService::auto_scale_up_nodes")
+        self.storage
             .auto_scale_up_nodes(cluster_name, cluster_node_num)
+            .await
     }
 
-    pub fn audo_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+    pub async fn auto_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         let _guard = self
             .scale_lock
             .lock()
             .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
-        self.store
-            .write()
-            .expect("MemBrokerService::audo_delete_free_nodes")
-            .audo_delete_free_nodes(cluster_name)
+        self.storage.auto_delete_free_nodes(cluster_name).await
     }
 
-    pub fn change_config(
+    pub async fn change_config(
         &self,
         cluster_name: String,
         config: HashMap<String, String>,
     ) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemBrokerService::change_config")
-            .change_config(cluster_name, config)
+        self.storage.change_config(cluster_name, config).await
     }
 
-    pub fn balance_masters(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemBrokerService::balance_masters")
-            .balance_masters(cluster_name)
+    pub async fn balance_masters(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+        self.storage.balance_masters(cluster_name).await
     }
 
-    pub fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemBrokerService::remove_proxy")
-            .remove_proxy(proxy_address)
+    pub async fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
+        self.storage.remove_proxy(proxy_address).await
     }
 
-    pub fn check_resource_for_failures(&self) -> Result<Vec<String>, MetaStoreError> {
+    pub async fn check_resource_for_failures(&self) -> Result<Vec<String>, MetaStoreError> {
         let migration_limit = self.config.migration_limit;
-        let store_copy = self
-            .store
-            .read()
-            .expect("MemBrokerService::check_resource_for_failures")
-            .clone();
+        let store_copy = self.storage.get_all_metadata().await?;
         let checker = ResourceChecker::new(store_copy);
         checker.check_failure_tolerance(migration_limit)
     }
@@ -383,19 +406,16 @@ impl MemBrokerService {
         Ok(payload)
     }
 
-    pub fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
+    pub async fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         let _guard = self
             .scale_lock
             .lock()
             .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
-        self.store
-            .write()
-            .expect("MemBrokerService::migrate_slots")
-            .migrate_slots(cluster_name)
+        self.storage.migrate_slots(cluster_name).await
     }
 
-    pub fn migrate_slots_to_scale_down(
+    pub async fn migrate_slots_to_scale_down(
         &self,
         cluster_name: String,
         new_node_num: usize,
@@ -405,10 +425,9 @@ impl MemBrokerService {
             .lock()
             .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
-        self.store
-            .write()
-            .expect("MemBrokerService::migrate_slots_to_scale_down")
+        self.storage
             .migrate_slots_to_scale_down(cluster_name, new_node_num)
+            .await
     }
 
     pub async fn auto_scale_node_number(
@@ -426,10 +445,9 @@ impl MemBrokerService {
             .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
 
         let (scale_op, proxy_addresses, cluster_epoch) = self
-            .store
-            .write()
-            .expect("MemBrokerService::auto_scale_node_number")
-            .auto_change_node_number(cluster_name.clone(), new_node_num)?;
+            .storage
+            .auto_change_node_number(cluster_name.clone(), new_node_num)
+            .await?;
 
         if let ScaleOp::NoOp | ScaleOp::ScaleDown = scale_op {
             return Ok(());
@@ -443,76 +461,54 @@ impl MemBrokerService {
             return Err(MetaStoreError::ProxyNotSync);
         }
 
-        self.store
-            .write()
-            .expect("MemBrokerService::auto_scale_node_number")
+        self.storage
             .auto_scale_out_node_number(cluster_name, new_node_num)
+            .await
     }
 
-    pub fn get_failures(&self) -> Vec<String> {
+    pub async fn get_failures(&self) -> Result<Vec<String>, MetaStoreError> {
         let failure_ttl = chrono::Duration::seconds(self.config.failure_ttl as i64);
         let failure_quorum = self.config.failure_quorum;
-        self.store
-            .write()
-            .expect("MemBrokerService::get_failures")
-            .get_failures(failure_ttl, failure_quorum)
+        self.storage.get_failures(failure_ttl, failure_quorum).await
     }
 
-    pub fn add_failure(&self, address: String, reporter_id: String) {
-        self.store
-            .write()
-            .expect("MemBrokerService::add_failure")
-            .add_failure(address, reporter_id)
+    pub async fn add_failure(
+        &self,
+        address: String,
+        reporter_id: String,
+    ) -> Result<(), MetaStoreError> {
+        self.storage.add_failure(address, reporter_id).await
     }
 
-    pub fn commit_migration(&self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
+    pub async fn commit_migration(&self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
         // TODO: Maybe we need to make `clear_free_nodes` of `commit_migration` configurable.
-        self.store
-            .write()
-            .expect("MemBrokerService::commit_migration")
-            .commit_migration(task, false)
+        self.storage.commit_migration(task, false).await
     }
 
-    pub fn replace_failed_proxy(
+    pub async fn replace_failed_proxy(
         &self,
         failed_proxy_address: String,
     ) -> Result<Option<Proxy>, MetaStoreError> {
         let migration_limit = self.config.migration_limit;
-        self.store
-            .write()
-            .expect("MemBrokerService::replace_failed_node")
+        self.storage
             .replace_failed_proxy(failed_proxy_address, migration_limit)
+            .await
     }
 
-    pub fn get_failed_proxies(&self) -> Vec<String> {
-        self.store
-            .read()
-            .expect("MemBrokerService::get_failed_proxies")
-            .get_failed_proxies()
+    pub async fn get_failed_proxies(&self) -> Result<Vec<String>, MetaStoreError> {
+        self.storage.get_failed_proxies().await
     }
 
-    pub fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemBrokerService::force_bump_all_epoch")
-            .force_bump_all_epoch(new_epoch)
+    pub async fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError> {
+        self.storage.force_bump_all_epoch(new_epoch).await
     }
 
-    pub fn get_epoch(&self) -> Result<u64, MetaStoreError> {
-        let epoch = self
-            .store
-            .read()
-            .expect("MemBrokerService::get_epoch")
-            .get_global_epoch();
-        Ok(epoch)
+    pub async fn get_epoch(&self) -> Result<u64, MetaStoreError> {
+        self.storage.get_global_epoch().await
     }
 
     pub async fn recover_epoch(&self) -> Result<Vec<String>, MetaStoreError> {
-        let proxy_addresses = self
-            .store
-            .read()
-            .expect("MemBrokerService::recover_epoch")
-            .get_proxies();
+        let proxy_addresses = self.storage.get_proxy_addresses(None, None).await?;
         let EpochFetchResult {
             max_epoch,
             failed_addresses,
@@ -521,18 +517,12 @@ impl MemBrokerService {
             "Get largest epoch {} with failed addresses: {:?}",
             max_epoch, failed_addresses
         );
-        self.store
-            .write()
-            .expect("MemBrokerService::recover_epoch")
-            .recover_epoch(max_epoch + 1);
+        self.storage.recover_epoch(max_epoch + 1).await?;
         Ok(failed_addresses)
     }
 
-    pub fn check_metadata(&self) -> Result<(), MetaStore> {
-        self.store
-            .read()
-            .expect("MemBrokerService::check_metadata")
-            .check()
+    pub async fn check_metadata(&self) -> Result<Option<MetaStore>, MetaStoreError> {
+        self.storage.check_metadata().await
     }
 }
 
@@ -542,15 +532,18 @@ async fn get_version(_req: HttpRequest) -> &'static str {
     UNDERMOON_VERSION
 }
 
-async fn get_all_metadata(state: ServiceState) -> impl Responder {
-    let metadata = state.get_all_data();
-    web::Json(metadata)
+async fn get_all_metadata(state: ServiceState) -> Result<web::Json<MetaStore>, MetaStoreError> {
+    let metadata = state.get_all_data().await?;
+    Ok(web::Json(metadata))
 }
 
 async fn restore_metadata(
     (meta_store, state): (web::Json<MetaStore>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    state.restore_metadata(meta_store.into_inner()).map(|_| "")
+    state
+        .restore_metadata(meta_store.into_inner())
+        .await
+        .map(|_| "")
 }
 
 #[derive(Deserialize)]
@@ -561,49 +554,50 @@ struct Pagination {
 
 async fn get_proxy_addresses(
     (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ProxyAddressesPayload>, MetaStoreError> {
     let Pagination { offset, limit } = pagination;
-    let addresses = state.get_proxy_addresses(offset, limit);
-    web::Json(ProxyAddressesPayload { addresses })
+    let addresses = state.get_proxy_addresses(offset, limit).await?;
+    Ok(web::Json(ProxyAddressesPayload { addresses }))
 }
 
 async fn get_proxy_by_address(
     (path, state): (web::Path<(String,)>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ProxyPayload>, MetaStoreError> {
     let name = path.into_inner().0;
-    let proxy = state.get_proxy_by_address(&name);
-    web::Json(ProxyPayload { proxy })
+    let proxy = state.get_proxy_by_address(&name).await?;
+    Ok(web::Json(ProxyPayload { proxy }))
 }
 
 async fn get_cluster_names(
     (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ClusterNamesPayload>, MetaStoreError> {
     let Pagination { offset, limit } = pagination;
-    let names = state.get_cluster_names(offset, limit);
-    web::Json(ClusterNamesPayload { names })
+    let names = state.get_cluster_names(offset, limit).await?;
+    Ok(web::Json(ClusterNamesPayload { names }))
 }
 
 async fn get_cluster_by_name(
     (path, state): (web::Path<(String,)>, ServiceState),
-) -> impl Responder {
+) -> Result<web::Json<ClusterPayload>, MetaStoreError> {
     let name = path.into_inner().0;
-    let cluster = state.get_cluster_by_name(&name);
-    web::Json(ClusterPayload { cluster })
+    let cluster = state.get_cluster_by_name(&name).await?;
+    Ok(web::Json(ClusterPayload { cluster }))
 }
 
 async fn get_cluster_info_by_name(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<web::Json<ClusterInfo>, MetaStoreError> {
     let name = path.into_inner().0;
-    match state.get_cluster_info_by_name(&name) {
-        Some(cluster_info) => Ok(web::Json(cluster_info)),
-        None => Err(MetaStoreError::ClusterNotFound),
+    match state.get_cluster_info_by_name(&name).await {
+        Ok(Some(cluster_info)) => Ok(web::Json(cluster_info)),
+        Ok(None) => Err(MetaStoreError::ClusterNotFound),
+        Err(err) => Err(err),
     }
 }
 
-async fn get_failures(state: ServiceState) -> impl Responder {
-    let addresses = state.get_failures();
-    web::Json(FailuresPayload { addresses })
+async fn get_failures(state: ServiceState) -> Result<web::Json<FailuresPayload>, MetaStoreError> {
+    let addresses = state.get_failures().await?;
+    Ok(web::Json(FailuresPayload { addresses }))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -617,9 +611,10 @@ pub struct ProxyResourcePayload {
 async fn add_proxy(
     (proxy_resource, state): (web::Json<ProxyResourcePayload>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    let res = state.add_proxy(proxy_resource.into_inner()).map(|()| "")?;
+    // This may still successfully update the store even on error.
+    let res = state.add_proxy(proxy_resource.into_inner()).await;
     state.trigger_update().await?;
-    Ok(res)
+    res.map(|()| "")
 }
 
 #[derive(Deserialize, Serialize)]
@@ -636,18 +631,18 @@ async fn add_cluster(
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     let CreateClusterPayload { node_number } = payload.into_inner();
-    let res = state.add_cluster(cluster_name, node_number).map(|()| "")?;
+    state.add_cluster(cluster_name, node_number).await?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
 }
 
 async fn remove_cluster(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    let res = state.remove_cluster(cluster_name).map(|()| "")?;
+    state.remove_cluster(cluster_name).await?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
 }
 
 #[derive(Deserialize, Serialize)]
@@ -666,6 +661,7 @@ async fn auto_scale_up_nodes(
     let node_num = payload.into_inner().cluster_node_number;
     let res = state
         .auto_scale_up_nodes(cluster_name, node_num)
+        .await
         .map(web::Json)?;
     state.trigger_update().await?;
     Ok(res)
@@ -685,18 +681,21 @@ async fn auto_add_nodes(
 ) -> Result<web::Json<Vec<Node>>, MetaStoreError> {
     let cluster_name = path.into_inner().0;
     let node_num = payload.into_inner().node_number;
-    let res = state.auto_add_node(cluster_name, node_num).map(web::Json)?;
+    let res = state
+        .auto_add_nodes(cluster_name, node_num)
+        .await
+        .map(web::Json)?;
     state.trigger_update().await?;
     Ok(res)
 }
 
-async fn audo_delete_free_nodes(
+async fn auto_delete_free_nodes(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    let res = state.audo_delete_free_nodes(cluster_name).map(|()| "")?;
+    state.auto_delete_free_nodes(cluster_name).await?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
 }
 
 async fn change_config(
@@ -707,29 +706,27 @@ async fn change_config(
     ),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    let res = state
+    state
         .change_config(cluster_name, config.into_inner())
-        .map(|()| "")?;
+        .await?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
 }
 
 async fn balance_masters(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let cluster_name = path.into_inner().0;
-    let res = state.balance_masters(cluster_name).map(|()| "");
-    let sync_res = state.trigger_update().await;
-    let res = res?;
-    sync_res?;
-    Ok(res)
+    state.balance_masters(cluster_name).await?;
+    state.trigger_update().await?;
+    Ok("")
 }
 
 async fn bump_epoch(
     (path, state): (web::Path<(u64,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let new_epoch = path.into_inner().0;
-    state.force_bump_all_epoch(new_epoch)?;
+    state.force_bump_all_epoch(new_epoch).await?;
     state.trigger_update().await?;
     Ok("")
 }
@@ -738,9 +735,9 @@ async fn remove_proxy(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (proxy_address,) = path.into_inner();
-    let res = state.remove_proxy(proxy_address).map(|()| "")?;
+    state.remove_proxy(proxy_address).await?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
 }
 
 #[derive(Deserialize, Serialize)]
@@ -751,7 +748,7 @@ pub struct ResourceFailureCheckPayload {
 async fn check_resource_for_failures(
     state: ServiceState,
 ) -> Result<web::Json<ResourceFailureCheckPayload>, MetaStoreError> {
-    let hosts_cannot_fail = state.check_resource_for_failures()?;
+    let hosts_cannot_fail = state.check_resource_for_failures().await?;
     Ok(web::Json(ResourceFailureCheckPayload { hosts_cannot_fail }))
 }
 
@@ -773,7 +770,7 @@ async fn migrate_slots(
     (path, state): (web::Path<(String,)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name,) = path.into_inner();
-    state.migrate_slots(cluster_name)?;
+    state.migrate_slots(cluster_name).await?;
     state.trigger_update().await?;
     Ok("")
 }
@@ -782,7 +779,9 @@ async fn migrate_slots_to_scale_down(
     (path, state): (web::Path<(String, usize)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (cluster_name, new_node_num) = path.into_inner();
-    state.migrate_slots_to_scale_down(cluster_name, new_node_num)?;
+    state
+        .migrate_slots_to_scale_down(cluster_name, new_node_num)
+        .await?;
     state.trigger_update().await?;
     Ok("")
 }
@@ -800,7 +799,7 @@ async fn add_failure(
     (path, state): (web::Path<(String, String)>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
     let (server_proxy_address, reporter_id) = path.into_inner();
-    state.add_failure(server_proxy_address, reporter_id);
+    state.add_failure(server_proxy_address, reporter_id).await?;
     state.trigger_update().await?;
     Ok("")
 }
@@ -808,9 +807,9 @@ async fn add_failure(
 async fn commit_migration(
     (task, state): (web::Json<MigrationTaskMeta>, ServiceState),
 ) -> Result<&'static str, MetaStoreError> {
-    let res = state.commit_migration(task.into_inner()).map(|()| "")?;
+    state.commit_migration(task.into_inner()).await?;
     state.trigger_update().await?;
-    Ok(res)
+    Ok("")
 }
 
 async fn replace_failed_node(
@@ -819,6 +818,7 @@ async fn replace_failed_node(
     let (proxy_address,) = path.into_inner();
     let res = state
         .replace_failed_proxy(proxy_address)
+        .await
         .map(|proxy| ReplaceProxyResponse { proxy })
         .map(web::Json);
     let sync_res = state.trigger_update().await;
@@ -827,13 +827,15 @@ async fn replace_failed_node(
     Ok(res)
 }
 
-async fn get_failed_proxies(state: ServiceState) -> impl Responder {
-    let addresses = state.get_failed_proxies();
-    web::Json(FailedProxiesPayload { addresses })
+async fn get_failed_proxies(
+    state: ServiceState,
+) -> Result<web::Json<FailedProxiesPayload>, MetaStoreError> {
+    let addresses = state.get_failed_proxies().await?;
+    Ok(web::Json(FailedProxiesPayload { addresses }))
 }
 
 async fn get_epoch(state: ServiceState) -> Result<String, MetaStoreError> {
-    state.get_epoch().map(|epoch| epoch.to_string())
+    state.get_epoch().await.map(|epoch| epoch.to_string())
 }
 
 #[derive(Deserialize, Serialize)]
@@ -879,6 +881,8 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::OneClusterAlreadyExisted => http::StatusCode::CONFLICT,
             MetaStoreError::ProxyNotSync => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::NodeNumberChanging => http::StatusCode::CONFLICT,
+            MetaStoreError::External => http::StatusCode::INTERNAL_SERVER_ERROR,
+            MetaStoreError::Retry => http::StatusCode::CONFLICT,
         }
     }
 
