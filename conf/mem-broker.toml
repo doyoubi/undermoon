@@ -35,7 +35,9 @@ storage_type = "memory"
 
 # Use the following config to enable external http storage.
 #
-# undermoon_name = "my_undermoon_name"
+# This is used for external system to differentiate different undermoon clusters
+# storage_name = "my_storage_name"
+# storage_password = "somepassword"
 # storage_type = "http"
 # http_storage_address = "localhost:9999"
 # refresh_interval = 5

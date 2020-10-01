@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const EXTERNAL_HTTP_STORE_API_PATH: &str = "/api/v1/store";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExternalStore {
@@ -25,7 +26,8 @@ pub struct ExternalStore {
 pub struct ExternalHttpStorage {
     // This name is used for the external storage
     // to differentiate different undermoon clusters.
-    undermoon_name: String,
+    storage_name: String,
+    storage_password: String,
 
     http_service_address: String,
     client: reqwest::Client,
@@ -36,9 +38,15 @@ pub struct ExternalHttpStorage {
 }
 
 impl ExternalHttpStorage {
-    pub fn new(undermoon_name: String, http_service_address: String, enable_ordered_proxy: bool) -> Self {
+    pub fn new(
+        storage_name: String,
+        storage_password: String,
+        http_service_address: String,
+        enable_ordered_proxy: bool,
+    ) -> Self {
         Self {
-            undermoon_name,
+            storage_name,
+            storage_password,
             http_service_address,
             client: reqwest::Client::new(),
             cached_store: ArcSwap::new(Arc::new(MetaStore::new(enable_ordered_proxy))),
@@ -48,7 +56,7 @@ impl ExternalHttpStorage {
     fn gen_url(&self) -> String {
         format!(
             "http://{}{}/{}",
-            self.http_service_address, EXTERNAL_HTTP_STORE_API_PATH, self.undermoon_name,
+            self.http_service_address, EXTERNAL_HTTP_STORE_API_PATH, self.storage_name,
         )
     }
 
@@ -57,7 +65,11 @@ impl ExternalHttpStorage {
         // Response:
         //     HTTP 200: ExternalStore json
         let url = self.gen_url();
-        let response = self.client.get(&url).send().await.map_err(|e| {
+        let request = self.client.get(&url).timeout(HTTP_TIMEOUT).basic_auth(
+            self.storage_name.clone(),
+            Some(self.storage_password.clone()),
+        );
+        let response = request.send().await.map_err(|e| {
             error!("Failed to get external http store {:?}", e);
             MetaStoreError::External
         })?;
@@ -101,16 +113,14 @@ impl ExternalHttpStorage {
         //     HTTP 409 for version conflict
         trace!("Update json {:?}", serde_json::to_string(&external_store));
         let url = self.gen_url();
-        let response = self
-            .client
-            .put(&url)
-            .json(&external_store)
-            .send()
-            .await
-            .map_err(|e| {
-                error!("Failed to update external http store {:?}", e);
-                MetaStoreError::External
-            })?;
+        let request = self.client.put(&url).timeout(HTTP_TIMEOUT).basic_auth(
+            self.storage_name.clone(),
+            Some(self.storage_password.clone()),
+        );
+        let response = request.json(&external_store).send().await.map_err(|e| {
+            error!("Failed to update external http store {:?}", e);
+            MetaStoreError::External
+        })?;
 
         let status = response.status();
 
