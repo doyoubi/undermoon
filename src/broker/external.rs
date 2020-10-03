@@ -162,6 +162,7 @@ impl ExternalHttpStorage {
     pub async fn keep_refreshing_cache(&self, config: MemBrokerConfig, refresh_interval: Duration) {
         info!("try initializing the data");
         self.try_init().await;
+
         info!("external http storage start refreshing task");
         let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
         let mut update_failures_count = 0;

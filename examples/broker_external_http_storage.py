@@ -13,6 +13,17 @@ version = 0
 store = None
 
 
+# This is configured in mem-broker.toml
+storage_name = 'my_storage_name'
+storage_password = 'somepassword'
+
+
+def check_auth(username, password):
+    print('user:pass', username, password)
+    if username != storage_name or password != storage_password:
+        abort(401)
+
+
 @app.route(STORE_PATH, methods=['GET'])
 def get(name):
     response = {
@@ -24,6 +35,9 @@ def get(name):
 
 @app.route(STORE_PATH, methods=['PUT'])
 def update(name):
+    auth = request.authorization
+    check_auth(auth.username, auth.password)
+
     content = request.get_json()
     global version, store
     v = content['version']
