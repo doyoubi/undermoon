@@ -49,7 +49,15 @@ fn gen_conf() -> MemBrokerConfig {
                 .unwrap_or_else(|_| "localhost:9999".to_string());
             let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or_else(|_| 5);
             let refresh_interval = Duration::from_secs(refresh_interval);
+            let storage_name = s
+                .get::<String>("storage_name")
+                .unwrap_or_else(|_| "my_storage_name".to_string());
+            let storage_password = s
+                .get::<String>("storage_password")
+                .unwrap_or_else(|_| "my_storage_password".to_string());
             StorageConfig::ExternalHTTP {
+                storage_name,
+                storage_password,
                 address,
                 refresh_interval,
             }
@@ -147,9 +155,9 @@ async fn main() -> std::io::Result<()> {
     let update_file_interval = config.update_meta_file_interval;
     let sync_meta_interval = config.sync_meta_interval;
 
-    let meta_storage = Arc::new(JsonFileStorage::new(config.meta_filename.clone()));
+    let meta_persistence = Arc::new(JsonFileStorage::new(config.meta_filename.clone()));
     let meta_store = if config.recover_from_meta_file {
-        meta_storage
+        meta_persistence
             .load()
             .await
             .map_err(meta_sync_error_to_io_err)?
@@ -161,7 +169,7 @@ async fn main() -> std::io::Result<()> {
     let meta_replicator = JsonMetaReplicator::new(config.replica_addresses.clone(), http_client);
     let meta_replicator = Arc::new(meta_replicator);
 
-    let service = MemBrokerService::new(config, meta_storage, meta_replicator, meta_store)
+    let service = MemBrokerService::new(config, meta_persistence, meta_replicator, meta_store)
         .map_err(meta_error_to_io_error)?;
     let service = Arc::new(service);
 

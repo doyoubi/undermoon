@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const EXTERNAL_HTTP_STORE_API_PATH: &str = "/api/v1/store";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExternalStore {
@@ -23,6 +24,11 @@ pub struct ExternalStore {
 }
 
 pub struct ExternalHttpStorage {
+    // This name is used for the external storage
+    // to differentiate different undermoon clusters.
+    storage_name: String,
+    storage_password: String,
+
     http_service_address: String,
     client: reqwest::Client,
 
@@ -32,8 +38,15 @@ pub struct ExternalHttpStorage {
 }
 
 impl ExternalHttpStorage {
-    pub fn new(http_service_address: String, enable_ordered_proxy: bool) -> Self {
+    pub fn new(
+        storage_name: String,
+        storage_password: String,
+        http_service_address: String,
+        enable_ordered_proxy: bool,
+    ) -> Self {
         Self {
+            storage_name,
+            storage_password,
             http_service_address,
             client: reqwest::Client::new(),
             cached_store: ArcSwap::new(Arc::new(MetaStore::new(enable_ordered_proxy))),
@@ -42,8 +55,8 @@ impl ExternalHttpStorage {
 
     fn gen_url(&self) -> String {
         format!(
-            "http://{}{}",
-            self.http_service_address, EXTERNAL_HTTP_STORE_API_PATH
+            "http://{}{}/{}",
+            self.http_service_address, EXTERNAL_HTTP_STORE_API_PATH, self.storage_name,
         )
     }
 
@@ -52,7 +65,11 @@ impl ExternalHttpStorage {
         // Response:
         //     HTTP 200: ExternalStore json
         let url = self.gen_url();
-        let response = self.client.get(&url).send().await.map_err(|e| {
+        let request = self.client.get(&url).timeout(HTTP_TIMEOUT).basic_auth(
+            self.storage_name.clone(),
+            Some(self.storage_password.clone()),
+        );
+        let response = request.send().await.map_err(|e| {
             error!("Failed to get external http store {:?}", e);
             MetaStoreError::External
         })?;
@@ -96,16 +113,14 @@ impl ExternalHttpStorage {
         //     HTTP 409 for version conflict
         trace!("Update json {:?}", serde_json::to_string(&external_store));
         let url = self.gen_url();
-        let response = self
-            .client
-            .put(&url)
-            .json(&external_store)
-            .send()
-            .await
-            .map_err(|e| {
-                error!("Failed to update external http store {:?}", e);
-                MetaStoreError::External
-            })?;
+        let request = self.client.put(&url).timeout(HTTP_TIMEOUT).basic_auth(
+            self.storage_name.clone(),
+            Some(self.storage_password.clone()),
+        );
+        let response = request.json(&external_store).send().await.map_err(|e| {
+            error!("Failed to update external http store {:?}", e);
+            MetaStoreError::External
+        })?;
 
         let status = response.status();
 
@@ -139,17 +154,25 @@ impl ExternalHttpStorage {
         &self,
         external_store: ExternalStore,
     ) -> Result<(), MetaStoreError> {
+        // This method should only used for non-empty version.
+        if external_store.version.is_none() {
+            return Err(MetaStoreError::EmptyExternalVersion);
+        }
         self.update_external_store(external_store.clone()).await?;
         self.cached_store.swap(Arc::new(external_store.store));
         Ok(())
     }
 
-    pub async fn keep_refreshing_cache(&self, config: MemBrokerConfig, refresh_interval: Duration) {
+    pub async fn keep_refreshing_cache(
+        &self,
+        config: MemBrokerConfig,
+        refresh_interval: Duration,
+    ) -> ! {
         info!("try initializing the data");
         self.try_init().await;
+
         info!("external http storage start refreshing task");
         let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
-        let mut update_failures_count = 0;
         loop {
             Delay::new(refresh_interval).await;
             let ExternalStore { mut store, version } = match self.get_external_store().await {
@@ -164,19 +187,16 @@ impl ExternalHttpStorage {
             };
 
             // Cleanup the failures map
-            store.get_failures(failure_ttl, config.failure_quorum);
-            let res = if update_failures_count > 10 {
-                update_failures_count = 0;
-                self.update_external_store_and_cache(ExternalStore { store, version })
-                    .await
+            if store.cleanup_failures(failure_ttl, config.failure_quorum) {
+                let res = self
+                    .update_external_store_and_cache(ExternalStore { store, version })
+                    .await;
+                if let Err(err) = res {
+                    error!("failed to refresh cache: {:?}", err);
+                }
             } else {
-                update_failures_count += 1;
                 self.cached_store.swap(Arc::new(store));
-                Ok(())
             };
-            if let Err(err) = res {
-                error!("failed to refresh cache: {:?}", err);
-            }
         }
     }
 
@@ -203,6 +223,7 @@ impl MetaStorage for ExternalHttpStorage {
         Ok(store.clone())
     }
 
+    // This will NOT update the remote store as it does not contains `version`.
     async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
         // Avoid updating the store frequently.
         let store = self.cached_store.lease();
@@ -210,11 +231,8 @@ impl MetaStorage for ExternalHttpStorage {
             return Ok(());
         }
 
-        self.update_external_store_and_cache(ExternalStore {
-            store: meta_store,
-            version: None,
-        })
-        .await
+        self.cached_store.swap(Arc::new(meta_store));
+        Ok(())
     }
 
     async fn get_cluster_names(

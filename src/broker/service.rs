@@ -133,6 +133,10 @@ pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 pub enum StorageConfig {
     Memory,
     ExternalHTTP {
+        // This name is used for the external storage
+        // to differentiate different undermoon clusters.
+        storage_name: String,
+        storage_password: String,
         address: String,
         refresh_interval: Duration,
     },
@@ -198,11 +202,15 @@ impl MemBrokerService {
                 Arc::new(MemoryStorage::new(Arc::new(RwLock::new(meta_store))))
             }
             StorageConfig::ExternalHTTP {
+                storage_name,
+                storage_password,
                 address,
                 refresh_interval,
             } => {
                 let config_clone = config.clone();
                 let http_storage = Arc::new(ExternalHttpStorage::new(
+                    storage_name,
+                    storage_password,
                     address,
                     config.enable_ordered_proxy,
                 ));
@@ -883,6 +891,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::NodeNumberChanging => http::StatusCode::CONFLICT,
             MetaStoreError::External => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::Retry => http::StatusCode::CONFLICT,
+            MetaStoreError::EmptyExternalVersion => http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 

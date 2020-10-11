@@ -3,15 +3,6 @@ failure_ttl = 60
 failure_quorum = 1
 migration_limit = 2
 
-recover_from_meta_file = true
-meta_filename = "metadata"
-# Refresh meta file on each update
-auto_update_meta_file = true
-# Periodically update meta file.
-# This is in seconds.
-# Use zero to disable it.
-update_meta_file_interval = 10
-
 # The HTTP API address of other memory brokers.
 replica_addresses = []
 # replica_addresses = ["192.168.0.123:7799", "192.168.0.123:8899"]
@@ -32,10 +23,21 @@ sync_meta_interval = 10
 enable_ordered_proxy = false
 
 storage_type = "memory"
+recover_from_meta_file = true
+meta_filename = "metadata"
+# Refresh meta file on each update
+auto_update_meta_file = true
+# Periodically update meta file.
+# This is in seconds.
+# Use zero to disable it.
+update_meta_file_interval = 10
 
 # Use the following config to enable external http storage.
 #
+# This is used for external system to differentiate different undermoon clusters
 # storage_type = "http"
+# storage_name = "my_storage_name"
+# storage_password = "somepassword"
 # http_storage_address = "localhost:9999"
 # refresh_interval = 5
 

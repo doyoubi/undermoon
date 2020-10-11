@@ -408,6 +408,10 @@ impl MetaStore {
         MetaStoreUpdate::new(self).get_failures(failure_ttl, failure_quorum)
     }
 
+    pub fn cleanup_failures(&mut self, failure_ttl: chrono::Duration, failure_quorum: u64) -> bool {
+        MetaStoreUpdate::new(self).cleanup_failures(failure_ttl, failure_quorum)
+    }
+
     pub fn add_proxy(
         &mut self,
         proxy_address: String,
@@ -654,6 +658,7 @@ pub enum MetaStoreError {
     NodeNumberChanging,
     External,
     Retry,
+    EmptyExternalVersion,
 }
 
 impl MetaStoreError {
@@ -688,6 +693,7 @@ impl MetaStoreError {
             Self::NodeNumberChanging => "NODE_NUMBER_CHANGING",
             Self::External => "EXTERNAL",
             Self::Retry => "RETRY",
+            Self::EmptyExternalVersion => "EMPTY_EXTERNAL_VERSION",
         }
     }
 }

@@ -172,6 +172,14 @@ impl<'a> MetaStoreUpdate<'a> {
             .collect()
     }
 
+    // Returns whether store has changed.
+    pub fn cleanup_failures(&mut self, failure_ttl: chrono::Duration, failure_quorum: u64) -> bool {
+        let len_before = self.store.failures.len();
+        self.get_failures(failure_ttl, failure_quorum);
+        let len_after = self.store.failures.len();
+        len_before != len_after
+    }
+
     pub fn add_proxy(
         &mut self,
         proxy_address: String,
