@@ -154,12 +154,20 @@ impl ExternalHttpStorage {
         &self,
         external_store: ExternalStore,
     ) -> Result<(), MetaStoreError> {
+        // This method should only used for non-empty version.
+        if external_store.version.is_none() {
+            return Err(MetaStoreError::EmptyExternalVersion);
+        }
         self.update_external_store(external_store.clone()).await?;
         self.cached_store.swap(Arc::new(external_store.store));
         Ok(())
     }
 
-    pub async fn keep_refreshing_cache(&self, config: MemBrokerConfig, refresh_interval: Duration) {
+    pub async fn keep_refreshing_cache(
+        &self,
+        config: MemBrokerConfig,
+        refresh_interval: Duration,
+    ) -> ! {
         info!("try initializing the data");
         self.try_init().await;
 
@@ -215,6 +223,7 @@ impl MetaStorage for ExternalHttpStorage {
         Ok(store.clone())
     }
 
+    // This will NOT update the remote store as it does not contains `version`.
     async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
         // Avoid updating the store frequently.
         let store = self.cached_store.lease();
@@ -222,11 +231,8 @@ impl MetaStorage for ExternalHttpStorage {
             return Ok(());
         }
 
-        self.update_external_store_and_cache(ExternalStore {
-            store: meta_store,
-            version: None,
-        })
-        .await
+        self.cached_store.swap(Arc::new(meta_store));
+        Ok(())
     }
 
     async fn get_cluster_names(

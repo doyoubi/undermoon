@@ -658,6 +658,7 @@ pub enum MetaStoreError {
     NodeNumberChanging,
     External,
     Retry,
+    EmptyExternalVersion,
 }
 
 impl MetaStoreError {
@@ -692,6 +693,7 @@ impl MetaStoreError {
             Self::NodeNumberChanging => "NODE_NUMBER_CHANGING",
             Self::External => "EXTERNAL",
             Self::Retry => "RETRY",
+            Self::EmptyExternalVersion => "EMPTY_EXTERNAL_VERSION",
         }
     }
 }

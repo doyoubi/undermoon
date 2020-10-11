@@ -891,6 +891,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::NodeNumberChanging => http::StatusCode::CONFLICT,
             MetaStoreError::External => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::Retry => http::StatusCode::CONFLICT,
+            MetaStoreError::EmptyExternalVersion => http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
