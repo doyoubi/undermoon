@@ -165,7 +165,6 @@ impl ExternalHttpStorage {
 
         info!("external http storage start refreshing task");
         let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
-        let mut update_failures_count = 0;
         loop {
             Delay::new(refresh_interval).await;
             let ExternalStore { mut store, version } = match self.get_external_store().await {
@@ -180,19 +179,16 @@ impl ExternalHttpStorage {
             };
 
             // Cleanup the failures map
-            store.get_failures(failure_ttl, config.failure_quorum);
-            let res = if update_failures_count > 10 {
-                update_failures_count = 0;
-                self.update_external_store_and_cache(ExternalStore { store, version })
-                    .await
+            if store.cleanup_failures(failure_ttl, config.failure_quorum) {
+                let res = self
+                    .update_external_store_and_cache(ExternalStore { store, version })
+                    .await;
+                if let Err(err) = res {
+                    error!("failed to refresh cache: {:?}", err);
+                }
             } else {
-                update_failures_count += 1;
                 self.cached_store.swap(Arc::new(store));
-                Ok(())
             };
-            if let Err(err) = res {
-                error!("failed to refresh cache: {:?}", err);
-            }
         }
     }
 

@@ -408,6 +408,10 @@ impl MetaStore {
         MetaStoreUpdate::new(self).get_failures(failure_ttl, failure_quorum)
     }
 
+    pub fn cleanup_failures(&mut self, failure_ttl: chrono::Duration, failure_quorum: u64) -> bool {
+        MetaStoreUpdate::new(self).cleanup_failures(failure_ttl, failure_quorum)
+    }
+
     pub fn add_proxy(
         &mut self,
         proxy_address: String,

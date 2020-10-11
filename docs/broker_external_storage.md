@@ -6,16 +6,21 @@ so there's a `<name>` argument in the path to differentiate these clusters.
 Query data:
 ```
 GET /api/v1/store/<name>
+
 Response:
   HTTP 200: ExternalStore json
+  HTTP 404: <name> not found
 ```
 
 Update data:
 ```
 PUT /api/v1/store/<name>
+Basic Auth: <name>:<password>
+
 Request: ExternalStore json
 Response:
   HTTP 200 for success
+  HTTP 404: <name> not found
   HTTP 409 for version conflict
 ```
 
