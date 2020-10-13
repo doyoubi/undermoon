@@ -71,7 +71,11 @@ impl ExternalHttpStorage {
         );
         let response = request.send().await.map_err(|e| {
             error!("Failed to get external http store {:?}", e);
-            MetaStoreError::External
+            if e.is_timeout() {
+                MetaStoreError::ExternalTimeout
+            } else {
+                MetaStoreError::External
+            }
         })?;
 
         let status = response.status();
@@ -119,7 +123,11 @@ impl ExternalHttpStorage {
         );
         let response = request.json(&external_store).send().await.map_err(|e| {
             error!("Failed to update external http store {:?}", e);
-            MetaStoreError::External
+            if e.is_timeout() {
+                MetaStoreError::ExternalTimeout
+            } else {
+                MetaStoreError::External
+            }
         })?;
 
         let status = response.status();
