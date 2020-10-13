@@ -129,13 +129,15 @@ pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService
 
 pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 
-#[derive(Debug, Clone)]
+#[derive(Derivative)]
+#[derivative(Debug, Clone)]
 pub enum StorageConfig {
     Memory,
     ExternalHTTP {
         // This name is used for the external storage
         // to differentiate different undermoon clusters.
         storage_name: String,
+        #[derivative(Debug="ignore")]
         storage_password: String,
         address: String,
         refresh_interval: Duration,
@@ -892,6 +894,7 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::External => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::Retry => http::StatusCode::CONFLICT,
             MetaStoreError::EmptyExternalVersion => http::StatusCode::INTERNAL_SERVER_ERROR,
+            MetaStoreError::ExternalTimeout => http::StatusCode::GATEWAY_TIMEOUT,
         }
     }
 

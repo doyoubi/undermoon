@@ -659,6 +659,7 @@ pub enum MetaStoreError {
     External,
     Retry,
     EmptyExternalVersion,
+    ExternalTimeout,
 }
 
 impl MetaStoreError {
@@ -694,6 +695,7 @@ impl MetaStoreError {
             Self::External => "EXTERNAL",
             Self::Retry => "RETRY",
             Self::EmptyExternalVersion => "EMPTY_EXTERNAL_VERSION",
+            Self::ExternalTimeout => "EXTERNAL_TIMEOUT",
         }
     }
 }
