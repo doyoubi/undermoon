@@ -137,7 +137,7 @@ pub enum StorageConfig {
         // This name is used for the external storage
         // to differentiate different undermoon clusters.
         storage_name: String,
-        #[derivative(Debug="ignore")]
+        #[derivative(Debug = "ignore")]
         storage_password: String,
         address: String,
         refresh_interval: Duration,

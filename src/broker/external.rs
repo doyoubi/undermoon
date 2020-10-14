@@ -471,9 +471,15 @@ impl MetaStorage for ExternalHttpStorage {
         index: Option<usize>,
     ) -> Result<(), MetaStoreError> {
         let ExternalStore { mut store, version } = self.get_external_store().await?;
+
+        let origin_epoch = store.get_global_epoch();
         let res = store.add_proxy(proxy_address, nodes, host, index);
-        self.update_external_store_and_cache(ExternalStore { store, version })
-            .await?;
+        // This api is called frequently by undermoon-operator.
+        // Only update external storage if there's change.
+        if origin_epoch != store.get_global_epoch() {
+            self.update_external_store_and_cache(ExternalStore { store, version })
+                .await?;
+        }
         res
     }
 

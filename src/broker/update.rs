@@ -203,8 +203,6 @@ impl<'a> MetaStoreUpdate<'a> {
             (true, None) => return Err(MetaStoreError::MissingIndex),
         };
 
-        self.store.bump_global_epoch();
-
         let exists = self.store.all_proxies.contains_key(&proxy_address);
 
         self.store
@@ -218,8 +216,12 @@ impl<'a> MetaStoreUpdate<'a> {
                 cluster: None,
             });
 
-        self.store.failed_proxies.remove(&proxy_address);
-        self.store.failures.remove(&proxy_address);
+        let mut cleared = self.store.failed_proxies.remove(&proxy_address);
+        cleared = self.store.failures.remove(&proxy_address).is_some() || cleared;
+
+        if !exists || cleared {
+            self.store.bump_global_epoch();
+        }
 
         if !exists {
             Ok(())
