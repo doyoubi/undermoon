@@ -788,6 +788,26 @@ mod tests {
     }
 
     #[test]
+    fn test_add_proxy_already_existed() {
+        let mut store = MetaStore::new(false);
+        let proxy_address = "127.0.0.1:7000";
+        let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
+
+        store
+            .add_proxy(proxy_address.to_string(), nodes.clone(), None, None)
+            .unwrap();
+
+        let origin_epoch = store.get_global_epoch();
+
+        let err = store
+            .add_proxy(proxy_address.to_string(), nodes.clone(), None, None)
+            .unwrap_err();
+        assert_eq!(err, MetaStoreError::AlreadyExisted);
+        // The external storage depends on this to reduce the update rate.
+        assert_eq!(origin_epoch, store.get_global_epoch());
+    }
+
+    #[test]
     fn test_specifying_host_when_adding_proxy() {
         let proxy_address = "127.0.0.1:7000";
         let nodes = ["127.0.0.1:6000".to_string(), "127.0.0.1:6001".to_string()];
