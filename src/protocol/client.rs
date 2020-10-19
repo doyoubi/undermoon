@@ -8,7 +8,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use either::Either;
 use futures::{Future, SinkExt, StreamExt};
-use mockall::automock;
+use mockall::{automock, mock};
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -57,9 +57,30 @@ mod client_trait {
             Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>,
         >;
     }
+
+    pub trait RedisClientFactory: ThreadSafe {
+        type Client: RedisClient;
+
+        fn create_client<'s>(
+            &'s self,
+            address: String,
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>>;
+    }
+
+    mock! {
+        pub RedisClientFactory {}
+        pub trait RedisClientFactory: ThreadSafe {
+            type Client = MockRedisClient;
+
+            fn create_client<'s>(
+                &'s self,
+                address: String,
+            ) -> Pin<Box<dyn Future<Output = Result<MockRedisClient, RedisClientError>> + Send + 's>>;
+        }
+    }
 }
 
-pub use client_trait::{MockRedisClient, RedisClient};
+pub use client_trait::{MockRedisClient, MockRedisClientFactory, RedisClient, RedisClientFactory};
 
 fn process_single_cmd_result(
     result: Result<OptionalMulti<RespVec>, RedisClientError>,
@@ -106,15 +127,6 @@ fn process_multi_cmd_result(
         },
         Err(err) => Err(err),
     }
-}
-
-pub trait RedisClientFactory: ThreadSafe {
-    type Client: RedisClient;
-
-    fn create_client<'s>(
-        &'s self,
-        address: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>>;
 }
 
 // For unit tests.
