@@ -130,14 +130,23 @@ impl<'a> MetaStoreUpdate<'a> {
         )
     }
 
-    pub fn add_failure(&mut self, address: String, reporter_id: String) {
+    pub fn add_failure(&mut self, address: String, reporter_id: String) -> bool {
         let now = Utc::now();
+        if let Some(true) = self
+            .store
+            .failures
+            .get(&address)
+            .map(|failures| failures.contains_key(&reporter_id))
+        {
+            return false;
+        }
         self.store.bump_global_epoch();
         self.store
             .failures
             .entry(address)
             .or_insert_with(HashMap::new)
             .insert(reporter_id, now.timestamp());
+        true
     }
 
     pub fn get_failures(

@@ -396,7 +396,7 @@ impl MetaStore {
         MetaStoreQuery::new(self).get_cluster_info_by_name(cluster_name, migration_limit)
     }
 
-    pub fn add_failure(&mut self, address: String, reporter_id: String) {
+    pub fn add_failure(&mut self, address: String, reporter_id: String) -> bool {
         MetaStoreUpdate::new(self).add_failure(address, reporter_id)
     }
 
@@ -1045,12 +1045,17 @@ mod tests {
             .is_some());
         let epoch1 = store.get_global_epoch();
 
-        store.add_failure(failed_address.to_string(), "reporter_id".to_string());
+        let updated = store.add_failure(failed_address.to_string(), "reporter_id".to_string());
+        assert!(updated);
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
         let proxy_num = store.get_proxies().len();
         assert_eq!(proxy_num, original_proxy_num);
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
+
+        let updated = store.add_failure(failed_address.to_string(), "reporter_id".to_string());
+        assert!(!updated);
+        assert_eq!(epoch2, store.get_global_epoch());
 
         let failure_quorum: u64 = 1;
         assert_eq!(
