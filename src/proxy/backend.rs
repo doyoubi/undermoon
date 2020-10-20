@@ -450,6 +450,10 @@ where
                     retry_times,
                     tasks: mut retry_tasks,
                 }) => {
+                    for task in retry_tasks.iter_mut() {
+                        task.log_event(TaskEvent::WritingQueueReceived);
+                        packets.push_back(task.get_packet());
+                    }
                     tasks.extend(retry_tasks.drain(..));
                     Some(retry_times)
                 }
@@ -687,6 +691,179 @@ impl<T> Error for SenderBackendError<T> {
         match self {
             Self::Io(err) => Some(err),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    struct CounterHandler {
+        counter: Arc<AtomicUsize>,
+        replies: Mutex<Vec<RespVec>>,
+    }
+
+    impl CounterHandler {
+        fn new() -> Self {
+            let counter = Arc::new(AtomicUsize::new(0));
+            Self{
+                counter,
+                replies: Mutex::new(vec![]),
+            }
+        }
+
+        fn get_count(&self) -> usize {
+            self.counter.load(Ordering::SeqCst)
+        }
+
+        fn get_replies(&self) -> Vec<RespVec> {
+            self.replies.lock().unwrap().clone()
+        }
+    }
+
+    impl CmdTaskResultHandler for CounterHandler {
+        type Task = DummyCmdTask;
+
+        fn handle_task(
+            &self,
+            _cmd_task: Self::Task,
+            result: BackendResult<<Self::Task as CmdTask>::Pkt>,
+        ) {
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            self.replies.lock().unwrap().push(result.unwrap());
+        }
+    }
+
+    struct DummyCmdTask {
+        resp: RespVec,
+    }
+
+    impl DummyCmdTask {
+        fn new(resp: RespVec) -> Self {
+            Self {resp}
+        }
+    }
+
+    impl CmdTask for DummyCmdTask {
+        type Pkt = RespVec;
+        type TaskType = u64;
+        type Context = u32;
+
+        fn get_key(&self) -> Option<&'static [u8]> {None}
+        fn get_slot(&self) -> Option<usize> {None}
+        fn set_result(self, _result: CommandResult<RespVec>) {}
+        fn get_packet(&self) -> RespVec {
+            self.resp.clone()
+        }
+        fn get_type(&self) -> u64 {0}
+        fn get_context(&self) -> u32 {0}
+
+        fn set_resp_result(self, _result: Result<RespVec, CommandError>)
+            where
+                Self: Sized {}
+
+        fn log_event(&mut self, _event: TaskEvent) {}
+    }
+
+    #[tokio::test]
+    async fn test_handle_conn() {
+        let (sender, receiver) = mpsc::unbounded::<RespVec>();
+        let writer: ConnSink<RespVec> = Box::pin(sender.sink_map_err(|_| BackendError::Canceled));
+        let reader: ConnStream<RespVec> = Box::pin(receiver.map(Ok));
+
+        let (mut task_sender, mut task_receiver) = mpsc::unbounded();
+        for i in 0..3 {
+            let i: usize = i;
+            task_sender.send(DummyCmdTask::new(
+                RespVec::Simple(i.to_string().into_bytes())
+            )).await.unwrap();
+        }
+
+        let handler = Arc::new(CounterHandler::new());
+        let handler2 = handler.clone();
+
+        tokio::spawn(async move {
+            while handler2.get_count() < 3 {
+                Delay::new(Duration::from_millis(20)).await;
+            }
+            task_sender.close().await.unwrap();
+        });
+
+        let res = handle_conn(
+            writer,
+            reader,
+            &mut task_receiver,
+            handler.clone(),
+            None,
+        ).await;
+
+        assert!(res.is_ok());
+        let replies = handler.get_replies();
+        assert_eq!(replies.len(), 3);
+        for (i, reply) in replies.into_iter().enumerate() {
+            let content = i.to_string().into_bytes();
+            match reply {
+                RespVec::Simple(b) => assert_eq!(b, content),
+                _ => assert!(false),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_conn_with_retry() {
+        let (sender, receiver) = mpsc::unbounded::<RespVec>();
+        let writer: ConnSink<RespVec> = Box::pin(sender.sink_map_err(|_| BackendError::Canceled));
+        let reader: ConnStream<RespVec> = Box::pin(receiver.map(Ok));
+
+        let (mut task_sender, mut task_receiver) = mpsc::unbounded();
+
+        let tasks = (0..3).map(|i| {
+            DummyCmdTask::new(
+                RespVec::Simple(i.to_string().into_bytes())
+            )
+        }).collect();
+        let retry = RetryState{
+            retry_times: 0,
+            tasks,
+        };
+
+        for i in 3..6 {
+            let i: usize = i;
+            task_sender.send(DummyCmdTask::new(
+                RespVec::Simple(i.to_string().into_bytes())
+            )).await.unwrap();
+        }
+
+        let handler = Arc::new(CounterHandler::new());
+        let handler2 = handler.clone();
+
+        tokio::spawn(async move {
+            while handler2.get_count() < 6 {
+                Delay::new(Duration::from_millis(20)).await;
+            }
+            task_sender.close().await.unwrap();
+        });
+
+        let res = handle_conn(
+            writer,
+            reader,
+            &mut task_receiver,
+            handler.clone(),
+            Some(retry),
+        ).await;
+
+        assert!(res.is_ok());
+        let replies = handler.get_replies();
+        assert_eq!(replies.len(), 6);
+        for (i, reply) in replies.into_iter().enumerate() {
+            let content = i.to_string().into_bytes();
+            match reply {
+                RespVec::Simple(b) => assert_eq!(b, content),
+                _ => assert!(false),
+            }
         }
     }
 }
