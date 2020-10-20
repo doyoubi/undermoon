@@ -300,7 +300,9 @@ impl MetaStorage for ExternalHttpStorage {
         reporter_id: String,
     ) -> Result<(), MetaStoreError> {
         let ExternalStore { mut store, version } = self.get_external_store().await?;
-        store.add_failure(address, reporter_id);
+        if !store.add_failure(address, reporter_id) {
+            return Ok(());
+        }
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
         Ok(())
