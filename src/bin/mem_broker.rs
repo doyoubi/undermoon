@@ -47,7 +47,7 @@ fn gen_conf() -> MemBrokerConfig {
             let address = s
                 .get::<String>("http_storage_address")
                 .unwrap_or_else(|_| "localhost:9999".to_string());
-            let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or_else(|_| 5);
+            let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or_else(|_| 30);
             let refresh_interval = Duration::from_secs(refresh_interval);
             let storage_name = s
                 .get::<String>("storage_name")
