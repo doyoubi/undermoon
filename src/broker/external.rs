@@ -111,6 +111,13 @@ impl ExternalHttpStorage {
         }
     }
 
+    async fn get_external_store_and_update_cache(&self) -> Result<ExternalStore, MetaStoreError> {
+        let external_store = self.get_external_store().await?;
+        self.cached_store
+            .swap(Arc::new(external_store.store.clone()));
+        Ok(external_store)
+    }
+
     async fn update_external_store(
         &self,
         external_store: ExternalStore,
@@ -232,7 +239,10 @@ impl ExternalHttpStorage {
     }
 
     fn try_lock(&self) -> Result<AtomicLockGuard, MetaStoreError> {
-        self.lock.lock().ok_or_else(|| MetaStoreError::Retry)
+        self.lock.lock().ok_or_else(|| {
+            warn!("External storage is locked. Return MetaStoreError::Retry");
+            MetaStoreError::Retry
+        })
     }
 }
 
@@ -313,7 +323,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         if !store.add_failure(address, reporter_id) {
             return Ok(());
         }
@@ -329,7 +340,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<Option<Proxy>, MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         let res = store.replace_failed_proxy(failed_proxy_address, migration_limit);
         // It may change the store even on error.
         self.update_external_store_and_cache(ExternalStore { store, version })
@@ -344,7 +356,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.commit_migration(task, clear_free_nodes)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -374,7 +387,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.add_cluster(cluster_name, node_num)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -384,7 +398,8 @@ impl MetaStorage for ExternalHttpStorage {
     async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.remove_cluster(cluster_name)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -398,7 +413,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<Vec<Node>, MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         let nodes = store.auto_add_nodes(cluster_name, node_num)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -412,7 +428,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<Vec<Node>, MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         let nodes = store.auto_scale_up_nodes(cluster_name, cluster_node_num)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -422,7 +439,8 @@ impl MetaStorage for ExternalHttpStorage {
     async fn auto_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.auto_delete_free_nodes(cluster_name)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -436,7 +454,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.migrate_slots_to_scale_down(cluster_name, new_node_num)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -446,7 +465,8 @@ impl MetaStorage for ExternalHttpStorage {
     async fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.migrate_slots(cluster_name)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -460,7 +480,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(ScaleOp, Vec<String>, u64), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         let data = store.auto_change_node_number(cluster_name, expected_num)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -474,7 +495,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.auto_scale_out_node_number(cluster_name, expected_num)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -488,7 +510,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.change_config(cluster_name, config)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -498,7 +521,8 @@ impl MetaStorage for ExternalHttpStorage {
     async fn balance_masters(&self, cluster_name: String) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.balance_masters(cluster_name)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -514,7 +538,8 @@ impl MetaStorage for ExternalHttpStorage {
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
 
         let origin_epoch = store.get_global_epoch();
         let res = store.add_proxy(proxy_address, nodes, host, index);
@@ -530,7 +555,8 @@ impl MetaStorage for ExternalHttpStorage {
     async fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.remove_proxy(proxy_address)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -546,7 +572,8 @@ impl MetaStorage for ExternalHttpStorage {
     async fn recover_epoch(&self, exsting_largest_epoch: u64) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.recover_epoch(exsting_largest_epoch + 1);
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
@@ -556,7 +583,8 @@ impl MetaStorage for ExternalHttpStorage {
     async fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
-        let ExternalStore { mut store, version } = self.get_external_store().await?;
+        let ExternalStore { mut store, version } =
+            self.get_external_store_and_update_cache().await?;
         store.force_bump_all_epoch(new_epoch)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
