@@ -39,6 +39,6 @@ update_meta_file_interval = 10
 # storage_name = "my_storage_name"
 # storage_password = "somepassword"
 # http_storage_address = "localhost:9999"
-# refresh_interval = 5
+# refresh_interval = 30
 
 debug = false
