@@ -379,7 +379,11 @@ where
             Err(err) => {
                 conn_failed.store(true, Ordering::SeqCst);
                 error!("failed to connect: {} {:?}", address, err);
-                retry_state.take();
+                if let Some(RetryState { tasks, .. }) = retry_state.take() {
+                    for task in tasks.into_iter() {
+                        task.set_resp_result(Err(CommandError::Canceled));
+                    }
+                }
 
                 let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
                 loop {
@@ -709,7 +713,7 @@ mod tests {
     impl CounterHandler {
         fn new() -> Self {
             let counter = Arc::new(AtomicUsize::new(0));
-            Self{
+            Self {
                 counter,
                 replies: Mutex::new(vec![]),
             }
@@ -743,7 +747,7 @@ mod tests {
 
     impl DummyCmdTask {
         fn new(resp: RespVec) -> Self {
-            Self {resp}
+            Self { resp }
         }
     }
 
@@ -752,18 +756,28 @@ mod tests {
         type TaskType = u64;
         type Context = u32;
 
-        fn get_key(&self) -> Option<&'static [u8]> {None}
-        fn get_slot(&self) -> Option<usize> {None}
+        fn get_key(&self) -> Option<&'static [u8]> {
+            None
+        }
+        fn get_slot(&self) -> Option<usize> {
+            None
+        }
         fn set_result(self, _result: CommandResult<RespVec>) {}
         fn get_packet(&self) -> RespVec {
             self.resp.clone()
         }
-        fn get_type(&self) -> u64 {0}
-        fn get_context(&self) -> u32 {0}
+        fn get_type(&self) -> u64 {
+            0
+        }
+        fn get_context(&self) -> u32 {
+            0
+        }
 
         fn set_resp_result(self, _result: Result<RespVec, CommandError>)
-            where
-                Self: Sized {}
+        where
+            Self: Sized,
+        {
+        }
 
         fn log_event(&mut self, _event: TaskEvent) {}
     }
@@ -777,9 +791,12 @@ mod tests {
         let (mut task_sender, mut task_receiver) = mpsc::unbounded();
         for i in 0..3 {
             let i: usize = i;
-            task_sender.send(DummyCmdTask::new(
-                RespVec::Simple(i.to_string().into_bytes())
-            )).await.unwrap();
+            task_sender
+                .send(DummyCmdTask::new(RespVec::Simple(
+                    i.to_string().into_bytes(),
+                )))
+                .await
+                .unwrap();
         }
 
         let handler = Arc::new(CounterHandler::new());
@@ -792,13 +809,7 @@ mod tests {
             task_sender.close().await.unwrap();
         });
 
-        let res = handle_conn(
-            writer,
-            reader,
-            &mut task_receiver,
-            handler.clone(),
-            None,
-        ).await;
+        let res = handle_conn(writer, reader, &mut task_receiver, handler.clone(), None).await;
 
         assert!(res.is_ok());
         let replies = handler.get_replies();
@@ -820,21 +831,22 @@ mod tests {
 
         let (mut task_sender, mut task_receiver) = mpsc::unbounded();
 
-        let tasks = (0..3).map(|i| {
-            DummyCmdTask::new(
-                RespVec::Simple(i.to_string().into_bytes())
-            )
-        }).collect();
-        let retry = RetryState{
+        let tasks = (0..3)
+            .map(|i| DummyCmdTask::new(RespVec::Simple(i.to_string().into_bytes())))
+            .collect();
+        let retry = RetryState {
             retry_times: 0,
             tasks,
         };
 
         for i in 3..6 {
             let i: usize = i;
-            task_sender.send(DummyCmdTask::new(
-                RespVec::Simple(i.to_string().into_bytes())
-            )).await.unwrap();
+            task_sender
+                .send(DummyCmdTask::new(RespVec::Simple(
+                    i.to_string().into_bytes(),
+                )))
+                .await
+                .unwrap();
         }
 
         let handler = Arc::new(CounterHandler::new());
@@ -853,7 +865,8 @@ mod tests {
             &mut task_receiver,
             handler.clone(),
             Some(retry),
-        ).await;
+        )
+        .await;
 
         assert!(res.is_ok());
         let replies = handler.get_replies();
