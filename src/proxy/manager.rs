@@ -198,6 +198,14 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn set_meta(&self, cluster_meta: ProxyClusterMeta) -> Result<(), ClusterMetaError> {
+        // validation
+        if !cluster_meta
+            .get_local()
+            .check_hosts(self.config.announce_host.as_str())
+        {
+            return Err(ClusterMetaError::NotMyMeta);
+        }
+
         let active_redirection = self.config.active_redirection;
 
         let sender_factory = &self.sender_factory;
@@ -243,7 +251,8 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), ClusterMetaError> {
-        self.replicator_manager.update_replicators(meta)
+        self.replicator_manager
+            .update_replicators(meta, self.config.announce_host.clone())
     }
 
     pub fn get_replication_info(&self) -> RespVec {

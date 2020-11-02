@@ -16,6 +16,7 @@ use tokio::net::TcpListener;
 pub struct ServerProxyConfig {
     pub address: String,
     pub announce_address: String,
+    pub announce_host: String,
     pub auto_select_cluster: bool,
     pub slowlog_len: NonZeroUsize,
     pub slowlog_log_slower_than: AtomicI64,
@@ -59,6 +60,7 @@ impl ServerProxyConfig {
         match field.to_lowercase().as_ref() {
             "address" => Ok(self.address.clone()),
             "announce_address" => Ok(self.announce_address.clone()),
+            "announce_host" => Ok(self.announce_host.clone()),
             "auto_select_cluster" => Ok(self.auto_select_cluster.to_string()),
             "slowlog_len" => Ok(self.slowlog_len.to_string()),
             "thread_number" => Ok(self.thread_number.to_string()),
@@ -86,6 +88,7 @@ impl ServerProxyConfig {
         match field.to_lowercase().as_ref() {
             "address" => Err(ConfigError::ReadonlyField),
             "announce_address" => Err(ConfigError::ReadonlyField),
+            "announce_host" => Err(ConfigError::ReadonlyField),
             "auto_select_cluster" => Err(ConfigError::ReadonlyField),
             "slowlog_len" => Err(ConfigError::ReadonlyField),
             "thread_number" => Err(ConfigError::ReadonlyField),
