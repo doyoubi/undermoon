@@ -20,6 +20,7 @@ pub const DEFAULT_CLUSTER: &str = "admin";
 pub enum ClusterMetaError {
     OldEpoch,
     TryAgain,
+    NotMyMeta,
 }
 
 impl fmt::Display for ClusterMetaError {

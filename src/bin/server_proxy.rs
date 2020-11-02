@@ -17,6 +17,7 @@ use std::time::Duration;
 use string_error::into_err;
 use undermoon::common::config::ClusterConfig;
 use undermoon::common::track::TrackedFutureRegistry;
+use undermoon::common::utils::extract_host_from_address;
 use undermoon::protocol::SimpleRedisClientFactory;
 use undermoon::proxy::backend::DefaultConnFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
@@ -44,6 +45,12 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     let address = s
         .get::<String>("address")
         .unwrap_or_else(|_| "127.0.0.1:5299".to_string());
+    let announce_address = s
+        .get::<String>("announce_address")
+        .unwrap_or_else(|_| address.clone());
+    let announce_host = extract_host_from_address(announce_address.as_str())
+        .ok_or_else(|| "announce_address")?
+        .to_string();
 
     let slowlog_len = NonZeroUsize::new(s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024))
         .ok_or_else(|| "slowlog_len")?;
@@ -75,10 +82,9 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     };
 
     let config = ServerProxyConfig {
-        address: address.clone(),
-        announce_address: s
-            .get::<String>("announce_address")
-            .unwrap_or_else(|_| address),
+        address,
+        announce_address,
+        announce_host,
         auto_select_cluster: s
             .get::<bool>("auto_select_cluster")
             .unwrap_or_else(|_| true),

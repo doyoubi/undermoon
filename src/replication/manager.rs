@@ -5,6 +5,7 @@ use super::replicator::{
 use crate::common::cluster::ClusterName;
 use crate::common::future_group::{new_auto_drop_future, FutureAutoStopHandle};
 use crate::common::track::TrackedFutureRegistry;
+use crate::common::utils::extract_host_from_address;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
 use crate::proxy::cluster::ClusterMetaError;
 use itertools::Either;
@@ -31,13 +32,35 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         }
     }
 
-    pub fn update_replicators(&self, meta: ReplicatorMeta) -> Result<(), ClusterMetaError> {
+    pub fn update_replicators(
+        &self,
+        meta: ReplicatorMeta,
+        announce_host: String,
+    ) -> Result<(), ClusterMetaError> {
         let ReplicatorMeta {
             epoch,
             flags,
             masters,
             replicas,
         } = meta;
+
+        // validation
+        for meta in masters.iter() {
+            if Some(true)
+                != extract_host_from_address(meta.master_node_address.as_str())
+                    .map(|host| host == announce_host)
+            {
+                return Err(ClusterMetaError::NotMyMeta);
+            }
+        }
+        for meta in replicas.iter() {
+            if Some(true)
+                != extract_host_from_address(meta.replica_node_address.as_str())
+                    .map(|host| host == announce_host)
+            {
+                return Err(ClusterMetaError::NotMyMeta);
+            }
+        }
 
         let force = flags.force;
         if !force && self.updating_epoch.load(atomic::Ordering::SeqCst) >= epoch {

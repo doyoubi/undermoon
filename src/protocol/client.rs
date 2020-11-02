@@ -56,6 +56,12 @@ mod client_trait {
         ) -> Pin<
             Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>,
         >;
+
+        fn quit<'s>(
+            &'s mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RedisClientError>> + Send + 's>> {
+            Box::pin(async { Ok(()) })
+        }
     }
 
     pub trait RedisClientFactory: ThreadSafe {
@@ -341,6 +347,13 @@ impl RedisClient for PooledRedisClient {
     ) -> Pin<Box<dyn Future<Output = Result<OptionalMulti<RespVec>, RedisClientError>> + Send + 's>>
     {
         Box::pin(self.execute_cmd_with_err_guard(command))
+    }
+
+    fn quit<'s>(
+        &'s mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), RedisClientError>> + Send + 's>> {
+        self.err = true;
+        Box::pin(async { Ok(()) })
     }
 }
 

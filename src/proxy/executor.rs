@@ -302,6 +302,9 @@ where
                 ClusterMetaError::TryAgain => cmd_ctx.set_resp_result(Ok(Resp::Error(
                     response::TRY_AGAIN_REPLY.to_string().into_bytes(),
                 ))),
+                ClusterMetaError::NotMyMeta => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    response::ERR_NOT_MY_META.to_string().into_bytes(),
+                ))),
             },
         }
     }
@@ -330,6 +333,9 @@ where
                     ))),
                     ClusterMetaError::TryAgain => cmd_ctx.set_resp_result(Ok(Resp::Error(
                         response::TRY_AGAIN_REPLY.to_string().into_bytes(),
+                    ))),
+                    ClusterMetaError::NotMyMeta => cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        response::ERR_NOT_MY_META.to_string().into_bytes(),
                     ))),
                 }
             }

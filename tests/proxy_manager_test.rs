@@ -44,8 +44,9 @@ mod tests {
 
     fn gen_config() -> ServerProxyConfig {
         ServerProxyConfig {
-            address: "localhost:5299".to_string(),
-            announce_address: "localhost:5299".to_string(),
+            address: "127.0.0.1:5299".to_string(),
+            announce_address: "127.0.0.1:5299".to_string(),
+            announce_host: "127.0.0.1".to_string(),
             auto_select_cluster: true,
             slowlog_len: NonZeroUsize::new(1024).unwrap(),
             slowlog_log_slower_than: AtomicI64::new(0),

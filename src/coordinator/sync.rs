@@ -2,7 +2,7 @@ use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, ProxyMetaRetriever, ProxyMetaSender};
 use crate::common::cluster::{ClusterName, Proxy, Role, SlotRange};
 use crate::common::proto::{ClusterConfigMap, ClusterMapFlags, ProxyClusterMap, ProxyClusterMeta};
-use crate::common::response::{OK_REPLY, OLD_EPOCH_REPLY};
+use crate::common::response::{ERR_NOT_MY_META, OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
 use futures::{Future, TryFutureExt};
@@ -139,6 +139,13 @@ async fn send_meta<C: RedisClient>(
         Resp::Error(err_str) => {
             if err_str == OLD_EPOCH_REPLY.as_bytes() {
                 Ok(())
+            } else if err_str == ERR_NOT_MY_META.as_bytes() {
+                error!("sent meta to the wrong node");
+                // We must close the connection.
+                if let Err(err) = client.quit().await {
+                    error!("failed to quit client: {:?}", err);
+                }
+                Err(CoordinateError::InvalidReply)
             } else {
                 error!("failed to send meta, invalid reply {:?}", err_str);
                 Err(CoordinateError::InvalidReply)
@@ -345,6 +352,34 @@ mod tests {
         )
         .await;
         assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_meta_incorrect_node() {
+        let mut mock_client = MockRedisClient::new();
+        let cmd = vec![
+            b"UMCTL".to_vec(),
+            b"SETCLUSTER".to_vec(),
+            b"test_args".to_vec(),
+        ];
+        mock_client
+            .expect_execute_single()
+            .withf(move |command: &Vec<BinSafeStr>| command.eq(&cmd))
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Ok(Resp::Error(ERR_NOT_MY_META.to_string().into_bytes())) })
+            });
+        mock_client
+            .expect_quit()
+            .times(1)
+            .returning(|| Box::pin(async { Ok(()) }));
+        let res = send_meta(
+            &mut mock_client,
+            "SETCLUSTER".to_string(),
+            vec!["test_args".to_string()],
+        )
+        .await;
+        assert!(res.is_err());
     }
 
     fn create_client_func() -> impl RedisClient {

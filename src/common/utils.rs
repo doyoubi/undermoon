@@ -276,6 +276,13 @@ impl<T> RetryError<T> {
     }
 }
 
+pub fn extract_host_from_address(address: &str) -> Option<&str> {
+    let mut it = address.splitn(2, ':');
+    let host = it.next()?;
+    it.next()?;
+    Some(host)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +325,15 @@ mod tests {
         for (l, u) in (b'a'..=b'z').into_iter().zip(b'A'..=b'Z') {
             assert_eq!(byte_to_uppercase(l), u);
         }
+    }
+
+    #[test]
+    fn test_extract_host_from_address() {
+        assert_eq!(
+            extract_host_from_address("localhost:12345").unwrap(),
+            "localhost"
+        );
+        assert!(extract_host_from_address("").is_none());
+        assert!(extract_host_from_address("localhost").is_none());
     }
 }

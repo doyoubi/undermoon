@@ -2,6 +2,7 @@ use super::cluster::SlotRange;
 use super::utils::{has_flags, CmdParseError};
 use crate::common::cluster::ClusterName;
 use crate::common::config::ClusterConfig;
+use crate::common::utils::extract_host_from_address;
 use crate::protocol::{Array, BulkStr, Resp};
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -254,6 +255,28 @@ impl ProxyClusterMap {
         It: Iterator<Item = String>,
     {
         SlotRange::from_strings(it).ok_or_else(|| CmdParseError {})
+    }
+
+    pub fn check_hosts(&self, announce_host: &str) -> bool {
+        for (cluster_name, nodes) in self.cluster_map.iter() {
+            for local_node_address in nodes.keys() {
+                let host = match extract_host_from_address(local_node_address.as_str()) {
+                    Some(host) => host,
+                    None => {
+                        error!("invalid local node address: {}", local_node_address);
+                        return false;
+                    }
+                };
+                if host != announce_host {
+                    error!(
+                        "not my announce host: {} {} != {}",
+                        cluster_name, announce_host, local_node_address
+                    );
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
