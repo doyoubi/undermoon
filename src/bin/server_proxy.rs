@@ -7,6 +7,7 @@ extern crate config;
 extern crate env_logger;
 
 use arc_swap::ArcSwap;
+use futures::channel::mpsc;
 use std::cmp::min;
 use std::env;
 use std::error::Error;
@@ -163,6 +164,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let meta_map = Arc::new(ArcSwap::new(Arc::new(MetaMap::empty())));
     let future_registry = Arc::new(TrackedFutureRegistry::default());
 
+    let (service_stopped_sender, service_stopped_receiver) = mpsc::unbounded();
+
     let forward_handler = SharedForwardHandler::new(
         config.clone(),
         cluster_config,
@@ -171,6 +174,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         meta_map,
         Arc::new(DefaultConnFactory::default()),
         future_registry.clone(),
+        service_stopped_sender,
     );
     let server = ServerProxyService::new(
         config.clone(),
@@ -185,7 +189,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .enable_all()
         .build()?;
 
-    if let Err(err) = runtime.block_on(server.run()) {
+    if let Err(err) = runtime.block_on(server.run(service_stopped_receiver)) {
         error!("tokio runtime failed: {}", err);
         return Err(err);
     }

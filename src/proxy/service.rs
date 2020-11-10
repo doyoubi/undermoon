@@ -4,7 +4,8 @@ use super::slowlog::SlowRequestLogger;
 use crate::common::config::ConfigError;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{resolve_first_address, ThreadSafe};
-use futures::{FutureExt, StreamExt};
+use futures::channel::mpsc;
+use futures::{select, FutureExt, StreamExt};
 use std::error::Error;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -145,7 +146,10 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         }
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn Error>> {
+    pub async fn run(
+        &self,
+        mut stopped: mpsc::UnboundedReceiver<()>,
+    ) -> Result<(), Box<dyn Error>> {
         let address = self.config.address.clone();
         let address = resolve_first_address(&address).await.ok_or_else(|| {
             let err_str = format!("failed to resolve address: {}", address);
@@ -167,8 +171,21 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let future_registry = self.future_registry.clone();
 
         let mut s = listener.incoming();
-        while let Some(sock) = s.next().await {
-            let sock = sock?;
+        loop {
+            let sock_res_opt = select! {
+                sock_res_opt = s.next().fuse() => sock_res_opt,
+                _ = stopped.next() => {
+                    warn!("service shutdown");
+                    break;
+                }
+            };
+            let sock = match sock_res_opt {
+                Some(sock_res) => sock_res?,
+                None => {
+                    warn!("listener closed");
+                    break;
+                }
+            };
 
             if let Err(err) = sock.set_nodelay(true) {
                 let err_str = format!("failed to set TCP_NODELAY: {:?}", err);

@@ -22,6 +22,7 @@ use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, Resp
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use btoi::btou;
+use futures::channel::mpsc;
 use futures::future;
 use futures_timer::Delay;
 use std::convert::TryFrom;
@@ -58,6 +59,7 @@ where
         meta_map: SharedMetaMap<C>,
         conn_factory: Arc<C>,
         future_registry: Arc<TrackedFutureRegistry>,
+        stopped: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
             handler: sync::Arc::new(ForwardHandler::new(
@@ -68,6 +70,7 @@ where
                 meta_map,
                 conn_factory,
                 future_registry,
+                stopped,
             )),
         }
     }
@@ -95,6 +98,7 @@ pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket
     slow_request_logger: Arc<SlowRequestLogger>,
     compressor: CmdCompressor<CompressionStrategyMetaMapConfig<C>>,
     future_registry: Arc<TrackedFutureRegistry>,
+    stopped: mpsc::UnboundedSender<()>,
 }
 
 impl<F, C> ForwardHandler<F, C>
@@ -110,6 +114,7 @@ where
         meta_map: SharedMetaMap<C>,
         conn_factory: Arc<C>,
         future_registry: Arc<TrackedFutureRegistry>,
+        stopped: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
             config: config.clone(),
@@ -124,6 +129,7 @@ where
             slow_request_logger,
             compressor: CmdCompressor::new(CompressionStrategyMetaMapConfig::new(meta_map)),
             future_registry,
+            stopped,
         }
     }
 }
@@ -264,6 +270,8 @@ where
             self.handle_umctl_get_epoch(cmd_ctx);
         } else if sub_cmd.eq("READY") {
             self.handle_umctl_ready(cmd_ctx);
+        } else if sub_cmd.eq("SHUTDOWN") {
+            self.handle_umctl_shutdown(cmd_ctx);
         } else {
             cmd_ctx.set_resp_result(Ok(Resp::Error(
                 String::from("Invalid sub command").into_bytes(),
@@ -446,6 +454,16 @@ where
         let is_ready = self.manager.is_ready(cmd_ctx.get_cluster());
         let n = if is_ready { 1 } else { 0 };
         cmd_ctx.set_resp_result(Ok(Resp::Integer(n.to_string().into_bytes())))
+    }
+
+    fn handle_umctl_shutdown(&self, cmd_ctx: CmdCtx) {
+        if let Err(_err) = self.stopped.unbounded_send(()) {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(b"failed to send shutdown".to_vec())));
+            return;
+        }
+        cmd_ctx.set_resp_result(Ok(Resp::Simple(
+            response::OK_REPLY.to_string().into_bytes(),
+        )))
     }
 
     fn handle_config(&self, cmd_ctx: CmdCtx) {
