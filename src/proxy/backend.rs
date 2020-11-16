@@ -2,9 +2,10 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
+use crate::common::batch::BatchState;
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
-    OptionalMulti, Packet, Resp, RespCodec, RespVec,
+    OptionalMulti, Packet, Resp, RespCodec, RespVec, PacketSizeHint,
 };
 use either::Either;
 use futures::channel::mpsc;
@@ -447,6 +448,8 @@ where
     let mut tasks = VecDeque::with_capacity(BUF_SIZE);
     let mut packets = VecDeque::with_capacity(BUF_SIZE);
 
+    let mut batch_state = BatchState::new(4096 * 2, Duration::from_nanos(400_000));
+
     future::poll_fn(
         |cx: &mut Context<'_>| -> Poll<Result<(), HandleConnErr<H::Task>>> {
             let retry_times_opt = match retry_state_opt.take() {
@@ -487,6 +490,13 @@ where
 
                 match packets.pop_front() {
                     Some(packet) => {
+                        // Zero size hint only affects performance.
+                        let n = packet.get_size_hint().unwrap_or_else(|| {
+                            error!("FATAL: unexpected None size hint");
+                            0
+                        });
+                        batch_state.add_content_size(n);
+
                         if let Err(err) = writer.as_mut().start_send(packet) {
                             break Err(err);
                         }
@@ -505,11 +515,17 @@ where
                         }
                     }
                     None => {
-                        // Even we don't call `start_send` this time,
-                        // the former execution of this polling function may have
-                        // a Pending result for poll_flush. We need to flush anyway.
+                        let now = coarsetime::Instant::now();
+                        if !batch_state.need_flush(cx, now) {
+                            break Ok(());
+                        }
+
                         match writer.as_mut().poll_flush(cx) {
-                            Poll::Pending | Poll::Ready(Ok(())) => break Ok(()),
+                            Poll::Pending => break Ok(()),
+                            Poll::Ready(Ok(())) => {
+                                batch_state.reset(now);
+                                break Ok(());
+                            },
                             Poll::Ready(Err(err)) => break Err(err),
                         }
                     }

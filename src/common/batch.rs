@@ -10,6 +10,70 @@ use futures_timer::Delay;
 use pin_project::pin_project;
 use std::num::NonZeroUsize;
 use std::time::Duration;
+use std::cmp::min;
+
+pub struct BatchState {
+    flush_timer_interval: Duration,
+    wbuf_size: usize,
+    curr_wbuf_content_size: usize,
+    last_wbuf_flush_size: usize,
+    last_flush_interval: coarsetime::Duration,
+    last_flush_time: coarsetime::Instant,
+    flush_timer: Delay,
+}
+
+impl BatchState {
+    pub fn new(wbuf_size: usize, flush_timer_interval: Duration) -> Self {
+        Self {
+            flush_timer_interval,
+            wbuf_size,
+            curr_wbuf_content_size: 0,
+            last_wbuf_flush_size: wbuf_size,
+            last_flush_interval: coarsetime::Duration::new(0, (flush_timer_interval.as_nanos() / 2) as u32),
+            last_flush_time: coarsetime::Instant::now(),
+            flush_timer: Delay::new(flush_timer_interval),
+        }
+    }
+
+    pub fn add_content_size(&mut self, s: usize) {
+        self.curr_wbuf_content_size += s;
+    }
+
+    pub fn need_flush(&mut self, cx: &mut Context<'_>, now: coarsetime::Instant) -> bool {
+        if self.curr_wbuf_content_size == 0 {
+            return false;
+        }
+
+        if self.curr_wbuf_content_size >= self.last_wbuf_flush_size {
+            true
+        } else if now.duration_since(self.last_flush_time) >= self.last_flush_interval {
+            true
+        } else {
+            let mut flush = false;
+            match Pin::new(&mut self.flush_timer).poll(cx) {
+                Poll::Pending => (),
+                Poll::Ready(()) => {
+                    flush = true;
+                },
+            }
+            if flush {
+                self.flush_timer.reset(self.flush_timer_interval);
+            }
+            flush
+        }
+    }
+
+    pub fn reset(&mut self, now: coarsetime::Instant) {
+        self.last_wbuf_flush_size = min(self.curr_wbuf_content_size, self.wbuf_size);
+        self.curr_wbuf_content_size = 0;
+        if now > self.last_flush_time {
+            self.last_flush_interval = now - self.last_flush_time;
+        } else {
+            self.last_flush_interval = coarsetime::Duration::new(0, 0);
+        }
+        self.last_flush_time = now;
+    }
+}
 
 // The following codes are copied from github.com/mre/futures-batch
 // with some optimization which might not be for general purpose:

@@ -15,6 +15,10 @@ use std::str;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+pub trait PacketSizeHint {
+    fn get_size_hint(&self) -> Option<usize>;
+}
+
 // EncodedPacket and DecodedPacket abstracts the entries sent between clients and redis instances,
 // including the single Resp and multiple Resp.
 // TODO: use EncodedPacket + DecodedPacket in CmdTask.
@@ -50,24 +54,24 @@ impl<T: From<RespVec>> FromResp for T {
     }
 }
 
-pub trait Packet: EncodedPacket + DecodedPacket + ThreadSafe + FromResp
+pub trait Packet: EncodedPacket + DecodedPacket + ThreadSafe + FromResp + PacketSizeHint
 where
     Self: DecodedPacket<Hint = <Self as EncodedPacket>::Hint>,
     Self: FromResp<Hint = <Self as EncodedPacket>::Hint>,
 {
 }
 pub trait MonoPacket:
-    EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()>
+    EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()> + PacketSizeHint
 {
 }
 
-impl<T: EncodedPacket + DecodedPacket + ThreadSafe + FromResp> Packet for T
+impl<T: EncodedPacket + DecodedPacket + ThreadSafe + FromResp + PacketSizeHint> Packet for T
 where
     Self: DecodedPacket<Hint = <Self as EncodedPacket>::Hint>,
     Self: FromResp<Hint = <Self as EncodedPacket>::Hint>,
 {
 }
-impl<T: EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()>>
+impl<T: EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()> + PacketSizeHint>
     MonoPacket for T
 {
 }
@@ -194,6 +198,15 @@ impl RespPacket {
             *self = Self::Data(resp);
         }
         success
+    }
+}
+
+impl PacketSizeHint for RespPacket {
+    fn get_size_hint(&self) -> Option<usize> {
+        match self {
+            Self::Indexed(indexed_resp) => Some(indexed_resp.get_data().len()),
+            Self::Data(resp) => resp.get_size_hint(),
+        }
     }
 }
 
@@ -496,6 +509,24 @@ impl<T: DecodedPacket> DecodedPacket for OptionalMulti<T> {
             packets.push(packet);
         }
         Ok(Some(OptionalMulti::Multi(packets)))
+    }
+}
+
+impl<T: PacketSizeHint> PacketSizeHint for OptionalMulti<T> {
+    fn get_size_hint(&self) -> Option<usize> {
+        match self {
+            Self::Single(pkt) => pkt.get_size_hint(),
+            Self::Multi(pkts) => {
+                let mut sum = 0;
+                for pkt in pkts.iter() {
+                    match pkt.get_size_hint() {
+                        Some(n) => sum += n,
+                        None => return None,
+                    }
+                }
+                Some(sum)
+            }
+        }
     }
 }
 
