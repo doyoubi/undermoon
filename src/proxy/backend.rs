@@ -2,7 +2,7 @@ use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
-use crate::common::batch::BatchState;
+use crate::common::batch::{BatchState, BatchStats};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
     OptionalMulti, Packet, Resp, RespCodec, RespVec, PacketSizeHint,
@@ -242,6 +242,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
         handler: Arc<H>,
         _config: Arc<ServerProxyConfig>,
         conn_factory: Arc<CF>,
+        batch_stats: Arc<BatchStats>,
     ) -> (
         BackendNode<H>,
         impl Future<Output = Result<(), BackendError>> + Send,
@@ -254,7 +255,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
         let (tx, rx) = mpsc::unbounded();
         let conn_failed = Arc::new(AtomicBool::new(false));
         let handle_backend_fut =
-            handle_backend(handler, rx, conn_failed.clone(), address, conn_factory);
+            handle_backend(handler, rx, conn_failed.clone(), address, conn_factory, batch_stats);
         (Self { tx, conn_failed }, handle_backend_fut)
     }
 
@@ -358,6 +359,7 @@ pub async fn handle_backend<H, F>(
     conn_failed: Arc<AtomicBool>,
     address: String,
     conn_factory: Arc<F>,
+    batch_stats: Arc<BatchStats>,
 ) -> Result<(), BackendError>
 where
     H: CmdTaskResultHandler,
@@ -415,6 +417,7 @@ where
             &mut task_receiver,
             handler.clone(),
             retry_state.take(),
+            batch_stats.clone(),
         )
         .await;
         match res {
@@ -439,6 +442,7 @@ async fn handle_conn<H, S>(
     mut task_receiver: &mut S,
     handler: Arc<H>,
     mut retry_state_opt: Option<RetryState<H::Task>>,
+    batch_stats: Arc<BatchStats>,
 ) -> Result<(), HandleConnErr<H::Task>>
 where
     H: CmdTaskResultHandler,
@@ -448,7 +452,7 @@ where
     let mut tasks = VecDeque::with_capacity(BUF_SIZE);
     let mut packets = VecDeque::with_capacity(BUF_SIZE);
 
-    let mut batch_state = BatchState::new(4096 * 2, Duration::from_nanos(400_000));
+    let mut batch_state = BatchState::new(4096 * 2, coarsetime::Duration::new(0, 400_000), batch_stats.clone());
 
     future::poll_fn(
         |cx: &mut Context<'_>| -> Poll<Result<(), HandleConnErr<H::Task>>> {
@@ -825,7 +829,8 @@ mod tests {
             task_sender.close().await.unwrap();
         });
 
-        let res = handle_conn(writer, reader, &mut task_receiver, handler.clone(), None).await;
+        let batch_stats = Arc::new(BatchStats::default());
+        let res = handle_conn(writer, reader, &mut task_receiver, handler.clone(), None, batch_stats).await;
 
         assert!(res.is_ok());
         let replies = handler.get_replies();
@@ -875,12 +880,14 @@ mod tests {
             task_sender.close().await.unwrap();
         });
 
+        let batch_stats = Arc::new(BatchStats::default());
         let res = handle_conn(
             writer,
             reader,
             &mut task_receiver,
             handler.clone(),
             Some(retry),
+            batch_stats,
         )
         .await;
 

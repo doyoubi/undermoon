@@ -14,6 +14,7 @@ use crate::common::biatomic::BiAtomicU32;
 use crate::common::cluster::ClusterName;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{ThreadSafe, Wrapper};
+use crate::common::batch::BatchStats;
 use crate::protocol::{Resp, RespVec};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -62,6 +63,7 @@ pub fn gen_basic_blocking_sender_factory<F: CmdTaskResultHandlerFactory, CF: Con
     reply_handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
     future_registry: Arc<TrackedFutureRegistry>,
+    batch_stats: Arc<BatchStats>,
 ) -> BasicBlockingSenderFactory<F, CF>
 where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
@@ -74,6 +76,7 @@ where
             reply_handler_factory,
             conn_factory,
             future_registry,
+            batch_stats,
         ),
     )
 }

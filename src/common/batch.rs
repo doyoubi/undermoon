@@ -11,27 +11,60 @@ use pin_project::pin_project;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 use std::cmp::min;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+
+pub struct BatchStats {
+    last_wbuf_flush_size: AtomicUsize,
+    last_flush_interval: AtomicU64,
+}
+
+impl Default for BatchStats {
+    fn default() -> Self {
+        Self {
+            last_wbuf_flush_size: AtomicUsize::new(0),
+            last_flush_interval: AtomicU64::new(0),
+        }
+    }
+}
+
+impl BatchStats {
+    pub fn update(&self, last_wbuf_flush_size: usize, last_flush_interval: coarsetime::Duration) {
+        self.last_wbuf_flush_size.store(last_wbuf_flush_size, Ordering::Relaxed);
+        self.last_flush_interval.store(last_flush_interval.as_nanos(), Ordering::Relaxed);
+    }
+
+    pub fn get_flush_size(&self) -> usize {
+        self.last_wbuf_flush_size.load(Ordering::Relaxed)
+    }
+
+    pub fn get_flush_interval(&self) -> u64 {
+        self.last_flush_interval.load(Ordering::Relaxed)
+    }
+}
 
 pub struct BatchState {
-    flush_timer_interval: Duration,
+    flush_timer_interval: coarsetime::Duration,
     wbuf_size: usize,
     curr_wbuf_content_size: usize,
     last_wbuf_flush_size: usize,
     last_flush_interval: coarsetime::Duration,
     last_flush_time: coarsetime::Instant,
     flush_timer: Delay,
+    stats: Arc<BatchStats>
 }
 
 impl BatchState {
-    pub fn new(wbuf_size: usize, flush_timer_interval: Duration) -> Self {
+    pub fn new(wbuf_size: usize, flush_timer_interval: coarsetime::Duration, stats: Arc<BatchStats>) -> Self {
         Self {
             flush_timer_interval,
             wbuf_size,
             curr_wbuf_content_size: 0,
             last_wbuf_flush_size: wbuf_size,
-            last_flush_interval: coarsetime::Duration::new(0, (flush_timer_interval.as_nanos() / 2) as u32),
+            last_flush_interval: flush_timer_interval / 2,
             last_flush_time: coarsetime::Instant::now(),
-            flush_timer: Delay::new(flush_timer_interval),
+            flush_timer: Delay::new(Duration::from_nanos(flush_timer_interval.as_nanos())),
+            stats,
         }
     }
 
@@ -44,9 +77,11 @@ impl BatchState {
             return false;
         }
 
+        let flush_interval = min(self.last_flush_interval, self.flush_timer_interval);
+
         if self.curr_wbuf_content_size >= self.last_wbuf_flush_size {
             true
-        } else if now.duration_since(self.last_flush_time) >= self.last_flush_interval {
+        } else if now.duration_since(self.last_flush_time) >= flush_interval {
             true
         } else {
             let mut flush = false;
@@ -57,7 +92,7 @@ impl BatchState {
                 },
             }
             if flush {
-                self.flush_timer.reset(self.flush_timer_interval);
+                self.flush_timer.reset(Duration::from_nanos(self.flush_timer_interval.as_nanos()));
             }
             flush
         }
@@ -72,6 +107,8 @@ impl BatchState {
             self.last_flush_interval = coarsetime::Duration::new(0, 0);
         }
         self.last_flush_time = now;
+
+        self.stats.update(self.last_wbuf_flush_size, self.last_flush_interval);
     }
 }
 
