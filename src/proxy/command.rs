@@ -129,6 +129,8 @@ pub enum DataCmdType {
     ZREMRANGEBYLEX,
     ZREMRANGEBYRANK,
     ZREMRANGEBYSCORE,
+    BZPOPMIN,
+    BZPOPMAX,
     // Key commands
     EXPIRE,
     EXPIREAT,
@@ -207,6 +209,8 @@ impl DataCmdType {
             b"UNLINK" => DataCmdType::UNLINK,
             b"ZPOPMAX" => DataCmdType::ZPOPMAX,
             b"ZPOPMIN" => DataCmdType::ZPOPMIN,
+            b"BZPOPMAX" => DataCmdType::BZPOPMAX,
+            b"BZPOPMIN" => DataCmdType::BZPOPMIN,
             b"ZREM" => DataCmdType::ZREM,
             b"ZREMRANGEBYLEX" => DataCmdType::ZREMRANGEBYLEX,
             b"ZREMRANGEBYRANK" => DataCmdType::ZREMRANGEBYRANK,

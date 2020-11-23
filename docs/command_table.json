@@ -49,11 +49,11 @@
     }, 
     "bzpopmax": {
         "desc": "", 
-        "supported": false
+        "supported": true
     }, 
     "bzpopmin": {
         "desc": "", 
-        "supported": false
+        "supported": true
     }, 
     "client": {
         "desc": "", 
