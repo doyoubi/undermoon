@@ -129,6 +129,8 @@ pub enum DataCmdType {
     ZREMRANGEBYLEX,
     ZREMRANGEBYRANK,
     ZREMRANGEBYSCORE,
+    BZPOPMIN,
+    BZPOPMAX,
     // Key commands
     EXPIRE,
     EXPIREAT,
@@ -142,6 +144,12 @@ pub enum DataCmdType {
 }
 
 impl DataCmdType {
+    fn is_blocking_cmd(self) -> bool {
+        match self {
+            Self::BZPOPMIN | Self::BZPOPMAX | Self::BLPOP | Self::BRPOP | Self::BRPOPLPUSH => true,
+            _ => false,
+        }
+    }
     fn from_cmd_name(cmd_name: &[u8]) -> Self {
         let mut stack_cmd_name = ArrayVec::<[u8; MAX_COMMAND_NAME_LENGTH]>::new();
         for b in cmd_name {
@@ -207,6 +215,8 @@ impl DataCmdType {
             b"UNLINK" => DataCmdType::UNLINK,
             b"ZPOPMAX" => DataCmdType::ZPOPMAX,
             b"ZPOPMIN" => DataCmdType::ZPOPMIN,
+            b"BZPOPMAX" => DataCmdType::BZPOPMAX,
+            b"BZPOPMIN" => DataCmdType::BZPOPMIN,
             b"ZREM" => DataCmdType::ZREM,
             b"ZREMRANGEBYLEX" => DataCmdType::ZREMRANGEBYLEX,
             b"ZREMRANGEBYRANK" => DataCmdType::ZREMRANGEBYRANK,
@@ -433,11 +443,10 @@ impl CmdReplySender {
         match self.reply_sender.take() {
             Some(reply_sender) => {
                 if let Err(CommandError::Dropped) = &res {
-                    match self.data_cmd_type {
-                        DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH => {
-                            error!("blocking command is dropped")
-                        }
-                        _ => error!("command is dropped {:?}", Backtrace::new()),
+                    if self.data_cmd_type.is_blocking_cmd() {
+                        error!("blocking command is dropped");
+                    } else {
+                        error!("command is dropped {:?}", Backtrace::new());
                     }
                 }
                 Some(reply_sender.send(res).map_err(|_| CommandError::Canceled))

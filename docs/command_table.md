@@ -12,8 +12,8 @@
 | blpop | True | User MUST specify timeout. |
 | brpop | True | User MUST specify timeout. |
 | brpoplpush | True | User MUST specify timeout. |
-| bzpopmax | False |  |
-| bzpopmin | False |  |
+| bzpopmax | True | User MUST specify timeout. |
+| bzpopmin | True | User MUST specify timeout. |
 | client | False |  |
 | cluster | True | Only support the following sub commands: NODES, SLOTS, KEYSLOT. |
 | command | False |  |
