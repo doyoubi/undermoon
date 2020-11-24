@@ -835,7 +835,7 @@ where
                     Ok(resp) => resp,
                 };
 
-                if Self::is_empty_resp(&resp) && (timeout == 0 || retry_num < timeout) {
+                if Self::is_empty_resp(&resp, data_cmd_type) && (timeout == 0 || retry_num < timeout) {
                     continue;
                 }
 
@@ -958,10 +958,17 @@ where
         }
     }
 
-    fn is_empty_resp(resp: &RespVec) -> bool {
+    fn is_empty_resp(resp: &RespVec, data_cmd_type: DataCmdType) -> bool {
+        let is_list_pop =
+            data_cmd_type == DataCmdType::BLPOP || data_cmd_type == DataCmdType::BRPOP;
+        let is_zset_pop =
+            data_cmd_type == DataCmdType::BZPOPMIN || data_cmd_type == DataCmdType::BZPOPMAX;
+
         match resp {
-            Resp::Bulk(BulkStr::Nil) => true,
-            Resp::Arr(Array::Arr(arr)) if arr.is_empty() => true,
+            // nil bulk string for LPOP and RPOP
+            Resp::Bulk(BulkStr::Nil) if is_list_pop => true,
+            // empty array for ZPOPMIN and ZPOPMAX
+            Resp::Arr(Array::Arr(arr)) if arr.is_empty() && is_zset_pop => true,
             _ => false,
         }
     }
@@ -1024,7 +1031,7 @@ where
     fn adjust_lrpop_response(resp: RespVec, key: Vec<u8>) -> RespVec {
         match resp {
             Resp::Bulk(BulkStr::Nil) => {
-                // BLPOP, BRPOP need to change resposne to Array::Nil.
+                // BLPOP, BRPOP need to change response to Array::Nil.
                 return Resp::Arr(Array::Nil);
             }
             Resp::Bulk(BulkStr::Str(s)) => Resp::Arr(Array::Arr(vec![
@@ -1037,7 +1044,7 @@ where
 
     fn adjust_zpop_response(resp: RespVec, key: Vec<u8>) -> RespVec {
         match resp {
-            Resp::Arr(Array::Arr(arr)) if arr.len() == 0 => Resp::Bulk(BulkStr::Nil),
+            Resp::Arr(Array::Arr(arr)) if arr.len() == 0 => Resp::Arr(Array::Nil),
             Resp::Arr(Array::Arr(arr)) if arr.len() == 2 => {
                 let mut ret = vec![Resp::Bulk(BulkStr::Str(key))];
                 ret.extend(arr);
