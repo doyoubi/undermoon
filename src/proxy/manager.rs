@@ -12,13 +12,13 @@ use super::sender::{
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
+use crate::common::batch::BatchStats;
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, RetryError};
-use crate::common::batch::BatchStats;
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;

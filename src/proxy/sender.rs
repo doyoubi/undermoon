@@ -3,10 +3,10 @@ use super::backend::{
     ConnFactory, ReqTask, SenderBackendError,
 };
 use super::service::ServerProxyConfig;
+use crate::common::batch::BatchStats;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::protocol::Resp;
-use crate::common::batch::BatchStats;
 use either::Either;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;

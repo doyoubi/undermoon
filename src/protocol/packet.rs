@@ -61,7 +61,11 @@ where
 {
 }
 pub trait MonoPacket:
-    EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()> + PacketSizeHint
+    EncodedPacket<Hint = ()>
+    + DecodedPacket<Hint = ()>
+    + ThreadSafe
+    + FromResp<Hint = ()>
+    + PacketSizeHint
 {
 }
 
@@ -71,8 +75,13 @@ where
     Self: FromResp<Hint = <Self as EncodedPacket>::Hint>,
 {
 }
-impl<T: EncodedPacket<Hint = ()> + DecodedPacket<Hint = ()> + ThreadSafe + FromResp<Hint = ()> + PacketSizeHint>
-    MonoPacket for T
+impl<
+        T: EncodedPacket<Hint = ()>
+            + DecodedPacket<Hint = ()>
+            + ThreadSafe
+            + FromResp<Hint = ()>
+            + PacketSizeHint,
+    > MonoPacket for T
 {
 }
 

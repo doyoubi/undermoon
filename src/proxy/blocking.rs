@@ -10,11 +10,11 @@ use super::sender::{
 };
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
+use crate::common::batch::BatchStats;
 use crate::common::biatomic::BiAtomicU32;
 use crate::common::cluster::ClusterName;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{ThreadSafe, Wrapper};
-use crate::common::batch::BatchStats;
 use crate::protocol::{Resp, RespVec};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;

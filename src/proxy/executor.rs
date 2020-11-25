@@ -51,6 +51,7 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
         cluster_config: ClusterConfig,
@@ -106,6 +107,7 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
         cluster_config: ClusterConfig,
@@ -144,9 +146,7 @@ where
         let flush_interval = self.manager.get_batch_stats().get_flush_interval();
         let content = format!(
             "version:{}\r\n\r\n# Stats\r\nflush_size:{}\r\nflush_interval:{}\r\n",
-            UNDERMOON_VERSION,
-            flush_size,
-            flush_interval,
+            UNDERMOON_VERSION, flush_size, flush_interval,
         );
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(content.into_bytes()))));
     }

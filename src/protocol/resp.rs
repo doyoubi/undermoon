@@ -1,5 +1,5 @@
-use super::fp::{ForAll, Plug, RFunctor, Unplug, VFunctor};
 use super::encoder::get_resp_size_hint;
+use super::fp::{ForAll, Plug, RFunctor, Unplug, VFunctor};
 use super::packet::PacketSizeHint;
 use bytes::Bytes;
 use std::ops::Range;

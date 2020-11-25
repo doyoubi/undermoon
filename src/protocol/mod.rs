@@ -19,8 +19,8 @@ pub use self::fp::{RFunctor, VFunctor};
 pub use self::packet::{
     new_optional_multi_packet_codec, new_simple_packet_codec, DecodedPacket, EncodedPacket,
     FromResp, MonoPacket, OptionalMulti, OptionalMultiPacketDecoder, OptionalMultiPacketEncoder,
-    Packet, PacketDecoder, PacketEncoder, RespPacket, SimplePacketDecoder, SimplePacketEncoder,
-    PacketSizeHint,
+    Packet, PacketDecoder, PacketEncoder, PacketSizeHint, RespPacket, SimplePacketDecoder,
+    SimplePacketEncoder,
 };
 pub use self::resp::{
     Array, ArrayBytes, ArrayIndex, ArraySlice, ArrayVec, BinSafeStr, BulkStr, BulkStrBytes,

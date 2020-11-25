@@ -107,7 +107,7 @@ impl<T> From<io::Error> for EncodeError<T> {
 }
 
 pub fn get_resp_size_hint<T: AsRef<[u8]>>(resp: &Resp<T>) -> io::Result<usize> {
-    let mut writer = SizeHintWriter{};
+    let mut writer = SizeHintWriter {};
     encode_resp(&mut writer, resp)
 }
 

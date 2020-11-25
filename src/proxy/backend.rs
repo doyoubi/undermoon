@@ -1,11 +1,11 @@
 use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
 use crate::common::batch::{BatchState, BatchStats};
+use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
-    OptionalMulti, Packet, Resp, RespCodec, RespVec, PacketSizeHint,
+    OptionalMulti, Packet, PacketSizeHint, Resp, RespCodec, RespVec,
 };
 use either::Either;
 use futures::channel::mpsc;
@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 
@@ -254,8 +254,14 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
     {
         let (tx, rx) = mpsc::unbounded();
         let conn_failed = Arc::new(AtomicBool::new(false));
-        let handle_backend_fut =
-            handle_backend(handler, rx, conn_failed.clone(), address, conn_factory, batch_stats);
+        let handle_backend_fut = handle_backend(
+            handler,
+            rx,
+            conn_failed.clone(),
+            address,
+            conn_factory,
+            batch_stats,
+        );
         (Self { tx, conn_failed }, handle_backend_fut)
     }
 
@@ -452,7 +458,12 @@ where
     let mut tasks = VecDeque::with_capacity(BUF_SIZE);
     let mut packets = VecDeque::with_capacity(BUF_SIZE);
 
-    let mut batch_state = BatchState::new(4096 * 2, coarsetime::Duration::new(0, 400_000), batch_stats.clone());
+    let mut batch_state = BatchState::new(
+        4096 * 2,
+        Duration::new(0, 200_000),
+        Duration::new(0, 1_000_000),
+        batch_stats.clone(),
+    );
 
     future::poll_fn(
         |cx: &mut Context<'_>| -> Poll<Result<(), HandleConnErr<H::Task>>> {
@@ -519,7 +530,7 @@ where
                         }
                     }
                     None => {
-                        let now = coarsetime::Instant::now();
+                        let now = Instant::now();
                         if !batch_state.need_flush(cx, now) {
                             break Ok(());
                         }
@@ -529,7 +540,7 @@ where
                             Poll::Ready(Ok(())) => {
                                 batch_state.reset(now);
                                 break Ok(());
-                            },
+                            }
                             Poll::Ready(Err(err)) => break Err(err),
                         }
                     }
@@ -830,7 +841,15 @@ mod tests {
         });
 
         let batch_stats = Arc::new(BatchStats::default());
-        let res = handle_conn(writer, reader, &mut task_receiver, handler.clone(), None, batch_stats).await;
+        let res = handle_conn(
+            writer,
+            reader,
+            &mut task_receiver,
+            handler.clone(),
+            None,
+            batch_stats,
+        )
+        .await;
 
         assert!(res.is_ok());
         let replies = handler.get_replies();

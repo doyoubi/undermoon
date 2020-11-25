@@ -8,107 +8,193 @@ use futures::StreamExt;
 use futures_sink::Sink;
 use futures_timer::Delay;
 use pin_project::pin_project;
-use std::num::NonZeroUsize;
-use std::time::Duration;
 use std::cmp::min;
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 pub struct BatchStats {
     last_wbuf_flush_size: AtomicUsize,
-    last_flush_interval: AtomicU64,
+    last_flush_interval: AtomicU32,
 }
 
 impl Default for BatchStats {
     fn default() -> Self {
         Self {
             last_wbuf_flush_size: AtomicUsize::new(0),
-            last_flush_interval: AtomicU64::new(0),
+            last_flush_interval: AtomicU32::new(0),
         }
     }
 }
 
 impl BatchStats {
-    pub fn update(&self, last_wbuf_flush_size: usize, last_flush_interval: coarsetime::Duration) {
-        self.last_wbuf_flush_size.store(last_wbuf_flush_size, Ordering::Relaxed);
-        self.last_flush_interval.store(last_flush_interval.as_nanos(), Ordering::Relaxed);
+    pub fn update(&self, last_wbuf_flush_size: usize, last_flush_interval: Duration) {
+        self.last_wbuf_flush_size
+            .store(last_wbuf_flush_size, Ordering::Relaxed);
+        // Ignore the seconds part for simplicity.
+        self.last_flush_interval
+            .store(last_flush_interval.subsec_nanos(), Ordering::Relaxed);
     }
 
     pub fn get_flush_size(&self) -> usize {
         self.last_wbuf_flush_size.load(Ordering::Relaxed)
     }
 
-    pub fn get_flush_interval(&self) -> u64 {
+    pub fn get_flush_interval(&self) -> u32 {
         self.last_flush_interval.load(Ordering::Relaxed)
     }
 }
 
-pub struct BatchState {
-    flush_timer_interval: coarsetime::Duration,
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+const BEST_RECORD_TTL: Duration = Duration::from_secs(300);
+
+struct BatchOptimizer {
     wbuf_size: usize,
+    best_flush_size: usize,
+    best_spr: u128,
+    best_start_time: Instant,
+
+    curr_flush_size: usize,
+    curr_data_requested: usize,
+
+    increase_flush_size: bool,
+    last_record_time: Instant,
+}
+
+impl BatchOptimizer {
+    fn new(wbuf_size: usize) -> Self {
+        let init_flush_size = wbuf_size / 4;
+        Self {
+            wbuf_size,
+            best_flush_size: init_flush_size,
+            best_spr: u128::MAX,
+            best_start_time: Instant::now(),
+            curr_flush_size: init_flush_size,
+            curr_data_requested: 0,
+            increase_flush_size: true,
+            last_record_time: Instant::now(),
+        }
+    }
+
+    fn get_curr_flush_size(&self) -> usize {
+        self.curr_flush_size
+    }
+
+    fn add_data(&mut self, len: usize) {
+        self.curr_data_requested += len;
+    }
+
+    fn tick(&mut self, now: Instant) {
+        let interval = now.duration_since(self.last_record_time);
+        if interval < SAMPLE_INTERVAL {
+            return;
+        }
+        self.last_record_time = now;
+
+        if self.curr_data_requested == 0 {
+            return;
+        }
+
+        if now.duration_since(self.best_start_time) > BEST_RECORD_TTL {
+            // Make it be replaced next time
+            self.best_spr = u128::MAX;
+        }
+
+        let spr = interval.as_nanos() / (self.curr_data_requested as u128);
+        if spr < self.best_spr {
+            self.best_spr = spr;
+            self.best_flush_size = self.curr_flush_size;
+            self.best_start_time = now;
+        }
+
+        self.curr_flush_size = if self.increase_flush_size {
+            self.best_flush_size * 11 / 10
+        } else {
+            self.best_flush_size * 10 / 11
+        };
+        self.curr_flush_size = min(self.curr_flush_size, self.wbuf_size);
+        self.increase_flush_size = !self.increase_flush_size;
+        self.curr_data_requested = 0;
+    }
+}
+
+pub struct BatchState {
+    low_flush_interval: Duration,
+    high_flush_interval: Duration,
+
+    optimizer: BatchOptimizer,
     curr_wbuf_content_size: usize,
-    last_wbuf_flush_size: usize,
-    last_flush_interval: coarsetime::Duration,
-    last_flush_time: coarsetime::Instant,
+    last_flush_interval: Duration,
+    last_flush_time: Instant,
     flush_timer: Delay,
-    stats: Arc<BatchStats>
+    stats: Arc<BatchStats>,
 }
 
 impl BatchState {
-    pub fn new(wbuf_size: usize, flush_timer_interval: coarsetime::Duration, stats: Arc<BatchStats>) -> Self {
+    pub fn new(
+        wbuf_size: usize,
+        low_flush_interval: Duration,
+        high_flush_interval: Duration,
+        stats: Arc<BatchStats>,
+    ) -> Self {
         Self {
-            flush_timer_interval,
-            wbuf_size,
+            low_flush_interval,
+            high_flush_interval,
+            optimizer: BatchOptimizer::new(wbuf_size),
             curr_wbuf_content_size: 0,
-            last_wbuf_flush_size: wbuf_size,
-            last_flush_interval: flush_timer_interval / 2,
-            last_flush_time: coarsetime::Instant::now(),
-            flush_timer: Delay::new(Duration::from_nanos(flush_timer_interval.as_nanos())),
+            last_flush_interval: high_flush_interval / 2,
+            last_flush_time: Instant::now(),
+            flush_timer: Delay::new(high_flush_interval),
             stats,
         }
     }
 
     pub fn add_content_size(&mut self, s: usize) {
+        self.optimizer.add_data(s);
         self.curr_wbuf_content_size += s;
     }
 
-    pub fn need_flush(&mut self, cx: &mut Context<'_>, now: coarsetime::Instant) -> bool {
+    pub fn need_flush(&mut self, cx: &mut Context<'_>, now: Instant) -> bool {
         if self.curr_wbuf_content_size == 0 {
             return false;
         }
 
-        let flush_interval = min(self.last_flush_interval, self.flush_timer_interval);
-
-        if self.curr_wbuf_content_size >= self.last_wbuf_flush_size {
-            true
-        } else if now.duration_since(self.last_flush_time) >= flush_interval {
-            true
-        } else {
-            let mut flush = false;
-            match Pin::new(&mut self.flush_timer).poll(cx) {
-                Poll::Pending => (),
-                Poll::Ready(()) => {
-                    flush = true;
-                },
-            }
-            if flush {
-                self.flush_timer.reset(Duration::from_nanos(self.flush_timer_interval.as_nanos()));
-            }
-            flush
+        if self.curr_wbuf_content_size >= self.optimizer.get_curr_flush_size() {
+            return true;
         }
+        if now.duration_since(self.last_flush_time) >= self.low_flush_interval {
+            return true;
+        }
+
+        let mut flush = false;
+        match Pin::new(&mut self.flush_timer).poll(cx) {
+            Poll::Pending => (),
+            Poll::Ready(()) => {
+                flush = true;
+            }
+        }
+        if flush {
+            self.flush_timer.reset(self.high_flush_interval);
+        }
+        flush
     }
 
-    pub fn reset(&mut self, now: coarsetime::Instant) {
-        self.last_wbuf_flush_size = min(self.curr_wbuf_content_size, self.wbuf_size);
+    pub fn reset(&mut self, now: Instant) {
+        self.optimizer.tick(now);
+
         self.curr_wbuf_content_size = 0;
         if now > self.last_flush_time {
             self.last_flush_interval = now - self.last_flush_time;
         } else {
-            self.last_flush_interval = coarsetime::Duration::new(0, 0);
+            self.last_flush_interval = Duration::new(0, 0);
         }
         self.last_flush_time = now;
 
-        self.stats.update(self.last_wbuf_flush_size, self.last_flush_interval);
+        self.stats.update(
+            self.optimizer.get_curr_flush_size(),
+            self.last_flush_interval,
+        );
     }
 }
 
