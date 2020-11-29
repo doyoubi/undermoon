@@ -8,7 +8,7 @@ use futures::StreamExt;
 use futures_sink::Sink;
 use futures_timer::Delay;
 use pin_project::pin_project;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -46,12 +46,20 @@ impl BatchStats {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BatchStrategy {
+    Disabled,
+    Fixed,
+    Dynamic,
+}
+
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 const BEST_RECORD_TTL: Duration = Duration::from_secs(300);
 
 struct BatchOptimizer {
     wbuf_size: usize,
     best_flush_size: usize,
+
     best_spr: u128,
     best_start_time: Instant,
 
@@ -63,14 +71,13 @@ struct BatchOptimizer {
 }
 
 impl BatchOptimizer {
-    fn new(wbuf_size: usize) -> Self {
-        let init_flush_size = wbuf_size / 4;
+    fn new(flush_size: NonZeroUsize, wbuf_size: usize) -> Self {
         Self {
             wbuf_size,
-            best_flush_size: init_flush_size,
+            best_flush_size: flush_size.get(),
             best_spr: u128::MAX,
             best_start_time: Instant::now(),
-            curr_flush_size: init_flush_size,
+            curr_flush_size: flush_size.get(),
             curr_data_requested: 0,
             increase_flush_size: true,
             last_record_time: Instant::now(),
@@ -108,10 +115,18 @@ impl BatchOptimizer {
             self.best_start_time = now;
         }
 
+        const MAX_RANDOM_DT: usize = 256;
+        let random_dt = (interval.subsec_nanos() as usize) % MAX_RANDOM_DT;
         self.curr_flush_size = if self.increase_flush_size {
-            self.best_flush_size * 11 / 10
+            let d = max(self.best_flush_size / 10, random_dt);
+            self.curr_flush_size + d
         } else {
-            self.best_flush_size * 10 / 11
+            let d = max(self.best_flush_size / 11, random_dt);
+            if self.curr_flush_size > d {
+                self.curr_flush_size - d
+            } else {
+                self.curr_flush_size
+            }
         };
         self.curr_flush_size = min(self.curr_flush_size, self.wbuf_size);
         self.increase_flush_size = !self.increase_flush_size;
@@ -120,10 +135,12 @@ impl BatchOptimizer {
 }
 
 pub struct BatchState {
+    strategy: BatchStrategy,
+    flush_size: NonZeroUsize,
     low_flush_interval: Duration,
     high_flush_interval: Duration,
+    optimizer: Option<BatchOptimizer>,
 
-    optimizer: BatchOptimizer,
     curr_wbuf_content_size: usize,
     last_flush_interval: Duration,
     last_flush_time: Instant,
@@ -133,17 +150,26 @@ pub struct BatchState {
 
 impl BatchState {
     pub fn new(
+        strategy: BatchStrategy,
+        flush_size: NonZeroUsize,
         wbuf_size: usize,
         low_flush_interval: Duration,
         high_flush_interval: Duration,
         stats: Arc<BatchStats>,
     ) -> Self {
+        let optimizer = if let BatchStrategy::Dynamic = strategy {
+            Some(BatchOptimizer::new(flush_size, wbuf_size))
+        } else {
+            None
+        };
         Self {
+            strategy,
+            flush_size,
             low_flush_interval,
             high_flush_interval,
-            optimizer: BatchOptimizer::new(wbuf_size),
+            optimizer,
             curr_wbuf_content_size: 0,
-            last_flush_interval: high_flush_interval / 2,
+            last_flush_interval: low_flush_interval,
             last_flush_time: Instant::now(),
             flush_timer: Delay::new(high_flush_interval),
             stats,
@@ -151,16 +177,32 @@ impl BatchState {
     }
 
     pub fn add_content_size(&mut self, s: usize) {
-        self.optimizer.add_data(s);
+        if let BatchStrategy::Disabled = self.strategy {
+            return;
+        }
+
+        if let Some(optimizer) = self.optimizer.as_mut() {
+            optimizer.add_data(s);
+        }
         self.curr_wbuf_content_size += s;
     }
 
     pub fn need_flush(&mut self, cx: &mut Context<'_>, now: Instant) -> bool {
+        if let BatchStrategy::Disabled = self.strategy {
+            return true;
+        }
+
         if self.curr_wbuf_content_size == 0 {
             return false;
         }
 
-        if self.curr_wbuf_content_size >= self.optimizer.get_curr_flush_size() {
+        let flush_size = if let Some(optimizer) = self.optimizer.as_ref() {
+            optimizer.get_curr_flush_size()
+        } else {
+            self.flush_size.get()
+        };
+
+        if self.curr_wbuf_content_size >= flush_size {
             return true;
         }
         if now.duration_since(self.last_flush_time) >= self.low_flush_interval {
@@ -181,7 +223,16 @@ impl BatchState {
     }
 
     pub fn reset(&mut self, now: Instant) {
-        self.optimizer.tick(now);
+        if let BatchStrategy::Disabled = self.strategy {
+            return;
+        }
+
+        let flush_size = if let Some(optimizer) = self.optimizer.as_mut() {
+            optimizer.tick(now);
+            optimizer.get_curr_flush_size()
+        } else {
+            self.flush_size.get()
+        };
 
         self.curr_wbuf_content_size = 0;
         if now > self.last_flush_time {
@@ -191,10 +242,7 @@ impl BatchState {
         }
         self.last_flush_time = now;
 
-        self.stats.update(
-            self.optimizer.get_curr_flush_size(),
-            self.last_flush_interval,
-        );
+        self.stats.update(flush_size, self.last_flush_interval);
     }
 }
 

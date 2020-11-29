@@ -18,7 +18,12 @@ slowlog_sample_rate = 1000
 thread_number = 2
 
 backend_conn_num = 2
-
+backend_batch_strategy = "fixed"
+# In bytes
+backend_flush_size = 1024
+# In nanoseconds
+backend_low_flush_interval = 200000
+backend_high_flush_interval = 600000
 
 # Active Redirection Mode
 # When active_redirection is enabled,

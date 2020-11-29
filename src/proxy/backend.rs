@@ -1,7 +1,7 @@
 use super::command::{CommandError, CommandResult};
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
-use crate::common::batch::{BatchState, BatchStats};
+use crate::common::batch::{BatchState, BatchStats, BatchStrategy};
 use crate::common::utils::{resolve_first_address, RetryError, ThreadSafe};
 use crate::protocol::{
     new_simple_packet_codec, DecodeError, EncodeError, EncodedPacket, FromResp, MonoPacket,
@@ -19,6 +19,7 @@ use std::fmt;
 use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -240,7 +241,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
     pub fn new<CF>(
         address: String,
         handler: Arc<H>,
-        _config: Arc<ServerProxyConfig>,
+        config: Arc<ServerProxyConfig>,
         conn_factory: Arc<CF>,
         batch_stats: Arc<BatchStats>,
     ) -> (
@@ -261,6 +262,7 @@ impl<H: CmdTaskResultHandler> BackendNode<H> {
             address,
             conn_factory,
             batch_stats,
+            config,
         );
         (Self { tx, conn_failed }, handle_backend_fut)
     }
@@ -366,6 +368,7 @@ pub async fn handle_backend<H, F>(
     address: String,
     conn_factory: Arc<F>,
     batch_stats: Arc<BatchStats>,
+    config: Arc<ServerProxyConfig>,
 ) -> Result<(), BackendError>
 where
     H: CmdTaskResultHandler,
@@ -424,6 +427,10 @@ where
             handler.clone(),
             retry_state.take(),
             batch_stats.clone(),
+            config.backend_batch_strategy,
+            config.backend_flush_size,
+            config.backend_low_flush_interval,
+            config.backend_high_flush_interval,
         )
         .await;
         match res {
@@ -442,6 +449,7 @@ where
 
 type HandleConnErr<Task> = (BackendError, Option<RetryState<Task>>);
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_conn<H, S>(
     mut writer: ConnSink<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
     mut reader: ConnStream<<<H as CmdTaskResultHandler>::Task as CmdTask>::Pkt>,
@@ -449,6 +457,10 @@ async fn handle_conn<H, S>(
     handler: Arc<H>,
     mut retry_state_opt: Option<RetryState<H::Task>>,
     batch_stats: Arc<BatchStats>,
+    backend_batch_strategy: BatchStrategy,
+    backend_flush_size: NonZeroUsize,
+    backend_low_flush_interval: Duration,
+    backend_high_flush_interval: Duration,
 ) -> Result<(), HandleConnErr<H::Task>>
 where
     H: CmdTaskResultHandler,
@@ -458,10 +470,13 @@ where
     let mut tasks = VecDeque::with_capacity(BUF_SIZE);
     let mut packets = VecDeque::with_capacity(BUF_SIZE);
 
+    const CONN_WRITE_BUF_SIZE: usize = 8192;
     let mut batch_state = BatchState::new(
-        4096 * 2,
-        Duration::new(0, 200_000),
-        Duration::new(0, 1_000_000),
+        backend_batch_strategy,
+        backend_flush_size,
+        CONN_WRITE_BUF_SIZE,
+        backend_low_flush_interval,
+        backend_high_flush_interval,
         batch_stats.clone(),
     );
 
@@ -815,6 +830,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_conn() {
+        test_handle_conn_helper(BatchStrategy::Disabled).await;
+        test_handle_conn_helper(BatchStrategy::Fixed).await;
+        test_handle_conn_helper(BatchStrategy::Dynamic).await;
+    }
+
+    async fn test_handle_conn_helper(strategy: BatchStrategy) {
         let (sender, receiver) = mpsc::unbounded::<RespVec>();
         let writer: ConnSink<RespVec> = Box::pin(sender.sink_map_err(|_| BackendError::Canceled));
         let reader: ConnStream<RespVec> = Box::pin(receiver.map(Ok));
@@ -848,6 +869,10 @@ mod tests {
             handler.clone(),
             None,
             batch_stats,
+            strategy,
+            NonZeroUsize::new(1024).unwrap(),
+            Duration::from_nanos(200_000),
+            Duration::from_nanos(400_000),
         )
         .await;
 
@@ -865,6 +890,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_conn_with_retry() {
+        test_handle_conn_with_retry_helper(BatchStrategy::Disabled).await;
+        test_handle_conn_with_retry_helper(BatchStrategy::Fixed).await;
+        test_handle_conn_with_retry_helper(BatchStrategy::Dynamic).await;
+    }
+
+    async fn test_handle_conn_with_retry_helper(strategy: BatchStrategy) {
         let (sender, receiver) = mpsc::unbounded::<RespVec>();
         let writer: ConnSink<RespVec> = Box::pin(sender.sink_map_err(|_| BackendError::Canceled));
         let reader: ConnStream<RespVec> = Box::pin(receiver.map(Ok));
@@ -907,6 +938,10 @@ mod tests {
             handler.clone(),
             Some(retry),
             batch_stats,
+            strategy,
+            NonZeroUsize::new(1024).unwrap(),
+            Duration::from_nanos(200_000),
+            Duration::from_nanos(400_000),
         )
         .await;
 
