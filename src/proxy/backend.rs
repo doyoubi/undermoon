@@ -24,7 +24,7 @@ use std::pin::Pin;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 
@@ -545,15 +545,14 @@ where
                         }
                     }
                     None => {
-                        let now = Instant::now();
-                        if !batch_state.need_flush(cx, now) {
+                        if !batch_state.need_flush(cx) {
                             break Ok(());
                         }
 
                         match writer.as_mut().poll_flush(cx) {
                             Poll::Pending => break Ok(()),
                             Poll::Ready(Ok(())) => {
-                                batch_state.reset(now);
+                                batch_state.reset();
                                 break Ok(());
                             }
                             Poll::Ready(Err(err)) => break Err(err),

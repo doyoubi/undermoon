@@ -59,7 +59,6 @@ const BEST_RECORD_TTL: Duration = Duration::from_secs(300);
 struct BatchOptimizer {
     wbuf_size: usize,
     best_flush_size: usize,
-
     best_spr: u128,
     best_start_time: Instant,
 
@@ -119,13 +118,13 @@ impl BatchOptimizer {
         let random_dt = (interval.subsec_nanos() as usize) % MAX_RANDOM_DT;
         self.curr_flush_size = if self.increase_flush_size {
             let d = max(self.best_flush_size / 10, random_dt);
-            self.curr_flush_size + d
+            self.best_flush_size + d
         } else {
             let d = max(self.best_flush_size / 11, random_dt);
-            if self.curr_flush_size > d {
-                self.curr_flush_size - d
+            if self.best_flush_size > d {
+                self.best_flush_size - d
             } else {
-                self.curr_flush_size
+                self.best_flush_size
             }
         };
         self.curr_flush_size = min(self.curr_flush_size, self.wbuf_size);
@@ -144,7 +143,9 @@ pub struct BatchState {
     curr_wbuf_content_size: usize,
     last_flush_interval: Duration,
     last_flush_time: Instant,
+    cached_now: Instant,
     flush_timer: Delay,
+
     stats: Arc<BatchStats>,
 }
 
@@ -162,6 +163,7 @@ impl BatchState {
         } else {
             None
         };
+        let now = Instant::now();
         Self {
             strategy,
             flush_size,
@@ -170,31 +172,31 @@ impl BatchState {
             optimizer,
             curr_wbuf_content_size: 0,
             last_flush_interval: low_flush_interval,
-            last_flush_time: Instant::now(),
+            last_flush_time: now,
+            cached_now: now,
             flush_timer: Delay::new(high_flush_interval),
             stats,
         }
     }
 
     pub fn add_content_size(&mut self, s: usize) {
-        if let BatchStrategy::Disabled = self.strategy {
-            return;
-        }
-
+        self.curr_wbuf_content_size += s;
         if let Some(optimizer) = self.optimizer.as_mut() {
             optimizer.add_data(s);
         }
-        self.curr_wbuf_content_size += s;
     }
 
-    pub fn need_flush(&mut self, cx: &mut Context<'_>, now: Instant) -> bool {
+    pub fn need_flush(&mut self, cx: &mut Context<'_>) -> bool {
         if let BatchStrategy::Disabled = self.strategy {
-            return true;
+            return self.curr_wbuf_content_size > 0;
         }
 
         if self.curr_wbuf_content_size == 0 {
             return false;
         }
+
+        let now = Instant::now();
+        self.cached_now = now;
 
         let flush_size = if let Some(optimizer) = self.optimizer.as_ref() {
             optimizer.get_curr_flush_size()
@@ -222,10 +224,13 @@ impl BatchState {
         flush
     }
 
-    pub fn reset(&mut self, now: Instant) {
+    pub fn reset(&mut self) {
         if let BatchStrategy::Disabled = self.strategy {
+            self.curr_wbuf_content_size = 0;
             return;
         }
+
+        let now = self.cached_now;
 
         let flush_size = if let Some(optimizer) = self.optimizer.as_mut() {
             optimizer.tick(now);
