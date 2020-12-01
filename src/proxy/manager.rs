@@ -12,6 +12,7 @@ use super::sender::{
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
+use crate::common::batch::BatchStats;
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
@@ -101,6 +102,7 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     peer_sender_factory: PeerSenderFactory<C>,
     blocking_map: Arc<BlockingMap<BasicSenderFactory<C>, BlockingTaskRetrySender<C>>>,
     cluster_config: ClusterConfig,
+    batch_stats: Arc<BatchStats>,
 }
 
 impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> {
@@ -112,6 +114,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         meta_map: SharedMetaMap<C>,
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
+        let batch_stats = Arc::new(BatchStats::default());
         let reply_handler_factory = Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone()));
         let blocking_task_sender = Arc::new(BlockingTaskRetrySender::new(
             meta_map.clone(),
@@ -123,6 +126,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             reply_handler_factory,
             conn_factory.clone(),
             future_registry.clone(),
+            batch_stats.clone(),
         );
         let blocking_map = Arc::new(BlockingMap::new(basic_sender_factory, blocking_task_sender));
         let sender_factory = gen_blocking_sender_factory(blocking_map.clone());
@@ -132,18 +136,21 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             reply_commit_handler_factory,
             conn_factory.clone(),
             future_registry.clone(),
+            batch_stats.clone(),
         );
         let migration_sender_factory = Arc::new(gen_migration_sender_factory(
             config.clone(),
             Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone())),
             conn_factory.clone(),
             future_registry.clone(),
+            batch_stats.clone(),
         ));
         let migration_proxy_sender_factory = Arc::new(gen_migration_sender_factory(
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
             conn_factory,
             future_registry.clone(),
+            batch_stats.clone(),
         ));
         let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let config_clone = config.clone();
@@ -170,6 +177,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             peer_sender_factory,
             blocking_map,
             cluster_config,
+            batch_stats,
         }
     }
 
@@ -391,6 +399,10 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         }
         let meta_map = self.meta_map.load();
         meta_map.cluster_map.is_ready(cluster_name)
+    }
+
+    pub fn get_batch_stats(&self) -> &Arc<BatchStats> {
+        &self.batch_stats
     }
 }
 

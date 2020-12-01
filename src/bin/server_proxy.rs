@@ -11,11 +11,12 @@ use futures::channel::mpsc;
 use std::cmp::min;
 use std::env;
 use std::error::Error;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::sync::Arc;
 use std::time::Duration;
 use string_error::into_err;
+use undermoon::common::batch::BatchStrategy;
 use undermoon::common::config::ClusterConfig;
 use undermoon::common::track::TrackedFutureRegistry;
 use undermoon::common::utils::extract_host_from_address;
@@ -60,6 +61,30 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     let backend_conn_num =
         NonZeroUsize::new(s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 2))
             .ok_or_else(|| "backend_conn_num")?;
+    let backend_batch_strategy = s
+        .get::<String>("backend_batch_strategy")
+        .map(|strategy| match strategy.to_lowercase().as_str() {
+            "disabled" => BatchStrategy::Disabled,
+            "fixed" => BatchStrategy::Fixed,
+            "dynamic" => BatchStrategy::Dynamic,
+            _ => BatchStrategy::Fixed,
+        })
+        .unwrap_or_else(|_| BatchStrategy::Fixed);
+    let backend_flush_size = NonZeroUsize::new(
+        s.get::<usize>("backend_flush_size")
+            .unwrap_or_else(|_| 1024),
+    )
+    .ok_or_else(|| "backend_flush_size")?;
+    let backend_low_flush_interval = NonZeroU64::new(
+        s.get::<u64>("backend_low_flush_interval")
+            .unwrap_or_else(|_| 200_000),
+    )
+    .ok_or_else(|| "backend_low_flush_interval")?;
+    let backend_high_flush_interval = NonZeroU64::new(
+        s.get::<u64>("backend_high_flush_interval")
+            .unwrap_or_else(|_| 600_000),
+    )
+    .ok_or_else(|| "backend_high_flush_interval")?;
 
     let mut max_redirections = s.get::<usize>("max_redirections").unwrap_or_else(|_| 0);
     if max_redirections != 0 {
@@ -98,6 +123,10 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
             .unwrap_or_else(|_| false),
         max_redirections,
         default_redirection_address,
+        backend_batch_strategy,
+        backend_flush_size,
+        backend_low_flush_interval: Duration::from_nanos(backend_low_flush_interval.get()),
+        backend_high_flush_interval: Duration::from_nanos(backend_high_flush_interval.get()),
     };
 
     let mut cluster_config = ClusterConfig::default();

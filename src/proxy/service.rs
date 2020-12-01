@@ -1,6 +1,7 @@
 use super::session::CmdCtxHandler;
 use super::session::{handle_session, Session};
 use super::slowlog::SlowRequestLogger;
+use crate::common::batch::BatchStrategy;
 use crate::common::config::ConfigError;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{resolve_first_address, ThreadSafe};
@@ -10,6 +11,7 @@ use std::error::Error;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use string_error::into_err;
 use tokio::net::TcpListener;
 
@@ -27,6 +29,10 @@ pub struct ServerProxyConfig {
     pub active_redirection: bool,
     pub max_redirections: Option<NonZeroUsize>,
     pub default_redirection_address: Option<String>,
+    pub backend_batch_strategy: BatchStrategy,
+    pub backend_flush_size: NonZeroUsize,
+    pub backend_low_flush_interval: Duration,
+    pub backend_high_flush_interval: Duration,
 }
 
 impl ServerProxyConfig {

@@ -1,4 +1,6 @@
+use super::encoder::get_resp_size_hint;
 use super::fp::{ForAll, Plug, RFunctor, Unplug, VFunctor};
+use super::packet::PacketSizeHint;
 use bytes::Bytes;
 use std::ops::Range;
 use std::vec::Vec;
@@ -293,6 +295,18 @@ impl RespIndex {
     pub fn map_to_slice<'a>(&self, data: &'a [u8]) -> RespSlice<'a> {
         self.as_ref()
             .map(|DataIndex(s, e)| data.get(*s..*e).expect("RespIndex::map_to_slice"))
+    }
+}
+
+impl PacketSizeHint for RespVec {
+    fn get_size_hint(&self) -> Option<usize> {
+        match get_resp_size_hint(&self) {
+            Ok(n) => Some(n),
+            Err(_) => {
+                error!("FATAL: failed to get size hint");
+                None
+            }
+        }
     }
 }
 

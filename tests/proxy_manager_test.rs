@@ -18,6 +18,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio;
+    use undermoon::common::batch::BatchStrategy;
     use undermoon::common::cluster::{
         ClusterName, MigrationMeta, MigrationTaskMeta, Range, RangeList, SlotRange, SlotRangeTag,
     };
@@ -58,6 +59,10 @@ mod tests {
             active_redirection: false,
             max_redirections: None,
             default_redirection_address: None,
+            backend_batch_strategy: BatchStrategy::Fixed,
+            backend_flush_size: NonZeroUsize::new(1024).unwrap(),
+            backend_low_flush_interval: Duration::from_nanos(200_000),
+            backend_high_flush_interval: Duration::from_nanos(800_000),
         }
     }
 

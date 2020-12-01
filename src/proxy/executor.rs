@@ -53,6 +53,7 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
         cluster_config: ClusterConfig,
@@ -108,6 +109,7 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
         cluster_config: ClusterConfig,
@@ -141,6 +143,16 @@ where
     F: RedisClientFactory,
     C: ConnFactory<Pkt = RespPacket>,
 {
+    fn handle_info(&self, cmd_ctx: CmdCtx) {
+        let flush_size = self.manager.get_batch_stats().get_flush_size();
+        let flush_interval = self.manager.get_batch_stats().get_flush_interval();
+        let content = format!(
+            "version:{}\r\n\r\n# Stats\r\nflush_size:{}\r\nflush_interval:{}\r\n",
+            UNDERMOON_VERSION, flush_size, flush_interval,
+        );
+        cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(content.into_bytes()))));
+    }
+
     fn handle_auth(&self, mut cmd_ctx: CmdCtx, session_cluster_name: &sync::RwLock<ClusterName>) {
         let key = cmd_ctx.get_key();
         let cluster = match key {
@@ -1076,9 +1088,7 @@ where
             CmdType::Ping => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
-            CmdType::Info => cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(
-                format!("version:{}\r\n", UNDERMOON_VERSION,).into_bytes(),
-            )))),
+            CmdType::Info => self.handle_info(cmd_ctx),
             CmdType::Auth => self.handle_auth(cmd_ctx, session_cluster_name),
             CmdType::Quit => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))

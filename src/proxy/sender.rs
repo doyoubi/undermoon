@@ -3,6 +3,7 @@ use super::backend::{
     ConnFactory, ReqTask, SenderBackendError,
 };
 use super::service::ServerProxyConfig;
+use crate::common::batch::BatchStats;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::protocol::Resp;
@@ -53,6 +54,7 @@ where
     handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
     future_registry: Arc<TrackedFutureRegistry>,
+    batch_stats: Arc<BatchStats>,
 }
 
 impl<F: CmdTaskResultHandlerFactory, CF: ConnFactory> RecoverableBackendNodeFactory<F, CF>
@@ -65,12 +67,14 @@ where
         handler_factory: Arc<F>,
         conn_factory: Arc<CF>,
         future_registry: Arc<TrackedFutureRegistry>,
+        batch_stats: Arc<BatchStats>,
     ) -> Self {
         Self {
             config,
             handler_factory,
             conn_factory,
             future_registry,
+            batch_stats,
         }
     }
 }
@@ -89,6 +93,7 @@ where
             Arc::new(self.handler_factory.create()),
             self.config.clone(),
             self.conn_factory.clone(),
+            self.batch_stats.clone(),
         );
         let desc = format!("backend::RecoverableBackendNode: address={}", address);
         let fut = TrackedFutureRegistry::wrap(self.future_registry.clone(), fut, desc);
@@ -292,6 +297,7 @@ pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
     reply_handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
     future_registry: Arc<TrackedFutureRegistry>,
+    batch_stats: Arc<BatchStats>,
 ) -> BackendSenderFactory<F, CF>
 where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
@@ -304,6 +310,7 @@ where
             reply_handler_factory,
             conn_factory,
             future_registry,
+            batch_stats,
         ),
     ))
 }
@@ -316,6 +323,7 @@ pub fn gen_migration_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFact
     reply_handler_factory: Arc<F>,
     conn_factory: Arc<CF>,
     future_registry: Arc<TrackedFutureRegistry>,
+    batch_stats: Arc<BatchStats>,
 ) -> MigrationBackendSenderFactory<F, CF>
 where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
@@ -328,6 +336,7 @@ where
             reply_handler_factory,
             conn_factory,
             future_registry,
+            batch_stats,
         )),
     )
 }
