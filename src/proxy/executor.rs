@@ -847,7 +847,9 @@ where
                     Ok(resp) => resp,
                 };
 
-                if Self::is_empty_resp(&resp, data_cmd_type) && (timeout == 0 || retry_num < timeout) {
+                if Self::is_empty_resp(&resp, data_cmd_type)
+                    && (timeout == 0 || retry_num < timeout)
+                {
                     continue;
                 }
 
@@ -1044,7 +1046,7 @@ where
         match resp {
             Resp::Bulk(BulkStr::Nil) => {
                 // BLPOP, BRPOP need to change response to Array::Nil.
-                return Resp::Arr(Array::Nil);
+                Resp::Arr(Array::Nil)
             }
             Resp::Bulk(BulkStr::Str(s)) => Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str(key)),
@@ -1056,7 +1058,7 @@ where
 
     fn adjust_zpop_response(resp: RespVec, key: Vec<u8>) -> RespVec {
         match resp {
-            Resp::Arr(Array::Arr(arr)) if arr.len() == 0 => Resp::Arr(Array::Nil),
+            Resp::Arr(Array::Arr(arr)) if arr.is_empty() => Resp::Arr(Array::Nil),
             Resp::Arr(Array::Arr(arr)) if arr.len() == 2 => {
                 let mut ret = vec![Resp::Bulk(BulkStr::Str(key))];
                 ret.extend(arr);

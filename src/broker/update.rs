@@ -1080,6 +1080,10 @@ impl<'a> MetaStoreUpdate<'a> {
         match self.store.clusters.get_mut(&cluster_name) {
             None => return Err(MetaStoreError::ClusterNotFound),
             Some(ref mut cluster) => {
+                if cluster.is_migrating() {
+                    return Err(MetaStoreError::MigrationRunning);
+                }
+
                 let mut cluster_config = cluster.config.clone();
                 for (k, v) in config.iter() {
                     cluster_config.set_field(k, v).map_err(|err| {
