@@ -14,14 +14,20 @@ pub struct HttpMetaBroker {
     broker_addresses: BrokerAddresses,
     broker_index: AtomicUsize,
     client: reqwest::Client,
+    enable_compression: bool,
 }
 
 impl HttpMetaBroker {
-    pub fn new(broker_addresses: BrokerAddresses, client: reqwest::Client) -> Self {
+    pub fn new(
+        broker_addresses: BrokerAddresses,
+        client: reqwest::Client,
+        enable_compression: bool,
+    ) -> Self {
         HttpMetaBroker {
             broker_addresses,
             broker_index: AtomicUsize::new(0),
             client,
+            enable_compression,
         }
     }
 }
@@ -63,10 +69,18 @@ impl HttpMetaBroker {
         let url = self
             .gen_url(&format!("/clusters/meta/{}", name))
             .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            error!("failed to get cluster {:?}", e);
-            MetaDataBrokerError::RequestFailed
-        })?;
+        let encoding = gen_accept_encoding(self.enable_compression);
+
+        let response = self
+            .client
+            .get(&url)
+            .header(reqwest::header::ACCEPT_ENCODING, encoding)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("failed to get cluster {:?}", e);
+                MetaDataBrokerError::RequestFailed
+            })?;
         let ClusterPayload { cluster } = response.json().await.map_err(|e| {
             error!("failed to get cluster from json {:?}", e);
             MetaDataBrokerError::InvalidReply
@@ -98,10 +112,18 @@ impl HttpMetaBroker {
         let url = self
             .gen_url(&format!("/proxies/meta/{}", address))
             .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            error!("failed to get proxy {:?}", e);
-            MetaDataBrokerError::RequestFailed
-        })?;
+        let encoding = gen_accept_encoding(self.enable_compression);
+
+        let response = self
+            .client
+            .get(&url)
+            .header(reqwest::header::ACCEPT_ENCODING, encoding)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("failed to get proxy {:?}", e);
+                MetaDataBrokerError::RequestFailed
+            })?;
         let ProxyPayload { proxy } = response.json().await.map_err(move |e| {
             error!("failed to get proxy {} from json {:?}", address, e);
             MetaDataBrokerError::InvalidReply
@@ -246,6 +268,14 @@ impl MetaDataBroker for HttpMetaBroker {
                 .map(vec_result_to_stream)
                 .flatten_stream(),
         )
+    }
+}
+
+fn gen_accept_encoding(enable_compression: bool) -> &'static str {
+    if enable_compression {
+        "gzip"
+    } else {
+        "identity"
     }
 }
 

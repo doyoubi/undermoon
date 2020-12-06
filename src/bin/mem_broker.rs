@@ -189,6 +189,7 @@ async fn main() -> std::io::Result<()> {
         let service = service.clone();
         App::new()
             .wrap(middleware::Logger::default())
+            .wrap(middleware::Compress::default())
             .configure(|cfg| configure_app(cfg, service.clone()))
     })
     .bind(&address)?

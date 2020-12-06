@@ -58,12 +58,17 @@ fn gen_conf() -> CoordinatorConfig {
 
     let proxy_timeout = s.get::<usize>("proxy_timeout").unwrap_or_else(|_| 2);
 
+    let enable_compression = s
+        .get::<bool>("enable_compression")
+        .unwrap_or_else(|_| false);
+
     CoordinatorConfig {
         address,
         broker_addresses: Arc::new(ArcSwap::new(Arc::new(broker_address_list))),
         reporter_id,
         thread_number,
         proxy_timeout,
+        enable_compression,
     }
 }
 
@@ -74,6 +79,7 @@ fn gen_service(
     let data_broker = Arc::new(HttpMetaBroker::new(
         config.broker_addresses.clone(),
         http_client.clone(),
+        config.enable_compression,
     ));
     let mani_broker = Arc::new(HttpMetaManipulationBroker::new(
         config.broker_addresses.clone(),

@@ -31,6 +31,7 @@ pub struct CoordinatorConfig {
     pub reporter_id: String,
     pub thread_number: usize,
     pub proxy_timeout: usize,
+    pub enable_compression: bool,
 }
 
 impl CoordinatorConfig {

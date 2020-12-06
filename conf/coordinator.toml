@@ -3,3 +3,5 @@ address="127.0.0.1:6699"
 broker_address = "127.0.0.1:7799"
 reporter_id = "127.0.0.1:6699"
 thread_number = 2
+# Set this to true for large cluster
+enable_compression = false
