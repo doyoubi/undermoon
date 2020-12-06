@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ClusterConfig {
     #[serde(default)]
     pub compression_strategy: CompressionStrategy,
@@ -74,7 +74,7 @@ impl ClusterConfig {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionStrategy {
     Disabled = 0,
     // Only allow SET, SETEX, PSETEX, SETNX, GET, GETSET , MGET, MSET, MSETNX commands for String data type
@@ -137,7 +137,7 @@ impl<'de> Deserialize<'de> for CompressionStrategy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MigrationConfig {
     pub max_migration_time: u64,
     pub max_blocking_time: u64,

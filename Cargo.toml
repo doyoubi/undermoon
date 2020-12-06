@@ -58,6 +58,8 @@ backtrace = "0.3"
 jemallocator = "0.3.0"
 async-trait = "0.1"
 derivative = "2.1.1"
+flate2 = "1"
+base64 = "0.13.0"
 
 [profile.release]
 debug = true

@@ -4,8 +4,12 @@ use crate::common::cluster::ClusterName;
 use crate::common::config::ClusterConfig;
 use crate::common::utils::extract_host_from_address;
 use crate::protocol::{Array, BulkStr, Resp};
+use flate2::Compression;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::io;
+use std::io::Read;
+use std::io::Write;
 use std::iter::Peekable;
 use std::str;
 
@@ -30,21 +34,87 @@ macro_rules! try_get {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClusterMapFlags {
     pub force: bool,
+    pub compress: bool,
 }
 
 impl ClusterMapFlags {
     pub fn to_arg(&self) -> String {
+        let mut flags = Vec::new();
         if self.force {
-            "FORCE".to_string()
-        } else {
+            flags.push("FORCE");
+        }
+        if self.compress {
+            flags.push("COMPRESS");
+        }
+
+        if flags.is_empty() {
             "NOFLAG".to_string()
+        } else {
+            flags.join(",")
         }
     }
 
     pub fn from_arg(flags_str: &str) -> Self {
         let force = has_flags(flags_str, ',', "FORCE");
-        ClusterMapFlags { force }
+        let compress = has_flags(flags_str, ',', "COMPRESS");
+        ClusterMapFlags { force, compress }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProxyClusterMetaData {
+    local: ProxyClusterMap,
+    peer: ProxyClusterMap,
+    clusters_config: ClusterConfigMap,
+}
+
+impl ProxyClusterMetaData {
+    pub fn new(
+        local: ProxyClusterMap,
+        peer: ProxyClusterMap,
+        clusters_config: ClusterConfigMap,
+    ) -> Self {
+        Self {
+            local,
+            peer,
+            clusters_config,
+        }
+    }
+
+    pub fn gen_compressed_data(&self) -> Result<String, MetaCompressError> {
+        let s = serde_json::to_string(&self).map_err(|err| {
+            error!("failed to encode json for meta: {:?}", err);
+            MetaCompressError::Json
+        })?;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Compression::fast());
+        encoder
+            .write_all(s.as_bytes())
+            .map_err(MetaCompressError::Io)?;
+        let buf = encoder.finish().map_err(MetaCompressError::Io)?;
+        Ok(base64::encode(&buf))
+    }
+
+    pub fn from_compressed_data(data: String) -> Result<Self, MetaCompressError> {
+        let raw = base64::decode(data).map_err(|err| {
+            error!("failed to decode base64 for meta: {:?}", err);
+            MetaCompressError::Base64
+        })?;
+        let r = io::Cursor::new(raw);
+        let mut gz = flate2::read::GzDecoder::new(r);
+        let mut s = String::new();
+        gz.read_to_string(&mut s).map_err(MetaCompressError::Io)?;
+        serde_json::from_str(s.as_str()).map_err(|err| {
+            error!("failed to decode json for meta: {:?}", err);
+            MetaCompressError::Json
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum MetaCompressError {
+    Io(io::Error),
+    Json,
+    Base64,
 }
 
 const PEER_PREFIX: &str = "PEER";
@@ -93,6 +163,14 @@ impl ProxyClusterMeta {
 
     pub fn get_configs(&self) -> &ClusterConfigMap {
         &self.clusters_config
+    }
+
+    pub fn gen_data(&self) -> ProxyClusterMetaData {
+        ProxyClusterMetaData {
+            local: self.local.clone(),
+            peer: self.peer.clone(),
+            clusters_config: self.clusters_config.clone(),
+        }
     }
 
     pub fn from_resp<T: AsRef<[u8]>>(
@@ -178,9 +256,20 @@ impl ProxyClusterMeta {
         }
         args
     }
+
+    pub fn to_compressed_args(&self) -> Result<Vec<String>, MetaCompressError> {
+        let data = ProxyClusterMetaData::new(
+            self.local.clone(),
+            self.peer.clone(),
+            self.clusters_config.clone(),
+        )
+        .gen_compressed_data()?;
+        let args = vec![self.epoch.to_string(), self.flags.to_arg(), data];
+        Ok(args)
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProxyClusterMap {
     cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>,
 }
@@ -280,7 +369,7 @@ impl ProxyClusterMap {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ClusterConfigMap {
     config_map: HashMap<ClusterName, ClusterConfig>,
 }
@@ -802,6 +891,11 @@ mod tests {
         args.sort();
         cluster_args.sort();
         assert_eq!(args, cluster_args);
+
+        let metadata = cluster_meta.gen_data();
+        let d = metadata.gen_compressed_data().unwrap();
+        let metadata2 = ProxyClusterMetaData::from_compressed_data(d).unwrap();
+        assert_eq!(metadata, metadata2);
     }
 
     #[test]
@@ -835,6 +929,11 @@ mod tests {
                 .compression_strategy,
             CompressionStrategy::SetGetOnly
         );
+
+        let metadata = cluster_meta.gen_data();
+        let d = metadata.gen_compressed_data().unwrap();
+        let metadata2 = ProxyClusterMetaData::from_compressed_data(d).unwrap();
+        assert_eq!(metadata, metadata2);
     }
 
     #[test]
@@ -866,6 +965,11 @@ mod tests {
         assert!(extended_res.is_err());
         assert_eq!(cluster_meta.epoch, 233);
         assert!(cluster_meta.flags.force);
+
+        let metadata = cluster_meta.gen_data();
+        let d = metadata.gen_compressed_data().unwrap();
+        let metadata2 = ProxyClusterMetaData::from_compressed_data(d).unwrap();
+        assert_eq!(metadata, metadata2);
     }
 
     #[test]
@@ -897,6 +1001,11 @@ mod tests {
         assert!(extended_res.is_err());
         assert_eq!(cluster_meta.epoch, 233);
         assert!(cluster_meta.flags.force);
+
+        let metadata = cluster_meta.gen_data();
+        let d = metadata.gen_compressed_data().unwrap();
+        let metadata2 = ProxyClusterMetaData::from_compressed_data(d).unwrap();
+        assert_eq!(metadata, metadata2);
     }
 
     #[test]

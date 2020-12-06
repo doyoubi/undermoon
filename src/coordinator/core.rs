@@ -563,6 +563,7 @@ pub enum CoordinateError {
     InvalidReply,
     InvalidAddress,
     InvalidConfig,
+    CompressionError,
 }
 
 impl fmt::Display for CoordinateError {

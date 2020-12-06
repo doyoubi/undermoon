@@ -107,10 +107,11 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
     fn gen_proxy_meta_synchronizer(
         data_broker: Arc<DB>,
         client_factory: Arc<F>,
+        enable_compression: bool,
     ) -> impl ProxyMetaSynchronizer {
         let proxy_retriever = BrokerOrderedProxiesRetriever::new(data_broker.clone());
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
-        let sender = ProxyMetaRespSender::new(client_factory);
+        let sender = ProxyMetaRespSender::new(client_factory, enable_compression);
         ProxyMetaRespSynchronizer::new(proxy_retriever, meta_retriever, sender)
     }
 
@@ -124,12 +125,13 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
         data_broker: Arc<DB>,
         mani_broker: Arc<MB>,
         client_factory: Arc<F>,
+        enable_compression: bool,
     ) -> impl MigrationStateSynchronizer {
         let proxy_retriever = BrokerProxiesRetriever::new(data_broker.clone());
         let checker = MigrationStateRespChecker::new(client_factory.clone());
         let committer = BrokerMigrationCommitter::new(mani_broker);
         let meta_retriever = BrokerMetaRetriever::new(data_broker);
-        let sender = ProxyMetaRespSender::new(client_factory);
+        let sender = ProxyMetaRespSender::new(client_factory, enable_compression);
         ParMigrationStateSynchronizer::new(
             proxy_retriever,
             checker,
@@ -166,8 +168,11 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
         loop {
             trace!("start sync proxy meta data");
             defer!(trace!("proxy meta sync finished a round"));
-            let sync =
-                Self::gen_proxy_meta_synchronizer(data_broker.clone(), client_factory.clone());
+            let sync = Self::gen_proxy_meta_synchronizer(
+                data_broker.clone(),
+                client_factory.clone(),
+                self.config.enable_compression,
+            );
             let mut s = sync.run();
             while let Some(r) = s.next().await {
                 if let Err(e) = r {
@@ -206,6 +211,7 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
                 data_broker.clone(),
                 mani_broker.clone(),
                 client_factory.clone(),
+                self.config.enable_compression,
             );
             let mut s = sync.run();
             while let Some(r) = s.next().await {
