@@ -1815,7 +1815,9 @@ mod tests {
             "compression_strategy".to_string(),
             "set_get_only".to_string(),
         );
-        store.change_config(cluster_name.clone(), config).unwrap();
+        store
+            .change_config(cluster_name.clone(), config.clone())
+            .unwrap();
 
         let cluster_config = store
             .get_cluster_by_name(&cluster_name, migration_limit)
@@ -1825,6 +1827,14 @@ mod tests {
             cluster_config.compression_strategy,
             CompressionStrategy::SetGetOnly
         );
+
+        // Can't change config during migration
+        store.auto_add_nodes(cluster_name.clone(), 8).unwrap();
+        store.migrate_slots(cluster_name.clone()).unwrap();
+        let err = store
+            .change_config(cluster_name.clone(), config)
+            .unwrap_err();
+        assert_eq!(err, MetaStoreError::MigrationRunning);
     }
 
     #[test]
