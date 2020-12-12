@@ -205,6 +205,36 @@ impl ProxyClusterMeta {
 
         let flags = ClusterMapFlags::from_arg(&try_get!(it.next()));
 
+        if flags.compress {
+            let compressed_data = it.next().ok_or_else(|| {
+                error!("failed to get compressed data for UMCTL SETCLUSTER");
+                CmdParseError {}
+            })?;
+            let data =
+                ProxyClusterMetaData::from_compressed_data(compressed_data).map_err(|err| {
+                    error!(
+                        "failed to parse compressed data for UMCTL SETCLUSTER: {:?}",
+                        err
+                    );
+                    CmdParseError {}
+                })?;
+            let ProxyClusterMetaData {
+                local,
+                peer,
+                clusters_config,
+            } = data;
+            return Ok((
+                Self {
+                    epoch,
+                    flags,
+                    local,
+                    peer,
+                    clusters_config,
+                },
+                Ok(()),
+            ));
+        }
+
         let local = ProxyClusterMap::parse(it)?;
         let mut peer = ProxyClusterMap::new(HashMap::new());
         let mut clusters_config = ClusterConfigMap::default();
