@@ -54,7 +54,7 @@ class KeyValueTester:
         return proxies
 
     def cluster_ready(self, proxies):
-        # Overmoon will cache the data so once it's ready,
+        # Broker will cache the data so once it's ready,
         # you can't say it will be ready in the future.
         # Maybe the latest metadata are still not synchronized to the proxies.
         for proxy in proxies:

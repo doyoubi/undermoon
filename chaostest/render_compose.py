@@ -6,12 +6,9 @@ from jinja2 import Environment, FileSystemLoader
 import config
 
 
-def render_docker_compose(docker_compose_yml, is_mem_broker):
+def render_docker_compose(docker_compose_yml):
     env = Environment(loader=FileSystemLoader('./'))
-    if is_mem_broker:
-        template = env.get_template('chaostest/test_stack_mem_broker.yml.j2')
-    else:
-        template = env.get_template('chaostest/test_stack.yml.j2')
+    template = env.get_template('chaostest/test_stack_mem_broker.yml.j2')
     output = template.render(config.DOCKER_COMPOSE_CONFIG)
     with open(docker_compose_yml, 'w') as f:
         f.write(output)
@@ -19,7 +16,7 @@ def render_docker_compose(docker_compose_yml, is_mem_broker):
 
 if __name__ == '__main__':
     # Usage:
-    #     python chaostest/render_compose.py -t [overmoon|mem_broker] [-f] [-a]
+    #     python chaostest/render_compose.py -t mem_broker [-f] [-a]
     parser = argparse.ArgumentParser(description='Render docker-compose file for chaos testing')
 
     parser.add_argument('-t', action='store', dest='test_type',default='mem_broker')
@@ -45,4 +42,4 @@ if __name__ == '__main__':
         config.DOCKER_COMPOSE_CONFIG['active_redirection'] = False
         print("Disable active redirection")
 
-    render_docker_compose('chaostest/chaos-docker-compose.yml', is_mem_broker)
+    render_docker_compose('chaostest/chaos-docker-compose.yml')

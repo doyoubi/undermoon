@@ -19,11 +19,11 @@ DOCKER_COMPOSE_CONFIG = {
     'etcd_port': 2379,
     'active_redirection': False,
     'pumba_commands': {
-        'kill': "--random --interval 60s kill 're2:(server_proxy|coordinator|overmoon).*'",
-        'delay': "--random --interval 20s netem --duration 5s delay 're2:(server_proxy|coordinator|overmoon).*'",
-        'loss': "--random --interval 20s netem --duration 5s loss 're2:(server_proxy|coordinator|overmoon).*'",
-        'rate': "--random --interval 20s netem --duration 5s rate 're2:(server_proxy|coordinator|overmoon).*'",
-        'duplicate': "--random --interval 20s netem --duration 5s duplicate 're2:(server_proxy|coordinator|overmoon).*'",
-        'corrupt': "--random --interval 20s netem --duration 5s corrupt 're2:(server_proxy|coordinator|overmoon).*'",
+        'kill': "--random --interval 60s kill 're2:(server_proxy|coordinator).*'",
+        'delay': "--random --interval 20s netem --duration 5s delay 're2:(server_proxy|coordinator).*'",
+        'loss': "--random --interval 20s netem --duration 5s loss 're2:(server_proxy|coordinator).*'",
+        'rate': "--random --interval 20s netem --duration 5s rate 're2:(server_proxy|coordinator).*'",
+        'duplicate': "--random --interval 20s netem --duration 5s duplicate 're2:(server_proxy|coordinator).*'",
+        'corrupt': "--random --interval 20s netem --duration 5s corrupt 're2:(server_proxy|coordinator).*'",
     },
 }
