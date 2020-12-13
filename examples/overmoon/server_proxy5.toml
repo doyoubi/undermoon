@@ -1,3 +1,0 @@
-address = "0.0.0.0:6005"
-announce_address = "server_proxy5:6005"
-auto_select_cluster = true

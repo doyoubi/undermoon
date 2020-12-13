@@ -88,13 +88,6 @@ docker-mem-broker:
 docker-mem-broker-example:
 	docker-compose -f examples/docker-compose-mem-broker-example.yml up
 
-docker-overmoon:
-	# Need to build the 'overmoon' image first
-	# > git clone https://github.com/doyoubi/overmoon
-	# > cd overmoon
-	# > make build-docker
-	docker-compose -f examples/docker-compose-overmoon.yml up
-
 start-func-test:
 	python chaostest/render_compose.py -t mem_broker
 	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
@@ -123,6 +116,6 @@ chaos-test:
 func-test:
 	python chaostest/random_test.py exit-on-error
 
-.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker docker-overmoon \
+.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker \
     start-func-test start-chaos stop-chaos list-chaos-services chaos-test func-test
 

@@ -1,6 +1,0 @@
-address: 0.0.0.0:7799
-migration_limit: 1
-path_prefix: /overmoon
-failure_ttl: 10
-etcd_nodes:
-  - etcd:2379
