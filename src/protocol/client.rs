@@ -139,25 +139,29 @@ fn process_multi_cmd_result(
 pub struct DummyRedisClientFactory<C, F>
 where
     C: RedisClient + Sync + 'static,
-    F: Fn() -> C + ThreadSafe,
+    F: Fn(bool) -> C + ThreadSafe,
 {
     create_func: F,
+    enable_compression: bool,
 }
 
 impl<C, F> DummyRedisClientFactory<C, F>
 where
     C: RedisClient + Sync + 'static,
-    F: Fn() -> C + ThreadSafe,
+    F: Fn(bool) -> C + ThreadSafe,
 {
-    pub fn new(create_func: F) -> Self {
-        Self { create_func }
+    pub fn new(create_func: F, enable_compression: bool) -> Self {
+        Self {
+            create_func,
+            enable_compression,
+        }
     }
 }
 
 impl<C, F> RedisClientFactory for DummyRedisClientFactory<C, F>
 where
     C: RedisClient + Sync + 'static,
-    F: Fn() -> C + ThreadSafe,
+    F: Fn(bool) -> C + ThreadSafe,
 {
     type Client = C;
 
@@ -165,7 +169,7 @@ where
         &'s self,
         _address: String,
     ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>> {
-        let client = (self.create_func)();
+        let client = (self.create_func)(self.enable_compression);
         Box::pin(async move { Ok(client) })
     }
 }

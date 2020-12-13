@@ -150,7 +150,7 @@ mod tests {
         )
     }
 
-    fn create_client_func() -> impl RedisClient {
+    fn create_client_func(_enable_compression: bool) -> impl RedisClient {
         let mut mock_client = MockRedisClient::new();
 
         let info_mgr_cmd = vec![b"UMCTL".to_vec(), b"INFOMGR".to_vec()];
@@ -171,7 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_migration_state_checker() {
-        let factory = DummyRedisClientFactory::new(create_client_func);
+        let factory = DummyRedisClientFactory::new(create_client_func, false);
         let checker = MigrationStateRespChecker::new(Arc::new(factory));
         let res: Vec<_> = checker.check("127.0.0.1:6000".to_string()).collect().await;
         assert_eq!(res.len(), 1);
@@ -232,7 +232,7 @@ mod tests {
     // Integrate together.
     #[tokio::test]
     async fn test_migration_state_sync() {
-        let factory = Arc::new(DummyRedisClientFactory::new(create_client_func));
+        let factory = Arc::new(DummyRedisClientFactory::new(create_client_func, false));
         let checker = MigrationStateRespChecker::new(factory);
 
         let mut mock_mani_broker = MockMetaManipulationBroker::new();

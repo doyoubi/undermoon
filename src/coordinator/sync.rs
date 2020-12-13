@@ -1,7 +1,9 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, ProxyMetaRetriever, ProxyMetaSender};
 use crate::common::cluster::{ClusterName, Proxy, Role, SlotRange};
-use crate::common::proto::{ClusterConfigMap, ClusterMapFlags, ProxyClusterMap, ProxyClusterMeta};
+use crate::common::proto::{
+    ClusterConfigMap, ClusterMapFlags, MetaCompressError, ProxyClusterMap, ProxyClusterMeta,
+};
 use crate::common::response::{ERR_NOT_MY_META, OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
@@ -12,11 +14,15 @@ use std::sync::Arc;
 
 pub struct ProxyMetaRespSender<F: RedisClientFactory> {
     client_factory: Arc<F>,
+    enable_compression: bool,
 }
 
 impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
-    pub fn new(client_factory: Arc<F>) -> Self {
-        Self { client_factory }
+    pub fn new(client_factory: Arc<F>, enable_compression: bool) -> Self {
+        Self {
+            client_factory,
+            enable_compression,
+        }
     }
 }
 
@@ -28,18 +34,27 @@ impl<F: RedisClientFactory> ProxyMetaRespSender<F> {
             .await
             .map_err(CoordinateError::Redis)?;
         let proxy_with_only_masters = filter_proxy_masters(proxy.clone());
+        let repl_flags = ClusterMapFlags {
+            force: false,
+            compress: false,
+        };
         send_meta(
             &mut client,
             "SETREPL".to_string(),
-            generate_repl_meta_cmd_args(proxy, ClusterMapFlags { force: false }),
+            generate_repl_meta_cmd_args(proxy, repl_flags),
         )
         .await?;
-        send_meta(
-            &mut client,
-            "SETCLUSTER".to_string(),
-            generate_proxy_meta_cmd_args(ClusterMapFlags { force: false }, proxy_with_only_masters),
-        )
-        .await?;
+
+        let flags = ClusterMapFlags {
+            force: false,
+            compress: self.enable_compression,
+        };
+        let meta_cmd_args =
+            generate_proxy_meta_cmd_args(flags, proxy_with_only_masters).map_err(|err| {
+                error!("FATAL_ERROR: failed to generate {:?}", err);
+                CoordinateError::CompressionError
+            })?;
+        send_meta(&mut client, "SETCLUSTER".to_string(), meta_cmd_args).await?;
         Ok(())
     }
 }
@@ -91,7 +106,10 @@ impl<B: MetaDataBroker> ProxyMetaRetriever for BrokerMetaRetriever<B> {
     }
 }
 
-fn generate_proxy_meta_cmd_args(flags: ClusterMapFlags, proxy: Proxy) -> Vec<String> {
+fn generate_proxy_meta_cmd_args(
+    flags: ClusterMapFlags,
+    proxy: Proxy,
+) -> Result<Vec<String>, MetaCompressError> {
     let epoch = proxy.get_epoch();
     let clusters_config = ClusterConfigMap::new(proxy.get_clusters_config().clone());
 
@@ -115,8 +133,13 @@ fn generate_proxy_meta_cmd_args(flags: ClusterMapFlags, proxy: Proxy) -> Vec<Str
     }
     let local = ProxyClusterMap::new(cluster_map);
 
-    let proxy_cluster_meta = ProxyClusterMeta::new(epoch, flags, local, peer, clusters_config);
-    proxy_cluster_meta.to_args()
+    let proxy_cluster_meta =
+        ProxyClusterMeta::new(epoch, flags.clone(), local, peer, clusters_config);
+
+    if flags.compress {
+        return proxy_cluster_meta.to_compressed_args();
+    }
+    Ok(proxy_cluster_meta.to_args())
 }
 
 // sub_command should be SETCLUSTER, SETREPL
@@ -318,17 +341,55 @@ mod tests {
         .collect()
     }
 
+    fn gen_set_cluster_compress_args() -> Vec<String> {
+        let epoch = 7799;
+        let flags = ClusterMapFlags::from_arg("COMPRESS");
+
+        let mut local_map = HashMap::new();
+        let mut node_map = HashMap::new();
+        let slots = vec!["1".to_string(), "233-666".to_string()];
+        node_map.insert(
+            "127.0.0.1:7001".to_string(),
+            vec![SlotRange::from_strings(&mut slots.into_iter().peekable()).unwrap()],
+        );
+        local_map.insert(ClusterName::try_from("mycluster").unwrap(), node_map);
+        let local = ProxyClusterMap::new(local_map);
+
+        let peer = ProxyClusterMap::new(HashMap::new());
+        let mut cluster_map = HashMap::new();
+        cluster_map.insert(
+            ClusterName::try_from("mycluster").unwrap(),
+            ClusterConfig::default(),
+        );
+        let clusters_config = ClusterConfigMap::new(cluster_map);
+
+        let meta = ProxyClusterMeta::new(epoch, flags, local, peer, clusters_config);
+        meta.to_compressed_args().unwrap()
+    }
+
     #[test]
     fn test_master_generate_repl_meta_cmd_args() {
         let proxy = gen_testing_proxy(Role::Master);
-        let args = generate_repl_meta_cmd_args(proxy, ClusterMapFlags { force: false });
+        let args = generate_repl_meta_cmd_args(
+            proxy,
+            ClusterMapFlags {
+                force: false,
+                compress: false,
+            },
+        );
         assert_eq!(args, gen_master_args())
     }
 
     #[test]
     fn test_replica_generate_repl_meta_cmd_args() {
         let proxy = gen_testing_proxy(Role::Replica);
-        let args = generate_repl_meta_cmd_args(proxy, ClusterMapFlags { force: true });
+        let args = generate_repl_meta_cmd_args(
+            proxy,
+            ClusterMapFlags {
+                force: true,
+                compress: false,
+            },
+        );
         assert_eq!(args, gen_replica_args())
     }
 
@@ -382,7 +443,7 @@ mod tests {
         assert!(res.is_err());
     }
 
-    fn create_client_func() -> impl RedisClient {
+    fn create_client_func(enable_compression: bool) -> impl RedisClient {
         let call_times = Arc::new(AtomicUsize::new(0));
 
         let mut mock_client = MockRedisClient::new();
@@ -394,14 +455,22 @@ mod tests {
                 .map(|s| s.into_bytes())
                 .collect(),
         );
+
         let mut set_cluster_cmd = vec![b"UMCTL".to_vec(), b"SETCLUSTER".to_vec()];
-        set_cluster_cmd.append(
-            &mut gen_set_cluster_args()
+        if enable_compression {
+            let mut args = gen_set_cluster_compress_args()
                 .into_iter()
                 .map(|s| s.into_bytes())
-                .collect(),
-        );
-        set_cluster_cmd.push(b"CONFIG".to_vec());
+                .collect();
+            set_cluster_cmd.append(&mut args);
+        } else {
+            let mut args = gen_set_cluster_args()
+                .into_iter()
+                .map(|s| s.into_bytes())
+                .collect();
+            set_cluster_cmd.append(&mut args);
+            set_cluster_cmd.push(b"CONFIG".to_vec());
+        }
 
         mock_client
             .expect_execute_single()
@@ -409,6 +478,8 @@ mod tests {
                 if call_times.load(Ordering::SeqCst) == 0 {
                     call_times.fetch_add(1, Ordering::SeqCst);
                     command.eq(&set_repl_cmd)
+                } else if enable_compression {
+                    command.eq(&set_cluster_cmd)
                 } else {
                     // Ignore the config part
                     let cmd = command.get(0..set_cluster_cmd.len()).unwrap().to_vec();
@@ -423,8 +494,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_resp_sender() {
-        let client_factory = DummyRedisClientFactory::new(create_client_func);
-        let sender = ProxyMetaRespSender::new(Arc::new(client_factory));
+        test_meta_resp_sender_helper(false).await;
+        test_meta_resp_sender_helper(true).await;
+    }
+
+    async fn test_meta_resp_sender_helper(enable_compression: bool) {
+        let client_factory = DummyRedisClientFactory::new(create_client_func, enable_compression);
+        let sender = ProxyMetaRespSender::new(Arc::new(client_factory), enable_compression);
         let proxy = gen_testing_proxy(Role::Master);
         let res = sender.send_meta(proxy).await;
         assert!(res.is_ok());
@@ -455,6 +531,11 @@ mod tests {
     // Integrate together
     #[tokio::test]
     async fn test_meta_sync() {
+        test_meta_sync_helper(false).await;
+        test_meta_sync_helper(true).await;
+    }
+
+    async fn test_meta_sync_helper(enable_compression: bool) {
         let mut mock_broker = MockMetaDataBroker::new();
         let proxy_addr = gen_testing_proxy(Role::Master).get_address().to_string();
         let proxy_addr2 = proxy_addr.clone();
@@ -490,8 +571,8 @@ mod tests {
 
         let proxies_retriever = BrokerProxiesRetriever::new(mock_broker.clone());
         let meta_retriever = BrokerMetaRetriever::new(mock_broker);
-        let client_factory = DummyRedisClientFactory::new(create_client_func);
-        let sender = ProxyMetaRespSender::new(Arc::new(client_factory));
+        let client_factory = DummyRedisClientFactory::new(create_client_func, enable_compression);
+        let sender = ProxyMetaRespSender::new(Arc::new(client_factory), enable_compression);
 
         let sync = ProxyMetaRespSynchronizer::new(proxies_retriever, meta_retriever, sender);
         let results: Vec<_> = sync.run().collect().await;

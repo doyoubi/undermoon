@@ -209,7 +209,13 @@ mod tests {
         assert!(r.is_ok());
         let meta = r.unwrap();
         assert_eq!(meta.epoch, 233);
-        assert_eq!(meta.flags, ClusterMapFlags { force: true });
+        assert_eq!(
+            meta.flags,
+            ClusterMapFlags {
+                force: true,
+                compress: false
+            }
+        );
         assert_eq!(meta.masters.len(), 1);
         assert_eq!(meta.replicas.len(), 0);
 
@@ -231,7 +237,13 @@ mod tests {
         assert!(r.is_ok());
         let meta = r.unwrap();
         assert_eq!(meta.epoch, 233);
-        assert_eq!(meta.flags, ClusterMapFlags { force: false });
+        assert_eq!(
+            meta.flags,
+            ClusterMapFlags {
+                force: false,
+                compress: false
+            }
+        );
         assert_eq!(meta.masters.len(), 1);
         assert_eq!(meta.replicas.len(), 1);
 

@@ -113,7 +113,10 @@ mod tests {
 
         ReplicatorMeta {
             epoch: 233,
-            flags: ClusterMapFlags { force: false },
+            flags: ClusterMapFlags {
+                force: false,
+                compress: false,
+            },
             masters: vec![MasterMeta {
                 cluster_name: cluster_name.clone(),
                 master_node_address: "127.0.0.1:6379".to_string(),
@@ -132,7 +135,10 @@ mod tests {
 
         ReplicatorMeta {
             epoch: 233,
-            flags: ClusterMapFlags { force: false },
+            flags: ClusterMapFlags {
+                force: false,
+                compress: false,
+            },
             masters: vec![MasterMeta {
                 cluster_name: cluster_name.clone(),
                 master_node_address: "127.0.0.1:6379".to_string(),
@@ -147,7 +153,10 @@ mod tests {
 
         ReplicatorMeta {
             epoch: 233,
-            flags: ClusterMapFlags { force: false },
+            flags: ClusterMapFlags {
+                force: false,
+                compress: false,
+            },
             masters: vec![],
             replicas: vec![ReplicaMeta {
                 cluster_name: cluster_name.clone(),
