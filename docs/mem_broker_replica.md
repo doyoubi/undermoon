@@ -1,8 +1,4 @@
 # Setting Up Backup for Memory Broker
-Even though the on going [broker backed by Etcd](https://github.com/doyoubi/overmoon) will be more reliable,
-sometimes users may choose simplicity over reliability.
-`Memory Broker` is still a good way to go at this point.
-`Memory Broker` provides a naive solution for backing up the data.
 
 ## Setting Up Replica for Memory Broker
 Build the binaries:

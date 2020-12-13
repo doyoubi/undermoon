@@ -29,6 +29,7 @@ backend_high_flush_interval = 600000
 # When active_redirection is enabled,
 # all the server proxies will handle the redirection inside.
 # Clients don't need to be a Redis Cluster Client.
+# NOTICE: This is an experimental feature and don't use it in production.
 active_redirection = false
 # This is only useful when active_redirection is true.
 # Use 0 to disable limitation.

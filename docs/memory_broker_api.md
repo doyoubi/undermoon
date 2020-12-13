@@ -54,6 +54,7 @@ HTTP 200
 ##### Error
 ```
 HTTP 409 { "error": "INVALID_META_VERSION" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Get cluster info
@@ -101,6 +102,7 @@ HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 400 { "error": "INVALID_NODE_NUMBER" }
 HTTP 409 { "error": "ALREADY_EXISTED" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Delete cluster
@@ -115,6 +117,7 @@ HTTP 200
 ```
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Add nodes to cluster
@@ -142,6 +145,7 @@ HTTP 409 { "error": "ALREADY_EXISTED" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Add nodes to cluster if needed
@@ -171,6 +175,7 @@ HTTP 409 { "error": "ALREADY_EXISTED" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Delete Unused nodes in a cluster
@@ -188,6 +193,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Add or remove nodes and start migration
@@ -212,6 +218,7 @@ HTTP 409 { "error": "MIGRATION_RUNNING" }
 HTTP 400 { "error": "INVALID_NODE_NUMBER" }
 HTTP 409 { "error": "NO_AVAILABLE_RESOURCE" }
 HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Start migration for scaling out
@@ -231,6 +238,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "FREE_NODE_NOT_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Start migration for scaling down
@@ -252,6 +260,7 @@ HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
 HTTP 409 { "error": "FREE_NODE_FOUND" }
 HTTP 409 { "error": "MIGRATION_RUNNING" }
 HTTP 409 { "error": "NODE_NUMBER_CHANGING" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Change cluster config
@@ -279,6 +288,7 @@ HTTP 409 {
     "value": "xxxx",
     "message": "xxxx"
 }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Add proxy
@@ -302,6 +312,7 @@ HTTP 200
 ```
 HTTP 400 { "error": "INVALID_PROXY_ADDRESS" }
 HTTP 409 { "error": "ALREADY_EXISTED" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Delete proxy
@@ -316,6 +327,7 @@ HTTP 200
 ```
 HTTP 404 { "error": "PROXY_NOT_FOUND" }
 HTTP 409 { "error": "IN_USE" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Balance Masters
@@ -330,6 +342,7 @@ HTTP 200
 ```
 HTTP 400 { "error": "INVALID_CLUSTER_NAME" }
 HTTP 404 { "error": "CLUSTER_NOT_FOUND" }
+HTTP 409 { "error": "RETRY" }
 ```
 
 #### Get the current global epoch
