@@ -76,24 +76,15 @@ impl SlotRangeTag {
     }
 
     pub fn is_stable(&self) -> bool {
-        match self {
-            SlotRangeTag::None => true,
-            _ => false,
-        }
+        matches!(self, SlotRangeTag::None)
     }
 
     pub fn is_migrating(&self) -> bool {
-        match self {
-            SlotRangeTag::Migrating(_) => true,
-            _ => false,
-        }
+        matches!(self, SlotRangeTag::Migrating(_))
     }
 
     pub fn is_importing(&self) -> bool {
-        match self {
-            SlotRangeTag::Importing(_) => true,
-            _ => false,
-        }
+        matches!(self, SlotRangeTag::Importing(_))
     }
 }
 
@@ -129,7 +120,7 @@ impl TryFrom<&str> for RangeList {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let mut it = s.split(' ').map(|s| s.to_string());
-        Self::parse(&mut it).ok_or_else(|| InvalidRangeListString)
+        Self::parse(&mut it).ok_or(InvalidRangeListString)
     }
 }
 
@@ -283,10 +274,7 @@ impl From<&RangeList> for RangeMap {
             _ => (0, 0),
         };
 
-        let mut exists_map = Vec::with_capacity(map_len);
-        for _ in 0..map_len {
-            exists_map.push(false);
-        }
+        let mut exists_map = vec![false; map_len];
         for range in range_list.get_ranges().iter() {
             for slot_num in range.start()..=range.end() {
                 if let Some(slot) = slot_num

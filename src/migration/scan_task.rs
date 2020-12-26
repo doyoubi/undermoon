@@ -235,10 +235,7 @@ where
 
     async fn scan_migrate(&self) -> Result<(), MigrationError> {
         let state = self.state.clone();
-        let mgr_fut = self
-            .task
-            .start()
-            .ok_or_else(|| MigrationError::AlreadyStarted)?;
+        let mgr_fut = self.task.start().ok_or(MigrationError::AlreadyStarted)?;
 
         let fut = mgr_fut
             .map_ok(|()| info!("migration future finished scanning"))

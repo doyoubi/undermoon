@@ -8,13 +8,10 @@ install-linters:
 	rustup update
 	rustup component add clippy
 	rustup component add rustfmt
-	cargo install --git https://github.com/doyoubi/mylint-rs --tag v1.0
 
 lint:
-	find src -name "*.rs" | xargs rustup run stable rustfmt
-	find tests -name "*.rs" | xargs rustup run stable rustfmt
-	cargo clippy -- -W clippy::indexing_slicing
-	mylint -s Expect -s IndexExpression
+	cargo fmt --all
+	cargo clippy
 
 release:
 	cargo build --release

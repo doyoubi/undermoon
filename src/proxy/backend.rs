@@ -694,7 +694,7 @@ impl<T> SenderBackendError<T> {
         }
     }
 
-    pub fn map_task<P, F>(self: Self, f: F) -> SenderBackendError<P>
+    pub fn map_task<P, F>(self, f: F) -> SenderBackendError<P>
     where
         P: CmdTask,
         F: Fn(T) -> P,

@@ -373,7 +373,7 @@ impl ProxyClusterMap {
     where
         It: Iterator<Item = String>,
     {
-        SlotRange::from_strings(it).ok_or_else(|| CmdParseError {})
+        SlotRange::from_strings(it).ok_or(CmdParseError {})
     }
 
     pub fn check_hosts(&self, announce_host: &str) -> bool {

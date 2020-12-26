@@ -40,8 +40,8 @@ pub fn parse_resp(buf: &[u8]) -> Result<(RespIndex, usize), ParseError> {
         return Err(ParseError::NotEnoughData);
     }
 
-    let prefix = *buf.get(0).ok_or_else(|| ParseError::UnexpectedErr)?;
-    let next_buf = buf.get(1..).ok_or_else(|| ParseError::InvalidProtocol)?;
+    let prefix = *buf.get(0).ok_or(ParseError::UnexpectedErr)?;
+    let next_buf = buf.get(1..).ok_or(ParseError::InvalidProtocol)?;
 
     match prefix {
         b'$' => {
@@ -86,9 +86,7 @@ fn parse_array(buf: &[u8]) -> Result<(ArrayIndex, usize), ParseError> {
     let mut array = Vec::with_capacity(array_size);
 
     for _ in 0..array_size {
-        let next_buf = buf
-            .get(consumed..)
-            .ok_or_else(|| ParseError::InvalidProtocol)?;
+        let next_buf = buf.get(consumed..).ok_or(ParseError::InvalidProtocol)?;
         let (mut v, element_consumed) = parse_resp(next_buf)?;
         v.advance(consumed);
         consumed += element_consumed;
@@ -117,14 +115,14 @@ fn parse_len(buf: &[u8]) -> Result<(i64, usize), ParseError> {
     let (data_index, consumed) = parse_line(buf)?;
     let next_buf = buf
         .get(data_index.to_range())
-        .ok_or_else(|| ParseError::UnexpectedErr)?;
+        .ok_or(ParseError::UnexpectedErr)?;
 
     let len = btoi(&next_buf).map_err(|_| ParseError::InvalidProtocol)?;
     Ok((len, consumed))
 }
 
 fn parse_line(buf: &[u8]) -> Result<(DataIndex, usize), ParseError> {
-    let lf_index = memchr(LF, &buf).ok_or_else(|| ParseError::NotEnoughData)?;
+    let lf_index = memchr(LF, &buf).ok_or(ParseError::NotEnoughData)?;
     if lf_index == 0 {
         return Err(ParseError::InvalidProtocol);
     }

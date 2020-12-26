@@ -38,7 +38,7 @@ impl HttpMetaManipulationBroker {
     ) -> Result<Option<Proxy>, MetaManipulationBrokerError> {
         let url = self
             .gen_url(&format!("/proxies/failover/{}", failed_proxy_address))
-            .ok_or_else(|| MetaManipulationBrokerError::NoBroker)?;
+            .ok_or(MetaManipulationBrokerError::NoBroker)?;
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("Failed to replace proxy {:?}", e);
             MetaManipulationBrokerError::RequestFailed
@@ -77,7 +77,7 @@ impl HttpMetaManipulationBroker {
     ) -> Result<(), MetaManipulationBrokerError> {
         let url = self
             .gen_url("/clusters/migrations")
-            .ok_or_else(|| MetaManipulationBrokerError::NoBroker)?;
+            .ok_or(MetaManipulationBrokerError::NoBroker)?;
 
         let response = self
             .client

@@ -643,7 +643,7 @@ impl<T: CmdTask> Error for ClusterSendError<T> {
 }
 
 impl<T: CmdTask> ClusterSendError<T> {
-    pub fn map_task<P, F>(self: Self, f: F) -> ClusterSendError<P>
+    pub fn map_task<P, F>(self, f: F) -> ClusterSendError<P>
     where
         P: CmdTask,
         F: Fn(T) -> P,

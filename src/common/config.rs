@@ -35,7 +35,7 @@ impl ClusterConfig {
                     let f = field
                         .splitn(2, '_')
                         .nth(1)
-                        .ok_or_else(|| ConfigError::FieldNotFound)?;
+                        .ok_or(ConfigError::FieldNotFound)?;
                     return self.migration_config.set_field(f, value);
                 } else {
                     return Err(ConfigError::FieldNotFound);

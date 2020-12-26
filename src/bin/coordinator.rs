@@ -53,14 +53,12 @@ fn gen_conf() -> CoordinatorConfig {
         .get::<String>("reporter_id")
         .unwrap_or_else(|_| address.clone());
 
-    let thread_number = s.get::<usize>("thread_number").unwrap_or_else(|_| 4);
+    let thread_number = s.get::<usize>("thread_number").unwrap_or(4);
     let thread_number = max(1, thread_number);
 
-    let proxy_timeout = s.get::<usize>("proxy_timeout").unwrap_or_else(|_| 2);
+    let proxy_timeout = s.get::<usize>("proxy_timeout").unwrap_or(2);
 
-    let enable_compression = s
-        .get::<bool>("enable_compression")
-        .unwrap_or_else(|_| false);
+    let enable_compression = s.get::<bool>("enable_compression").unwrap_or(false);
 
     CoordinatorConfig {
         address,

@@ -51,16 +51,15 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
         .get::<String>("announce_address")
         .unwrap_or_else(|_| address.clone());
     let announce_host = extract_host_from_address(announce_address.as_str())
-        .ok_or_else(|| "announce_address")?
+        .ok_or("announce_address")?
         .to_string();
 
-    let slowlog_len = NonZeroUsize::new(s.get::<usize>("slowlog_len").unwrap_or_else(|_| 1024))
-        .ok_or_else(|| "slowlog_len")?;
-    let thread_number = NonZeroUsize::new(s.get::<usize>("thread_number").unwrap_or_else(|_| 2))
-        .ok_or_else(|| "thread_number")?;
-    let backend_conn_num =
-        NonZeroUsize::new(s.get::<usize>("backend_conn_num").unwrap_or_else(|_| 2))
-            .ok_or_else(|| "backend_conn_num")?;
+    let slowlog_len =
+        NonZeroUsize::new(s.get::<usize>("slowlog_len").unwrap_or(1024)).ok_or("slowlog_len")?;
+    let thread_number =
+        NonZeroUsize::new(s.get::<usize>("thread_number").unwrap_or(2)).ok_or("thread_number")?;
+    let backend_conn_num = NonZeroUsize::new(s.get::<usize>("backend_conn_num").unwrap_or(2))
+        .ok_or("backend_conn_num")?;
     let backend_batch_strategy = s
         .get::<String>("backend_batch_strategy")
         .map(|strategy| match strategy.to_lowercase().as_str() {
@@ -70,23 +69,21 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
             _ => BatchStrategy::Fixed,
         })
         .unwrap_or_else(|_| BatchStrategy::Fixed);
-    let backend_flush_size = NonZeroUsize::new(
-        s.get::<usize>("backend_flush_size")
-            .unwrap_or_else(|_| 1024),
-    )
-    .ok_or_else(|| "backend_flush_size")?;
+    let backend_flush_size =
+        NonZeroUsize::new(s.get::<usize>("backend_flush_size").unwrap_or(1024))
+            .ok_or("backend_flush_size")?;
     let backend_low_flush_interval = NonZeroU64::new(
         s.get::<u64>("backend_low_flush_interval")
-            .unwrap_or_else(|_| 200_000),
+            .unwrap_or(200_000),
     )
-    .ok_or_else(|| "backend_low_flush_interval")?;
+    .ok_or("backend_low_flush_interval")?;
     let backend_high_flush_interval = NonZeroU64::new(
         s.get::<u64>("backend_high_flush_interval")
-            .unwrap_or_else(|_| 600_000),
+            .unwrap_or(600_000),
     )
-    .ok_or_else(|| "backend_high_flush_interval")?;
+    .ok_or("backend_high_flush_interval")?;
 
-    let mut max_redirections = s.get::<usize>("max_redirections").unwrap_or_else(|_| 0);
+    let mut max_redirections = s.get::<usize>("max_redirections").unwrap_or(0);
     if max_redirections != 0 {
         max_redirections = min(MAX_REDIRECTIONS, max_redirections);
     }
@@ -105,22 +102,15 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
         address,
         announce_address,
         announce_host,
-        auto_select_cluster: s
-            .get::<bool>("auto_select_cluster")
-            .unwrap_or_else(|_| true),
+        auto_select_cluster: s.get::<bool>("auto_select_cluster").unwrap_or(true),
         slowlog_len,
         slowlog_log_slower_than: AtomicI64::new(
-            s.get::<i64>("slowlog_log_slower_than")
-                .unwrap_or_else(|_| 50000),
+            s.get::<i64>("slowlog_log_slower_than").unwrap_or(50000),
         ),
-        slowlog_sample_rate: AtomicU64::new(
-            s.get::<u64>("slowlog_sample_rate").unwrap_or_else(|_| 1000),
-        ),
+        slowlog_sample_rate: AtomicU64::new(s.get::<u64>("slowlog_sample_rate").unwrap_or(1000)),
         thread_number,
         backend_conn_num,
-        active_redirection: s
-            .get::<bool>("active_redirection")
-            .unwrap_or_else(|_| false),
+        active_redirection: s.get::<bool>("active_redirection").unwrap_or(false),
         max_redirections,
         default_redirection_address,
         backend_batch_strategy,
