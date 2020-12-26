@@ -447,7 +447,7 @@ impl<'a> MetaStoreMigrate<'a> {
                 .store
                 .clusters
                 .get_mut(&cluster_name)
-                .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
+                .ok_or(MetaStoreError::ClusterNotFound)?;
             let task_epoch = match &task.slot_range.tag {
                 SlotRangeTag::None => return Err(MetaStoreError::InvalidMigrationTask),
                 SlotRangeTag::Migrating(meta) => meta.epoch,
@@ -476,7 +476,7 @@ impl<'a> MetaStoreMigrate<'a> {
                         && slot_range_store.is_migrating
                 })
                 .map(|(i, j, _)| (i, j))
-                .ok_or_else(|| MetaStoreError::MigrationTaskNotFound)?;
+                .ok_or(MetaStoreError::MigrationTaskNotFound)?;
 
             let (dst_chunk_index, dst_chunk_part) = cluster
                 .chunks
@@ -500,7 +500,7 @@ impl<'a> MetaStoreMigrate<'a> {
                         && !slot_range_store.is_migrating
                 })
                 .map(|(i, j, _)| (i, j))
-                .ok_or_else(|| MetaStoreError::MigrationTaskNotFound)?;
+                .ok_or(MetaStoreError::MigrationTaskNotFound)?;
 
             let meta = MigrationMetaStore {
                 epoch: task_epoch,

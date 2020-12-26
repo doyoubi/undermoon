@@ -145,10 +145,10 @@ pub enum DataCmdType {
 
 impl DataCmdType {
     fn is_blocking_cmd(self) -> bool {
-        match self {
-            Self::BZPOPMIN | Self::BZPOPMAX | Self::BLPOP | Self::BRPOP | Self::BRPOPLPUSH => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::BZPOPMIN | Self::BZPOPMAX | Self::BLPOP | Self::BRPOP | Self::BRPOPLPUSH
+        )
     }
     fn from_cmd_name(cmd_name: &[u8]) -> Self {
         let mut stack_cmd_name = ArrayVec::<[u8; MAX_COMMAND_NAME_LENGTH]>::new();

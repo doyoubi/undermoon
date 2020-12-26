@@ -47,7 +47,7 @@ fn gen_conf() -> MemBrokerConfig {
             let address = s
                 .get::<String>("http_storage_address")
                 .unwrap_or_else(|_| "localhost:9999".to_string());
-            let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or_else(|_| 30);
+            let refresh_interval = s.get::<u64>("refresh_interval").unwrap_or(30);
             let refresh_interval = Duration::from_secs(refresh_interval);
             let storage_name = s
                 .get::<String>("storage_name")
@@ -78,29 +78,20 @@ fn gen_conf() -> MemBrokerConfig {
         address: s
             .get::<String>("address")
             .unwrap_or_else(|_| "127.0.0.1:7799".to_string()),
-        failure_ttl: s.get::<u64>("failure_ttl").unwrap_or_else(|_| 60),
-        failure_quorum: s.get::<u64>("failure_quorum").unwrap_or_else(|_| 1),
-        migration_limit: s.get::<u64>("migration_limit").unwrap_or_else(|_| 1),
-        recover_from_meta_file: s
-            .get::<bool>("recover_from_meta_file")
-            .unwrap_or_else(|_| false),
+        failure_ttl: s.get::<u64>("failure_ttl").unwrap_or(60),
+        failure_quorum: s.get::<u64>("failure_quorum").unwrap_or(1),
+        migration_limit: s.get::<u64>("migration_limit").unwrap_or(1),
+        recover_from_meta_file: s.get::<bool>("recover_from_meta_file").unwrap_or(false),
         meta_filename: s
             .get::<String>("meta_filename")
             .unwrap_or_else(|_| "metadata".to_string()),
-        auto_update_meta_file: s
-            .get::<bool>("auto_update_meta_file")
-            .unwrap_or_else(|_| false),
+        auto_update_meta_file: s.get::<bool>("auto_update_meta_file").unwrap_or(false),
         update_meta_file_interval: NonZeroU64::new(
-            s.get::<u64>("update_meta_file_interval")
-                .unwrap_or_else(|_| 0),
+            s.get::<u64>("update_meta_file_interval").unwrap_or(0),
         ),
         replica_addresses,
-        sync_meta_interval: NonZeroU64::new(
-            s.get::<u64>("sync_meta_interval").unwrap_or_else(|_| 0),
-        ),
-        enable_ordered_proxy: s
-            .get::<bool>("enable_ordered_proxy")
-            .unwrap_or_else(|_| false),
+        sync_meta_interval: NonZeroU64::new(s.get::<u64>("sync_meta_interval").unwrap_or(0)),
+        enable_ordered_proxy: s.get::<bool>("enable_ordered_proxy").unwrap_or(false),
         storage,
         debug,
     }

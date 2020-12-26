@@ -49,7 +49,7 @@ impl HttpMetaBroker {
     ) -> Result<Vec<ClusterName>, MetaDataBrokerError> {
         let url = self
             .gen_url("/clusters/names")
-            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
+            .ok_or(MetaDataBrokerError::NoBroker)?;
         let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get cluster names {:?}", e);
@@ -68,7 +68,7 @@ impl HttpMetaBroker {
     ) -> Result<Option<Cluster>, MetaDataBrokerError> {
         let url = self
             .gen_url(&format!("/clusters/meta/{}", name))
-            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
+            .ok_or(MetaDataBrokerError::NoBroker)?;
         let encoding = gen_accept_encoding(self.enable_compression);
 
         let response = self
@@ -95,7 +95,7 @@ impl HttpMetaBroker {
     ) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = self
             .gen_url("/proxies/addresses")
-            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
+            .ok_or(MetaDataBrokerError::NoBroker)?;
         let url = format!("{}?offset={}&limit={}", url, offset, limit);
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("failed to get proxy addresses {:?}", e);
@@ -111,7 +111,7 @@ impl HttpMetaBroker {
     async fn get_proxy_impl(&self, address: String) -> Result<Option<Proxy>, MetaDataBrokerError> {
         let url = self
             .gen_url(&format!("/proxies/meta/{}", address))
-            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
+            .ok_or(MetaDataBrokerError::NoBroker)?;
         let encoding = gen_accept_encoding(self.enable_compression);
 
         let response = self
@@ -138,7 +138,7 @@ impl HttpMetaBroker {
     ) -> Result<(), MetaDataBrokerError> {
         let url = self
             .gen_url(&format!("/failures/{}/{}", address, reporter_id))
-            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
+            .ok_or(MetaDataBrokerError::NoBroker)?;
         let response = self.client.post(&url).send().await.map_err(|e| {
             error!("failed to add failures {:?}", e);
             MetaDataBrokerError::RequestFailed
@@ -164,7 +164,7 @@ impl HttpMetaBroker {
     async fn get_failures_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = self
             .gen_url("/failures")
-            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
+            .ok_or(MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("Failed to get failures {:?}", e);
             MetaDataBrokerError::RequestFailed
@@ -179,7 +179,7 @@ impl HttpMetaBroker {
     async fn get_failed_proxies_impl(&self) -> Result<Vec<String>, MetaDataBrokerError> {
         let url = self
             .gen_url("/proxies/failed/addresses")
-            .ok_or_else(|| MetaDataBrokerError::NoBroker)?;
+            .ok_or(MetaDataBrokerError::NoBroker)?;
         let response = self.client.get(&url).send().await.map_err(|e| {
             error!("Failed to get failed proxies {:?}", e);
             MetaDataBrokerError::RequestFailed

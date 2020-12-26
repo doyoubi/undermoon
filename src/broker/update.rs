@@ -257,8 +257,7 @@ impl<'a> MetaStoreUpdate<'a> {
         if node_num % 4 != 0 {
             return Err(MetaStoreError::InvalidNodeNum);
         }
-        let proxy_num =
-            NonZeroUsize::new(node_num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
+        let proxy_num = NonZeroUsize::new(node_num / 2).ok_or(MetaStoreError::InvalidNodeNum)?;
 
         let proxy_resource_arr = if self.store.enable_ordered_proxy {
             self.generate_free_chunks_for_ordered_proxy_index(proxy_num, 0)?
@@ -414,7 +413,7 @@ impl<'a> MetaStoreUpdate<'a> {
         if num % 4 != 0 {
             return Err(MetaStoreError::InvalidNodeNum);
         }
-        let proxy_num = NonZeroUsize::new(num / 2).ok_or_else(|| MetaStoreError::InvalidNodeNum)?;
+        let proxy_num = NonZeroUsize::new(num / 2).ok_or(MetaStoreError::InvalidNodeNum)?;
 
         let proxy_resource_arr = if self.store.enable_ordered_proxy {
             self.generate_free_chunks_for_ordered_proxy_index(proxy_num, existing_proxy_num)?
@@ -766,7 +765,7 @@ impl<'a> MetaStoreUpdate<'a> {
             .store
             .all_proxies
             .get(&failed_proxy_address)
-            .ok_or_else(|| MetaStoreError::ProxyNotFound)?
+            .ok_or(MetaStoreError::ProxyNotFound)?
             .host
             .clone();
 
@@ -786,7 +785,7 @@ impl<'a> MetaStoreUpdate<'a> {
                 )
             })
             .map(|(peer_host, _)| peer_host)
-            .ok_or_else(|| MetaStoreError::NoAvailableResource)?;
+            .ok_or(MetaStoreError::NoAvailableResource)?;
 
         let peer_proxy = MetaStoreQuery::new(&self.store)
             .get_free_proxies()
@@ -954,7 +953,7 @@ impl<'a> MetaStoreUpdate<'a> {
             .store
             .clusters
             .get_mut(cluster_name)
-            .ok_or_else(|| MetaStoreError::ClusterNotFound)?;
+            .ok_or(MetaStoreError::ClusterNotFound)?;
 
         let mut peer_position = HashSet::new();
 

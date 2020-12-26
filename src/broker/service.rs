@@ -349,7 +349,7 @@ impl MemBrokerService {
         let _guard = self
             .scale_lock
             .lock()
-            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+            .ok_or(MetaStoreError::NodeNumberChanging)?;
 
         self.storage.auto_add_nodes(cluster_name, node_num).await
     }
@@ -362,7 +362,7 @@ impl MemBrokerService {
         let _guard = self
             .scale_lock
             .lock()
-            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+            .ok_or(MetaStoreError::NodeNumberChanging)?;
 
         self.storage
             .auto_scale_up_nodes(cluster_name, cluster_node_num)
@@ -373,7 +373,7 @@ impl MemBrokerService {
         let _guard = self
             .scale_lock
             .lock()
-            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+            .ok_or(MetaStoreError::NodeNumberChanging)?;
 
         self.storage.auto_delete_free_nodes(cluster_name).await
     }
@@ -420,7 +420,7 @@ impl MemBrokerService {
         let _guard = self
             .scale_lock
             .lock()
-            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+            .ok_or(MetaStoreError::NodeNumberChanging)?;
 
         self.storage.migrate_slots(cluster_name).await
     }
@@ -433,7 +433,7 @@ impl MemBrokerService {
         let _guard = self
             .scale_lock
             .lock()
-            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+            .ok_or(MetaStoreError::NodeNumberChanging)?;
 
         self.storage
             .migrate_slots_to_scale_down(cluster_name, new_node_num)
@@ -452,7 +452,7 @@ impl MemBrokerService {
         let _guard = self
             .scale_lock
             .lock()
-            .ok_or_else(|| MetaStoreError::NodeNumberChanging)?;
+            .ok_or(MetaStoreError::NodeNumberChanging)?;
 
         let (scale_op, proxy_addresses, cluster_epoch) = self
             .storage
