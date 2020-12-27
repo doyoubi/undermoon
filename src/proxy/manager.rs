@@ -28,7 +28,7 @@ use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::{ArcSwap, Lease};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub struct MetaMap<S: CmdTaskSender, P: CmdTaskSender, T>
 where
@@ -90,7 +90,7 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     // inside meta_map.
     meta_map: SharedMetaMap<C>,
     epoch: AtomicU64,
-    lock: Mutex<()>, // This is the write lock for `epoch`, `cluster`, and `task`.
+    lock: parking_lot::Mutex<()>, // This is the write lock for `epoch`, `cluster`, and `task`.
     replicator_manager: ReplicatorManager<F>,
     migration_manager: MigrationManager<
         F,
@@ -159,7 +159,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             config,
             meta_map,
             epoch: AtomicU64::new(0),
-            lock: Mutex::new(()),
+            lock: parking_lot::Mutex::new(()),
             replicator_manager: ReplicatorManager::new(
                 client_factory.clone(),
                 future_registry.clone(),
@@ -222,7 +222,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let cluster_config = &self.cluster_config;
 
         {
-            let _guard = self.lock.lock().expect("MetaManager::set_meta");
+            let _guard = self.lock.lock();
 
             if cluster_meta.get_epoch() <= self.epoch.load(Ordering::SeqCst)
                 && !cluster_meta.get_flags().force

@@ -9,8 +9,9 @@ use crate::common::utils::extract_host_from_address;
 use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespVec};
 use crate::proxy::cluster::ClusterMetaError;
 use itertools::Either;
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{atomic, Arc, RwLock};
+use std::sync::{atomic, Arc};
 
 type ReplicatorRecord = Either<Arc<dyn MasterReplicator>, Arc<dyn ReplicaReplicator>>;
 type ReplicatorMap = HashMap<(ClusterName, String), (ReplicatorRecord, Arc<FutureAutoStopHandle>)>;
@@ -92,13 +93,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
 
         let mut new_replicators = HashMap::new();
         // Add existing replicators
-        for (key, (replicator, handle)) in self
-            .replicators
-            .read()
-            .expect("ReplicatorManager::update_replicators")
-            .1
-            .iter()
-        {
+        for (key, (replicator, handle)) in self.replicators.read().1.iter() {
             if Some(true)
                 == master_key_set
                     .get(key)
@@ -146,10 +141,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         }
 
         {
-            let mut replicators = self
-                .replicators
-                .write()
-                .expect("ReplicatorManager::update_replicators");
+            let mut replicators = self.replicators.write();
             if !force && epoch <= replicators.0 {
                 // We're fooled by the `updating_epoch`, update it.
                 self.updating_epoch
@@ -210,10 +202,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
 
     // Returns (master number, replica number)
     pub fn get_role_num(&self) -> (usize, usize) {
-        let replicators = self
-            .replicators
-            .read()
-            .expect("ReplicatorManager::get_replica_num");
+        let replicators = self.replicators.read();
         let master_num = replicators
             .1
             .values()
@@ -231,10 +220,7 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
         let mut master_metadata = Vec::new();
         let mut replica_metadata = Vec::new();
 
-        let replicators = self
-            .replicators
-            .read()
-            .expect("ReplicatorManager::get_metadata");
+        let replicators = self.replicators.read();
         for (_key, (replicator, _handle)) in replicators.1.iter() {
             match replicator {
                 Either::Left(master) => {
