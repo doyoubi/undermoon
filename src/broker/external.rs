@@ -281,8 +281,7 @@ impl MetaStorage for ExternalHttpStorage {
         migration_limit: u64,
     ) -> Result<Option<Cluster>, MetaStoreError> {
         let store = self.cached_store.lease();
-        let cluster = store.get_cluster_by_name(name, migration_limit);
-        Ok(cluster)
+        store.get_cluster_by_name(name, migration_limit)
     }
 
     async fn get_proxy_addresses(
@@ -301,8 +300,7 @@ impl MetaStorage for ExternalHttpStorage {
         migration_limit: u64,
     ) -> Result<Option<Proxy>, MetaStoreError> {
         let store = self.cached_store.lease();
-        let proxy = store.get_proxy_by_address(address, migration_limit);
-        Ok(proxy)
+        store.get_proxy_by_address(address, migration_limit)
     }
 
     async fn get_failures(
@@ -376,8 +374,7 @@ impl MetaStorage for ExternalHttpStorage {
         migration_limit: u64,
     ) -> Result<Option<ClusterInfo>, MetaStoreError> {
         let store = self.cached_store.lease();
-        let cluster = store.get_cluster_info_by_name(cluster_name, migration_limit);
-        Ok(cluster)
+        store.get_cluster_info_by_name(cluster_name, migration_limit)
     }
 
     async fn add_cluster(

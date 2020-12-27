@@ -1,12 +1,11 @@
 use super::query::MetaStoreQuery;
 use super::store::{
     ChunkRolePosition, ChunkStore, ClusterStore, HostProxy, MetaStore, MetaStoreError,
-    ProxyResource, CHUNK_HALF_NODE_NUM, CHUNK_NODE_NUM, CHUNK_PARTS, NODES_PER_PROXY,
+    ProxyResource, CHUNK_HALF_NODE_NUM, CHUNK_PARTS, NODES_PER_PROXY,
 };
-use crate::common::cluster::{
-    Cluster, Node, Proxy, Range, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
-};
-use crate::common::cluster::{ClusterName, Role};
+use super::utils::InvalidStateError;
+use crate::common::cluster::ClusterName;
+use crate::common::cluster::{Node, Proxy, Range, RangeList, SlotRange, SlotRangeTag};
 use crate::common::config::ClusterConfig;
 use crate::common::utils::SLOT_NUM;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -23,111 +22,6 @@ pub struct MetaStoreUpdate<'a> {
 impl<'a> MetaStoreUpdate<'a> {
     pub fn new(store: &'a mut MetaStore) -> Self {
         Self { store }
-    }
-
-    fn cluster_store_to_cluster(cluster_store: &ClusterStore) -> Cluster {
-        let cluster_name = cluster_store.name.clone();
-
-        let nodes = cluster_store
-            .chunks
-            .iter()
-            .map(|chunk| {
-                let mut nodes = vec![];
-                for i in 0..CHUNK_NODE_NUM {
-                    let address = chunk
-                        .node_addresses
-                        .get(i)
-                        .expect("MetaStore::get_cluster_by_name: failed to get node")
-                        .clone();
-                    let proxy_address = chunk
-                        .proxy_addresses
-                        .get(i / 2)
-                        .expect("MetaStore::get_cluster_by_name: failed to get proxy")
-                        .clone();
-
-                    // get slots
-                    let mut slots = vec![];
-                    let (first_slot_index, second_slot_index) = match chunk.role_position {
-                        ChunkRolePosition::Normal => (0, 2),
-                        ChunkRolePosition::FirstChunkMaster => (0, 1),
-                        ChunkRolePosition::SecondChunkMaster => (2, 3),
-                    };
-                    if i == first_slot_index {
-                        let mut first_slots = vec![];
-                        if let Some(stable_slots) = &chunk.stable_slots[0] {
-                            first_slots.push(stable_slots.clone());
-                        }
-                        slots.append(&mut first_slots);
-                        let slot_ranges: Vec<_> = chunk.migrating_slots[0]
-                            .iter()
-                            .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(&cluster_store.chunks)
-                            })
-                            .collect();
-                        slots.extend(slot_ranges);
-                    }
-                    if i == second_slot_index {
-                        let mut second_slots = vec![];
-                        if let Some(stable_slots) = &chunk.stable_slots[1] {
-                            second_slots.push(stable_slots.clone());
-                        }
-                        slots.append(&mut second_slots);
-                        let slot_ranges: Vec<_> = chunk.migrating_slots[1]
-                            .iter()
-                            .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(&cluster_store.chunks)
-                            })
-                            .collect();
-                        slots.extend(slot_ranges);
-                    }
-
-                    // get repl
-                    let mut role = Role::Master;
-                    match chunk.role_position {
-                        ChunkRolePosition::Normal if i % 2 == 1 => role = Role::Replica,
-                        ChunkRolePosition::FirstChunkMaster if i >= CHUNK_HALF_NODE_NUM => {
-                            role = Role::Replica
-                        }
-                        ChunkRolePosition::SecondChunkMaster if i < CHUNK_HALF_NODE_NUM => {
-                            role = Role::Replica
-                        }
-                        _ => (),
-                    }
-
-                    let peer_index = match i {
-                        0 => 3,
-                        1 => 2,
-                        2 => 1,
-                        _ => 0,
-                    };
-                    let peer = ReplPeer {
-                        node_address: chunk
-                            .node_addresses
-                            .get(peer_index)
-                            .expect("MetaStore::get_cluster_by_name: failed to get peer node")
-                            .clone(),
-                        proxy_address: chunk
-                            .proxy_addresses
-                            .get(peer_index / 2)
-                            .expect("MetaStore::get_cluster_by_name: failed to get peer proxy")
-                            .clone(),
-                    };
-                    let repl = ReplMeta::new(role, vec![peer]);
-
-                    let node = Node::new(address, proxy_address, cluster_name.clone(), slots, repl);
-                    nodes.push(node);
-                }
-                nodes
-            })
-            .flatten()
-            .collect();
-
-        Cluster::new(
-            cluster_store.name.clone(),
-            cluster_store.epoch,
-            nodes,
-            cluster_store.config.clone(),
-        )
     }
 
     pub fn add_failure(&mut self, address: String, reporter_id: String) -> bool {
@@ -282,7 +176,10 @@ impl<'a> MetaStoreUpdate<'a> {
                     .store
                     .all_proxies
                     .get_mut(proxy_address)
-                    .expect("add_cluster: failed to get back proxy");
+                    .ok_or_else(|| {
+                        error!("FATAL add_cluster: failed to get back proxy");
+                        MetaStoreError::InvalidState
+                    })?;
                 proxy.cluster = Some(cluster_name.clone());
             }
         }
@@ -429,7 +326,8 @@ impl<'a> MetaStoreUpdate<'a> {
             Some(cluster_store) => {
                 cluster_store.chunks.append(&mut chunks);
                 cluster_store.epoch = new_epoch;
-                Self::cluster_store_to_cluster(&cluster_store)
+                MetaStoreQuery::cluster_store_to_cluster(&cluster_store)
+                    .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)?
             }
         };
 
@@ -440,14 +338,20 @@ impl<'a> MetaStoreUpdate<'a> {
                 .store
                 .all_proxies
                 .get_mut(proxy_address)
-                .expect("add_cluster: failed to get back proxy");
+                .ok_or_else(|| {
+                    error!("FATAL add_cluster: failed to get back proxy");
+                    MetaStoreError::InvalidState
+                })?;
             proxy.cluster = Some(cluster_name.clone());
         }
 
         let nodes = cluster.get_nodes();
         let new_nodes = nodes
             .get((nodes.len() - num)..)
-            .expect("auto_add_nodes: get nodes")
+            .ok_or_else(|| {
+                error!("FATAL auto_add_nodes: get nodes");
+                MetaStoreError::InvalidState
+            })?
             .to_vec();
 
         Ok(new_nodes)
@@ -548,23 +452,28 @@ impl<'a> MetaStoreUpdate<'a> {
         let link_table = self.build_link_table();
 
         let new_added_proxy_resource = Self::allocate_chunk(host_proxies, link_table, proxy_num)?;
-        let new_proxies = new_added_proxy_resource
-            .into_iter()
-            .map(|[a, b]| {
-                [
-                    self.store
-                        .all_proxies
-                        .get(&a)
-                        .expect("consume_proxy: get proxy resource")
-                        .clone(),
-                    self.store
-                        .all_proxies
-                        .get(&b)
-                        .expect("consume_proxy: get proxy resource")
-                        .clone(),
-                ]
-            })
-            .collect();
+        let mut new_proxies = Vec::new();
+        for [a, b] in new_added_proxy_resource.into_iter() {
+            let proxy_resource1 = self
+                .store
+                .all_proxies
+                .get(&a)
+                .ok_or_else(|| {
+                    error!("FATAL consume_proxy: get proxy resource");
+                    MetaStoreError::InvalidState
+                })?
+                .clone();
+            let proxy_resource2 = self
+                .store
+                .all_proxies
+                .get(&b)
+                .ok_or_else(|| {
+                    error!("FATAL consume_proxy: get proxy resource");
+                    MetaStoreError::InvalidState
+                })?
+                .clone();
+            new_proxies.push([proxy_resource1, proxy_resource2]);
+        }
         Ok(new_proxies)
     }
 
@@ -663,56 +572,91 @@ impl<'a> MetaStoreUpdate<'a> {
                 let (max_host, max_proxy_host) = host_proxies
                     .iter_mut()
                     .max_by_key(|(_host, proxies)| proxies.len())
-                    .expect("allocate_chunk: invalid state. cannot find any host");
+                    .ok_or_else(|| {
+                        error!("FATAL allocate_chunk: invalid state. cannot find any host");
+                        MetaStoreError::InvalidState
+                    })?;
                 (
                     max_host.clone(),
-                    max_proxy_host
-                        .pop()
-                        .expect("allocate_chunk: cannot find free proxy"),
+                    max_proxy_host.pop().ok_or_else(|| {
+                        error!("FATAL allocate_chunk: cannot find free proxy");
+                        MetaStoreError::InvalidState
+                    })?,
                 )
             };
 
             let (second_host, second_address) = {
-                let peers = link_table
-                    .get(&first_host)
-                    .expect("allocate_chunk: invalid state, cannot get link table entry");
-
+                let peers = link_table.get(&first_host).ok_or_else(|| {
+                    error!("FATAL allocate_chunk: invalid state, cannot get link table entry");
+                    MetaStoreError::InvalidState
+                })?;
                 let second_host = peers
                     .iter()
                     .filter(|(host, _)| {
                         let free_count = host_proxies.get(*host).map(|proxies| proxies.len());
                         **host != first_host && free_count != None && free_count != Some(0)
                     })
-                    .min_by(|(host1, count1), (host2, count2)| {
-                        Self::second_host_cmp(
-                            host1.as_str(),
-                            **count1,
-                            host2.as_str(),
-                            **count2,
-                            &host_proxies,
-                        )
+                    .fold(None, |res, (host, count)| match res {
+                        None => Some(Ok((host, count))),
+                        Some(Err(err)) => Some(Err(err)),
+                        Some(Ok((min_host, min_count))) => {
+                            let res = Self::second_host_cmp(
+                                host.as_str(),
+                                *count,
+                                min_host.as_str(),
+                                *min_count,
+                                &host_proxies,
+                            );
+                            match res {
+                                Err(err) => Some(Err(err)),
+                                Ok(Ordering::Less) => Some(Ok((host, count))),
+                                Ok(_) => Some(Ok((min_host, min_count))),
+                            }
+                        }
                     })
+                    .ok_or_else(|| {
+                        error!("FATAL allocate_chunk: invalid state, cannot get free proxy");
+                        MetaStoreError::InvalidState
+                    })?
                     .map(|t| t.0.clone())
-                    .expect("allocate_chunk: invalid state, cannot get free proxy");
+                    .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)?;
 
                 let second_address = host_proxies
                     .get_mut(&second_host)
-                    .expect("allocate_chunk: get second host")
+                    .ok_or_else(|| {
+                        error!("FATAL allocate_chunk: get second host");
+                        MetaStoreError::InvalidState
+                    })?
                     .pop()
-                    .expect("allocate_chunk: get second address");
+                    .ok_or_else(|| {
+                        error!("FATAL allocate_chunk: get second address");
+                        MetaStoreError::InvalidState
+                    })?;
                 (second_host, second_address)
             };
 
             *link_table
                 .get_mut(&first_host)
-                .expect("allocate_chunk: link table")
+                .ok_or_else(|| {
+                    error!("FATAL allocate_chunk: link table");
+                    MetaStoreError::InvalidState
+                })?
                 .get_mut(&second_host)
-                .expect("allocate_chunk: link table") += 1;
+                .ok_or_else(|| {
+                    error!("FATAL allocate_chunk: link table");
+                    MetaStoreError::InvalidState
+                })? += 1;
             *link_table
                 .get_mut(&second_host)
-                .expect("allocate_chunk: link table")
+                .ok_or_else(|| {
+                    error!("FATAL allocate_chunk: link table");
+                    MetaStoreError::InvalidState
+                })?
                 .get_mut(&first_host)
-                .expect("allocate_chunk: link table") += 1;
+                .ok_or_else(|| {
+                    error!("FATAL allocate_chunk: link table");
+                    MetaStoreError::InvalidState
+                })? += 1;
 
             new_proxy_pairs.push([first_address, second_address]);
         }
@@ -769,29 +713,43 @@ impl<'a> MetaStoreUpdate<'a> {
             .host
             .clone();
 
-        let link_count_table = link_table
-            .get(&failed_proxy_host)
-            .expect("consume_new_proxy: cannot find failed proxy");
+        let link_count_table = link_table.get(&failed_proxy_host).ok_or_else(|| {
+            error!("FATAL consume_new_proxy: cannot find failed proxy");
+            MetaStoreError::InvalidState
+        })?;
         let peer_host = link_count_table
             .iter()
             .filter(|(peer_host, _)| free_host_proxies.contains_key(*peer_host))
-            .min_by(|(host1, count1), (host2, count2)| {
-                Self::second_host_cmp(
-                    host1.as_str(),
-                    **count1,
-                    host2.as_str(),
-                    **count2,
-                    &free_host_proxies,
-                )
+            .fold(None, |res, (host, count)| match res {
+                None => Some(Ok((host, count))),
+                Some(Err(err)) => Some(Err(err)),
+                Some(Ok((min_host, min_count))) => {
+                    let res = Self::second_host_cmp(
+                        host.as_str(),
+                        *count,
+                        min_host.as_str(),
+                        *min_count,
+                        &free_host_proxies,
+                    );
+                    match res {
+                        Err(err) => Some(Err(err)),
+                        Ok(Ordering::Less) => Some(Ok((host, count))),
+                        Ok(_) => Some(Ok((min_host, min_count))),
+                    }
+                }
             })
+            .ok_or(MetaStoreError::NoAvailableResource)?
             .map(|(peer_host, _)| peer_host)
-            .ok_or(MetaStoreError::NoAvailableResource)?;
+            .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)?;
 
         let peer_proxy = MetaStoreQuery::new(&self.store)
             .get_free_proxies()
             .iter()
             .find(|host_proxy| peer_host == &host_proxy.host)
-            .expect("consume_new_proxy: get peer address")
+            .ok_or_else(|| {
+                error!("FATAL consume_new_proxy: get peer address");
+                MetaStoreError::InvalidState
+            })?
             .proxy_address
             .clone();
 
@@ -799,7 +757,10 @@ impl<'a> MetaStoreUpdate<'a> {
             .store
             .all_proxies
             .get(&peer_proxy)
-            .expect("consume_new_proxy: cannot find peer proxy")
+            .ok_or_else(|| {
+                error!("FATAL consume_new_proxy:  cannot find peer proxy");
+                MetaStoreError::InvalidState
+            })?
             .clone();
         Ok(new_proxy)
     }
@@ -900,11 +861,10 @@ impl<'a> MetaStoreUpdate<'a> {
         let proxy_resource = self.generate_new_free_proxy(failed_proxy_address.clone())?;
         let new_epoch = self.store.bump_global_epoch();
         {
-            let cluster = self
-                .store
-                .clusters
-                .get_mut(&cluster_name)
-                .expect("replace_failed_proxy: get cluster");
+            let cluster = self.store.clusters.get_mut(&cluster_name).ok_or_else(|| {
+                error!("FATAL replace_failed_proxy: get cluster");
+                MetaStoreError::InvalidState
+            })?;
             for chunk in cluster.chunks.iter_mut() {
                 if chunk.proxy_addresses[0] == failed_proxy_address {
                     chunk.hosts[0] = proxy_resource.host.clone();
@@ -938,7 +898,14 @@ impl<'a> MetaStoreUpdate<'a> {
 
         let proxy = MetaStoreQuery::new(self.store)
             .get_proxy_by_address(&proxy_resource.proxy_address, migration_limit)
-            .expect("replace_failed_proxy");
+            .map_err(|InvalidStateError {}| {
+                error!("FATAL replace_failed_proxy");
+                MetaStoreError::InvalidState
+            })?
+            .ok_or_else(|| {
+                error!("FATAL replace_failed_proxy: cannot get proxy");
+                MetaStoreError::InvalidState
+            })?;
         Ok(Some(proxy))
     }
 
@@ -1016,21 +983,27 @@ impl<'a> MetaStoreUpdate<'a> {
         host2: &str,
         count2: usize,
         free_host_proxies: &HashMap<String, Vec<String>>,
-    ) -> Ordering {
+    ) -> Result<Ordering, InvalidStateError> {
         let r = count1.cmp(&count2);
         if r != Ordering::Equal {
-            return r;
+            return Ok(r);
         }
         let host1_free = free_host_proxies
             .get(host1)
             .map(|proxies| proxies.len())
-            .expect("second_host_cmp: get back host");
+            .ok_or_else(|| {
+                error!("FATAL second_host_cmp: get back host");
+                InvalidStateError
+            })?;
         let host2_free = free_host_proxies
             .get(host2)
             .map(|proxies| proxies.len())
-            .expect("second_host_cmp: get back host");
+            .ok_or_else(|| {
+                error!("FATAL second_host_cmp: get back host");
+                InvalidStateError
+            })?;
         // Need to reverse it as we want the host with maximum proxies.
-        host2_free.cmp(&host1_free)
+        Ok(host2_free.cmp(&host1_free))
     }
 
     pub fn balance_masters(&mut self, cluster_name: String) -> Result<(), MetaStoreError> {

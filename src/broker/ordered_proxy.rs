@@ -60,6 +60,7 @@ mod tests {
 
         let proxy = store
             .get_proxy_by_address(proxy_address, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(proxy.get_address(), proxy_address);
         assert_eq!(proxy.get_epoch(), 1);
@@ -79,7 +80,11 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
+            .filter_map(|proxy_address| {
+                store
+                    .get_proxy_by_address(&proxy_address, migration_limit)
+                    .unwrap()
+            })
             .collect();
         let original_free_node_num: usize = proxies
             .iter()
@@ -96,6 +101,7 @@ mod tests {
         check_cluster_and_proxy(&store);
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_proxy_order(&cluster);
 
@@ -108,6 +114,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(cluster.get_nodes().len(), 4);
         check_cluster_proxy_order(&cluster);
@@ -124,7 +131,11 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
+            .filter_map(|proxy_address| {
+                store
+                    .get_proxy_by_address(&proxy_address, migration_limit)
+                    .unwrap()
+            })
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -140,6 +151,7 @@ mod tests {
         for node in cluster.get_nodes() {
             let proxy = store
                 .get_proxy_by_address(&node.get_proxy_address(), migration_limit)
+                .unwrap()
                 .unwrap();
             assert_eq!(proxy.get_free_nodes().len(), 0);
             assert_eq!(proxy.get_nodes().len(), 2);
@@ -181,7 +193,11 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
+            .filter_map(|proxy_address| {
+                store
+                    .get_proxy_by_address(&proxy_address, migration_limit)
+                    .unwrap()
+            })
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -203,6 +219,7 @@ mod tests {
         let failed_address = "127.0.0.2:7002";
         assert!(store
             .get_proxy_by_address(failed_address, migration_limit)
+            .unwrap()
             .is_some());
         let epoch1 = store.get_global_epoch();
 
@@ -238,6 +255,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_slots(cluster.clone(), 4);
         check_cluster_proxy_order(&cluster);
@@ -275,6 +293,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(
             cluster
@@ -339,6 +358,7 @@ mod tests {
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
                 .unwrap()
+                .unwrap()
                 .get_nodes()
                 .len(),
             4
@@ -346,6 +366,7 @@ mod tests {
         check_cluster_and_proxy(&store);
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_proxy_order(&cluster);
 
@@ -357,6 +378,7 @@ mod tests {
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
                 .unwrap()
+                .unwrap()
                 .get_nodes()
                 .len(),
             8
@@ -364,6 +386,7 @@ mod tests {
         check_cluster_and_proxy(&store);
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_proxy_order(&cluster);
 
@@ -375,6 +398,7 @@ mod tests {
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
                 .unwrap()
+                .unwrap()
                 .get_nodes()
                 .len(),
             4
@@ -382,6 +406,7 @@ mod tests {
         check_cluster_and_proxy(&store);
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_proxy_order(&cluster);
     }

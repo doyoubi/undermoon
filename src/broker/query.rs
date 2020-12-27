@@ -3,6 +3,7 @@ use super::store::{
     CHUNK_NODE_NUM,
 };
 use crate::broker::store::ProxyResource;
+use crate::broker::utils::InvalidStateError;
 use crate::common::cluster::{Cluster, Node, PeerProxy, Proxy, ReplMeta, ReplPeer};
 use crate::common::cluster::{ClusterName, Role};
 use itertools::Itertools;
@@ -39,33 +40,43 @@ impl<'a> MetaStoreQuery<'a> {
         clusters: &HashMap<ClusterName, ClusterStore>,
         cluster_name: &ClusterName,
         migration_limit: u64,
-    ) -> Option<ClusterStore> {
+    ) -> Result<Option<ClusterStore>, InvalidStateError> {
         clusters
             .get(cluster_name)
             .map(|c| c.limit_migration(migration_limit))
+            .transpose()
     }
 
-    pub fn get_proxy_by_address(&self, address: &str, migration_limit: u64) -> Option<Proxy> {
+    pub fn get_proxy_by_address(
+        &self,
+        address: &str,
+        migration_limit: u64,
+    ) -> Result<Option<Proxy>, InvalidStateError> {
         let all_proxies = &self.store.all_proxies;
         let clusters = &self.store.clusters;
 
-        let proxy_resource = all_proxies.get(address)?;
+        let proxy_resource = match all_proxies.get(address) {
+            Some(pr) => pr,
+            None => return Ok(None),
+        };
         let cluster_opt = proxy_resource
             .cluster
             .as_ref()
-            .and_then(|name| Self::get_cluster_store(clusters, name, migration_limit));
+            .map(|name| Self::get_cluster_store(clusters, name, migration_limit))
+            .transpose()?
+            .flatten();
 
         let cluster = match cluster_opt {
-            Some(cluster_store) => Self::cluster_store_to_cluster(&cluster_store),
+            Some(cluster_store) => Self::cluster_store_to_cluster(&cluster_store)?,
             None => {
-                return Some(Proxy::new(
+                return Ok(Some(Proxy::new(
                     address.to_string(),
                     self.store.global_epoch,
                     vec![],
                     proxy_resource.node_addresses.to_vec(),
                     vec![],
                     HashMap::new(),
-                ));
+                )));
             }
         };
 
@@ -116,7 +127,7 @@ impl<'a> MetaStoreQuery<'a> {
             peers,
             cluster_config,
         );
-        Some(proxy)
+        Ok(Some(proxy))
     }
 
     pub fn get_cluster_names(&self) -> Vec<ClusterName> {
@@ -136,129 +147,145 @@ impl<'a> MetaStoreQuery<'a> {
         }
     }
 
-    pub fn get_cluster_by_name(&self, cluster_name: &str, migration_limit: u64) -> Option<Cluster> {
-        let cluster_name = ClusterName::try_from(cluster_name).ok()?;
+    pub fn get_cluster_by_name(
+        &self,
+        cluster_name: &str,
+        migration_limit: u64,
+    ) -> Result<Option<Cluster>, InvalidStateError> {
+        let cluster_name = match ClusterName::try_from(cluster_name).ok() {
+            Some(cluster_name) => cluster_name,
+            None => return Ok(None),
+        };
 
         let cluster_store =
-            Self::get_cluster_store(&self.store.clusters, &cluster_name, migration_limit)?;
-        Some(Self::cluster_store_to_cluster(&cluster_store))
+            match Self::get_cluster_store(&self.store.clusters, &cluster_name, migration_limit)? {
+                Some(cluster_store) => cluster_store,
+                None => return Ok(None),
+            };
+        Self::cluster_store_to_cluster(&cluster_store).map(Some)
     }
 
     pub fn get_cluster_info_by_name(
         &self,
         cluster_name: &str,
         migration_limit: u64,
-    ) -> Option<ClusterInfo> {
-        let cluster_name = ClusterName::try_from(cluster_name).ok()?;
+    ) -> Result<Option<ClusterInfo>, InvalidStateError> {
+        let cluster_name = match ClusterName::try_from(cluster_name) {
+            Ok(cluster_name) => cluster_name,
+            _ => return Ok(None),
+        };
 
-        let cluster_store =
+        let cluster_store_opt =
             Self::get_cluster_store(&self.store.clusters, &cluster_name, migration_limit)?;
-        Some(cluster_store.get_info())
+        Ok(cluster_store_opt.map(|cluster_store| cluster_store.get_info()))
     }
 
-    fn cluster_store_to_cluster(cluster_store: &ClusterStore) -> Cluster {
+    pub fn cluster_store_to_cluster(
+        cluster_store: &ClusterStore,
+    ) -> Result<Cluster, InvalidStateError> {
         let cluster_name = cluster_store.name.clone();
 
-        let nodes = cluster_store
-            .chunks
-            .iter()
-            .map(|chunk| {
-                let mut nodes = vec![];
-                for i in 0..CHUNK_NODE_NUM {
-                    let address = chunk
-                        .node_addresses
-                        .get(i)
-                        .expect("MetaStore::get_cluster_by_name: failed to get node")
-                        .clone();
-                    let proxy_address = chunk
-                        .proxy_addresses
-                        .get(i / 2)
-                        .expect("MetaStore::get_cluster_by_name: failed to get proxy")
-                        .clone();
+        let mut nodes = vec![];
+        for chunk in cluster_store.chunks.iter() {
+            for i in 0..CHUNK_NODE_NUM {
+                let address = chunk
+                    .node_addresses
+                    .get(i)
+                    .ok_or_else(|| {
+                        error!("FATAL MetaStore::get_cluster_by_name: failed to get node");
+                        InvalidStateError
+                    })?
+                    .clone();
+                let proxy_address = chunk
+                    .proxy_addresses
+                    .get(i / 2)
+                    .ok_or_else(|| {
+                        error!("FATAL MetaStore::get_cluster_by_name: failed to get proxy");
+                        InvalidStateError
+                    })?
+                    .clone();
 
-                    // get slots
-                    let mut slots = vec![];
-                    let (first_slot_index, second_slot_index) = match chunk.role_position {
-                        ChunkRolePosition::Normal => (0, 2),
-                        ChunkRolePosition::FirstChunkMaster => (0, 1),
-                        ChunkRolePosition::SecondChunkMaster => (3, 2),
-                    };
-                    if i == first_slot_index {
-                        let mut first_slots = vec![];
-                        if let Some(stable_slots) = &chunk.stable_slots[0] {
-                            first_slots.push(stable_slots.clone());
-                        }
-                        slots.append(&mut first_slots);
-                        let slot_ranges: Vec<_> = chunk.migrating_slots[0]
-                            .iter()
-                            .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(&cluster_store.chunks)
-                            })
-                            .collect();
-                        slots.extend(slot_ranges);
+                // get slots
+                let mut slots = vec![];
+                let (first_slot_index, second_slot_index) = match chunk.role_position {
+                    ChunkRolePosition::Normal => (0, 2),
+                    ChunkRolePosition::FirstChunkMaster => (0, 1),
+                    ChunkRolePosition::SecondChunkMaster => (3, 2),
+                };
+                if i == first_slot_index {
+                    let mut first_slots = vec![];
+                    if let Some(stable_slots) = &chunk.stable_slots[0] {
+                        first_slots.push(stable_slots.clone());
                     }
-                    if i == second_slot_index {
-                        let mut second_slots = vec![];
-                        if let Some(stable_slots) = &chunk.stable_slots[1] {
-                            second_slots.push(stable_slots.clone());
-                        }
-                        slots.append(&mut second_slots);
-                        let slot_ranges: Vec<_> = chunk.migrating_slots[1]
-                            .iter()
-                            .map(|slot_range_store| {
-                                slot_range_store.to_slot_range(&cluster_store.chunks)
-                            })
-                            .collect();
-                        slots.extend(slot_ranges);
+                    slots.append(&mut first_slots);
+                    for slot_range_store in chunk.migrating_slots[0].iter() {
+                        slots.push(slot_range_store.to_slot_range(&cluster_store.chunks)?);
                     }
-
-                    // get repl
-                    let mut role = Role::Master;
-                    match chunk.role_position {
-                        ChunkRolePosition::Normal if i % 2 == 1 => role = Role::Replica,
-                        ChunkRolePosition::FirstChunkMaster if i >= CHUNK_HALF_NODE_NUM => {
-                            role = Role::Replica
-                        }
-                        ChunkRolePosition::SecondChunkMaster if i < CHUNK_HALF_NODE_NUM => {
-                            role = Role::Replica
-                        }
-                        _ => (),
-                    }
-
-                    let peer_index = match i {
-                        0 => 3,
-                        1 => 2,
-                        2 => 1,
-                        _ => 0,
-                    };
-                    let peer = ReplPeer {
-                        node_address: chunk
-                            .node_addresses
-                            .get(peer_index)
-                            .expect("MetaStore::get_cluster_by_name: failed to get peer node")
-                            .clone(),
-                        proxy_address: chunk
-                            .proxy_addresses
-                            .get(peer_index / 2)
-                            .expect("MetaStore::get_cluster_by_name: failed to get peer proxy")
-                            .clone(),
-                    };
-                    let repl = ReplMeta::new(role, vec![peer]);
-
-                    let node = Node::new(address, proxy_address, cluster_name.clone(), slots, repl);
-                    nodes.push(node);
                 }
-                nodes
-            })
-            .flatten()
-            .collect();
+                if i == second_slot_index {
+                    let mut second_slots = vec![];
+                    if let Some(stable_slots) = &chunk.stable_slots[1] {
+                        second_slots.push(stable_slots.clone());
+                    }
+                    slots.append(&mut second_slots);
+                    for slot_range_store in chunk.migrating_slots[1].iter() {
+                        slots.push(slot_range_store.to_slot_range(&cluster_store.chunks)?);
+                    }
+                }
 
-        Cluster::new(
+                // get repl
+                let mut role = Role::Master;
+                match chunk.role_position {
+                    ChunkRolePosition::Normal if i % 2 == 1 => role = Role::Replica,
+                    ChunkRolePosition::FirstChunkMaster if i >= CHUNK_HALF_NODE_NUM => {
+                        role = Role::Replica
+                    }
+                    ChunkRolePosition::SecondChunkMaster if i < CHUNK_HALF_NODE_NUM => {
+                        role = Role::Replica
+                    }
+                    _ => (),
+                }
+
+                let peer_index = match i {
+                    0 => 3,
+                    1 => 2,
+                    2 => 1,
+                    _ => 0,
+                };
+                let peer = ReplPeer {
+                    node_address: chunk
+                        .node_addresses
+                        .get(peer_index)
+                        .ok_or_else(|| {
+                            error!("FATAL MetaStore::get_cluster_by_name: failed to get peer node");
+                            InvalidStateError
+                        })?
+                        .clone(),
+                    proxy_address: chunk
+                        .proxy_addresses
+                        .get(peer_index / 2)
+                        .ok_or_else(|| {
+                            error!(
+                                "FATAL MetaStore::get_cluster_by_name: failed to get peer proxy"
+                            );
+                            InvalidStateError
+                        })?
+                        .clone(),
+                };
+                let repl = ReplMeta::new(role, vec![peer]);
+
+                let node = Node::new(address, proxy_address, cluster_name.clone(), slots, repl);
+                nodes.push(node);
+            }
+        }
+
+        let cluster = Cluster::new(
             cluster_store.name.clone(),
             cluster_store.epoch,
             nodes,
             cluster_store.config.clone(),
-        )
+        );
+        Ok(cluster)
     }
 
     pub fn get_free_proxy_resource(&self) -> Vec<ProxyResource> {

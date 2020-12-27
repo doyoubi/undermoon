@@ -1,3 +1,16 @@
+use std::{error, fmt};
+
+#[derive(Debug)]
+pub struct InvalidStateError;
+
+impl fmt::Display for InvalidStateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl error::Error for InvalidStateError {}
+
 #[cfg(test)]
 pub mod tests {
     use super::super::store::MetaStore;

@@ -2,6 +2,7 @@ use super::migrate::MetaStoreMigrate;
 use super::persistence::MetaSyncError;
 use super::query::MetaStoreQuery;
 use super::update::MetaStoreUpdate;
+use super::utils::InvalidStateError;
 use crate::common::cluster::ClusterName;
 use crate::common::cluster::{
     Cluster, MigrationMeta, MigrationTaskMeta, Node, Proxy, Range, RangeList, SlotRange,
@@ -52,37 +53,55 @@ pub struct MigrationSlotRangeStore {
 }
 
 impl MigrationSlotRangeStore {
-    pub fn to_slot_range(&self, chunks: &[ChunkStore]) -> SlotRange {
-        let src_chunk = chunks.get(self.meta.src_chunk_index).expect("get_cluster");
+    pub fn to_slot_range(&self, chunks: &[ChunkStore]) -> Result<SlotRange, InvalidStateError> {
+        let src_chunk = chunks.get(self.meta.src_chunk_index).ok_or_else(|| {
+            error!("FATAL get_cluster");
+            InvalidStateError
+        })?;
         let src_proxy_index =
             Self::chunk_part_to_proxy_index(self.meta.src_chunk_part, src_chunk.role_position);
         let src_proxy_address = src_chunk
             .proxy_addresses
             .get(src_proxy_index)
-            .expect("get_cluster")
+            .ok_or_else(|| {
+                error!("FATAL get_cluster");
+                InvalidStateError
+            })?
             .clone();
         let src_node_index =
             Self::chunk_part_to_node_index(self.meta.src_chunk_part, src_chunk.role_position);
         let src_node_address = src_chunk
             .node_addresses
             .get(src_node_index)
-            .expect("get_cluster")
+            .ok_or_else(|| {
+                error!("FATAL get_cluster");
+                InvalidStateError
+            })?
             .clone();
 
-        let dst_chunk = chunks.get(self.meta.dst_chunk_index).expect("get_cluster");
+        let dst_chunk = chunks.get(self.meta.dst_chunk_index).ok_or_else(|| {
+            error!("FATAL get_cluster");
+            InvalidStateError
+        })?;
         let dst_proxy_index =
             Self::chunk_part_to_proxy_index(self.meta.dst_chunk_part, dst_chunk.role_position);
         let dst_proxy_address = dst_chunk
             .proxy_addresses
             .get(dst_proxy_index)
-            .expect("get_cluster")
+            .ok_or_else(|| {
+                error!("FATAL get_cluster");
+                InvalidStateError
+            })?
             .clone();
         let dst_node_index =
             Self::chunk_part_to_node_index(self.meta.dst_chunk_part, dst_chunk.role_position);
         let dst_node_address = dst_chunk
             .node_addresses
             .get(dst_node_index)
-            .expect("get_cluster")
+            .ok_or_else(|| {
+                error!("FATAL get_cluster");
+                InvalidStateError
+            })?
             .clone();
 
         let meta = MigrationMeta {
@@ -92,7 +111,7 @@ impl MigrationSlotRangeStore {
             dst_proxy_address,
             dst_node_address,
         };
-        if self.is_migrating {
+        let slot_range = if self.is_migrating {
             SlotRange {
                 range_list: self.range_list.clone(),
                 tag: SlotRangeTag::Migrating(meta),
@@ -102,7 +121,8 @@ impl MigrationSlotRangeStore {
                 range_list: self.range_list.clone(),
                 tag: SlotRangeTag::Importing(meta),
             }
-        }
+        };
+        Ok(slot_range)
     }
 
     fn chunk_part_to_proxy_index(chunk_part: usize, role_position: ChunkRolePosition) -> usize {
@@ -213,9 +233,9 @@ impl ClusterStore {
     // the later ones will not stop until they are done.
     // (3) The later migration flags will be updated to server proxies with new epoch
     // bumped by the committing of former ones.
-    pub fn limit_migration(&self, migration_limit: u64) -> ClusterStore {
+    pub fn limit_migration(&self, migration_limit: u64) -> Result<ClusterStore, InvalidStateError> {
         if migration_limit == 0 {
-            return self.clone();
+            return Ok(self.clone());
         }
 
         let mut chunks = vec![];
@@ -255,7 +275,10 @@ impl ClusterStore {
                         let stable_slots = chunks
                             .get_mut(meta.src_chunk_index)
                             .and_then(|chunk| chunk.stable_slots.get_mut(meta.src_chunk_part))
-                            .expect("limit_migration")
+                            .ok_or_else(|| {
+                                error!("FATAL limit_migration");
+                                InvalidStateError
+                            })?
                             .get_or_insert_with(|| SlotRange {
                                 range_list: RangeList::new(vec![]),
                                 tag: SlotRangeTag::None,
@@ -267,7 +290,10 @@ impl ClusterStore {
                         chunks
                             .get_mut(meta.src_chunk_index)
                             .and_then(|chunk| chunk.migrating_slots.get_mut(meta.src_chunk_part))
-                            .expect("limit_migration")
+                            .ok_or_else(|| {
+                                error!("FATAL limit_migration");
+                                InvalidStateError
+                            })?
                             .push(slot_range_store.clone());
 
                         let mut importing_slot_range_store = slot_range_store.clone();
@@ -275,7 +301,10 @@ impl ClusterStore {
                         chunks
                             .get_mut(meta.dst_chunk_index)
                             .and_then(|chunk| chunk.migrating_slots.get_mut(meta.dst_chunk_part))
-                            .expect("limit_migration")
+                            .ok_or_else(|| {
+                                error!("FATAL limit_migration");
+                                InvalidStateError
+                            })?
                             .push(importing_slot_range_store);
 
                         migration_num += 1;
@@ -285,12 +314,13 @@ impl ClusterStore {
             }
         }
 
-        ClusterStore {
+        let cluster = ClusterStore {
             epoch: self.epoch,
             name: self.name.clone(),
             chunks,
             config: self.config.clone(),
-        }
+        };
+        Ok(cluster)
     }
 }
 
@@ -368,8 +398,14 @@ impl MetaStore {
         MetaStoreQuery::new(self).get_proxies_with_pagination(offset, limit)
     }
 
-    pub fn get_proxy_by_address(&self, address: &str, migration_limit: u64) -> Option<Proxy> {
-        MetaStoreQuery::new(self).get_proxy_by_address(address, migration_limit)
+    pub fn get_proxy_by_address(
+        &self,
+        address: &str,
+        migration_limit: u64,
+    ) -> Result<Option<Proxy>, MetaStoreError> {
+        MetaStoreQuery::new(self)
+            .get_proxy_by_address(address, migration_limit)
+            .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)
     }
 
     pub fn get_cluster_names(&self) -> Vec<ClusterName> {
@@ -384,16 +420,24 @@ impl MetaStore {
         MetaStoreQuery::new(self).get_cluster_names_with_pagination(offset, limit)
     }
 
-    pub fn get_cluster_by_name(&self, cluster_name: &str, migration_limit: u64) -> Option<Cluster> {
-        MetaStoreQuery::new(self).get_cluster_by_name(cluster_name, migration_limit)
+    pub fn get_cluster_by_name(
+        &self,
+        cluster_name: &str,
+        migration_limit: u64,
+    ) -> Result<Option<Cluster>, MetaStoreError> {
+        MetaStoreQuery::new(self)
+            .get_cluster_by_name(cluster_name, migration_limit)
+            .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)
     }
 
     pub fn get_cluster_info_by_name(
         &self,
         cluster_name: &str,
         migration_limit: u64,
-    ) -> Option<ClusterInfo> {
-        MetaStoreQuery::new(self).get_cluster_info_by_name(cluster_name, migration_limit)
+    ) -> Result<Option<ClusterInfo>, MetaStoreError> {
+        MetaStoreQuery::new(self)
+            .get_cluster_info_by_name(cluster_name, migration_limit)
+            .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)
     }
 
     pub fn add_failure(&mut self, address: String, reporter_id: String) -> bool {
@@ -660,6 +704,7 @@ pub enum MetaStoreError {
     Retry,
     EmptyExternalVersion,
     ExternalTimeout,
+    InvalidState,
 }
 
 impl MetaStoreError {
@@ -696,6 +741,7 @@ impl MetaStoreError {
             Self::Retry => "RETRY",
             Self::EmptyExternalVersion => "EMPTY_EXTERNAL_VERSION",
             Self::ExternalTimeout => "EXTERNAL_TIMEOUT",
+            Self::InvalidState => "INVALID_STATE",
         }
     }
 }
@@ -777,6 +823,7 @@ mod tests {
 
         let proxy = store
             .get_proxy_by_address(proxy_address, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(proxy.get_address(), proxy_address);
         assert_eq!(proxy.get_epoch(), 1);
@@ -848,7 +895,11 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
+            .filter_map(|proxy_address| {
+                store
+                    .get_proxy_by_address(&proxy_address, migration_limit)
+                    .unwrap()
+            })
             .collect();
         let original_free_node_num: usize = proxies
             .iter()
@@ -873,6 +924,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(cluster.get_nodes().len(), 4);
         let cluster_store = store
@@ -888,7 +940,11 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
+            .filter_map(|proxy_address| {
+                store
+                    .get_proxy_by_address(&proxy_address, migration_limit)
+                    .unwrap()
+            })
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -905,6 +961,7 @@ mod tests {
         for node in cluster.get_nodes() {
             let proxy = store
                 .get_proxy_by_address(&node.get_proxy_address(), migration_limit)
+                .unwrap()
                 .unwrap();
             assert_eq!(proxy.get_free_nodes().len(), 0);
             assert_eq!(proxy.get_nodes().len(), 2);
@@ -946,7 +1003,11 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
+            .filter_map(|proxy_address| {
+                store
+                    .get_proxy_by_address(&proxy_address, migration_limit)
+                    .unwrap()
+            })
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -959,7 +1020,11 @@ mod tests {
         let proxies: Vec<_> = store
             .get_proxies()
             .into_iter()
-            .filter_map(|proxy_address| store.get_proxy_by_address(&proxy_address, migration_limit))
+            .filter_map(|proxy_address| {
+                store
+                    .get_proxy_by_address(&proxy_address, migration_limit)
+                    .unwrap()
+            })
             .collect();
         let free_node_num: usize = proxies
             .iter()
@@ -992,7 +1057,10 @@ mod tests {
                 .unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
-                let proxy = store.get_proxy_by_address(&addr, migration_limit).unwrap();
+                let proxy = store
+                    .get_proxy_by_address(&addr, migration_limit)
+                    .unwrap()
+                    .unwrap();
                 if !proxy.get_free_nodes().is_empty() {
                     continue;
                 }
@@ -1011,7 +1079,10 @@ mod tests {
             store.add_cluster("testcluster2".to_string(), 4).unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
-                let proxy = store.get_proxy_by_address(&addr, migration_limit).unwrap();
+                let proxy = store
+                    .get_proxy_by_address(&addr, migration_limit)
+                    .unwrap()
+                    .unwrap();
                 if !proxy.get_free_nodes().is_empty() {
                     continue;
                 }
@@ -1042,6 +1113,7 @@ mod tests {
         let failed_address = "127.0.0.1:7001";
         assert!(store
             .get_proxy_by_address(failed_address, migration_limit)
+            .unwrap()
             .is_some());
         let epoch1 = store.get_global_epoch();
 
@@ -1078,6 +1150,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_slots(cluster.clone(), 4);
 
@@ -1114,6 +1187,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(
             cluster
@@ -1181,6 +1255,7 @@ mod tests {
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
                 .unwrap()
+                .unwrap()
                 .get_nodes()
                 .len(),
             4
@@ -1195,6 +1270,7 @@ mod tests {
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
                 .unwrap()
+                .unwrap()
                 .get_nodes()
                 .len(),
             8
@@ -1208,6 +1284,7 @@ mod tests {
         assert_eq!(
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
                 .unwrap()
                 .get_nodes()
                 .len(),
@@ -1250,6 +1327,7 @@ mod tests {
             .unwrap();
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(cluster.get_nodes().len(), start_node_num);
         assert_eq!(
@@ -1284,6 +1362,7 @@ mod tests {
         let start_node_num = store
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap()
+            .unwrap()
             .get_nodes()
             .len();
 
@@ -1296,6 +1375,7 @@ mod tests {
         assert_eq!(nodes.len(), added_node_num);
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
         assert_eq!(
@@ -1311,7 +1391,10 @@ mod tests {
         injection(store, migration_limit);
 
         for limit in [0, migration_limit].iter() {
-            let cluster = store.get_cluster_by_name(&cluster_name, *limit).unwrap();
+            let cluster = store
+                .get_cluster_by_name(&cluster_name, *limit)
+                .unwrap()
+                .unwrap();
             assert_eq!(cluster.get_nodes().len(), start_node_num + added_node_num);
             for (i, node) in cluster.get_nodes().iter().enumerate() {
                 if i < start_node_num {
@@ -1348,6 +1431,7 @@ mod tests {
 
             let cluster = store
                 .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
                 .unwrap();
 
             let slot_range_set: HashSet<_> = cluster
@@ -1376,6 +1460,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_slots(cluster, start_node_num + added_node_num);
         check_cluster_and_proxy(&store);
@@ -1444,6 +1529,7 @@ mod tests {
         let cluster_name = CLUSTER_NAME;
         let cluster = store
             .get_cluster_by_name(cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         let (failed_proxy_address, peer_proxy_address) = cluster
             .get_nodes()
@@ -1477,6 +1563,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(
             cluster
@@ -1542,6 +1629,7 @@ mod tests {
         let start_node_num = store
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap()
+            .unwrap()
             .get_nodes()
             .len();
 
@@ -1555,7 +1643,10 @@ mod tests {
         injection(store, migration_limit);
 
         for limit in [0, migration_limit].iter() {
-            let cluster = store.get_cluster_by_name(&cluster_name, *limit).unwrap();
+            let cluster = store
+                .get_cluster_by_name(&cluster_name, *limit)
+                .unwrap()
+                .unwrap();
             assert_eq!(cluster.get_nodes().len(), start_node_num);
             for (i, node) in cluster.get_nodes().iter().enumerate() {
                 if i >= start_node_num - removed_node_num {
@@ -1596,6 +1687,7 @@ mod tests {
 
             let cluster = store
                 .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
                 .unwrap();
 
             let slot_range_set: HashSet<_> = cluster
@@ -1628,6 +1720,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         assert_eq!(cluster.get_nodes().len(), start_node_num - removed_node_num);
         assert_eq!(
@@ -1638,6 +1731,7 @@ mod tests {
 
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap();
         check_cluster_slots(cluster, start_node_num - removed_node_num);
         check_cluster_and_proxy(&store);
@@ -1804,6 +1898,7 @@ mod tests {
         let cluster_config = store
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap()
+            .unwrap()
             .get_config();
         assert_eq!(
             cluster_config.compression_strategy,
@@ -1821,6 +1916,7 @@ mod tests {
 
         let cluster_config = store
             .get_cluster_by_name(&cluster_name, migration_limit)
+            .unwrap()
             .unwrap()
             .get_config();
         assert_eq!(
@@ -1849,6 +1945,7 @@ mod tests {
         store.migrate_slots(cluster_name.clone()).unwrap();
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap()
             .unwrap();
         let migrating_masters = cluster
             .get_nodes()
@@ -1876,6 +1973,7 @@ mod tests {
         store.migrate_slots(cluster_name.clone()).unwrap();
         let cluster = store
             .get_cluster_by_name(CLUSTER_NAME, migration_limit)
+            .unwrap()
             .unwrap();
         let migrating_masters = cluster
             .get_nodes()
@@ -1911,6 +2009,7 @@ mod tests {
             store
                 .get_cluster_by_name(CLUSTER_NAME, 1)
                 .unwrap()
+                .unwrap()
                 .get_nodes()
                 .len(),
             8
@@ -1925,6 +2024,7 @@ mod tests {
         assert_eq!(
             store
                 .get_cluster_by_name(CLUSTER_NAME, 1)
+                .unwrap()
                 .unwrap()
                 .get_nodes()
                 .len(),
@@ -1946,7 +2046,10 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
 
         let proxy_address = cluster
             .get_nodes()
@@ -1969,7 +2072,10 @@ mod tests {
             assert_ne!(chunk.role_position, ChunkRolePosition::Normal);
         }
 
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
         let epoch1 = cluster.get_epoch();
         store.balance_masters(cluster_name.clone()).unwrap();
         for chunk in store
@@ -1981,12 +2087,18 @@ mod tests {
         {
             assert_eq!(chunk.role_position, ChunkRolePosition::Normal);
         }
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
         let epoch2 = cluster.get_epoch();
         assert!(epoch2 > epoch1);
 
         // Won't change role for failed proxy
-        let cluster = store.get_cluster_by_name(cluster_name.as_str(), 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(cluster_name.as_str(), 1)
+            .unwrap()
+            .unwrap();
         let proxy_address = cluster
             .get_nodes()
             .get(0)
@@ -2034,14 +2146,20 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
 
         const NEW_EPOCH: u64 = 233;
 
         assert!(cluster.get_epoch() < NEW_EPOCH);
 
         store.force_bump_all_epoch(NEW_EPOCH).unwrap();
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
         assert_eq!(cluster.get_epoch(), NEW_EPOCH);
         assert_eq!(store.get_global_epoch(), NEW_EPOCH);
     }
@@ -2057,14 +2175,20 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
 
         // The epoch of free proxy will be global epoch.
         let new_epoch = store.get_global_epoch() + 1;
         assert!(cluster.get_epoch() < new_epoch);
 
         store.recover_epoch(new_epoch);
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
         assert_eq!(cluster.get_epoch(), new_epoch);
         assert_eq!(store.get_global_epoch(), new_epoch);
     }
@@ -2080,14 +2204,20 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
         store.add_cluster(cluster_name.clone(), 4).unwrap();
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
 
         let new_epoch = cluster.get_epoch() + 1;
         store.bump_global_epoch();
         assert!(cluster.get_epoch() < store.get_global_epoch());
 
         store.recover_epoch(new_epoch);
-        let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
+        let cluster = store
+            .get_cluster_by_name(&cluster_name, 1)
+            .unwrap()
+            .unwrap();
         assert!(new_epoch <= store.get_global_epoch());
         assert_eq!(cluster.get_epoch(), store.get_global_epoch());
     }
@@ -2114,6 +2244,7 @@ mod tests {
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
                 .unwrap()
+                .unwrap()
                 .get_nodes()
                 .len(),
             8
@@ -2127,6 +2258,7 @@ mod tests {
         assert_eq!(
             store
                 .get_cluster_by_name(&cluster_name, migration_limit)
+                .unwrap()
                 .unwrap()
                 .get_nodes()
                 .len(),
@@ -2154,6 +2286,7 @@ mod tests {
         let (first_master_proxy, second_master_proxy) = {
             let cluster = store
                 .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap()
                 .unwrap();
             let first_master = &cluster.get_nodes()[0];
             assert_eq!(first_master.get_role(), Role::Master);
@@ -2181,6 +2314,7 @@ mod tests {
         {
             let cluster = store
                 .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap()
                 .unwrap();
             let first_master = &cluster.get_nodes()[3];
             assert_eq!(first_master.get_role(), Role::Master);
@@ -2204,6 +2338,7 @@ mod tests {
         {
             let cluster = store
                 .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap()
                 .unwrap();
             let first_master = &cluster.get_nodes()[0];
             assert_eq!(first_master.get_role(), Role::Master);

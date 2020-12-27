@@ -145,8 +145,7 @@ impl MetaStorage for MemoryStorage {
         name: &str,
         migration_limit: u64,
     ) -> Result<Option<Cluster>, MetaStoreError> {
-        let cluster = self.store.read().get_cluster_by_name(name, migration_limit);
-        Ok(cluster)
+        self.store.read().get_cluster_by_name(name, migration_limit)
     }
 
     async fn get_proxy_addresses(
@@ -166,7 +165,7 @@ impl MetaStorage for MemoryStorage {
         let proxy = self
             .store
             .read()
-            .get_proxy_by_address(address, migration_limit);
+            .get_proxy_by_address(address, migration_limit)?;
         Ok(proxy)
     }
 
@@ -216,11 +215,9 @@ impl MetaStorage for MemoryStorage {
         cluster_name: &str,
         migration_limit: u64,
     ) -> Result<Option<ClusterInfo>, MetaStoreError> {
-        let cluster = self
-            .store
+        self.store
             .read()
-            .get_cluster_info_by_name(cluster_name, migration_limit);
-        Ok(cluster)
+            .get_cluster_info_by_name(cluster_name, migration_limit)
     }
 
     async fn add_cluster(

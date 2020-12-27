@@ -2,6 +2,7 @@ use super::store::{
     ClusterStore, MetaStore, MetaStoreError, MigrationMetaStore, MigrationSlotRangeStore,
     MigrationSlots, CHUNK_NODE_NUM,
 };
+use super::utils::InvalidStateError;
 use crate::common::cluster::ClusterName;
 use crate::common::cluster::{MigrationTaskMeta, Range, RangeList, SlotRange, SlotRangeTag};
 use crate::common::utils::SLOT_NUM;
@@ -39,15 +40,20 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(err);
         }
 
-        let migration_slots = Self::remove_slots_from_src(cluster, new_epoch);
-        Self::assign_dst_slots(cluster, migration_slots.clone());
+        let migration_slots = Self::remove_slots_from_src(cluster, new_epoch)
+            .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)?;
+        Self::assign_dst_slots(cluster, migration_slots.clone())
+            .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)?;
         cluster.set_epoch(new_epoch);
 
         Self::print_migration_slot(cluster, &migration_slots);
         Ok(())
     }
 
-    fn remove_slots_from_src(cluster: &mut ClusterStore, epoch: u64) -> Vec<MigrationSlots> {
+    fn remove_slots_from_src(
+        cluster: &mut ClusterStore,
+        epoch: u64,
+    ) -> Result<Vec<MigrationSlots>, InvalidStateError> {
         let dst_chunk_num = cluster
             .chunks
             .iter()
@@ -89,14 +95,20 @@ impl<'a> MetaStoreMigrate<'a> {
                             .get_ranges()
                             .last()
                             .map(|r| r.end() - r.start() + 1)
-                            .expect("remove_slots_from_src: slots > average + src_r >= 0");
+                            .ok_or_else(|| {
+                                error!("FATAL remove_slots_from_src: slots > average + src_r >= 0");
+                                InvalidStateError
+                            })?;
 
                         if remove_num >= num {
                             let range = slot_range
                                 .get_mut_range_list()
                                 .get_mut_ranges()
                                 .pop()
-                                .expect("remove_slots_from_src: need_num >= num");
+                                .ok_or_else(|| {
+                                    error!("FATAL remove_slots_from_src: need_num >= num");
+                                    InvalidStateError
+                                })?;
                             curr_dst_slots.push(range);
                             curr_slots_num += num;
                         } else {
@@ -104,7 +116,10 @@ impl<'a> MetaStoreMigrate<'a> {
                                 .get_mut_range_list()
                                 .get_mut_ranges()
                                 .last_mut()
-                                .expect("remove_slots_from_src");
+                                .ok_or_else(|| {
+                                    error!("FATAL remove_slots_from_src");
+                                    InvalidStateError
+                                })?;
                             let end = range.end();
                             let start = end - remove_num + 1;
                             *range.end_mut() -= remove_num;
@@ -140,7 +155,7 @@ impl<'a> MetaStoreMigrate<'a> {
             }
         }
 
-        migration_slots
+        Ok(migration_slots)
     }
 
     fn print_migration_slot(cluster: &ClusterStore, mgr_slots: &[MigrationSlots]) {
@@ -160,7 +175,10 @@ impl<'a> MetaStoreMigrate<'a> {
         for chunk in cluster.chunks.iter() {
             for mgr_slots in chunk.migrating_slots.iter() {
                 for slots in mgr_slots.iter() {
-                    let slot_range = slots.to_slot_range(&cluster.chunks);
+                    let slot_range = match slots.to_slot_range(&cluster.chunks) {
+                        Ok(slot_range) => slot_range,
+                        _ => continue,
+                    };
                     let tag = &slot_range.tag;
                     if !tag.is_migrating() {
                         continue;
@@ -229,7 +247,10 @@ impl<'a> MetaStoreMigrate<'a> {
         }
     }
 
-    fn assign_dst_slots(cluster: &mut ClusterStore, migration_slots: Vec<MigrationSlots>) {
+    fn assign_dst_slots(
+        cluster: &mut ClusterStore,
+        migration_slots: Vec<MigrationSlots>,
+    ) -> Result<(), InvalidStateError> {
         for migration_slot_range in migration_slots.into_iter() {
             let MigrationSlots { ranges, meta } = migration_slot_range;
 
@@ -237,11 +258,17 @@ impl<'a> MetaStoreMigrate<'a> {
                 let src_chunk = cluster
                     .chunks
                     .get_mut(meta.src_chunk_index)
-                    .expect("assign_dst_slots");
+                    .ok_or_else(|| {
+                        error!("FATAL assign_dst_slots");
+                        InvalidStateError
+                    })?;
                 let migrating_slots = src_chunk
                     .migrating_slots
                     .get_mut(meta.src_chunk_part)
-                    .expect("assign_dst_slots");
+                    .ok_or_else(|| {
+                        error!("FATAL assign_dst_slots");
+                        InvalidStateError
+                    })?;
                 let slot_range = MigrationSlotRangeStore {
                     range_list: RangeList::new(ranges.clone()),
                     is_migrating: true,
@@ -253,11 +280,17 @@ impl<'a> MetaStoreMigrate<'a> {
                 let dst_chunk = cluster
                     .chunks
                     .get_mut(meta.dst_chunk_index)
-                    .expect("assign_dst_slots");
+                    .ok_or_else(|| {
+                        error!("FATAL assign_dst_slots");
+                        InvalidStateError
+                    })?;
                 let migrating_slots = dst_chunk
                     .migrating_slots
                     .get_mut(meta.dst_chunk_part)
-                    .expect("assign_dst_slots");
+                    .ok_or_else(|| {
+                        error!("FATAL assign_dst_slots");
+                        InvalidStateError
+                    })?;
                 let slot_range = MigrationSlotRangeStore {
                     range_list: RangeList::new(ranges.clone()),
                     is_migrating: false,
@@ -268,6 +301,7 @@ impl<'a> MetaStoreMigrate<'a> {
         }
 
         Self::compact_slots(cluster);
+        Ok(())
     }
 
     fn compact_slots(cluster: &mut ClusterStore) {
@@ -320,8 +354,10 @@ impl<'a> MetaStoreMigrate<'a> {
 
         let new_chunk_num = new_node_num / 4;
         let migration_slots =
-            Self::remove_slots_from_src_to_scale_down(cluster, new_epoch, new_chunk_num);
-        Self::assign_dst_slots(cluster, migration_slots.clone());
+            Self::remove_slots_from_src_to_scale_down(cluster, new_epoch, new_chunk_num)
+                .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)?;
+        Self::assign_dst_slots(cluster, migration_slots.clone())
+            .map_err(|InvalidStateError {}| MetaStoreError::InvalidState)?;
         cluster.set_epoch(new_epoch);
 
         Self::print_migration_slot(cluster, &migration_slots);
@@ -332,7 +368,7 @@ impl<'a> MetaStoreMigrate<'a> {
         cluster: &mut ClusterStore,
         epoch: u64,
         new_chunk_num: usize,
-    ) -> Vec<MigrationSlots> {
+    ) -> Result<Vec<MigrationSlots>, InvalidStateError> {
         let dst_chunk_num = new_chunk_num;
 
         let dst_master_num = dst_chunk_num * 2;
@@ -367,9 +403,10 @@ impl<'a> MetaStoreMigrate<'a> {
 
                         let dst_existing = *dst_existing_slots_num
                             .get(curr_dst_master_index)
-                            .expect(
-                            "remove_slots_from_src_to_scale_down: get dst existing slots number",
-                        );
+                            .ok_or_else(|| {
+                                error!("FATAL remove_slots_from_src_to_scale_down: get dst existing slots number");
+                                InvalidStateError
+                            })?;
                         let need_num = dst_final_num - curr_slots_num - dst_existing;
                         let available_num = slot_range.get_range_list().get_slots_num();
 
@@ -383,7 +420,12 @@ impl<'a> MetaStoreMigrate<'a> {
                             .get_ranges()
                             .get(0)
                             .map(|r| r.end() - r.start() + 1)
-                            .expect("remove_slots_from_src_to_scale_down: available_num > 0");
+                            .ok_or_else(|| {
+                                error!(
+                                    "FATAL remove_slots_from_src_to_scale_down: available_num > 0"
+                                );
+                                InvalidStateError
+                            })?;
 
                         if remove_num >= num {
                             let range = slot_range.get_mut_range_list().get_mut_ranges().remove(0);
@@ -394,7 +436,10 @@ impl<'a> MetaStoreMigrate<'a> {
                                 .get_mut_range_list()
                                 .get_mut_ranges()
                                 .get_mut(0)
-                                .expect("remove_slots_from_src_to_scale_down: available_num > 0");
+                                .ok_or_else(|| {
+                                    error!("FATAL remove_slots_from_src_to_scale_down: available_num > 0");
+                                    InvalidStateError
+                                })?;
                             // end - start + 1 == remove_num
                             // end == remove_num + start - 1
                             let start = range.start();
@@ -433,7 +478,7 @@ impl<'a> MetaStoreMigrate<'a> {
             }
         }
 
-        migration_slots
+        Ok(migration_slots)
     }
 
     pub fn commit_migration(&mut self, task: MigrationTaskMeta) -> Result<(), MetaStoreError> {
@@ -534,7 +579,10 @@ impl<'a> MetaStoreMigrate<'a> {
                     },
                 );
                 if let Some((j, mut range_list)) = removed_slots {
-                    match chunk.stable_slots.get_mut(j).expect("commit_migration") {
+                    match chunk.stable_slots.get_mut(j).ok_or_else(|| {
+                        error!("FATAL commit_migration");
+                        MetaStoreError::InvalidState
+                    })? {
                         Some(stable_slots) => {
                             stable_slots
                                 .get_mut_range_list()
