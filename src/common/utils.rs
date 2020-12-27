@@ -150,9 +150,20 @@ pub fn get_hash_tag(key: &[u8]) -> &[u8] {
             if end_offset == 0 {
                 return key;
             }
-            return key
-                .get(begin + 1..begin + 1 + end_offset)
-                .expect("get_hash_tag");
+            let start = begin + 1;
+            let end = start + end_offset;
+            return match key.get(start..end) {
+                Some(slice) => slice,
+                None => {
+                    error!(
+                        "FATAL get_hash_tag data len: {} range: {} {}",
+                        key.len(),
+                        start,
+                        end
+                    );
+                    key
+                }
+            };
         }
     }
     key

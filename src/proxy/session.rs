@@ -1,5 +1,5 @@
 use super::backend::{CmdTask, CmdTaskFactory, CmdTaskResult};
-use super::cluster::{ClusterTag, DEFAULT_CLUSTER};
+use super::cluster::ClusterTag;
 use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
     CommandResult, DataCmdType, TaskReply, TaskResult,
@@ -16,7 +16,6 @@ use futures::{future, Future, Sink, Stream, TryFutureExt};
 use futures::{StreamExt, TryStreamExt};
 use std::boxed::Box;
 use std::collections::VecDeque;
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -233,7 +232,7 @@ impl<H: CmdCtxHandler> Session<H> {
         slow_request_logger: sync::Arc<SlowRequestLogger>,
         config: Arc<ServerProxyConfig>,
     ) -> Self {
-        let cluster_name = ClusterName::try_from(DEFAULT_CLUSTER).expect("Session::new");
+        let cluster_name = ClusterName::default();
         Session {
             session_id,
             cluster_name: sync::Arc::new(parking_lot::RwLock::new(cluster_name)),

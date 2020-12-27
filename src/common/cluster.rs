@@ -217,14 +217,36 @@ impl RangeList {
         let mut b = 1;
         while let Some(e) = self.0.get(b).cloned() {
             {
-                let s = self.0.get_mut(a).expect("RangeList::compact");
+                let s = match self.0.get_mut(a) {
+                    Some(s) => s,
+                    None => {
+                        error!(
+                            "FATAL RangeList::compact data len: {} a: {}",
+                            self.0.len(),
+                            a
+                        );
+                        return;
+                    }
+                };
                 if s.end() + 1 >= e.start() {
                     s.1 = max(s.end(), e.end());
                     b += 1;
                     continue;
                 }
             }
-            *self.0.get_mut(a + 1).expect("RangeList::compact") = e;
+            match self.0.get_mut(a + 1) {
+                Some(slice) => {
+                    *slice = e;
+                }
+                None => {
+                    error!(
+                        "FATAL RangeList::compact data len: {} a + 1: {}",
+                        self.0.len(),
+                        a + 1
+                    );
+                    return;
+                }
+            }
             a += 1;
             b += 1;
         }
@@ -391,6 +413,7 @@ impl SlotRange {
 // To optimize the ClusterTag::get_cluster_name, we need to eliminate the heap allocation.
 // Thus we make ClusterName a stack string with limited size.
 pub const CLUSTER_NAME_MAX_LENGTH: usize = 31;
+pub const DEFAULT_CLUSTER: &str = "admin";
 
 #[derive(Debug)]
 pub struct InvalidClusterName;
@@ -439,7 +462,13 @@ impl ClusterName {
 
 impl Default for ClusterName {
     fn default() -> Self {
-        Self::empty()
+        match Self::try_from(DEFAULT_CLUSTER) {
+            Ok(name) => name,
+            Err(err) => {
+                error!("unexpected default cluster name: {:?}", err);
+                ClusterName(ClusterNameInner::default())
+            }
+        }
     }
 }
 
@@ -1123,5 +1152,10 @@ mod tests {
         assert_eq!(range_list.get_ranges().len(), 1);
         assert_eq!(range_list.get_ranges()[0].start(), 0);
         assert_eq!(range_list.get_ranges()[0].end(), 233);
+    }
+
+    #[test]
+    fn test_default_cluster_length() {
+        ClusterName::try_from(DEFAULT_CLUSTER).unwrap();
     }
 }

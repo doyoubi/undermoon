@@ -25,6 +25,37 @@ pub enum TaskEvent {
     WaitDone = 7,
 }
 
+// The following duplicated codes are used to avoid
+// unpredictable index at compile time for `arr[index]` call.
+// TODO: See whether `const generics` could help once it's stable.
+impl TaskEvent {
+    fn index_array<T: Copy>(self, arr: &[T; EVENT_NUMBER]) -> &T {
+        match self {
+            Self::Created => &arr[0],
+            Self::SentToMigrationBackend => &arr[1],
+            Self::SentToCluster => &arr[2],
+            Self::SentToWritingQueue => &arr[3],
+            Self::WritingQueueReceived => &arr[4],
+            Self::SentToBackend => &arr[5],
+            Self::ReceivedFromBackend => &arr[6],
+            Self::WaitDone => &arr[7],
+        }
+    }
+
+    fn index_array_mut<T>(self, arr: &mut [T; EVENT_NUMBER]) -> &mut T {
+        match self {
+            Self::Created => &mut arr[0],
+            Self::SentToMigrationBackend => &mut arr[1],
+            Self::SentToCluster => &mut arr[2],
+            Self::SentToWritingQueue => &mut arr[3],
+            Self::WritingQueueReceived => &mut arr[4],
+            Self::SentToBackend => &mut arr[5],
+            Self::ReceivedFromBackend => &mut arr[6],
+            Self::WaitDone => &mut arr[7],
+        }
+    }
+}
+
 const EVENT_NUMBER: usize = 8;
 const LOG_ELEMENT_NUMBER: usize = 5;
 
@@ -35,17 +66,11 @@ struct RequestEventMap {
 
 impl RequestEventMap {
     fn set_event_time(&mut self, event: TaskEvent, timestamp: i64) {
-        *self
-            .events
-            .get_mut(event as usize)
-            .expect("RequestEventMap::set_event_time") = timestamp;
+        *event.index_array_mut(&mut self.events) = timestamp;
     }
 
     fn get_event_time(&self, event: TaskEvent) -> i64 {
-        *self
-            .events
-            .get(event as usize)
-            .expect("RequestEventMap::get_event_time")
+        *event.index_array(&self.events)
     }
 
     fn get_used_time(&self, event: TaskEvent) -> i64 {

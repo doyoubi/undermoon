@@ -41,11 +41,13 @@ impl IndexedResp {
         match self.resp {
             RespIndex::Arr(ArrayIndex::Arr(ref resps)) => {
                 resps.get(index).and_then(|resp| match resp {
-                    RespIndex::Bulk(BulkStrIndex::Str(s)) => Some(
-                        self.data
-                            .get(s.to_range())
-                            .expect("IndexedResp::get_array_element"),
-                    ),
+                    RespIndex::Bulk(BulkStrIndex::Str(s)) => match self.data.get(s.to_range()) {
+                        None => {
+                            error!("FATAL IndexedResp::get_array_element data len: {}, range: {:?}", self.data.len(), s);
+                            None
+                        }
+                        data => data,
+                    },
                     _ => None,
                 })
             }
@@ -65,9 +67,20 @@ impl IndexedResp {
     }
 
     pub fn to_resp_vec(&self) -> RespVec {
-        self.resp.as_ref().map(|DataIndex(s, e)| {
-            (&self.data.get(*s..*e).expect("IndexedResp::to_resp_vec")).to_vec()
-        })
+        self.resp
+            .as_ref()
+            .map(|DataIndex(s, e)| match self.data.get(*s..*e) {
+                Some(slice) => slice.to_vec(),
+                None => {
+                    error!(
+                        "FATAL IndexedResp::to_resp_vec data len: {} range: {} {}",
+                        self.data.len(),
+                        *s,
+                        *e
+                    );
+                    Vec::new()
+                }
+            })
     }
 
     pub fn get_data(&self) -> &[u8] {
@@ -284,17 +297,39 @@ impl BulkStrIndex {
     }
 }
 
+const EMPTY_DATA: [u8; 0] = [];
+
 impl ArrayIndex {
     pub fn map_to_slice<'a>(&self, data: &'a [u8]) -> ArraySlice<'a> {
-        self.as_ref()
-            .map(|DataIndex(s, e)| data.get(*s..*e).expect("ArrayIndex::map_to_slice"))
+        self.as_ref().map(|DataIndex(s, e)| match data.get(*s..*e) {
+            Some(slice) => slice,
+            None => {
+                error!(
+                    "FATAL ArrayIndex::map_to_slice data len: {} range: {} {}",
+                    data.len(),
+                    *s,
+                    *e
+                );
+                &EMPTY_DATA
+            }
+        })
     }
 }
 
 impl RespIndex {
     pub fn map_to_slice<'a>(&self, data: &'a [u8]) -> RespSlice<'a> {
-        self.as_ref()
-            .map(|DataIndex(s, e)| data.get(*s..*e).expect("RespIndex::map_to_slice"))
+        self.as_ref().map(|DataIndex(s, e)| match data.get(*s..*e) {
+            Some(slice) => slice,
+            None => {
+                error!(
+                    "FATAL RespIndex::map_to_slice data len: {} range: {} {}",
+                    data.len(),
+                    *s,
+                    *e
+                );
+                &EMPTY_DATA
+            }
+        })
     }
 }
 

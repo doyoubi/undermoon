@@ -14,8 +14,6 @@ use std::error::Error;
 use std::fmt;
 use std::iter::Iterator;
 
-pub const DEFAULT_CLUSTER: &str = "admin";
-
 #[derive(Debug)]
 pub enum ClusterMetaError {
     OldEpoch,
@@ -1064,10 +1062,5 @@ mod tests {
         assert!(is_ready(&gen_testing_slot_ranges("127.0.0.1:5299")));
         assert!(is_ready(&gen_testing_migration_slot_ranges(false)));
         assert!(!is_ready(&gen_testing_migration_slot_ranges(true)));
-    }
-
-    #[test]
-    fn test_default_cluster_length() {
-        ClusterName::try_from(DEFAULT_CLUSTER).unwrap();
     }
 }
