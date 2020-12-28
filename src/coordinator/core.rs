@@ -220,8 +220,13 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for ParFai
     }
 }
 
-// Clippy accidentally thinks [automock] is an index expression.
-#[allow(clippy::indexing_slicing)]
+// Suppress errors in [automock]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::panic_in_result_fn,
+    clippy::unreachable
+)]
 mod trait_mod {
     use super::*;
 

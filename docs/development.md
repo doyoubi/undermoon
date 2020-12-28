@@ -1,12 +1,8 @@
 # Development Guide
 
-## Use Linter
-Install linters:
-```
-$ make install-linters
-```
+## Run linter and tests
 
-Then run the following commands before commit your codes:
+Run the following commands before committing your codes:
 ```
 $ make lint
 $ make test
@@ -17,10 +13,10 @@ $ make test
 Avoid using `unsafe` and calls that could crash like `unwrap`, `unsafe_pinned`.
 Use `pin-project` instead of `pin-utils`.
 
-But you can still use `expect` for some cases:
+But you can still use `expect` for some cases only you have to:
 
 - (1) Data manipulation in memory broker
-- (2) Locks
+- ~~(2) Locks~~ (Use poison-free locks in parking_lot)
 
 ### Employ dependency injection for better unit tests
 Dependency injection not only make it much easier to write unit tests

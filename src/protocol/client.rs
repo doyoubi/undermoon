@@ -19,9 +19,14 @@ use tokio::net::TcpStream;
 use tokio::time;
 use tokio_util::codec::{Decoder, Framed};
 
-// Suppress warning from automock.
-#[allow(clippy::ptr_arg)]
-#[allow(clippy::indexing_slicing)]
+// Suppress errors in [automock]
+#[allow(
+    clippy::ptr_arg,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::panic_in_result_fn,
+    clippy::unreachable
+)]
 mod client_trait {
     use super::*;
     use futures::FutureExt;

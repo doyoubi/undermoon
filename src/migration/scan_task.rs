@@ -302,6 +302,8 @@ where
         info!("final_switch done");
     }
 
+    // For `select!`
+    #[allow(clippy::panic)]
     async fn run(&self) -> Result<(), MigrationError> {
         let final_switch = self.final_switch();
 
@@ -316,6 +318,8 @@ where
         Ok(())
     }
 
+    // For `select!`
+    #[allow(clippy::panic)]
     async fn run_migration(&self) -> Result<(), MigrationError> {
         let pre_check = self.pre_check();
         let pre_block = self.pre_block();
@@ -366,6 +370,8 @@ where
         let meta = self.meta.clone();
         let fut = self.run();
 
+        // For `select!`
+        #[allow(clippy::panic)]
         let fut = async move {
             let r = select! {
                 res = fut.fuse() => res,
