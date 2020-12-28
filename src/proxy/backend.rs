@@ -398,6 +398,8 @@ where
                 }
 
                 let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
+                // For `select!`
+                #[allow(clippy::panic)]
                 loop {
                     let mut tasks_fut = task_receiver.next().fuse();
                     let task_opt = select! {

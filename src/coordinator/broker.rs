@@ -8,7 +8,12 @@ use std::io;
 use std::pin::Pin;
 
 // Clippy accidentally thinks [automock] is an index expression.
-#[allow(clippy::indexing_slicing)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::panic_in_result_fn,
+    clippy::unreachable
+)]
 mod trait_mod {
     use super::*;
 

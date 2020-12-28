@@ -465,7 +465,7 @@ impl Default for ClusterName {
         match Self::try_from(DEFAULT_CLUSTER) {
             Ok(name) => name,
             Err(err) => {
-                error!("unexpected default cluster name: {:?}", err);
+                error!("FATAL unexpected default cluster name: {:?}", err);
                 ClusterName(ClusterNameInner::default())
             }
         }
