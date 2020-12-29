@@ -11,7 +11,7 @@ use either::Either;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Weak};
 
 pub trait CmdTaskSender {
     type Task: CmdTask;
@@ -243,14 +243,14 @@ impl<S: CmdTaskSender> CmdTaskSender for CachedSender<S> {
 // TODO: support cleanup here to avoid memory leak.
 pub struct CachedSenderFactory<F: CmdTaskSenderFactory> {
     inner_factory: F,
-    cached_senders: Arc<RwLock<HashMap<String, Weak<F::Sender>>>>,
+    cached_senders: Arc<parking_lot::RwLock<HashMap<String, Weak<F::Sender>>>>,
 }
 
 impl<F: CmdTaskSenderFactory> CachedSenderFactory<F> {
     pub fn new(inner_factory: F) -> Self {
         Self {
             inner_factory,
-            cached_senders: Arc::new(RwLock::new(HashMap::new())),
+            cached_senders: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         }
     }
 }
@@ -262,7 +262,6 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
         if let Some(sender) = self
             .cached_senders
             .read()
-            .expect("CachedSenderFactory::create")
             .get(&address)
             .and_then(|sender_weak| sender_weak.upgrade())
         {
@@ -274,10 +273,7 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
         // Acceptable race condition here. Multiple threads might be creating at the same time.
         let inner_sender = Arc::new(self.inner_factory.create(address.clone()));
         let inner_sender_clone = {
-            let mut guard = self
-                .cached_senders
-                .write()
-                .expect("CachedSenderFactory::create");
+            let mut guard = self.cached_senders.write();
             let inner_sender_weak = Arc::downgrade(&inner_sender);
             guard.entry(address).or_insert(inner_sender_weak);
             inner_sender

@@ -88,7 +88,7 @@ where
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
-        session_cluster_name: &sync::RwLock<ClusterName>,
+        session_cluster_name: &parking_lot::RwLock<ClusterName>,
     ) -> CmdReplyFuture {
         self.handler
             .handle_cmd_ctx(cmd_ctx, reply_receiver, session_cluster_name)
@@ -153,7 +153,11 @@ where
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(content.into_bytes()))));
     }
 
-    fn handle_auth(&self, mut cmd_ctx: CmdCtx, session_cluster_name: &sync::RwLock<ClusterName>) {
+    fn handle_auth(
+        &self,
+        mut cmd_ctx: CmdCtx,
+        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+    ) {
         let key = cmd_ctx.get_key();
         let cluster = match key {
             None => {
@@ -179,9 +183,7 @@ where
             }
         };
 
-        *session_cluster_name
-            .write()
-            .expect("ForwardHandler::handle_auth") = cluster_name.clone();
+        *session_cluster_name.write() = cluster_name.clone();
         cmd_ctx.set_cluster_name(cluster_name);
         cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
     }
@@ -1078,7 +1080,7 @@ where
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
-        session_cluster_name: &sync::RwLock<ClusterName>,
+        session_cluster_name: &parking_lot::RwLock<ClusterName>,
     ) -> CmdReplyFuture {
         let mut cmd_ctx = cmd_ctx;
         if self.config.auto_select_cluster {

@@ -19,7 +19,7 @@ use actix_web::{error, http, web, HttpRequest, HttpResponse};
 use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
@@ -200,9 +200,9 @@ impl MemBrokerService {
         }
 
         let storage: Arc<dyn MetaStorage> = match config.storage.clone() {
-            StorageConfig::Memory => {
-                Arc::new(MemoryStorage::new(Arc::new(RwLock::new(meta_store))))
-            }
+            StorageConfig::Memory => Arc::new(MemoryStorage::new(Arc::new(
+                parking_lot::RwLock::new(meta_store),
+            ))),
             StorageConfig::ExternalHTTP {
                 storage_name,
                 storage_password,

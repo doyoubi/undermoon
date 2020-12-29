@@ -4,7 +4,7 @@ use crate::broker::store::ScaleOp;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 #[async_trait]
 pub trait MetaStorage: Send + Sync + 'static {
@@ -108,11 +108,11 @@ pub trait MetaStorage: Send + Sync + 'static {
 }
 
 pub struct MemoryStorage {
-    store: Arc<RwLock<MetaStore>>,
+    store: Arc<parking_lot::RwLock<MetaStore>>,
 }
 
 impl MemoryStorage {
-    pub fn new(store: Arc<RwLock<MetaStore>>) -> Self {
+    pub fn new(store: Arc<parking_lot::RwLock<MetaStore>>) -> Self {
         Self { store }
     }
 }
@@ -120,19 +120,12 @@ impl MemoryStorage {
 #[async_trait]
 impl MetaStorage for MemoryStorage {
     async fn get_all_metadata(&self) -> Result<MetaStore, MetaStoreError> {
-        let store = self
-            .store
-            .read()
-            .expect("MemoryStorage::get_all_data")
-            .clone();
+        let store = self.store.read().clone();
         Ok(store)
     }
 
     async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::restore_metadata")
-            .restore(meta_store)
+        self.store.write().restore(meta_store)
     }
 
     async fn get_cluster_names(
@@ -143,7 +136,6 @@ impl MetaStorage for MemoryStorage {
         let names = self
             .store
             .read()
-            .expect("MemoryStorage::get_cluster_names")
             .get_cluster_names_with_pagination(offset, limit);
         Ok(names)
     }
@@ -153,11 +145,7 @@ impl MetaStorage for MemoryStorage {
         name: &str,
         migration_limit: u64,
     ) -> Result<Option<Cluster>, MetaStoreError> {
-        let cluster = self
-            .store
-            .read()
-            .expect("MemoryStorage::get_cluster_by_name")
-            .get_cluster_by_name(name, migration_limit);
+        let cluster = self.store.read().get_cluster_by_name(name, migration_limit);
         Ok(cluster)
     }
 
@@ -166,11 +154,7 @@ impl MetaStorage for MemoryStorage {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> Result<Vec<String>, MetaStoreError> {
-        let addresses = self
-            .store
-            .read()
-            .expect("MemoryStorage::get_proxy_addresses")
-            .get_proxies_with_pagination(offset, limit);
+        let addresses = self.store.read().get_proxies_with_pagination(offset, limit);
         Ok(addresses)
     }
 
@@ -182,7 +166,6 @@ impl MetaStorage for MemoryStorage {
         let proxy = self
             .store
             .read()
-            .expect("MemoryStorage::get_proxy_by_address")
             .get_proxy_by_address(address, migration_limit);
         Ok(proxy)
     }
@@ -192,11 +175,7 @@ impl MetaStorage for MemoryStorage {
         failure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Result<Vec<String>, MetaStoreError> {
-        let failures = self
-            .store
-            .write()
-            .expect("MemoryStorage::get_failures")
-            .get_failures(failure_ttl, failure_quorum);
+        let failures = self.store.write().get_failures(failure_ttl, failure_quorum);
         Ok(failures)
     }
 
@@ -205,10 +184,7 @@ impl MetaStorage for MemoryStorage {
         address: String,
         reporter_id: String,
     ) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::add_failure")
-            .add_failure(address, reporter_id);
+        self.store.write().add_failure(address, reporter_id);
         Ok(())
     }
 
@@ -219,7 +195,6 @@ impl MetaStorage for MemoryStorage {
     ) -> Result<Option<Proxy>, MetaStoreError> {
         self.store
             .write()
-            .expect("MemoryStorage::replace_failed_node")
             .replace_failed_proxy(failed_proxy_address, migration_limit)
     }
 
@@ -228,18 +203,11 @@ impl MetaStorage for MemoryStorage {
         task: MigrationTaskMeta,
         clear_free_nodes: bool,
     ) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::commit_migration")
-            .commit_migration(task, clear_free_nodes)
+        self.store.write().commit_migration(task, clear_free_nodes)
     }
 
     async fn get_failed_proxies(&self) -> Result<Vec<String>, MetaStoreError> {
-        let failures = self
-            .store
-            .read()
-            .expect("MemoryStorage::get_failed_proxies")
-            .get_failed_proxies();
+        let failures = self.store.read().get_failed_proxies();
         Ok(failures)
     }
 
@@ -251,7 +219,6 @@ impl MetaStorage for MemoryStorage {
         let cluster = self
             .store
             .read()
-            .expect("MemoryStorage::get_cluster_info_by_name")
             .get_cluster_info_by_name(cluster_name, migration_limit);
         Ok(cluster)
     }
@@ -261,17 +228,11 @@ impl MetaStorage for MemoryStorage {
         cluster_name: String,
         node_num: usize,
     ) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::add_cluster")
-            .add_cluster(cluster_name, node_num)
+        self.store.write().add_cluster(cluster_name, node_num)
     }
 
     async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::remove_cluster")
-            .remove_cluster(cluster_name)
+        self.store.write().remove_cluster(cluster_name)
     }
 
     async fn auto_add_nodes(
@@ -279,10 +240,7 @@ impl MetaStorage for MemoryStorage {
         cluster_name: String,
         node_num: usize,
     ) -> Result<Vec<Node>, MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::auto_add_node")
-            .auto_add_nodes(cluster_name, node_num)
+        self.store.write().auto_add_nodes(cluster_name, node_num)
     }
 
     async fn auto_scale_up_nodes(
@@ -292,15 +250,11 @@ impl MetaStorage for MemoryStorage {
     ) -> Result<Vec<Node>, MetaStoreError> {
         self.store
             .write()
-            .expect("MemoryStorage::auto_scale_up_nodes")
             .auto_scale_up_nodes(cluster_name, cluster_node_num)
     }
 
     async fn auto_delete_free_nodes(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::auto_delete_free_nodes")
-            .auto_delete_free_nodes(cluster_name)
+        self.store.write().auto_delete_free_nodes(cluster_name)
     }
 
     async fn migrate_slots_to_scale_down(
@@ -310,15 +264,11 @@ impl MetaStorage for MemoryStorage {
     ) -> Result<(), MetaStoreError> {
         self.store
             .write()
-            .expect("MemoryStorage::migrate_slots_to_scale_down")
             .migrate_slots_to_scale_down(cluster_name, new_node_num)
     }
 
     async fn migrate_slots(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::migrate_slots")
-            .migrate_slots(cluster_name)
+        self.store.write().migrate_slots(cluster_name)
     }
 
     #[allow(clippy::type_complexity)]
@@ -329,7 +279,6 @@ impl MetaStorage for MemoryStorage {
     ) -> Result<(ScaleOp, Vec<String>, u64), MetaStoreError> {
         self.store
             .write()
-            .expect("MemoryStorage::auto_scale_node_number")
             .auto_change_node_number(cluster_name, expected_num)
     }
 
@@ -340,7 +289,6 @@ impl MetaStorage for MemoryStorage {
     ) -> Result<(), MetaStoreError> {
         self.store
             .write()
-            .expect("MemoryStorage::auto_scale_node_number")
             .auto_scale_out_node_number(cluster_name, expected_num)
     }
 
@@ -349,17 +297,11 @@ impl MetaStorage for MemoryStorage {
         cluster_name: String,
         config: HashMap<String, String>,
     ) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::change_config")
-            .change_config(cluster_name, config)
+        self.store.write().change_config(cluster_name, config)
     }
 
     async fn balance_masters(&self, cluster_name: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::balance_masters")
-            .balance_masters(cluster_name)
+        self.store.write().balance_masters(cluster_name)
     }
 
     async fn add_proxy(
@@ -371,47 +313,29 @@ impl MetaStorage for MemoryStorage {
     ) -> Result<(), MetaStoreError> {
         self.store
             .write()
-            .expect("MemoryStorage::add_proxy")
             .add_proxy(proxy_address, nodes, host, index)
     }
 
     async fn remove_proxy(&self, proxy_address: String) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::remove_proxy")
-            .remove_proxy(proxy_address)
+        self.store.write().remove_proxy(proxy_address)
     }
 
     async fn get_global_epoch(&self) -> Result<u64, MetaStoreError> {
-        let epoch = self
-            .store
-            .read()
-            .expect("MemoryStorage::get_global_epoch")
-            .get_global_epoch();
+        let epoch = self.store.read().get_global_epoch();
         Ok(epoch)
     }
 
     async fn recover_epoch(&self, exsting_largest_epoch: u64) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::recover_epoch")
-            .recover_epoch(exsting_largest_epoch + 1);
+        self.store.write().recover_epoch(exsting_largest_epoch + 1);
         Ok(())
     }
 
     async fn force_bump_all_epoch(&self, new_epoch: u64) -> Result<(), MetaStoreError> {
-        self.store
-            .write()
-            .expect("MemoryStorage::force_bump_all_epoch")
-            .force_bump_all_epoch(new_epoch)
+        self.store.write().force_bump_all_epoch(new_epoch)
     }
 
     async fn check_metadata(&self) -> Result<Option<MetaStore>, MetaStoreError> {
-        let check_res = self
-            .store
-            .read()
-            .expect("MemoryStorage::check_metadata")
-            .check();
+        let check_res = self.store.read().check();
         match check_res {
             Ok(()) => Ok(None),
             Err(store) => Ok(Some(store)),

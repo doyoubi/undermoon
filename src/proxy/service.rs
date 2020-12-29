@@ -153,6 +153,8 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
         let future_registry = self.future_registry.clone();
 
         let mut s = listener.incoming();
+        // For `select!`
+        #[allow(clippy::panic)]
         loop {
             let sock_res_opt = select! {
                 sock_res_opt = s.next().fuse() => sock_res_opt,

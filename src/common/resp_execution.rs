@@ -222,6 +222,8 @@ impl<F: RedisClientFactory> I64Retriever<F> {
                 interval,
                 handle_result,
             );
+            // For `select!`
+            #[allow(clippy::panic)]
             let fut = async {
                 select! {
                     () = sending.fuse() => Ok(()),

@@ -72,7 +72,7 @@ Or you can set them up without docker following this docs: [setting up undermoon
 ## Development
 `undermoon` tries to avoid `unsafe` and some calls that could crash like `unwrap`.
 
-Then run the following commands before commit your codes:
+Run the following commands before committing your codes:
 ```
 $ make lint
 $ make test

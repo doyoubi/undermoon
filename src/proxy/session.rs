@@ -40,7 +40,7 @@ pub trait CmdCtxHandler {
         &self,
         cmd_ctx: CmdCtx,
         result_receiver: CmdReplyReceiver,
-        session_cluster_name: &sync::RwLock<ClusterName>,
+        session_cluster_name: &parking_lot::RwLock<ClusterName>,
     ) -> CmdReplyFuture;
 }
 
@@ -220,7 +220,7 @@ impl CmdTaskFactory for CmdCtxFactory {
 
 pub struct Session<H: CmdCtxHandler> {
     session_id: usize,
-    cluster_name: sync::Arc<sync::RwLock<ClusterName>>,
+    cluster_name: sync::Arc<parking_lot::RwLock<ClusterName>>,
     cmd_ctx_handler: H,
     slow_request_logger: sync::Arc<SlowRequestLogger>,
     config: Arc<ServerProxyConfig>,
@@ -236,7 +236,7 @@ impl<H: CmdCtxHandler> Session<H> {
         let cluster_name = ClusterName::try_from(DEFAULT_CLUSTER).expect("Session::new");
         Session {
             session_id,
-            cluster_name: sync::Arc::new(sync::RwLock::new(cluster_name)),
+            cluster_name: sync::Arc::new(parking_lot::RwLock::new(cluster_name)),
             cmd_ctx_handler,
             slow_request_logger,
             config,
@@ -247,11 +247,7 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
-        let cluster_name = self
-            .cluster_name
-            .read()
-            .expect("Session::handle_cmd")
-            .clone();
+        let cluster_name = self.cluster_name.read().clone();
 
         let slowlog_enabled = self
             .slow_request_logger

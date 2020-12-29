@@ -378,6 +378,8 @@ where
         }
     }
 
+    // For `select!`
+    #[allow(clippy::panic)]
     pub async fn run_task_handler(&self) {
         let exists_task_sender = self.exists_task_sender.clone();
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
