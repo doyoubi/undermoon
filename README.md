@@ -1,6 +1,6 @@
 ![undermoon logo](docs/undermoon-logo.svg)
 
-# Undermoon [![Build Status](https://travis-ci.com/doyoubi/undermoon.svg?branch=master)](https://travis-ci.com/doyoubi/undermoon)
+# Undermoon ![Continuous Integration](https://github.com/doyoubi/undermoon/workflows/Continuous%20Integration/badge.svg?event=push)
 `Undermoon` is a self-managed Redis clustering system based on **Redis Cluster Protocol** supporting:
 
 - Horizontal scalability and high availability
