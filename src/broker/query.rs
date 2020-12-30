@@ -156,7 +156,7 @@ impl<'a> MetaStoreQuery<'a> {
         Some(cluster_store.get_info())
     }
 
-    fn cluster_store_to_cluster(cluster_store: &ClusterStore) -> Cluster {
+    pub fn cluster_store_to_cluster(cluster_store: &ClusterStore) -> Cluster {
         let cluster_name = cluster_store.name.clone();
 
         let nodes = cluster_store
