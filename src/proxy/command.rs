@@ -239,35 +239,35 @@ pub type CmdTypeTuple = (CmdType, DataCmdType);
 
 pub fn requires_blocking_migration(data_cmd_type: DataCmdType) -> bool {
     // Any commands that could possibly delete the key should be migrated in a blocking way.
-    match data_cmd_type {
-        DataCmdType::DEL => true,
-        DataCmdType::EVAL => true,
-        DataCmdType::EVALSHA => true,
-        DataCmdType::EXPIRE => true,
-        DataCmdType::EXPIREAT => true,
-        DataCmdType::HDEL => true,
-        DataCmdType::LPOP => true,
-        DataCmdType::RPOP => true,
-        DataCmdType::RPOPLPUSH => true,
-        DataCmdType::LREM => true,
-        DataCmdType::LTRIM => true,
-        DataCmdType::MOVE => true,
-        DataCmdType::PEXPIRE => true,
-        DataCmdType::PEXPIREAT => true,
-        DataCmdType::RENAME => true,
-        DataCmdType::RENAMENX => true,
-        DataCmdType::SMOVE => true,
-        DataCmdType::SPOP => true,
-        DataCmdType::SREM => true,
-        DataCmdType::UNLINK => true,
-        DataCmdType::ZPOPMAX => true,
-        DataCmdType::ZPOPMIN => true,
-        DataCmdType::ZREM => true,
-        DataCmdType::ZREMRANGEBYLEX => true,
-        DataCmdType::ZREMRANGEBYRANK => true,
-        DataCmdType::ZREMRANGEBYSCORE => true,
-        _ => false,
-    }
+    matches!(
+        data_cmd_type,
+        DataCmdType::DEL
+            | DataCmdType::EVAL
+            | DataCmdType::EVALSHA
+            | DataCmdType::EXPIRE
+            | DataCmdType::EXPIREAT
+            | DataCmdType::HDEL
+            | DataCmdType::LPOP
+            | DataCmdType::RPOP
+            | DataCmdType::RPOPLPUSH
+            | DataCmdType::LREM
+            | DataCmdType::LTRIM
+            | DataCmdType::MOVE
+            | DataCmdType::PEXPIRE
+            | DataCmdType::PEXPIREAT
+            | DataCmdType::RENAME
+            | DataCmdType::RENAMENX
+            | DataCmdType::SMOVE
+            | DataCmdType::SPOP
+            | DataCmdType::SREM
+            | DataCmdType::UNLINK
+            | DataCmdType::ZPOPMAX
+            | DataCmdType::ZPOPMIN
+            | DataCmdType::ZREM
+            | DataCmdType::ZREMRANGEBYLEX
+            | DataCmdType::ZREMRANGEBYRANK
+            | DataCmdType::ZREMRANGEBYSCORE
+    )
 }
 
 #[derive(Debug)]

@@ -19,12 +19,10 @@ python chaostest/render_compose.py mem_broker [enable_failure]
 
 Build `undermoon`:
 ```
-make docker-build-image
-```
-
-Or rebuild if the source codes are changed:
-```
-make docker-rebuild-bin
+make docker-build-release-image
+// or
+make docker-build-test-image
+docker tag undermoon_test undermoon
 ```
 
 Start Docker Swarm:

@@ -1,6 +1,5 @@
 /target
 **/*.rs.bk
-examples/target_volume/
 chaostest/__pycache__/
 chaostest/chaos-docker-compose.yml
 *.pyc

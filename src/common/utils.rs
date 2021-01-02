@@ -235,10 +235,10 @@ pub fn bytes_ascii_case_insensitive_eq(lhs: &[u8], rhs: &[u8]) -> bool {
         if a == b {
             continue;
         }
-        if b'a' <= a && a <= b'z' && a == b + DELTA {
+        if (b'a'..=b'z').contains(&a) && a == b + DELTA {
             continue;
         }
-        if b'A' <= a && a <= b'Z' && a + DELTA == b {
+        if (b'A'..=b'Z').contains(&a) && a + DELTA == b {
             continue;
         }
         return false;
@@ -249,7 +249,7 @@ pub fn bytes_ascii_case_insensitive_eq(lhs: &[u8], rhs: &[u8]) -> bool {
 #[inline]
 pub fn byte_to_uppercase(b: u8) -> u8 {
     const DELTA: u8 = b'a' - b'A';
-    if b'a' <= b && b <= b'z' {
+    if (b'a'..=b'z').contains(&b) {
         b - DELTA
     } else {
         b
