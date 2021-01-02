@@ -6,9 +6,7 @@ services:
       restart_policy:
         condition: any
         delay: 30s
-    volumes:
-    - ${PWD}/examples/target_volume:/undermoon/target
-    command: /undermoon/target/debug/mem_broker
+    command: mem_broker
     ports:
     - "{{ broker_port }}:{{ broker_port }}"
     environment:
@@ -27,9 +25,7 @@ coordinator{{ coordinator_id }}:
     restart_policy:
       condition: any
       delay: 30s
-  volumes:
-  - ${PWD}/examples/target_volume:/undermoon/target
-  command: /undermoon/target/debug/coordinator
+  command: coordinator
   environment:
   - RUST_LOG=undermoon=debug,coordinator=debug
   - RUST_BACKTRACE=full
@@ -60,9 +56,7 @@ server_proxy{{ proxy_port }}:
     restart_policy:
       condition: any
       delay: 30s
-  volumes:
-  - ${PWD}/examples/target_volume:/undermoon/target
-  command: /undermoon/target/debug/server_proxy
+  command: server_proxy
   ports:
   - "{{ proxy_port }}:{{ proxy_port }}"
   environment:

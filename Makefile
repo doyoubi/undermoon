@@ -37,46 +37,13 @@ broker2:
 flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy conf/server-proxy.toml
 
-# Debug image and release image use different ways for building image.
-# For faster rebuild, builder image will only build the binaries and move it out
-# to the host by shared volume. The debug undermoon image will not get the image
-# when being built. Instead we need to specify the volume to `insert` the binary
-# to the debug undermoon image.
-docker-build-image:
-	docker image build -f examples/Dockerfile-builder -t undermoon_builder .
-	sh scripts/dkrebuild.sh
-	docker image build -f examples/Dockerfile-undermoon -t undermoon .
-
-docker-rebuild-bin:
-	sh scripts/dkrebuild.sh
-
 # Image for testing undermoon-operator
 docker-build-test-image:
-	rm -f examples/target_volume/debug/*
-	rm -f examples/target_volume/release/*
-	docker image build -f examples/Dockerfile-builder-test -t undermoon_builder_test .
-	mkdir -p ./examples/target_volume/debug
-	docker rm undermoon-builder-container-debug || true
-	docker create -it --name undermoon-builder-container-debug undermoon_builder_test bash
-	docker cp undermoon-builder-container-debug:/undermoon/target/debug/server_proxy ./examples/target_volume/debug/
-	docker cp undermoon-builder-container-debug:/undermoon/target/debug/coordinator ./examples/target_volume/debug/
-	docker cp undermoon-builder-container-debug:/undermoon/target/debug/mem_broker ./examples/target_volume/debug/
-	docker rm undermoon-builder-container-debug
 	docker image build -f examples/Dockerfile-undermoon-test -t undermoon_test .
 
 # The release builder will build the binaries and move it out by `docker cp`.
 # When the release undermoon image is built, the binaries will be moved into it.
 docker-build-release:
-	rm -f examples/target_volume/debug/*
-	rm -f examples/target_volume/release/*
-	docker image build -f examples/Dockerfile-builder-release -t undermoon_builder_release .
-	mkdir -p ./examples/target_volume/release
-	docker rm undermoon-builder-container || true
-	docker create -it --name undermoon-builder-container undermoon_builder_release bash
-	docker cp undermoon-builder-container:/undermoon/target/release/server_proxy ./examples/target_volume/release/
-	docker cp undermoon-builder-container:/undermoon/target/release/coordinator ./examples/target_volume/release/
-	docker cp undermoon-builder-container:/undermoon/target/release/mem_broker ./examples/target_volume/release/
-	docker rm undermoon-builder-container
 	docker image build -f examples/Dockerfile-undermoon-release -t undermoon .
 
 docker-mem-broker:
@@ -113,6 +80,6 @@ chaos-test:
 func-test:
 	python chaostest/random_test.py exit-on-error
 
-.PHONY: build test lint release server coord test_broker flame docker-build-image docker-multi-redis docker-multi-shard docker-failover docker-mem-broker \
+.PHONY: build test lint release server coord test_broker flame docker-multi-redis docker-multi-shard docker-failover docker-mem-broker \
     start-func-test start-chaos stop-chaos list-chaos-services chaos-test func-test
 

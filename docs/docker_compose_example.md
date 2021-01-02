@@ -15,7 +15,7 @@ $ make docker-mem-broker-example
 
 Or build it yourself and run the `undermoon` docker image:
 ```bash
-$ make docker-build-image
+$ make docker-build-test-image
 $ make docker-mem-broker
 ```
 
