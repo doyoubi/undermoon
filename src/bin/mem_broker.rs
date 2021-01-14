@@ -19,8 +19,6 @@ use undermoon::broker::{
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-const MAX_PAYLOAD: usize = 128 * 1024 * 1024;
-
 fn gen_conf() -> MemBrokerConfig {
     let mut s = config::Config::new();
     if let Some(conf_file_path) = env::args().nth(1) {
@@ -190,8 +188,6 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         let service = service.clone();
         App::new()
-            .data(actix_web::web::PayloadConfig::default().limit(MAX_PAYLOAD))
-            .data(actix_web::web::JsonConfig::default().limit(MAX_PAYLOAD))
             .wrap(middleware::Logger::default())
             .configure(|cfg| configure_app(cfg, service.clone()))
     })
