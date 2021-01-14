@@ -23,11 +23,14 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
+const MAX_PAYLOAD: usize = 128 * 1024 * 1024;
 
 pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
     let service2 = service.clone();
     cfg.data(service).service(
         web::scope(MEM_BROKER_API_VERSION)
+            .app_data(actix_web::web::PayloadConfig::default().limit(MAX_PAYLOAD))
+            .app_data(actix_web::web::JsonConfig::default().limit(MAX_PAYLOAD))
             .wrap_fn(move |req, srv| {
                 let method = req.method().clone();
                 let peer_addr = match req.peer_addr() {
