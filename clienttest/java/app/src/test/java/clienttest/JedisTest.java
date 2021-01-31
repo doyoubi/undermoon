@@ -17,7 +17,7 @@ public class JedisTest {
 
     @BeforeClass
     public void setUp() {
-        var node = new HostAndPort("127.0.0.1", 5299);
+        var node = new HostAndPort(Utils.getNodeHost(), Utils.getNodePort());
         this.jc = new JedisCluster(node);
     }
 

@@ -22,8 +22,9 @@ func genKey(testcase, key string) string {
 }
 
 func TestMain(m *testing.M) {
+	host, port := getNodeAddress()
 	clusterClient = redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: []string{"localhost:5299"},
+		Addrs: []string{fmt.Sprintf("%s:%s", host, port)},
 	})
 	os.Exit(m.Run())
 }

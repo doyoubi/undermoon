@@ -5,7 +5,7 @@ package clienttest;
 
 public class App {
     public String getGreeting() {
-        return "Hello World!";
+        return "This project is only used for running unit tests!";
     }
 
     public static void main(String[] args) {
