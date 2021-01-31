@@ -9,6 +9,8 @@
 plugins {
     // Apply the application plugin to add support for building a CLI application in Java.
     application
+
+    id("com.adarshr.test-logger") version "2.1.1"
 }
 
 repositories {
@@ -19,6 +21,8 @@ repositories {
 dependencies {
     // Use TestNG framework, also requires calling test.useTestNG() below
     testImplementation("org.testng:testng:7.2.0")
+    testImplementation("redis.clients:jedis:3.5.1")
+    testImplementation("org.slf4j:slf4j-nop:1.7.25")
 
     // This dependency is used by the application.
     implementation("com.google.guava:guava:29.0-jre")
@@ -32,4 +36,10 @@ application {
 tasks.test {
     // Use TestNG for unit tests.
     useTestNG()
+}
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(11))
+    }
 }
