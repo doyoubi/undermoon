@@ -1,5 +1,6 @@
 | COMMAND | SUPPORTED | DESCRIPTION |
 |---|---|---|
+| acl | False |  |
 | append | True |  |
 | asking | True | This is an no-op. It only returns OK. |
 | auth | False | This command is reserved for future use. |
@@ -7,6 +8,7 @@
 | bgsave | False |  |
 | bitcount | True |  |
 | bitfield | True |  |
+| bitfield_ro | False |  |
 | bitop | False |  |
 | bitpos | True |  |
 | blpop | True | User MUST specify timeout. |
@@ -16,7 +18,7 @@
 | bzpopmin | True | User MUST specify timeout. |
 | client | False |  |
 | cluster | True | Only support the following sub commands: NODES, SLOTS, KEYSLOT. |
-| command | False |  |
+| command | True | Will filter the unsupported commands |
 | config | True |  |
 | dbsize | False |  |
 | debug | False |  |
@@ -47,6 +49,7 @@
 | getrange | True |  |
 | getset | True |  |
 | hdel | True |  |
+| hello | False |  |
 | hexists | True |  |
 | hget | True |  |
 | hgetall | True |  |
@@ -74,6 +77,7 @@
 | llen | True |  |
 | lolwut | False |  |
 | lpop | True |  |
+| lpos | False |  |
 | lpush | True |  |
 | lpushx | True |  |
 | lrange | True |  |
@@ -147,6 +151,7 @@
 | srandmember | True |  |
 | srem | True |  |
 | sscan | True |  |
+| stralgo | False |  |
 | strlen | True |  |
 | subscribe | False |  |
 | substr | False |  |

@@ -6,19 +6,23 @@ use super::manager::{MetaManager, SharedMetaMap};
 use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
+use super::table::CommandTable;
 use crate::common::cluster::ClusterName;
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{
-    change_bulk_array_element, generate_slot, same_slot, str_ascii_case_insensitive_eq,
+    change_bulk_array_element, generate_slot, pretty_print_bytes, same_slot,
+    str_ascii_case_insensitive_eq,
 };
 use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
 use crate::migration::task::parse_switch_command;
 use crate::migration::task::MgrSubCmd;
-use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec, VFunctor};
+use crate::protocol::{
+    Array, BulkStr, RFunctor, RedisClientFactory, Resp, RespPacket, RespVec, VFunctor,
+};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use btoi::btou;
@@ -102,6 +106,7 @@ pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket
     compressor: CmdCompressor<CompressionStrategyMetaMapConfig<C>>,
     future_registry: Arc<TrackedFutureRegistry>,
     stopped: mpsc::UnboundedSender<()>,
+    command_table: Arc<CommandTable>,
 }
 
 impl<F, C> ForwardHandler<F, C>
@@ -134,6 +139,7 @@ where
             compressor: CmdCompressor::new(CompressionStrategyMetaMapConfig::new(meta_map)),
             future_registry,
             stopped,
+            command_table: Arc::new(CommandTable::default()),
         }
     }
 }
@@ -525,6 +531,55 @@ where
                 "invalid config sub-command".to_string().into_bytes(),
             )))
         }
+    }
+
+    fn handle_command_cmd(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+    ) -> CmdReplyFuture {
+        let table = self.command_table.clone();
+        CmdReplyFuture::Right(Box::pin(async move {
+            let res = self.manager.send_to_any_local_node(&cmd_ctx).await;
+
+            let cmds = match res {
+                Resp::Arr(Array::Arr(cmds)) => cmds,
+                others => {
+                    let resp = Resp::Error(
+                        format!(
+                            "invalid command reply: {:?}",
+                            others.as_ref().map(|b| pretty_print_bytes(b.as_slice()))
+                        )
+                        .into_bytes(),
+                    );
+                    cmd_ctx.set_resp_result(Ok(resp));
+                    return reply_receiver.await;
+                }
+            };
+
+            let mut filtered = Vec::with_capacity(cmds.capacity());
+            for cmd in cmds.into_iter() {
+                let cmd_name = match &cmd {
+                    Resp::Arr(Array::Arr(elements)) => elements.get(0),
+                    _ => None,
+                };
+                match cmd_name {
+                    Some(Resp::Bulk(BulkStr::Str(s))) => {
+                        if table.is_supported(s.as_slice()) {
+                            filtered.push(cmd);
+                        }
+                    }
+                    _ => {
+                        let resp = Resp::Error(b"cannot get command name".to_vec());
+                        cmd_ctx.set_resp_result(Ok(resp));
+                        return reply_receiver.await;
+                    }
+                };
+            }
+
+            cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(filtered))));
+            reply_receiver.await
+        }))
     }
 
     fn handle_data_cmd(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
@@ -975,7 +1030,10 @@ where
     }
 
     fn is_empty_resp(resp: &RespVec, data_cmd_type: DataCmdType) -> bool {
-        let is_list_pop = matches!(data_cmd_type, DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH);
+        let is_list_pop = matches!(
+            data_cmd_type,
+            DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH
+        );
         let is_zset_pop = matches!(data_cmd_type, DataCmdType::BZPOPMIN | DataCmdType::BZPOPMAX);
 
         match resp {
@@ -1116,9 +1174,7 @@ where
             CmdType::UmSync => self.handle_umsync(cmd_ctx),
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
             CmdType::Config => self.handle_config(cmd_ctx),
-            CmdType::Command => {
-                cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![]))));
-            }
+            CmdType::Command => return self.handle_command_cmd(cmd_ctx, reply_receiver),
             CmdType::Asking => cmd_ctx.set_resp_result(Ok(Resp::Simple(
                 response::OK_REPLY.to_string().into_bytes(),
             ))),
