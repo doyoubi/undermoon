@@ -975,10 +975,8 @@ where
     }
 
     fn is_empty_resp(resp: &RespVec, data_cmd_type: DataCmdType) -> bool {
-        let is_list_pop =
-            data_cmd_type == DataCmdType::BLPOP || data_cmd_type == DataCmdType::BRPOP;
-        let is_zset_pop =
-            data_cmd_type == DataCmdType::BZPOPMIN || data_cmd_type == DataCmdType::BZPOPMAX;
+        let is_list_pop = matches!(data_cmd_type, DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH);
+        let is_zset_pop = matches!(data_cmd_type, DataCmdType::BZPOPMIN | DataCmdType::BZPOPMAX);
 
         match resp {
             // nil bulk string for LPOP and RPOP
