@@ -313,6 +313,15 @@ impl Command {
         self.request
     }
 
+    pub fn to_safe_str_vec(&self) -> Option<Vec<BinSafeStr>> {
+        let l = self.get_command_len()?;
+        let mut cmd = Vec::with_capacity(l);
+        for i in 0..l {
+            cmd.push(self.get_command_element(i)?.to_vec());
+        }
+        Some(cmd)
+    }
+
     pub fn get_packet(&self) -> RespPacket {
         self.request.as_ref().clone()
     }

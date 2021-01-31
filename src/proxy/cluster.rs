@@ -282,6 +282,12 @@ where
         self.local_clusters.contains_key(cluster_name)
             || self.remote_clusters.contains_key(cluster_name)
     }
+
+    pub fn get_cluster_any_node(&self, cluster_name: &ClusterName) -> Option<String> {
+        self.local_clusters
+            .get(cluster_name)
+            .and_then(|cluster| cluster.get_any_node())
+    }
 }
 
 struct SenderMap<S: CmdTaskSender> {
@@ -406,6 +412,10 @@ impl<S: CmdTaskSender> LocalCluster<S> {
 
     pub fn is_ready(&self) -> bool {
         is_ready(&self.slot_ranges)
+    }
+
+    pub fn get_any_node(&self) -> Option<String> {
+        self.local_backend.nodes.keys().next().cloned()
     }
 }
 

@@ -12,3 +12,4 @@ pub mod service;
 pub mod session;
 mod slot;
 pub mod slowlog;
+mod table;

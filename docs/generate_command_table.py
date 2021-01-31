@@ -15,12 +15,18 @@ def get_existing_command_table():
         return {}
 
 
+def get_commands_from_server_proxy():
+    client = redis.StrictRedis(port=5299)
+    commands = client.execute_command("COMMAND")
+    return [cmd[0].decode("utf-8") for cmd in commands]
+
+
 def get_commands_from_redis():
     ''' Use COMMAND to get all the commands from Redis
     '''
     client = redis.StrictRedis()
     commands = client.execute_command("COMMAND")
-    return [cmd[0] for cmd in commands]
+    return [cmd[0].decode("utf-8") for cmd in commands]
 
 
 def generate_markdown(table):
@@ -38,12 +44,13 @@ def generate_markdown(table):
 
 # Need to run a Redis locally to retrieve the commands.
 if __name__ == '__main__':
+    supported_cmds = set(get_commands_from_server_proxy())
     table = get_existing_command_table()
     for cmd in get_commands_from_redis():
         if cmd in table:
             continue
         table[cmd] = {
-            'supported': False,
+            'supported': cmd in supported_cmds,
             'desc': ''
         }
 

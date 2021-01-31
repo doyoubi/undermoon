@@ -1,802 +1,822 @@
 {
+    "acl": {
+        "desc": "",
+        "supported": false
+    },
     "append": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "asking": {
-        "desc": "This is an no-op. It only returns OK.", 
+        "desc": "This is an no-op. It only returns OK.",
         "supported": true
-    }, 
+    },
     "auth": {
-        "desc": "This command is reserved for future use.", 
+        "desc": "This command is reserved for future use.",
         "supported": false
-    }, 
+    },
     "bgrewriteaof": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "bgsave": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "bitcount": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "bitfield": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
+    "bitfield_ro": {
+        "desc": "",
+        "supported": false
+    },
     "bitop": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "bitpos": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "blpop": {
-        "desc": "User MUST specify timeout.", 
+        "desc": "User MUST specify timeout.",
         "supported": true
-    }, 
+    },
     "brpop": {
-        "desc": "User MUST specify timeout.", 
+        "desc": "User MUST specify timeout.",
         "supported": true
-    }, 
+    },
     "brpoplpush": {
-        "desc": "User MUST specify timeout.", 
+        "desc": "User MUST specify timeout.",
         "supported": true
-    }, 
+    },
     "bzpopmax": {
-        "desc": "", 
+        "desc": "User MUST specify timeout.",
         "supported": true
-    }, 
+    },
     "bzpopmin": {
-        "desc": "", 
+        "desc": "User MUST specify timeout.",
         "supported": true
-    }, 
+    },
     "client": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "cluster": {
-        "desc": "Only support the following sub commands: NODES, SLOTS, KEYSLOT.", 
+        "desc": "Only support the following sub commands: NODES, SLOTS, KEYSLOT.",
         "supported": true
-    }, 
+    },
     "command": {
-        "desc": "", 
-        "supported": false
-    }, 
+        "desc": "Will filter the unsupported commands",
+        "supported": true
+    },
     "config": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "dbsize": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "debug": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "decr": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "decrby": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "del": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "discard": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "dump": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "echo": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "eval": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "evalsha": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "exec": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "exists": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "expire": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "expireat": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "flushall": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "flushdb": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "geoadd": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "geodist": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "geohash": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "geopos": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "georadius": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "georadius_ro": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "georadiusbymember": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "georadiusbymember_ro": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "get": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "getbit": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "getrange": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "getset": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hdel": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
+    "hello": {
+        "desc": "",
+        "supported": false
+    },
     "hexists": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hget": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hgetall": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hincrby": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hincrbyfloat": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hkeys": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hlen": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hmget": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hmset": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "host:": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "hscan": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hset": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hsetnx": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hstrlen": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "hvals": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "incr": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "incrby": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "incrbyfloat": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "info": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "keys": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "lastsave": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "latency": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "lindex": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "linsert": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "llen": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "lolwut": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "lpop": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
+    "lpos": {
+        "desc": "",
+        "supported": false
+    },
     "lpush": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "lpushx": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "lrange": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "lrem": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "lset": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "ltrim": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "memory": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "mget": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "migrate": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "module": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "monitor": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "move": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "mset": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "msetnx": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "multi": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "object": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "persist": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "pexpire": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "pexpireat": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "pfadd": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "pfcount": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "pfdebug": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "pfmerge": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "pfselftest": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "ping": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "post": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "psetex": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "psubscribe": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "psync": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "pttl": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "publish": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "pubsub": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "punsubscribe": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "randomkey": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "readonly": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "readwrite": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "rename": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "renamenx": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": false
-    }, 
+    },
     "replconf": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "replicaof": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "restore": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "restore-asking": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "role": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "rpop": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "rpoplpush": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "rpush": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "rpushx": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "sadd": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "save": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "scan": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "scard": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "script": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "sdiff": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "sdiffstore": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "select": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "set": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "setbit": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "setex": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "setnx": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "setrange": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "shutdown": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "sinter": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "sinterstore": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "sismember": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "slaveof": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "slowlog": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "smembers": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "smove": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "sort": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "spop": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "srandmember": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "srem": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "sscan": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
+    "stralgo": {
+        "desc": "",
+        "supported": false
+    },
     "strlen": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "subscribe": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "substr": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "sunion": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "sunionstore": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": false
-    }, 
+    },
     "swapdb": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "sync": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "time": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "touch": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "ttl": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "type": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "unlink": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "unsubscribe": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "unwatch": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "wait": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "watch": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "xack": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xadd": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xclaim": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xdel": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xgroup": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "xinfo": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "xlen": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xpending": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xrange": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xread": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "xreadgroup": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "xrevrange": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "xsetid": {
-        "desc": "", 
+        "desc": "",
         "supported": false
-    }, 
+    },
     "xtrim": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zadd": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zcard": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zcount": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zincrby": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zinterstore": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
-    }, 
+    },
     "zlexcount": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zpopmax": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zpopmin": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrange": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrangebylex": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrangebyscore": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrank": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrem": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zremrangebylex": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zremrangebyrank": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zremrangebyscore": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrevrange": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrevrangebylex": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrevrangebyscore": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zrevrank": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zscan": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zscore": {
-        "desc": "", 
+        "desc": "",
         "supported": true
-    }, 
+    },
     "zunionstore": {
-        "desc": "All the keys should be in the same slot.", 
+        "desc": "All the keys should be in the same slot.",
         "supported": true
     }
 }

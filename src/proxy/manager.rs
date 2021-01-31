@@ -22,7 +22,7 @@ use crate::common::utils::{gen_moved, RetryError};
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
-use crate::protocol::{Array, BulkStr, RedisClientFactory, Resp, RespPacket, RespVec};
+use crate::protocol::{Array, BulkStr, RedisClient, RedisClientFactory, Resp, RespPacket, RespVec};
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::{ArcSwap, Lease};
@@ -102,6 +102,7 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     peer_sender_factory: PeerSenderFactory<C>,
     blocking_map: Arc<BlockingMap<BasicSenderFactory<C>, BlockingTaskRetrySender<C>>>,
     cluster_config: ClusterConfig,
+    client_factory: Arc<F>,
     batch_stats: Arc<BatchStats>,
 }
 
@@ -167,7 +168,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             migration_manager: MigrationManager::new(
                 config_clone,
                 cluster_config_clone,
-                client_factory,
+                client_factory.clone(),
                 migration_sender_factory,
                 migration_proxy_sender_factory,
                 cmd_ctx_factory,
@@ -177,6 +178,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             peer_sender_factory,
             blocking_map,
             cluster_config,
+            client_factory,
             batch_stats,
         }
     }
@@ -316,6 +318,38 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
 
     pub fn get_finished_migration_tasks(&self) -> Vec<MigrationTaskMeta> {
         self.meta_map.load().migration_map.get_finished_tasks()
+    }
+
+    pub async fn send_to_any_local_node(&self, cmd_ctx: &CmdCtx) -> RespVec {
+        let address = match self
+            .meta_map
+            .load()
+            .cluster_map
+            .get_cluster_any_node(cmd_ctx.get_cluster_name())
+        {
+            None => {
+                return Resp::Error(response::ERR_CLUSTER_NOT_FOUND.to_string().into_bytes());
+            }
+            Some(address) => address,
+        };
+
+        let mut client = match self.client_factory.create_client(address).await {
+            Err(err) => {
+                return Resp::Error(err.to_string().into_bytes());
+            }
+            Ok(client) => client,
+        };
+
+        let cmd = match cmd_ctx.get_cmd().to_safe_str_vec() {
+            None => {
+                return Resp::Error(b"send_with_temp_conn: invalid command".to_vec());
+            }
+            Some(cmd) => cmd,
+        };
+        match client.execute_single(cmd).await {
+            Err(err) => Resp::Error(err.to_string().into_bytes()),
+            Ok(res) => res,
+        }
     }
 
     pub fn send(&self, cmd_ctx: CmdCtx) {
