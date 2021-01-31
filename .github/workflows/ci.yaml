@@ -68,8 +68,8 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-  build:
-    name: Build
+  clienttest:
+    name: ClientTest
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
@@ -83,3 +83,22 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
+      - name: Run server proxy in background
+        run: target/debug/server_proxy conf/server-proxy.toml &
+        env:
+          RUST_LOG: undermoon=debug,server_proxy=debug
+          UNDERMOON_ANNOUNCE_ADDRESS: 127.0.0.1:5299
+      - name: Install redis and start redis server
+        uses: shogo82148/actions-setup-redis@v1
+        with:
+          redis-version: '5.x'
+      - name: Init server proxy
+        run: redis-cli -h localhost -p 5299 UMCTL SETCLUSTER 2 NOFLAGS mydb 127.0.0.1:6379 1 0-16383
+      - name: Test server proxy
+        run: '[ "$(redis-cli -h localhost -p 5299 EXISTS somekey)" = "0" ]'
+      - name: Setup go
+        uses: actions/setup-go@v1
+        with:
+          go-version: '1.15'
+      - name: Run Golang client tests
+        run: cd clienttest/golang && go test ./...
