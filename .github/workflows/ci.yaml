@@ -96,9 +96,28 @@ jobs:
         run: redis-cli -h localhost -p 5299 UMCTL SETCLUSTER 2 NOFLAGS mydb 127.0.0.1:6379 1 0-16383
       - name: Test server proxy
         run: '[ "$(redis-cli -h localhost -p 5299 EXISTS somekey)" = "0" ]'
+      # Run golang tests
       - name: Setup go
         uses: actions/setup-go@v1
         with:
           go-version: '1.15'
       - name: Run Golang client tests
-        run: cd clienttest/golang && go test ./...
+        run: go test -v ./...
+        working-directory: ./clienttest/golang
+        env:
+          CLIENT_TEST_NODE_HOST: 127.0.0.1
+          CLIENT_TEST_NODE_PORT: 5299
+      # Run java tests
+      - name: Install Java
+        uses: actions/setup-java@v1
+        with:
+          java-version: 11
+      - name: Regenerate Gradle Wrapper
+        run: gradle wrapper
+        working-directory: ./clienttest/java
+      - name: Run Java client tests
+        run: ./gradlew clean test
+        working-directory: ./clienttest/java
+        env:
+          CLIENT_TEST_NODE_HOST: 127.0.0.1
+          CLIENT_TEST_NODE_PORT: 5299
