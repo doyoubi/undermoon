@@ -36,14 +36,14 @@ use std::time::Duration;
 
 type NonBlockingCommandsWithKey = Vec<(Vec<u8>, RespVec)>;
 
-pub struct SharedForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
+pub struct SharedForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt=RespPacket>> {
     handler: sync::Arc<ForwardHandler<F, C>>,
 }
 
 impl<F, C> Clone for SharedForwardHandler<F, C>
-where
-    F: RedisClientFactory,
-    C: ConnFactory<Pkt = RespPacket>,
+    where
+        F: RedisClientFactory,
+        C: ConnFactory<Pkt=RespPacket>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -53,9 +53,9 @@ where
 }
 
 impl<F, C> SharedForwardHandler<F, C>
-where
-    F: RedisClientFactory,
-    C: ConnFactory<Pkt = RespPacket>,
+    where
+        F: RedisClientFactory,
+        C: ConnFactory<Pkt=RespPacket>,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -84,9 +84,9 @@ where
 }
 
 impl<F, C> CmdCtxHandler for SharedForwardHandler<F, C>
-where
-    F: RedisClientFactory,
-    C: ConnFactory<Pkt = RespPacket>,
+    where
+        F: RedisClientFactory,
+        C: ConnFactory<Pkt=RespPacket>,
 {
     fn handle_cmd_ctx(
         &self,
@@ -99,7 +99,7 @@ where
     }
 }
 
-pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
+pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt=RespPacket>> {
     config: Arc<ServerProxyConfig>,
     manager: MetaManager<F, C>,
     slow_request_logger: Arc<SlowRequestLogger>,
@@ -110,9 +110,9 @@ pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket
 }
 
 impl<F, C> ForwardHandler<F, C>
-where
-    F: RedisClientFactory,
-    C: ConnFactory<Pkt = RespPacket>,
+    where
+        F: RedisClientFactory,
+        C: ConnFactory<Pkt=RespPacket>,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -145,9 +145,9 @@ where
 }
 
 impl<F, C> ForwardHandler<F, C>
-where
-    F: RedisClientFactory,
-    C: ConnFactory<Pkt = RespPacket>,
+    where
+        F: RedisClientFactory,
+        C: ConnFactory<Pkt=RespPacket>,
 {
     fn handle_info(&self, cmd_ctx: CmdCtx) {
         let flush_size = self.manager.get_batch_stats().get_flush_size();
@@ -169,14 +169,14 @@ where
             None => {
                 return cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Missing cluster name").into_bytes(),
-                )))
+                )));
             }
             Some(cluster_name) => match str::from_utf8(&cluster_name) {
                 Ok(cluster) => cluster.to_string(),
                 Err(_) => {
                     return cmd_ctx.set_resp_result(Ok(Resp::Error(
                         String::from("Invalid cluster name").into_bytes(),
-                    )))
+                    )));
                 }
             },
         };
@@ -185,7 +185,7 @@ where
             _err => {
                 return cmd_ctx.set_resp_result(Ok(Resp::Error(
                     String::from("Cluster name is too long").into_bytes(),
-                )))
+                )));
             }
         };
 
@@ -550,7 +550,7 @@ where
                             "invalid command reply: {:?}",
                             others.as_ref().map(|b| pretty_print_bytes(b.as_slice()))
                         )
-                        .into_bytes(),
+                            .into_bytes(),
                     );
                     cmd_ctx.set_resp_result(Ok(resp));
                     return reply_receiver.await;
@@ -589,6 +589,9 @@ where
             }
             DataCmdType::MSET => {
                 CmdReplyFuture::Right(Box::pin(self.handle_mset(cmd_ctx, reply_receiver)))
+            }
+            DataCmdType::MSETNX => {
+                CmdReplyFuture::Right(Box::pin(self.handle_msetnx(cmd_ctx, reply_receiver)))
             }
             DataCmdType::DEL if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
                 CmdReplyFuture::Right(Box::pin(self.handle_multi_int_cmd(
@@ -676,8 +679,7 @@ where
         cmd_ctx.set_resp_result(Ok(resp));
         reply_receiver.await
     }
-
-    async fn handle_mset(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+    async fn handle_mset_family(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver, subcommand: &'static [u8]) -> TaskResult {
         let arg_len = cmd_ctx.get_cmd().get_command_len().unwrap_or(0);
 
         if !self.config.active_redirection {
@@ -744,6 +746,14 @@ where
         let resp = Resp::Simple(response::OK_REPLY.to_string().into_bytes());
         cmd_ctx.set_resp_result(Ok(resp));
         reply_receiver.await
+    }
+
+    async fn handle_mset(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        return self.handle_mset_family(cmd_ctx, reply_receiver, b"SET").await;
+    }
+
+    async fn handle_msetnx(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        return self.handle_mset_family(cmd_ctx, reply_receiver, b"SETNX").await;
     }
 
     // DEL and EXISTS
@@ -1128,9 +1138,9 @@ where
 }
 
 impl<F, C> CmdCtxHandler for ForwardHandler<F, C>
-where
-    F: RedisClientFactory,
-    C: ConnFactory<Pkt = RespPacket>,
+    where
+        F: RedisClientFactory,
+        C: ConnFactory<Pkt=RespPacket>,
 {
     fn handle_cmd_ctx(
         &self,
