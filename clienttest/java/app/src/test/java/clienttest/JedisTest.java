@@ -3,14 +3,15 @@
  */
 package clienttest;
 
-import org.testng.annotations.*;
-import static org.testng.Assert.*;
-
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisCluster;
 
 import java.util.List;
 import java.util.function.BiFunction;
+
+import static org.testng.Assert.assertEquals;
 
 public class JedisTest {
     JedisCluster jc;
@@ -37,6 +38,7 @@ public class JedisTest {
 
     @Test
     public void multiKeyCommand() {
+        // for hashtag,  refers to https://redis.io/topics/cluster-spec
         final var key1 = this.genKey("multikey", "key1:{hashtag}");
         final var key2 = this.genKey("multikey", "key2:{hashtag}");
         final var value1 = "value1";
@@ -47,6 +49,27 @@ public class JedisTest {
         assertEquals(values.size(), 2);
         assertEquals(values.get(0), value1);
         assertEquals(values.get(1), value2);
+
+    }
+
+    @Test
+    public void multiKeyNXCommand() {
+        // for hashtag,  refers to https://redis.io/topics/cluster-spec
+        final var key1 = this.genKey("multikey_nx", "key1:{hashtag}");
+        final var key2 = this.genKey("multikey_nx", "key2:{hashtag}");
+        final var key3 = this.genKey("multikey_nx", "key3:{hashtag}");
+        final var value1 = "value1";
+        final var value2 = "value2";
+        final var value3 = "value3";
+
+        this.jc.mset(key1, value1, key2, value2);
+        final var values = this.jc.mget(key1, key2);
+        assertEquals(values.size(), 2);
+        assertEquals(values.get(0), value1);
+        assertEquals(values.get(1), value2);
+
+        long nSet = this.jc.msetnx(key3, value3, key1, value1);
+        assertEquals(nSet, 0L);
     }
 
     @Test
