@@ -1276,6 +1276,12 @@ impl<F, C> CmdCtxHandler for ForwardHandler<F, C>
             CmdType::Asking => cmd_ctx.set_resp_result(Ok(Resp::Simple(
                 response::OK_REPLY.to_string().into_bytes(),
             ))),
+            CmdType::Hello => {
+                // Redis 6 clients would use this command to change protocol.
+                // Make server proxy act as low version Redis.
+                let err_msg = b"ERR unknown command `hello`";
+                cmd_ctx.set_resp_result(Ok(Resp::Error(err_msg.to_vec())))
+            }
             CmdType::Others => return self.handle_data_cmd(cmd_ctx, reply_receiver),
         };
         CmdReplyFuture::Left(reply_receiver)
