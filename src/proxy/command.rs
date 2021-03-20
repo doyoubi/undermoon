@@ -34,6 +34,7 @@ pub enum CmdType {
     Config,
     Command,
     Asking,
+    Hello,
 }
 
 impl CmdType {
@@ -62,6 +63,7 @@ impl CmdType {
             b"CONFIG" => CmdType::Config,
             b"COMMAND" => CmdType::Command,
             b"ASKING" => CmdType::Asking,
+            b"HELLO" => CmdType::Hello,
             _ => CmdType::Others,
         }
     }
