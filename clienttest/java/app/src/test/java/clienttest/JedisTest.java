@@ -49,7 +49,6 @@ public class JedisTest {
         assertEquals(values.size(), 2);
         assertEquals(values.get(0), value1);
         assertEquals(values.get(1), value2);
-
     }
 
     @Test
