@@ -37,14 +37,14 @@ use std::time::Duration;
 
 type NonBlockingCommandsWithKey = Vec<(Vec<u8>, RespVec)>;
 
-pub struct SharedForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt=RespPacket>> {
+pub struct SharedForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
     handler: sync::Arc<ForwardHandler<F, C>>,
 }
 
 impl<F, C> Clone for SharedForwardHandler<F, C>
-    where
-        F: RedisClientFactory,
-        C: ConnFactory<Pkt=RespPacket>,
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -54,9 +54,9 @@ impl<F, C> Clone for SharedForwardHandler<F, C>
 }
 
 impl<F, C> SharedForwardHandler<F, C>
-    where
-        F: RedisClientFactory,
-        C: ConnFactory<Pkt=RespPacket>,
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -85,9 +85,9 @@ impl<F, C> SharedForwardHandler<F, C>
 }
 
 impl<F, C> CmdCtxHandler for SharedForwardHandler<F, C>
-    where
-        F: RedisClientFactory,
-        C: ConnFactory<Pkt=RespPacket>,
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
 {
     fn handle_cmd_ctx(
         &self,
@@ -100,7 +100,7 @@ impl<F, C> CmdCtxHandler for SharedForwardHandler<F, C>
     }
 }
 
-pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt=RespPacket>> {
+pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> {
     config: Arc<ServerProxyConfig>,
     manager: MetaManager<F, C>,
     slow_request_logger: Arc<SlowRequestLogger>,
@@ -111,9 +111,9 @@ pub struct ForwardHandler<F: RedisClientFactory, C: ConnFactory<Pkt=RespPacket>>
 }
 
 impl<F, C> ForwardHandler<F, C>
-    where
-        F: RedisClientFactory,
-        C: ConnFactory<Pkt=RespPacket>,
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -146,9 +146,9 @@ impl<F, C> ForwardHandler<F, C>
 }
 
 impl<F, C> ForwardHandler<F, C>
-    where
-        F: RedisClientFactory,
-        C: ConnFactory<Pkt=RespPacket>,
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
 {
     fn handle_info(&self, cmd_ctx: CmdCtx) {
         let flush_size = self.manager.get_batch_stats().get_flush_size();
@@ -551,7 +551,7 @@ impl<F, C> ForwardHandler<F, C>
                             "invalid command reply: {:?}",
                             others.as_ref().map(|b| pretty_print_bytes(b.as_slice()))
                         )
-                            .into_bytes(),
+                        .into_bytes(),
                     );
                     cmd_ctx.set_resp_result(Ok(resp));
                     return reply_receiver.await;
@@ -1226,9 +1226,9 @@ impl<F, C> ForwardHandler<F, C>
 }
 
 impl<F, C> CmdCtxHandler for ForwardHandler<F, C>
-    where
-        F: RedisClientFactory,
-        C: ConnFactory<Pkt=RespPacket>,
+where
+    F: RedisClientFactory,
+    C: ConnFactory<Pkt = RespPacket>,
 {
     fn handle_cmd_ctx(
         &self,

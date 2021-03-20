@@ -27,10 +27,11 @@ impl BiAtomicU32 {
             let new_num1 = num1_func(old_num1);
             let new_num2 = num2_func(old_num2);
             let new_num = Self::combine_two_num(new_num1, new_num2);
-            let prev_num = self
+            let success = self
                 .inner
-                .compare_and_swap(old_num, new_num, Ordering::SeqCst);
-            if prev_num == old_num {
+                .compare_exchange(old_num, new_num, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok();
+            if success {
                 return (old_num1, old_num2);
             }
         }
