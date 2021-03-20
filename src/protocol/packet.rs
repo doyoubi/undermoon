@@ -563,7 +563,9 @@ impl OptionalMultiHintState {
             OptionalMultiHint::Single(()) => 1,
             OptionalMultiHint::Multi(v) => v.len() + 2,
         };
-        self.state.compare_and_swap(0, n, Ordering::SeqCst) == 0
+        self.state
+            .compare_exchange(0, n, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     }
 }
 

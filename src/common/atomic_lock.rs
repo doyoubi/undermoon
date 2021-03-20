@@ -20,7 +20,11 @@ impl AtomicLock {
     }
 
     pub fn lock(&self) -> Option<AtomicLockGuard> {
-        if self.flag.compare_and_swap(false, true, Ordering::SeqCst) {
+        if self
+            .flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return None;
         }
         Some(AtomicLockGuard::new(self))

@@ -99,7 +99,11 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
     }
 
     fn send_stop_signal(&self) -> Result<(), ReplicatorError> {
-        if self.stopped.compare_and_swap(false, true, Ordering::SeqCst) {
+        if self
+            .stopped
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             Err(ReplicatorError::AlreadyEnded)
         } else {
             Ok(())
@@ -107,7 +111,11 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
     }
 
     async fn start_impl(&self) -> ReplicatorResult {
-        if self.started.compare_and_swap(false, true, Ordering::SeqCst) {
+        if self
+            .started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             error!(
                 "FATAL ERROR: RedisReplicaReplicator has already started {:?}",
                 self.meta
