@@ -23,6 +23,7 @@ dependencies {
     testImplementation("org.testng:testng:7.2.0")
     testImplementation("redis.clients:jedis:3.5.1")
     testImplementation("io.lettuce:lettuce-core:6.0.3.RELEASE")
+    testImplementation("org.redisson:redisson:3.15.1")
     testImplementation("org.slf4j:slf4j-nop:1.7.25")
 
     // This dependency is used by the application.
