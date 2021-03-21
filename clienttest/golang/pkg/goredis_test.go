@@ -173,3 +173,39 @@ func testZsetBlockingCommandHelper(t *testing.T, cmdFunc ZsetCmdFunc) {
 
 	group.Wait()
 }
+
+func TestSingleKeyEval(t *testing.T) {
+	assert := assert.New(t)
+
+	key := genKey("singlekey_eval", "key")
+	const arg = "arg"
+
+	const script = "return {KEYS[1],ARGV[1]}"
+	vals, err := clusterClient.Eval(ctx, script, []string{key}, arg).Result()
+	assert.NoError(err)
+
+	strs := vals.([]interface{})
+	assert.Equal(2, len(strs))
+	assert.Equal(key, strs[0].(string))
+	assert.Equal(arg, strs[1].(string))
+}
+
+func TestMultiKeyEval(t *testing.T) {
+	assert := assert.New(t)
+
+	key1 := genKey("multikey-eval", "key1:{hashtag}")
+	key2 := genKey("multikey-eval", "key2:{hashtag}")
+	const arg1 = "arg1"
+	const arg2 = "arg2"
+
+	const script = "return {KEYS[1],KEYS[2],ARGV[1],ARGV[2]}"
+	vals, err := clusterClient.Eval(ctx, script, []string{key1, key2}, arg1, arg2).Result()
+	assert.NoError(err)
+
+	strs := vals.([]interface{})
+	assert.Equal(4, len(strs))
+	assert.Equal(key1, strs[0].(string))
+	assert.Equal(key2, strs[1].(string))
+	assert.Equal(arg1, strs[2].(string))
+	assert.Equal(arg2, strs[3].(string))
+}
