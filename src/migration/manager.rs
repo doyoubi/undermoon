@@ -4,10 +4,10 @@ use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRang
 use crate::common::config::{AtomicMigrationConfig, ClusterConfig};
 use crate::common::proto::{ClusterConfigMap, ProxyClusterMap};
 use crate::common::track::TrackedFutureRegistry;
-use crate::common::utils::ThreadSafe;
+use crate::common::utils::{generate_slot, ThreadSafe};
 use crate::migration::task::MgrSubCmd;
 use crate::protocol::Resp;
-use crate::protocol::{Array, BulkStr, RedisClientFactory, RespVec};
+use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientFactory, RespVec};
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHint, BlockingHintTask, TaskBlockingControllerFactory};
 use crate::proxy::cluster::{ClusterSendError, ClusterTag};
@@ -339,6 +339,26 @@ where
             cmd_task,
             BlockingHint::NotBlocking,
         )))
+    }
+
+    pub fn keys_are_importing(&self, cluster_name: &ClusterName, keys: &[BinSafeStr]) -> bool {
+        if let Some(tasks) = self.task_map.get(cluster_name) {
+            let slots: Vec<usize> = keys
+                .iter()
+                .map(|key| generate_slot(key.as_slice()))
+                .collect();
+            for mgr_task in tasks.values() {
+                if let Either::Right(importing_task) = &mgr_task.task {
+                    for slot in slots.iter() {
+                        if importing_task.contains_slot(*slot) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -22,7 +22,10 @@ use crate::common::utils::{gen_moved, RetryError};
 use crate::migration::manager::{MigrationManager, MigrationMap, SwitchError};
 use crate::migration::task::MgrSubCmd;
 use crate::migration::task::SwitchArg;
-use crate::protocol::{Array, BulkStr, RedisClient, RedisClientFactory, Resp, RespPacket, RespVec};
+use crate::protocol::{
+    Array, BinSafeStr, BulkStr, RedisClient, RedisClientFactory, Resp, RespPacket, RespVec,
+};
+use crate::proxy::backend::CmdTaskFactory;
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::{ArcSwap, Lease};
@@ -390,6 +393,54 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 }
             }
         }
+    }
+
+    pub async fn ensure_keys_imported(
+        &self,
+        cmd_ctx: &CmdCtx,
+        keys: &[BinSafeStr],
+    ) -> Result<(), RespVec> {
+        // This check and do will not result in race condition,
+        // because in "not imported" state,
+        // the keys are not owned by this proxy and will be "MOVED".
+        if !self
+            .meta_map
+            .lease()
+            .migration_map
+            .keys_are_importing(cmd_ctx.get_cluster_name(), keys)
+        {
+            return Ok(());
+        }
+
+        // Send EXISTS command to trigger key migration.
+        let mut futs = vec![];
+        let factory = CmdCtxFactory::default();
+
+        for key in keys.iter() {
+            let resp = Resp::Arr(Array::Arr(vec![
+                Resp::Bulk(BulkStr::Str("EXISTS".to_string().into_bytes())),
+                Resp::Bulk(BulkStr::Str(key.clone())),
+            ]));
+            let (sub_cmd_ctx, reply_fut) = factory.create_with_ctx(cmd_ctx.get_context(), resp);
+            self.send(sub_cmd_ctx);
+            futs.push(reply_fut);
+        }
+
+        let res = futures::future::join_all(futs).await;
+        for sub_result in res.into_iter() {
+            let reply = match sub_result {
+                Ok(reply) => reply,
+                Err(err) => {
+                    return Err(Resp::Error(format!("ERR: {}", err).into_bytes()));
+                }
+            };
+            // This will also handle the MOVED case.
+            if matches!(reply, Resp::Error(_)) {
+                return Err(reply);
+            }
+        }
+
+        Ok(())
     }
 
     pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {

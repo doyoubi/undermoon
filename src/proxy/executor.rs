@@ -615,6 +615,7 @@ where
             | DataCmdType::BZPOPMAX => CmdReplyFuture::Right(Box::pin(
                 self.handle_blocking_commands(cmd_ctx, reply_receiver),
             )),
+            DataCmdType::EVAL => self.handle_eval_cmd(cmd_ctx, reply_receiver),
             _ => {
                 self.handle_single_key_data_cmd(cmd_ctx);
                 CmdReplyFuture::Left(reply_receiver)
@@ -765,12 +766,15 @@ where
             }
         }
 
+        let mut keys = vec![];
         let mut slotted_kvs: HashMap<usize, Vec<Resp<Vec<u8>>>> = Default::default();
         for i in 0.. {
             let key = match cmd_ctx.get_cmd().get_command_element(2 * i + 1) {
                 Some(key) => key,
                 None => break,
             };
+            keys.push(key.to_vec());
+
             let value = match cmd_ctx.get_cmd().get_command_element(2 * i + 2) {
                 Some(value) => value,
                 None => {
@@ -786,6 +790,15 @@ where
                 .or_insert_with(|| vec![Resp::Bulk(BulkStr::Str(b"MSETNX".to_vec()))]);
             target_slot.push(Resp::Bulk(BulkStr::Str(key.to_vec())));
             target_slot.push(Resp::Bulk(BulkStr::Str(value.to_vec())));
+        }
+
+        if let Err(err_resp) = self
+            .manager
+            .ensure_keys_imported(&cmd_ctx, keys.as_slice())
+            .await
+        {
+            cmd_ctx.set_resp_result(Ok(err_resp));
+            return reply_receiver.await;
         }
 
         let factory = CmdCtxFactory::default();
@@ -1024,6 +1037,68 @@ where
             retry_num += 1;
             Delay::new(Duration::from_secs(1)).await;
         }
+    }
+
+    fn handle_eval_cmd(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
+        let key_num = match cmd_ctx.get_cmd().get_command_element(2) {
+            Some(key_num_str) => match btoi::btoi::<usize>(key_num_str) {
+                Ok(key_num) => key_num,
+                Err(err) => {
+                    let err_msg = format!("ERR: Invalid `numkeys` {:?}", err);
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(err_msg.into_bytes())));
+                    return CmdReplyFuture::Left(reply_receiver);
+                }
+            },
+            None => {
+                let err_msg = b"ERR: Missing `numkeys` for EVAL";
+                cmd_ctx.set_resp_result(Ok(Resp::Error(err_msg.to_vec())));
+                return CmdReplyFuture::Left(reply_receiver);
+            }
+        };
+
+        if key_num == 1 {
+            self.handle_single_key_data_cmd(cmd_ctx);
+            return CmdReplyFuture::Left(reply_receiver);
+        }
+
+        CmdReplyFuture::Right(Box::pin(self.handle_multi_key_eval_cmd(
+            cmd_ctx,
+            reply_receiver,
+            key_num,
+        )))
+    }
+
+    async fn handle_multi_key_eval_cmd(
+        &self,
+        cmd_ctx: CmdCtx,
+        reply_receiver: CmdReplyReceiver,
+        key_num: usize,
+    ) -> TaskResult {
+        let keys: Vec<_> = (3..3 + key_num)
+            .filter_map(|i| cmd_ctx.get_cmd().get_command_element(i))
+            .map(|b| b.to_vec())
+            .collect();
+
+        // Even for `self.config.active_redirection == true`,
+        // EVAL should only contain keys in the same slot.
+        if !same_slot(keys.iter().map(|b| b.as_slice())) {
+            cmd_ctx.set_resp_result(Ok(Resp::Error(
+                response::ERR_NOT_THE_SAME_SLOT.to_string().into_bytes(),
+            )));
+            return reply_receiver.await;
+        }
+
+        if let Err(err_resp) = self
+            .manager
+            .ensure_keys_imported(&cmd_ctx, keys.as_slice())
+            .await
+        {
+            cmd_ctx.set_resp_result(Ok(err_resp));
+            return reply_receiver.await;
+        }
+
+        self.handle_single_key_data_cmd(cmd_ctx);
+        reply_receiver.await
     }
 
     fn handle_single_key_data_cmd(&self, cmd_ctx: CmdCtx) {
