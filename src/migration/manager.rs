@@ -12,6 +12,7 @@ use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHint, BlockingHintTask, TaskBlockingControllerFactory};
 use crate::proxy::cluster::{ClusterSendError, ClusterTag};
 use crate::proxy::command::CmdTypeTuple;
+use crate::proxy::migration_backend::WaitableTask;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use crate::proxy::slowlog::TaskEvent;
@@ -35,11 +36,14 @@ pub struct NewTask<T: CmdTask> {
     task: TaskRecord<T>,
 }
 
-pub struct MigrationManager<RCF, TSF, PTSF, CTF>
+pub struct MigrationManager<RCF, TSF, DTSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    <DTSF as CmdTaskSenderFactory>::Sender:
+        ThreadSafe + CmdTaskSender<Task = ReqTask<WaitableTask<CTF::Task>>>,
+    DTSF: CmdTaskSenderFactory + ThreadSafe,
     <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     PTSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
@@ -50,16 +54,20 @@ where
     cluster_config: ClusterConfig,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
+    dst_sender_factory: Arc<DTSF>,
     proxy_sender_factory: Arc<PTSF>,
     cmd_task_factory: Arc<CTF>,
     future_registry: Arc<TrackedFutureRegistry>,
 }
 
-impl<RCF, TSF, PTSF, CTF> MigrationManager<RCF, TSF, PTSF, CTF>
+impl<RCF, TSF, DTSF, PTSF, CTF> MigrationManager<RCF, TSF, DTSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    <DTSF as CmdTaskSenderFactory>::Sender:
+        ThreadSafe + CmdTaskSender<Task = ReqTask<WaitableTask<CTF::Task>>>,
+    DTSF: CmdTaskSenderFactory + ThreadSafe,
     <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     PTSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
@@ -71,6 +79,7 @@ where
         cluster_config: ClusterConfig,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        dst_sender_factory: Arc<DTSF>,
         proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
         future_registry: Arc<TrackedFutureRegistry>,
@@ -80,6 +89,7 @@ where
             cluster_config,
             client_factory,
             sender_factory,
+            dst_sender_factory,
             proxy_sender_factory,
             cmd_task_factory,
             future_registry,
@@ -105,6 +115,7 @@ where
             mgr_config,
             self.client_factory.clone(),
             self.sender_factory.clone(),
+            self.dst_sender_factory.clone(),
             self.proxy_sender_factory.clone(),
             self.cmd_task_factory.clone(),
             blocking_ctrl_factory,
@@ -362,7 +373,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn update_from_old_task_map<RCF, CTF, BCF, TSF, PTSF>(
+    pub fn update_from_old_task_map<RCF, CTF, BCF, TSF, DTSF, PTSF>(
         &self,
         local_cluster_map: &ProxyClusterMap,
         cluster_config_map: &ClusterConfigMap,
@@ -370,6 +381,7 @@ where
         mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        dst_sender_factory: Arc<DTSF>,
         proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
         blocking_ctrl_factory: Arc<BCF>,
@@ -381,6 +393,9 @@ where
         BCF: TaskBlockingControllerFactory,
         TSF: CmdTaskSenderFactory + ThreadSafe,
         <TSF as CmdTaskSenderFactory>::Sender: CmdTaskSender<Task = ReqTask<T>> + ThreadSafe,
+        DTSF: CmdTaskSenderFactory + ThreadSafe,
+        <DTSF as CmdTaskSenderFactory>::Sender:
+            CmdTaskSender<Task = ReqTask<WaitableTask<T>>> + ThreadSafe,
         PTSF: CmdTaskSenderFactory + ThreadSafe,
         <PTSF as CmdTaskSenderFactory>::Sender: CmdTaskSender<Task = ReqTask<T>> + ThreadSafe,
     {
@@ -507,6 +522,7 @@ where
                                 slot_range.clone(),
                                 client_factory.clone(),
                                 sender_factory.clone(),
+                                dst_sender_factory.clone(),
                                 proxy_sender_factory.clone(),
                                 cmd_task_factory.clone(),
                             ));

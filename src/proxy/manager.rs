@@ -26,6 +26,7 @@ use crate::protocol::{
     Array, BinSafeStr, BulkStr, RedisClient, RedisClientFactory, Resp, RespPacket, RespVec,
 };
 use crate::proxy::backend::CmdTaskFactory;
+use crate::proxy::migration_backend::WaitableTask;
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
 use arc_swap::{ArcSwap, Lease};
@@ -77,6 +78,8 @@ type PeerSenderFactory<C> = BackendSenderFactory<ReplyCommitHandlerFactory, C>;
 
 type MigrationSenderFactory<C> =
     MigrationBackendSenderFactory<DecompressCommitHandlerFactory<CmdCtx, C>, C>;
+type MigrationDstSenderFactory<C> =
+    MigrationBackendSenderFactory<DecompressCommitHandlerFactory<WaitableTask<CmdCtx>, C>, C>;
 type MigrationProxySenderFactory<C> = MigrationBackendSenderFactory<ReplyCommitHandlerFactory, C>;
 
 type ProxyMetaMap<C> = MetaMap<
@@ -98,6 +101,7 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     migration_manager: MigrationManager<
         F,
         MigrationSenderFactory<C>,
+        MigrationDstSenderFactory<C>,
         MigrationProxySenderFactory<C>,
         CmdCtxFactory,
     >,
@@ -149,6 +153,13 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             future_registry.clone(),
             batch_stats.clone(),
         ));
+        let migration_dst_sender_factory = Arc::new(gen_migration_sender_factory(
+            config.clone(),
+            Arc::new(DecompressCommitHandlerFactory::new(meta_map.clone())),
+            conn_factory.clone(),
+            future_registry.clone(),
+            batch_stats.clone(),
+        ));
         let migration_proxy_sender_factory = Arc::new(gen_migration_sender_factory(
             config.clone(),
             Arc::new(ReplyCommitHandlerFactory::default()),
@@ -173,6 +184,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 cluster_config_clone,
                 client_factory.clone(),
                 migration_sender_factory,
+                migration_dst_sender_factory,
                 migration_proxy_sender_factory,
                 cmd_ctx_factory,
                 future_registry,

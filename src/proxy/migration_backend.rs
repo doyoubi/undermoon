@@ -1,14 +1,18 @@
 use super::backend::{BackendError, CmdTask, CmdTaskFactory, ReqTask, SenderBackendError};
-use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError};
+use super::command::{requires_blocking_migration, CmdTypeTuple, CommandError, CommandResult};
 use super::sender::CmdTaskSender;
+use super::slowlog::TaskEvent;
 use crate::common::response;
-use crate::common::utils::{generate_lock_slot, pretty_print_bytes, RetryError};
+use crate::common::utils::{generate_lock_slot, pretty_print_bytes, RetryError, Wrapper};
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use atomic_option::AtomicOption;
 use dashmap::DashSet;
 use either::Either;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::channel::{
+    mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    oneshot,
+};
 use futures::{select, Future, FutureExt, StreamExt};
 use futures_timer::Delay;
 use std::fmt;
@@ -19,6 +23,89 @@ use std::time::Duration;
 
 const KEY_NOT_EXISTS: &str = "0";
 const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access source node";
+
+type WaitHandle = oneshot::Receiver<()>;
+
+pub struct WaitableTask<T: CmdTask> {
+    inner: T,
+    // We reply on the `drop` function of `sender`
+    #[allow(dead_code)]
+    sender: Option<oneshot::Sender<()>>,
+}
+
+impl<T: CmdTask> WaitableTask<T> {
+    fn new_with_handle(inner: T) -> (Self, WaitHandle) {
+        let (sender, receiver) = oneshot::channel();
+        (
+            Self {
+                inner,
+                sender: Some(sender),
+            },
+            receiver,
+        )
+    }
+
+    fn new_without_handle(inner: T) -> Self {
+        Self {
+            inner,
+            sender: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn into_inner(self) -> T {
+        let Self { inner, .. } = self;
+        inner
+    }
+}
+
+impl<T: CmdTask> From<WaitableTask<T>> for Wrapper<T> {
+    fn from(waitable_task: WaitableTask<T>) -> Self {
+        let WaitableTask { inner, .. } = waitable_task;
+        Wrapper(inner)
+    }
+}
+
+impl<T: CmdTask> CmdTask for WaitableTask<T> {
+    type Pkt = T::Pkt;
+    type TaskType = T::TaskType;
+    type Context = T::Context;
+
+    fn get_key(&self) -> Option<&[u8]> {
+        self.inner.get_key()
+    }
+
+    fn get_slot(&self) -> Option<usize> {
+        self.inner.get_slot()
+    }
+
+    fn set_result(self, result: CommandResult<Self::Pkt>) {
+        self.inner.set_result(result)
+    }
+
+    fn get_packet(&self) -> Self::Pkt {
+        self.inner.get_packet()
+    }
+
+    fn get_type(&self) -> Self::TaskType {
+        self.inner.get_type()
+    }
+
+    fn get_context(&self) -> Self::Context {
+        self.inner.get_context()
+    }
+
+    fn set_resp_result(self, result: Result<RespVec, CommandError>)
+    where
+        Self: Sized,
+    {
+        self.inner.set_resp_result(result)
+    }
+
+    fn log_event(&mut self, event: TaskEvent) {
+        self.inner.log_event(event)
+    }
+}
 
 type ReplyFuture = Pin<Box<dyn Future<Output = Result<RespVec, CommandError>> + Send>>;
 type DataEntryFuture =
@@ -36,11 +123,11 @@ impl<F: CmdTaskFactory> MgrCmdStateExists<F> {
         key: BinSafeStr,
         lock_slot: usize,
         cmd_task_factory: &F,
-    ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>, ReplyFuture) {
         let resp = Self::gen_exists_resp(&key);
         let (cmd_task, reply_fut) =
             cmd_task_factory.create_with_ctx(inner_task.get_context(), resp);
-        let task = ReqTask::Simple(cmd_task);
+        let task = ReqTask::Simple(WaitableTask::new_without_handle(cmd_task));
         let state = Self {
             inner_task,
             key,
@@ -68,27 +155,28 @@ struct MgrCmdStateForward;
 impl MgrCmdStateForward {
     fn from_state_exists<F: CmdTaskFactory>(
         state: MgrCmdStateExists<F>,
-    ) -> (Self, ReqTask<F::Task>) {
-        let inner_task = state.into_inner();
-        (MgrCmdStateForward, ReqTask::Simple(inner_task))
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
+        let (inner_task, wait_handle) = WaitableTask::new_with_handle(state.into_inner());
+        (MgrCmdStateForward, ReqTask::Simple(inner_task), wait_handle)
     }
 
     fn from_state_dump_pttl<F: CmdTaskFactory>(
         state: MgrCmdStateDumpPttl<F>,
-    ) -> (Self, ReqTask<F::Task>) {
-        let inner_task = state.into_inner();
-        (MgrCmdStateForward, ReqTask::Simple(inner_task))
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
+        let (inner_task, wait_handle) = WaitableTask::new_with_handle(state.into_inner());
+        (MgrCmdStateForward, ReqTask::Simple(inner_task), wait_handle)
     }
 
     fn from_state_umsync<F: CmdTaskFactory>(
         state: MgrCmdStateUmSync<F>,
-    ) -> (Self, ReqTask<F::Task>) {
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
         let MgrCmdStateUmSync {
             inner_task,
             lock_guard,
         } = state;
         drop(lock_guard);
-        (MgrCmdStateForward, ReqTask::Simple(inner_task))
+        let (inner_task, wait_handle) = WaitableTask::new_with_handle(inner_task);
+        (MgrCmdStateForward, ReqTask::Simple(inner_task), wait_handle)
     }
 }
 
@@ -229,7 +317,12 @@ impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
         state: MgrCmdStateDumpPttl<F>,
         entry: DataEntry,
         cmd_task_factory: &F,
-    ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
+    ) -> (
+        Self,
+        ReqTask<WaitableTask<F::Task>>,
+        ReplyFuture,
+        [WaitHandle; 2],
+    ) {
         let MgrCmdStateDumpPttl {
             inner_task,
             key,
@@ -241,6 +334,10 @@ impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
         let (restore_cmd_task, restore_reply_fut) =
             cmd_task_factory.create_with_ctx(inner_task.get_context(), resp);
 
+        let (restore_cmd_task, restore_wait_handle) =
+            WaitableTask::new_with_handle(restore_cmd_task);
+        let (inner_task, inner_wait_handle) = WaitableTask::new_with_handle(inner_task);
+
         let task = ReqTask::Multi(vec![restore_cmd_task, inner_task]);
         (
             MgrCmdStateRestoreForward {
@@ -250,6 +347,7 @@ impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
             },
             task,
             restore_reply_fut,
+            [restore_wait_handle, inner_wait_handle],
         )
     }
 
@@ -300,22 +398,26 @@ type UmSyncTaskSender<F> = UnboundedSender<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type DeleteKeyTaskSender = UnboundedSender<ReplyFuture>;
 type DeleteKeyTaskReceiver = UnboundedReceiver<ReplyFuture>;
+type DstWaitHandleSender = UnboundedSender<WaitHandle>;
+type DstWaitHandleReceiver = UnboundedReceiver<WaitHandle>;
 
-pub struct RestoreDataCmdTaskHandler<F, S, PS>
+pub struct RestoreDataCmdTaskHandler<F, S, DS, PS>
 where
     F: CmdTaskFactory,
     F::Task: CmdTask<TaskType = CmdTypeTuple>,
     S: CmdTaskSender<Task = ReqTask<F::Task>>,
+    DS: CmdTaskSender<Task = ReqTask<WaitableTask<F::Task>>>,
     PS: CmdTaskSender<Task = ReqTask<F::Task>>,
 {
     src_sender: Arc<S>,
-    dst_sender: Arc<S>,
+    dst_sender: Arc<DS>,
     src_proxy_sender: Arc<PS>,
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
     restore_task_sender: RestoreTaskSender<F>,
     umsync_task_sender: UmSyncTaskSender<F>,
     del_task_sender: DeleteKeyTaskSender,
+    wait_handle_sender: DstWaitHandleSender,
     #[allow(clippy::type_complexity)]
     task_receivers: AtomicOption<(
         ExistsTaskReceiver<F>,
@@ -323,21 +425,23 @@ where
         RestoreTaskReceiver<F>,
         UmSyncTaskReceiver<F>,
         DeleteKeyTaskReceiver,
+        DstWaitHandleReceiver,
     )>,
     cmd_task_factory: Arc<F>,
     key_lock: Arc<KeyLock>,
 }
 
-impl<F, S, PS> RestoreDataCmdTaskHandler<F, S, PS>
+impl<F, S, DS, PS> RestoreDataCmdTaskHandler<F, S, DS, PS>
 where
     F: CmdTaskFactory,
     F::Task: CmdTask<TaskType = CmdTypeTuple>,
     S: CmdTaskSender<Task = ReqTask<F::Task>>,
+    DS: CmdTaskSender<Task = ReqTask<WaitableTask<F::Task>>>,
     PS: CmdTaskSender<Task = ReqTask<F::Task>>,
 {
     pub fn new(
         src_sender: S,
-        dst_sender: S,
+        dst_sender: DS,
         src_proxy_sender: PS,
         cmd_task_factory: Arc<F>,
     ) -> Self {
@@ -349,12 +453,14 @@ where
         let (restore_task_sender, restore_task_receiver) = unbounded();
         let (umsync_task_sender, umsync_task_receiver) = unbounded();
         let (del_task_sender, del_task_receiver) = unbounded();
+        let (wait_handle_sender, wait_handle_receiver) = unbounded();
         let task_receivers = AtomicOption::new(Box::new((
             exists_task_receiver,
             dump_pttl_task_receiver,
             restore_task_receiver,
             umsync_task_receiver,
             del_task_receiver,
+            wait_handle_receiver,
         )));
         let key_lock = Arc::new(KeyLock::new(LOCK_SHARD_SIZE));
         Self {
@@ -366,6 +472,7 @@ where
             restore_task_sender,
             umsync_task_sender,
             del_task_sender,
+            wait_handle_sender,
             task_receivers,
             cmd_task_factory,
             key_lock,
@@ -385,6 +492,7 @@ where
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
         let umsync_task_sender = self.umsync_task_sender.clone();
         let del_task_sender = self.del_task_sender.clone();
+        let wait_handle_sender = self.wait_handle_sender.clone();
         let src_sender = self.src_sender.clone();
         let dst_sender = self.dst_sender.clone();
         let src_proxy_sender = self.src_proxy_sender.clone();
@@ -399,6 +507,7 @@ where
             restore_task_receiver,
             umsync_task_receiver,
             del_task_receiver,
+            wait_handle_receiver,
         ) = match receiver_opt {
             Some(r) => r,
             None => {
@@ -412,6 +521,7 @@ where
             exists_task_receiver,
             dump_pttl_task_sender,
             umsync_task_sender,
+            wait_handle_sender.clone(),
             src_sender.clone(),
             dst_sender.clone(),
             src_proxy_sender,
@@ -422,6 +532,7 @@ where
         let dump_pttl_task_handler = Self::handle_dump_pttl_task(
             dump_pttl_task_receiver,
             restore_task_sender,
+            wait_handle_sender.clone(),
             dst_sender.clone(),
             cmd_task_factory.clone(),
         );
@@ -433,15 +544,19 @@ where
             cmd_task_factory,
         );
 
-        let umsync_task_handler = Self::handle_umsync_task(umsync_task_receiver, dst_sender);
+        let umsync_task_handler =
+            Self::handle_umsync_task(umsync_task_receiver, wait_handle_sender.clone(), dst_sender);
 
         let del_task_handler = Self::handle_del_task(del_task_receiver);
+
+        let handle_wait_handler = Self::handle_wait_handle(wait_handle_receiver);
 
         let mut exists_task_handler = Box::pin(exists_task_handler.fuse());
         let mut dump_pttl_task_handler = Box::pin(dump_pttl_task_handler.fuse());
         let mut restore_task_handler = Box::pin(restore_task_handler.fuse());
         let mut umsync_task_handler = Box::pin(umsync_task_handler.fuse());
         let mut del_task_handler = Box::pin(del_task_handler.fuse());
+        let mut handle_wait_handler = Box::pin(handle_wait_handler.fuse());
 
         select! {
             () = exists_task_handler => (),
@@ -449,6 +564,7 @@ where
             () = restore_task_handler => (),
             () = umsync_task_handler => (),
             () = del_task_handler => (),
+            () = handle_wait_handler => (),
         }
 
         // Need to finish the remaining commands before exiting.
@@ -460,6 +576,7 @@ where
             () = restore_task_handler => (),
             () = umsync_task_handler => (),
             () = del_task_handler => (),
+            () = handle_wait_handler => (),
         }
 
         self.restore_task_sender.close_channel();
@@ -469,6 +586,7 @@ where
             () = restore_task_handler => (),
             () = umsync_task_handler => (),
             () = del_task_handler => (),
+            () = handle_wait_handler => (),
         }
 
         self.umsync_task_sender.close_channel();
@@ -476,11 +594,19 @@ where
         select! {
             () = umsync_task_handler => (),
             () = del_task_handler => (),
+            () = handle_wait_handler => (),
         }
 
         self.del_task_sender.close_channel();
         info!("wait for del task");
-        del_task_handler.await;
+        select! {
+            () = del_task_handler => (),
+            () = handle_wait_handler => (),
+        }
+
+        self.wait_handle_sender.close_channel();
+        info!("wait for wait_handle task");
+        handle_wait_handler.await;
         info!("All remaining tasks in migration backend are finished");
     }
 
@@ -490,8 +616,9 @@ where
         mut exists_task_receiver: ExistsTaskReceiver<F>,
         dump_pttl_task_sender: DumpPttlTaskSender<F>,
         umsync_task_sender: UmSyncTaskSender<F>,
+        wait_handle_sender: DstWaitHandleSender,
         src_sender: Arc<S>,
-        dst_sender: Arc<S>,
+        dst_sender: Arc<DS>,
         src_proxy_sender: Arc<PS>,
         cmd_task_factory: Arc<F>,
         key_lock: Arc<KeyLock>,
@@ -504,9 +631,15 @@ where
             };
 
             if key_exists {
-                let (_state, req_task) = MgrCmdStateForward::from_state_exists(state);
+                let (_state, req_task, wait_handle) = MgrCmdStateForward::from_state_exists(state);
                 if let Err(err) = dst_sender.send(req_task) {
                     debug!("failed to forward: {:?}", err);
+                }
+                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
+                    debug!(
+                        "failed to send wait_handle in handle_exists_task: {:?}",
+                        err
+                    );
                 }
                 continue;
             }
@@ -547,10 +680,16 @@ where
                                 Err(()) => continue,
                             };
                             if key_exists {
-                                let (_state, req_task) =
+                                let (_state, req_task, wait_handle) =
                                     MgrCmdStateForward::from_state_exists(state);
                                 if let Err(err) = dst_sender.send(req_task) {
                                     debug!("failed to forward: {:?}", err);
+                                }
+                                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
+                                    debug!(
+                                        "failed to send wait_handle in handle_exists_task: {:?}",
+                                        err
+                                    );
                                 }
                                 continue;
                             }
@@ -612,7 +751,8 @@ where
     async fn handle_dump_pttl_task(
         mut dump_pttl_task_receiver: DumpPttlTaskReceiver<F>,
         restore_task_sender: RestoreTaskSender<F>,
-        dst_sender: Arc<S>,
+        wait_handle_sender: DstWaitHandleSender,
+        dst_sender: Arc<DS>,
         cmd_task_factory: Arc<F>,
     ) {
         while let Some((state, reply_fut)) = dump_pttl_task_receiver.next().await {
@@ -621,9 +761,16 @@ where
                 Ok(Some(entry)) => entry,
                 Ok(None) => {
                     // The key also does not exist in source node.
-                    let (_state, req_task) = MgrCmdStateForward::from_state_dump_pttl(state);
+                    let (_state, req_task, wait_handle) =
+                        MgrCmdStateForward::from_state_dump_pttl(state);
                     if let Err(err) = dst_sender.send(req_task) {
                         debug!("failed to send forward: {:?}", err);
+                    }
+                    if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
+                        debug!(
+                            "failed to send wait_handle in handle_dump_pttl_task: {:?}",
+                            err
+                        );
                     }
                     continue;
                 }
@@ -637,10 +784,17 @@ where
                 }
             };
 
-            let (state, req_task, reply_receiver) =
+            let (state, req_task, reply_receiver, wait_handles) =
                 MgrCmdStateRestoreForward::from_state_exists(state, entry, &(*cmd_task_factory));
+
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to send restore and forward: {:?}", err);
+            }
+
+            for wait_handle in std::array::IntoIter::new(wait_handles) {
+                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
+                    debug!("failed to send wait_handle to queue: {:?}", err);
+                }
             }
 
             if let Err(err) = restore_task_sender.unbounded_send((state, reply_receiver)) {
@@ -697,7 +851,8 @@ where
 
     async fn handle_umsync_task(
         mut umsync_task_receiver: UmSyncTaskReceiver<F>,
-        dst_sender: Arc<S>,
+        wait_handle_sender: DstWaitHandleSender,
+        dst_sender: Arc<DS>,
     ) {
         while let Some((state, reply_fut)) = umsync_task_receiver.next().await {
             // The DUMP and RESTORE has already been processed in the source proxy.
@@ -723,9 +878,15 @@ where
                 _ => (),
             };
 
-            let (_state, req_task) = MgrCmdStateForward::from_state_umsync(state);
+            let (_state, req_task, wait_handle) = MgrCmdStateForward::from_state_umsync(state);
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to forward: {:?}", err);
+            }
+            if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
+                debug!(
+                    "failed to send wait_handle in handle_umsync_task: {:?}",
+                    err
+                );
             }
         }
     }
@@ -745,6 +906,12 @@ where
                     err
                 );
             }
+        }
+    }
+
+    async fn handle_wait_handle(mut wait_handle_receiver: DstWaitHandleReceiver) {
+        while let Some(wait_handle) = wait_handle_receiver.next().await {
+            wait_handle.await.unwrap_or(());
         }
     }
 
@@ -789,7 +956,7 @@ where
         cmd_task_factory: &F,
         key: BinSafeStr,
         lock_slot: usize,
-        dst_sender: &S,
+        dst_sender: &DS,
     ) -> Result<(MgrCmdStateExists<F>, ReplyFuture), SenderBackendError<F::Task>> {
         let (state, task, reply_fut) =
             MgrCmdStateExists::from_task(cmd_task, key, lock_slot, cmd_task_factory);
@@ -821,7 +988,7 @@ where
         cmd_task_factory: &F,
         key: BinSafeStr,
         lock_slot: usize,
-        dst_sender: &S,
+        dst_sender: &DS,
     ) -> Result<(MgrCmdStateExists<F>, ReplyFuture), ()> {
         let (state, task, reply_fut) =
             MgrCmdStateExists::from_task(cmd_task, key, lock_slot, cmd_task_factory);
@@ -1084,6 +1251,38 @@ mod tests {
         }
     }
 
+    struct DummyWaitTaskSender {
+        sender: DummyCmdTaskSender,
+    }
+
+    impl DummyWaitTaskSender {
+        fn new(exists: bool, err_set: HashMap<&'static str, ErrType>, pttl: i64) -> Self {
+            Self {
+                sender: DummyCmdTaskSender::new(exists, err_set, pttl),
+            }
+        }
+
+        fn get_cmd_count(&self, cmd: &str) -> Option<usize> {
+            self.sender.get_cmd_count(cmd)
+        }
+    }
+
+    impl CmdTaskSender for DummyWaitTaskSender {
+        type Task = ReqTask<WaitableTask<CmdCtx>>;
+
+        fn send(&self, req_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
+            match req_task {
+                ReqTask::Simple(waitable_task) => self.sender.handle(waitable_task.into_inner()),
+                ReqTask::Multi(cmd_task_arr) => {
+                    for waitable_task in cmd_task_arr.into_iter() {
+                        self.sender.handle(waitable_task.into_inner());
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
     fn gen_test_cmd_ctx(command: Vec<&'static str>) -> (CmdCtx, CmdReplyReceiver) {
         let resp = Resp::Arr(Array::Arr(
             command
@@ -1116,7 +1315,12 @@ mod tests {
     }
 
     async fn run_future(
-        handler: &RestoreDataCmdTaskHandler<CmdCtxFactory, DummyCmdTaskSender, DummyCmdTaskSender>,
+        handler: &RestoreDataCmdTaskHandler<
+            CmdCtxFactory,
+            DummyCmdTaskSender,
+            DummyWaitTaskSender,
+            DummyCmdTaskSender,
+        >,
         reply_receiver: CmdReplyReceiver,
     ) -> BinSafeStr {
         let reply = gen_reply_future(reply_receiver);
@@ -1134,7 +1338,7 @@ mod tests {
     async fn test_key_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(false, HashMap::new(), 666),
-            DummyCmdTaskSender::new(true, HashMap::new(), 666),
+            DummyWaitTaskSender::new(true, HashMap::new(), 666),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
@@ -1157,7 +1361,7 @@ mod tests {
     async fn test_key_dst_not_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(true, HashMap::new(), 666),
-            DummyCmdTaskSender::new(false, HashMap::new(), 1),
+            DummyWaitTaskSender::new(false, HashMap::new(), 1),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
@@ -1183,7 +1387,7 @@ mod tests {
     async fn test_key_both_not_exists() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(false, HashMap::new(), 666),
-            DummyCmdTaskSender::new(false, HashMap::new(), 233),
+            DummyWaitTaskSender::new(false, HashMap::new(), 233),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
@@ -1214,7 +1418,7 @@ mod tests {
         for err_set in &[err_set1, err_set2] {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(false, HashMap::new(), 666),
-                DummyCmdTaskSender::new(true, err_set.clone(), 666),
+                DummyWaitTaskSender::new(true, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
@@ -1246,7 +1450,7 @@ mod tests {
         for (i, err_set) in [err_set1, err_set2].iter().enumerate() {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(false, HashMap::new(), 666),
-                DummyCmdTaskSender::new(true, err_set.clone(), 666),
+                DummyWaitTaskSender::new(true, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
@@ -1282,7 +1486,7 @@ mod tests {
         for err_set in &[err_set1, err_set2] {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(true, err_set.clone(), 666),
-                DummyCmdTaskSender::new(false, HashMap::new(), 666),
+                DummyWaitTaskSender::new(false, HashMap::new(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
@@ -1314,7 +1518,7 @@ mod tests {
         for err_set in &[err_set1, err_set2] {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(true, err_set.clone(), 666),
-                DummyCmdTaskSender::new(false, HashMap::new(), 666),
+                DummyWaitTaskSender::new(false, HashMap::new(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
@@ -1346,7 +1550,7 @@ mod tests {
         for (i, err_set) in [err_set1, err_set2].iter().enumerate() {
             let handler = RestoreDataCmdTaskHandler::new(
                 DummyCmdTaskSender::new(true, HashMap::new(), 666),
-                DummyCmdTaskSender::new(false, err_set.clone(), 666),
+                DummyWaitTaskSender::new(false, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
             );
@@ -1378,7 +1582,7 @@ mod tests {
     async fn test_key_exists_with_negative_pttl() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(true, HashMap::new(), -1),
-            DummyCmdTaskSender::new(false, HashMap::new(), -2),
+            DummyWaitTaskSender::new(false, HashMap::new(), -2),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
@@ -1404,7 +1608,7 @@ mod tests {
     async fn test_key_dst_not_exists_for_del() {
         let handler = RestoreDataCmdTaskHandler::new(
             DummyCmdTaskSender::new(true, HashMap::new(), 666),
-            DummyCmdTaskSender::new(false, HashMap::new(), 1),
+            DummyWaitTaskSender::new(false, HashMap::new(), 1),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
         );
