@@ -248,10 +248,11 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 master_node_address,
                 replicas,
             } = meta;
-            let mut master_meta = vec![];
-            master_meta.push(format!("cluster:{}\n", cluster_name));
-            master_meta.push("role:master\n".to_string());
-            master_meta.push(format!("node_address:{}\n", master_node_address));
+            let mut master_meta = vec![
+                format!("cluster:{}\n", cluster_name),
+                "role:master\n".to_string(),
+                format!("node_address:{}\n", master_node_address),
+            ];
             for replica in replicas.into_iter() {
                 master_meta.push(format!(
                     "replica:{}@{}\n",
@@ -274,10 +275,11 @@ impl<F: RedisClientFactory> ReplicatorManager<F> {
                 replica_node_address,
                 masters,
             } = meta;
-            let mut replica_meta = vec![];
-            replica_meta.push(format!("cluster:{}\n", cluster_name));
-            replica_meta.push("role:replica\n".to_string());
-            replica_meta.push(format!("node_address:{}\n", replica_node_address));
+            let mut replica_meta = vec![
+                format!("cluster:{}\n", cluster_name),
+                "role:replica\n".to_string(),
+                format!("node_address:{}\n", replica_node_address),
+            ];
             for master in masters.into_iter() {
                 replica_meta.push(format!(
                     "master:{}@{}\n",

@@ -136,7 +136,7 @@ pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
 #[derivative(Debug, Clone)]
 pub enum StorageConfig {
     Memory,
-    ExternalHTTP {
+    ExternalHttp {
         // This name is used for the external storage
         // to differentiate different undermoon clusters.
         storage_name: String,
@@ -206,7 +206,7 @@ impl MemBrokerService {
             StorageConfig::Memory => Arc::new(MemoryStorage::new(Arc::new(
                 parking_lot::RwLock::new(meta_store),
             ))),
-            StorageConfig::ExternalHTTP {
+            StorageConfig::ExternalHttp {
                 storage_name,
                 storage_password,
                 address,

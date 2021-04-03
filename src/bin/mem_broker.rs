@@ -55,7 +55,7 @@ fn gen_conf() -> MemBrokerConfig {
             let storage_password = s
                 .get::<String>("storage_password")
                 .unwrap_or_else(|_| "my_storage_password".to_string());
-            StorageConfig::ExternalHTTP {
+            StorageConfig::ExternalHttp {
                 storage_name,
                 storage_password,
                 address,

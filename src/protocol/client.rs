@@ -78,9 +78,11 @@ mod client_trait {
         ) -> Pin<Box<dyn Future<Output = Result<Self::Client, RedisClientError>> + Send + 's>>;
     }
 
+    // Generate MockRedisClientFactory
+    // The `mockall` will add a "Mock" prefix to `RedisClientFactory` below.
     mock! {
         pub RedisClientFactory {}
-        pub trait RedisClientFactory: ThreadSafe {
+        impl RedisClientFactory for RedisClientFactory {
             type Client = MockRedisClient;
 
             fn create_client<'s>(

@@ -74,6 +74,7 @@ where
     CTF::Task: ClusterTag,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
         cluster_config: ClusterConfig,

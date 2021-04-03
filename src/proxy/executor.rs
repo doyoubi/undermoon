@@ -585,37 +585,37 @@ where
 
     fn handle_data_cmd(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> CmdReplyFuture {
         match cmd_ctx.get_data_cmd_type() {
-            DataCmdType::MGET => {
+            DataCmdType::Mget => {
                 CmdReplyFuture::Right(Box::pin(self.handle_mget(cmd_ctx, reply_receiver)))
             }
-            DataCmdType::MSET => {
+            DataCmdType::Mset => {
                 CmdReplyFuture::Right(Box::pin(self.handle_mset(cmd_ctx, reply_receiver)))
             }
-            DataCmdType::MSETNX => {
+            DataCmdType::Msetnx => {
                 CmdReplyFuture::Right(Box::pin(self.handle_msetnx(cmd_ctx, reply_receiver)))
             }
-            DataCmdType::DEL if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
+            DataCmdType::Del if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
                 CmdReplyFuture::Right(Box::pin(self.handle_multi_int_cmd(
                     cmd_ctx,
                     reply_receiver,
                     "DEL",
                 )))
             }
-            DataCmdType::EXISTS if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
+            DataCmdType::Exists if cmd_ctx.get_cmd().get_command_element(2).is_some() => {
                 CmdReplyFuture::Right(Box::pin(self.handle_multi_int_cmd(
                     cmd_ctx,
                     reply_receiver,
                     "EXISTS",
                 )))
             }
-            DataCmdType::BLPOP
-            | DataCmdType::BRPOP
-            | DataCmdType::BRPOPLPUSH
-            | DataCmdType::BZPOPMIN
-            | DataCmdType::BZPOPMAX => CmdReplyFuture::Right(Box::pin(
+            DataCmdType::Blpop
+            | DataCmdType::Brpop
+            | DataCmdType::Brpoplpush
+            | DataCmdType::Bzpopmin
+            | DataCmdType::Bzpopmax => CmdReplyFuture::Right(Box::pin(
                 self.handle_blocking_commands(cmd_ctx, reply_receiver),
             )),
-            DataCmdType::EVAL => self.handle_eval_cmd(cmd_ctx, reply_receiver),
+            DataCmdType::Eval => self.handle_eval_cmd(cmd_ctx, reply_receiver),
             _ => {
                 self.handle_single_key_data_cmd(cmd_ctx);
                 CmdReplyFuture::Left(reply_receiver)
@@ -1022,10 +1022,10 @@ where
                 }
 
                 let resp = match data_cmd_type {
-                    DataCmdType::BLPOP | DataCmdType::BRPOP => {
+                    DataCmdType::Blpop | DataCmdType::Brpop => {
                         Self::adjust_lrpop_response(resp, key)
                     }
-                    DataCmdType::BZPOPMIN | DataCmdType::BZPOPMAX => {
+                    DataCmdType::Bzpopmin | DataCmdType::Bzpopmax => {
                         Self::adjust_zpop_response(resp, key)
                     }
                     _ => resp,
@@ -1164,11 +1164,11 @@ where
         data_cmd_type: DataCmdType,
     ) -> Result<&'static str, RespVec> {
         match data_cmd_type {
-            DataCmdType::BLPOP => Ok("LPOP"),
-            DataCmdType::BRPOP => Ok("RPOP"),
-            DataCmdType::BRPOPLPUSH => Ok("RPOPLPUSH"),
-            DataCmdType::BZPOPMIN => Ok("ZPOPMIN"),
-            DataCmdType::BZPOPMAX => Ok("ZPOPMAX"),
+            DataCmdType::Blpop => Ok("LPOP"),
+            DataCmdType::Brpop => Ok("RPOP"),
+            DataCmdType::Brpoplpush => Ok("RPOPLPUSH"),
+            DataCmdType::Bzpopmin => Ok("ZPOPMIN"),
+            DataCmdType::Bzpopmax => Ok("ZPOPMAX"),
             _ => {
                 let cmd_name = cmd_ctx
                     .get_cmd()
@@ -1184,11 +1184,11 @@ where
 
     fn get_command_arg_len(cmd_ctx: &CmdCtx, data_cmd_type: DataCmdType) -> Result<usize, RespVec> {
         match (data_cmd_type, cmd_ctx.get_cmd().get_command_len()) {
-            (DataCmdType::BLPOP, Some(len)) if len > 2 => Ok(len),
-            (DataCmdType::BRPOP, Some(len)) if len > 2 => Ok(len),
-            (DataCmdType::BRPOPLPUSH, Some(len)) if len == 4 => Ok(len),
-            (DataCmdType::BZPOPMIN, Some(len)) if len > 2 => Ok(len),
-            (DataCmdType::BZPOPMAX, Some(len)) if len > 2 => Ok(len),
+            (DataCmdType::Blpop, Some(len)) if len > 2 => Ok(len),
+            (DataCmdType::Brpop, Some(len)) if len > 2 => Ok(len),
+            (DataCmdType::Brpoplpush, Some(len)) if len == 4 => Ok(len),
+            (DataCmdType::Bzpopmin, Some(len)) if len > 2 => Ok(len),
+            (DataCmdType::Bzpopmax, Some(len)) if len > 2 => Ok(len),
             _ => {
                 let cmd_name = cmd_ctx
                     .get_cmd()
@@ -1205,9 +1205,9 @@ where
     fn is_empty_resp(resp: &RespVec, data_cmd_type: DataCmdType) -> bool {
         let is_list_pop = matches!(
             data_cmd_type,
-            DataCmdType::BLPOP | DataCmdType::BRPOP | DataCmdType::BRPOPLPUSH
+            DataCmdType::Blpop | DataCmdType::Brpop | DataCmdType::Brpoplpush
         );
-        let is_zset_pop = matches!(data_cmd_type, DataCmdType::BZPOPMIN | DataCmdType::BZPOPMAX);
+        let is_zset_pop = matches!(data_cmd_type, DataCmdType::Bzpopmin | DataCmdType::Bzpopmax);
 
         match resp {
             // nil bulk string for LPOP and RPOP
@@ -1238,7 +1238,7 @@ where
         let mut cmds = vec![];
         use DataCmdType::*;
         match data_cmd_type {
-            BLPOP | BRPOP | BZPOPMIN | BZPOPMAX => {
+            Blpop | Brpop | Bzpopmin | Bzpopmax => {
                 // exclude the timeout argument
                 for i in 1..(arg_len - 1) {
                     let key = match cmd_ctx.get_cmd().get_command_element(i) {
@@ -1255,7 +1255,7 @@ where
                     cmds.push((key, resp));
                 }
             }
-            BRPOPLPUSH => {
+            Brpoplpush => {
                 let mut resp = cmd_ctx.get_cmd().get_resp_slice().map(|b| b.to_vec());
                 change_bulk_array_element(
                     &mut resp,

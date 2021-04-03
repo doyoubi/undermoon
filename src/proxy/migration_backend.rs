@@ -636,7 +636,7 @@ where
                     debug!("failed to forward: {:?}", err);
                 }
                 if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                    debug!(
+                    warn!(
                         "failed to send wait_handle in handle_exists_task: {:?}",
                         err
                     );
@@ -686,7 +686,7 @@ where
                                     debug!("failed to forward: {:?}", err);
                                 }
                                 if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                                    debug!(
+                                    warn!(
                                         "failed to send wait_handle in handle_exists_task: {:?}",
                                         err
                                     );
@@ -767,7 +767,7 @@ where
                         debug!("failed to send forward: {:?}", err);
                     }
                     if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                        debug!(
+                        warn!(
                             "failed to send wait_handle in handle_dump_pttl_task: {:?}",
                             err
                         );
@@ -793,7 +793,7 @@ where
 
             for wait_handle in std::array::IntoIter::new(wait_handles) {
                 if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                    debug!("failed to send wait_handle to queue: {:?}", err);
+                    warn!("failed to send wait_handle to queue: {:?}", err);
                 }
             }
 
@@ -883,7 +883,7 @@ where
                 debug!("failed to forward: {:?}", err);
             }
             if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                debug!(
+                warn!(
                     "failed to send wait_handle in handle_umsync_task: {:?}",
                     err
                 );

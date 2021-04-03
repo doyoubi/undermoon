@@ -192,8 +192,7 @@ impl RangeList {
     }
 
     pub fn to_strings(&self) -> Vec<String> {
-        let mut strs = vec![];
-        strs.push(self.0.len().to_string());
+        let mut strs = vec![self.0.len().to_string()];
         for range in self.0.iter() {
             let Range(start, end) = range;
             strs.push(format!("{}-{}", *start, *end));
