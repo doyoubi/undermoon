@@ -5,8 +5,8 @@ use super::backend::{
 use super::cluster::ClusterTag;
 use super::command::{CommandError, CommandResult};
 use super::sender::{
-    CachedSenderFactory, CmdTaskSender, CmdTaskSenderFactory, RRSenderGroupFactory,
-    RecoverableBackendNodeFactory,
+    CachedSenderFactory, CmdTaskSender, CmdTaskSenderFactory, RecoverableBackendNodeFactory,
+    RoundRobinSenderGroupFactory,
 };
 use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
@@ -54,7 +54,7 @@ pub trait TaskBlockingControllerFactory {
 pub trait BlockingCmdTaskSender: CmdTaskSender + ThreadSafe {}
 
 pub type BasicBlockingSenderFactory<F, CF> =
-    RRSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>;
+    RoundRobinSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>;
 pub type BlockingBackendSenderFactory<F, CF, BS> =
     CachedSenderFactory<TaskBlockingQueueSenderFactory<BasicBlockingSenderFactory<F, CF>, BS>>;
 
@@ -69,7 +69,7 @@ where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
     CF::Pkt: Send,
 {
-    RRSenderGroupFactory::new(
+    RoundRobinSenderGroupFactory::new(
         config.backend_conn_num,
         RecoverableBackendNodeFactory::new(
             config.clone(),

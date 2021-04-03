@@ -53,9 +53,9 @@ impl<C: CompressionStrategyConfig> CmdCompressor<C> {
         }
 
         let index = match cmd_ctx.get_data_cmd_type() {
-            DataCmdType::GETSET | DataCmdType::SET | DataCmdType::SETNX => OptionalMulti::Single(2),
-            DataCmdType::PSETEX | DataCmdType::SETEX => OptionalMulti::Single(3),
-            DataCmdType::MSET | DataCmdType::MSETNX => {
+            DataCmdType::Getset | DataCmdType::Set | DataCmdType::Setnx => OptionalMulti::Single(2),
+            DataCmdType::Psetex | DataCmdType::Setex => OptionalMulti::Single(3),
+            DataCmdType::Mset | DataCmdType::Msetnx => {
                 let l = match cmd_ctx.get_cmd().get_command_len() {
                     None => return Err(CompressionError::InvalidRequest),
                     Some(l) => l,
@@ -63,22 +63,22 @@ impl<C: CompressionStrategyConfig> CmdCompressor<C> {
                 let key_indices = (2..l).step_by(2).collect();
                 OptionalMulti::Multi(key_indices)
             }
-            DataCmdType::APPEND
-            | DataCmdType::BITCOUNT
-            | DataCmdType::BITFIELD
-            | DataCmdType::BITOP
-            | DataCmdType::BITPOS
-            | DataCmdType::DECR
-            | DataCmdType::DECRBY
-            | DataCmdType::GETBIT
-            | DataCmdType::GETRANGE
-            | DataCmdType::INCR
-            | DataCmdType::INCRBY
-            | DataCmdType::INCRBYFLOAT
-            | DataCmdType::MGET
-            | DataCmdType::SETBIT
-            | DataCmdType::SETRANGE
-            | DataCmdType::STRLEN => match strategy {
+            DataCmdType::Append
+            | DataCmdType::Bitcount
+            | DataCmdType::Bitfield
+            | DataCmdType::Bitop
+            | DataCmdType::Bitpos
+            | DataCmdType::Decr
+            | DataCmdType::Decrby
+            | DataCmdType::Getbit
+            | DataCmdType::Getrange
+            | DataCmdType::Incr
+            | DataCmdType::Incrby
+            | DataCmdType::Incrbyfloat
+            | DataCmdType::Mget
+            | DataCmdType::Setbit
+            | DataCmdType::Setrange
+            | DataCmdType::Strlen => match strategy {
                 CompressionStrategy::SetGetOnly => return Err(CompressionError::RestrictedCmd),
                 _ => return Err(CompressionError::UnsupportedCmdType),
             },
@@ -139,7 +139,7 @@ impl<C: CompressionStrategyConfig> CmdReplyDecompressor<C> {
 
         let data_cmd_type = cmd_ctx.get_data_cmd_type();
         match data_cmd_type {
-            DataCmdType::GET | DataCmdType::GETSET => {
+            DataCmdType::Get | DataCmdType::Getset => {
                 let compressed = if let Resp::Bulk(BulkStr::Str(s)) = packet.to_resp_slice() {
                     let compressed = match zstd::decode_all(s) {
                         Ok(c) => c,
@@ -158,7 +158,7 @@ impl<C: CompressionStrategyConfig> CmdReplyDecompressor<C> {
                 }
                 Ok(())
             }
-            DataCmdType::MGET => {
+            DataCmdType::Mget => {
                 let compressed_arr = if let Resp::Arr(Array::Arr(arr)) = packet.to_resp_slice() {
                     let mut compressed_arr = vec![];
                     for bulk_str in arr.iter() {

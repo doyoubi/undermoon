@@ -181,12 +181,12 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for ReqAdaptorSenderFactory<F
 }
 
 // Round robin sender.
-pub struct RRSenderGroup<S: CmdTaskSender> {
+pub struct RoundRobinSenderGroup<S: CmdTaskSender> {
     senders: Vec<S>,
     cursor: AtomicUsize,
 }
 
-impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
+impl<S: CmdTaskSender> CmdTaskSender for RoundRobinSenderGroup<S> {
     type Task = S::Task;
 
     fn send(&self, cmd_task: Self::Task) -> Result<(), SenderBackendError<Self::Task>> {
@@ -199,12 +199,12 @@ impl<S: CmdTaskSender> CmdTaskSender for RRSenderGroup<S> {
     }
 }
 
-pub struct RRSenderGroupFactory<F: CmdTaskSenderFactory> {
+pub struct RoundRobinSenderGroupFactory<F: CmdTaskSenderFactory> {
     group_size: NonZeroUsize,
     inner_factory: F,
 }
 
-impl<F: CmdTaskSenderFactory> RRSenderGroupFactory<F> {
+impl<F: CmdTaskSenderFactory> RoundRobinSenderGroupFactory<F> {
     pub fn new(group_size: NonZeroUsize, inner_factory: F) -> Self {
         Self {
             group_size,
@@ -213,8 +213,8 @@ impl<F: CmdTaskSenderFactory> RRSenderGroupFactory<F> {
     }
 }
 
-impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for RRSenderGroupFactory<F> {
-    type Sender = RRSenderGroup<F::Sender>;
+impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for RoundRobinSenderGroupFactory<F> {
+    type Sender = RoundRobinSenderGroup<F::Sender>;
 
     fn create(&self, address: String) -> Self::Sender {
         let mut senders = Vec::new();
@@ -286,7 +286,7 @@ impl<F: CmdTaskSenderFactory> CmdTaskSenderFactory for CachedSenderFactory<F> {
 }
 
 pub type BackendSenderFactory<F, CF> =
-    CachedSenderFactory<RRSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>>;
+    CachedSenderFactory<RoundRobinSenderGroupFactory<RecoverableBackendNodeFactory<F, CF>>>;
 
 pub fn gen_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
     config: Arc<ServerProxyConfig>,
@@ -299,7 +299,7 @@ where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
     CF::Pkt: Send,
 {
-    CachedSenderFactory::new(RRSenderGroupFactory::new(
+    CachedSenderFactory::new(RoundRobinSenderGroupFactory::new(
         config.backend_conn_num,
         RecoverableBackendNodeFactory::new(
             config.clone(),
@@ -312,7 +312,7 @@ where
 }
 
 pub type MigrationBackendSenderFactory<F, CF> =
-    RRSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>;
+    RoundRobinSenderGroupFactory<ReqAdaptorSenderFactory<RecoverableBackendNodeFactory<F, CF>>>;
 
 pub fn gen_migration_sender_factory<F: CmdTaskResultHandlerFactory, CF: ConnFactory>(
     config: Arc<ServerProxyConfig>,
@@ -325,7 +325,7 @@ where
     <F::Handler as CmdTaskResultHandler>::Task: CmdTask<Pkt = CF::Pkt>,
     CF::Pkt: Send,
 {
-    RRSenderGroupFactory::new(
+    RoundRobinSenderGroupFactory::new(
         config.backend_conn_num,
         ReqAdaptorSenderFactory::new(RecoverableBackendNodeFactory::new(
             config.clone(),

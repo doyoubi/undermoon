@@ -172,10 +172,13 @@ mod tests {
         let resp = response.into_resp_vec();
         let s = match resp {
             Resp::Simple(s) => s,
-            other => panic!(format!(
-                "unexpected pattern {:?}",
-                other.map(|b| pretty_print_bytes(b.as_slice()))
-            )),
+            other => {
+                println!(
+                    "unexpected pattern {:?}",
+                    other.map(|b| pretty_print_bytes(b.as_slice()))
+                );
+                panic!();
+            }
         };
         assert_eq!(s, OK_REPLY.as_bytes());
     }
@@ -193,7 +196,10 @@ mod tests {
         let resp = response.into_resp_vec();
         let err = match resp {
             Resp::Error(err_str) => err_str,
-            other => panic!(format!("unexpected pattern {:?}", other)),
+            other => {
+                println!("unexpected pattern {:?}", other);
+                panic!();
+            }
         };
         let err_str = str::from_utf8(&err).unwrap();
         assert!(err_str.starts_with(ERR_CLUSTER_NOT_FOUND));
@@ -365,10 +371,13 @@ mod tests {
             let resp = response.into_resp_vec();
             let s = match resp {
                 Resp::Simple(s) => s,
-                other => panic!(format!(
-                    "unexpected pattern {:?}",
-                    other.map(|b| pretty_print_bytes(b.as_slice()))
-                )),
+                other => {
+                    println!(
+                        "unexpected pattern {:?}",
+                        other.map(|b| pretty_print_bytes(b.as_slice()))
+                    );
+                    panic!();
+                }
             };
             assert_eq!(s, OK_REPLY.as_bytes());
         }
@@ -383,10 +392,13 @@ mod tests {
             let resp = response.into_resp_vec();
             let err_msg = match resp {
                 Resp::Error(err_msg) => err_msg,
-                other => panic!(format!(
-                    "unexpected pattern {:?}",
-                    other.map(|b| pretty_print_bytes(b.as_slice()))
-                )),
+                other => {
+                    println!(
+                        "unexpected pattern {:?}",
+                        other.map(|b| pretty_print_bytes(b.as_slice()))
+                    );
+                    panic!();
+                }
             };
             let s = str::from_utf8(err_msg.as_slice()).unwrap();
             assert!(s.starts_with(ERR_MOVED));
@@ -405,10 +417,13 @@ mod tests {
             let resp = response.into_resp_vec();
             let err_msg = match resp {
                 Resp::Error(err_msg) => err_msg,
-                other => panic!(format!(
-                    "unexpected pattern {:?}",
-                    other.map(|b| pretty_print_bytes(b.as_slice()))
-                )),
+                other => {
+                    println!(
+                        "unexpected pattern {:?}",
+                        other.map(|b| pretty_print_bytes(b.as_slice()))
+                    );
+                    panic!();
+                }
             };
             let s = str::from_utf8(err_msg.as_slice()).unwrap();
             assert!(s.starts_with(ERR_MOVED));
@@ -424,10 +439,13 @@ mod tests {
             let resp = response.into_resp_vec();
             let s = match resp {
                 Resp::Simple(s) => s,
-                other => panic!(format!(
-                    "unexpected pattern {:?}",
-                    other.map(|b| pretty_print_bytes(b.as_slice()))
-                )),
+                other => {
+                    println!(
+                        "unexpected pattern {:?}",
+                        other.map(|b| pretty_print_bytes(b.as_slice()))
+                    );
+                    panic!();
+                }
             };
             assert_eq!(s, OK_REPLY.as_bytes());
         }
@@ -839,10 +857,13 @@ mod tests {
         let resp = response.into_resp_vec();
         let s = match resp {
             Resp::Error(s) => s,
-            other => panic!(format!(
-                "unexpected pattern {:?}",
-                other.map(|b| pretty_print_bytes(b.as_slice()))
-            )),
+            other => {
+                println!(
+                    "unexpected pattern {:?}",
+                    other.map(|b| pretty_print_bytes(b.as_slice()))
+                );
+                panic!();
+            }
         };
         assert_eq!(s, ERR_TOO_MANY_REDIRECTIONS.as_bytes());
     }

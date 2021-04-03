@@ -81,67 +81,67 @@ impl CmdType {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DataCmdType {
     // String commands
-    APPEND,
-    BITCOUNT,
-    BITFIELD,
-    BITOP,
-    BITPOS,
-    DECR,
-    DECRBY,
-    GET,
-    GETBIT,
-    GETRANGE,
-    GETSET,
-    INCR,
-    INCRBY,
-    INCRBYFLOAT,
-    MGET,
-    MSET,
-    MSETNX,
-    PSETEX,
-    SET,
-    SETBIT,
-    SETEX,
-    SETNX,
-    SETRANGE,
-    STRLEN,
-    EVAL,
-    EVALSHA,
-    DEL,
-    EXISTS,
+    Append,
+    Bitcount,
+    Bitfield,
+    Bitop,
+    Bitpos,
+    Decr,
+    Decrby,
+    Get,
+    Getbit,
+    Getrange,
+    Getset,
+    Incr,
+    Incrby,
+    Incrbyfloat,
+    Mget,
+    Mset,
+    Msetnx,
+    Psetex,
+    Set,
+    Setbit,
+    Setex,
+    Setnx,
+    Setrange,
+    Strlen,
+    Eval,
+    Evalsha,
+    Del,
+    Exists,
     // List commands
-    BLPOP,
-    BRPOP,
-    BRPOPLPUSH,
-    LPOP,
-    RPOP,
-    RPOPLPUSH,
-    LREM,
-    LTRIM,
+    Blpop,
+    Brpop,
+    Brpoplpush,
+    Lpop,
+    Rpop,
+    Rpoplpush,
+    Lrem,
+    Ltrim,
     // Hash commands
-    HDEL,
+    Hdel,
     // Set commands
-    SMOVE,
-    SPOP,
-    SREM,
+    Smove,
+    Spop,
+    Srem,
     // Sorted Set commands
-    ZPOPMAX,
-    ZPOPMIN,
-    ZREM,
-    ZREMRANGEBYLEX,
-    ZREMRANGEBYRANK,
-    ZREMRANGEBYSCORE,
-    BZPOPMIN,
-    BZPOPMAX,
+    Zpopmax,
+    Zpopmin,
+    Zrem,
+    Zremrangebylex,
+    Zremrangebyrank,
+    Zremrangebyscore,
+    Bzpopmin,
+    Bzpopmax,
     // Key commands
-    EXPIRE,
-    EXPIREAT,
-    PEXPIRE,
-    PEXPIREAT,
-    MOVE,
-    RENAME,
-    RENAMENX,
-    UNLINK,
+    Expire,
+    Expireat,
+    Pexpire,
+    Pexpireat,
+    Move,
+    Rename,
+    Renamenx,
+    Unlink,
     Others,
 }
 
@@ -149,7 +149,7 @@ impl DataCmdType {
     fn is_blocking_cmd(self) -> bool {
         matches!(
             self,
-            Self::BZPOPMIN | Self::BZPOPMAX | Self::BLPOP | Self::BRPOP | Self::BRPOPLPUSH
+            Self::Bzpopmin | Self::Bzpopmax | Self::Blpop | Self::Brpop | Self::Brpoplpush
         )
     }
     fn from_cmd_name(cmd_name: &[u8]) -> Self {
@@ -167,62 +167,62 @@ impl DataCmdType {
         let cmd_name: &[u8] = &stack_cmd_name;
 
         match cmd_name {
-            b"APPEND" => DataCmdType::APPEND,
-            b"BITCOUNT" => DataCmdType::BITCOUNT,
-            b"BITFIELD" => DataCmdType::BITFIELD,
-            b"BITOP" => DataCmdType::BITOP,
-            b"BITPOS" => DataCmdType::BITPOS,
-            b"DECR" => DataCmdType::DECR,
-            b"DECRBY" => DataCmdType::DECRBY,
-            b"GET" => DataCmdType::GET,
-            b"GETBIT" => DataCmdType::GETBIT,
-            b"GETRANGE" => DataCmdType::GETRANGE,
-            b"GETSET" => DataCmdType::GETSET,
-            b"INCR" => DataCmdType::INCR,
-            b"INCRBY" => DataCmdType::INCRBY,
-            b"INCRBYFLOAT" => DataCmdType::INCRBYFLOAT,
-            b"MGET" => DataCmdType::MGET,
-            b"MSET" => DataCmdType::MSET,
-            b"MSETNX" => DataCmdType::MSETNX,
-            b"PSETEX" => DataCmdType::PSETEX,
-            b"SET" => DataCmdType::SET,
-            b"SETBIT" => DataCmdType::SETBIT,
-            b"SETEX" => DataCmdType::SETEX,
-            b"SETNX" => DataCmdType::SETNX,
-            b"SETRANGE" => DataCmdType::SETRANGE,
-            b"STRLEN" => DataCmdType::STRLEN,
-            b"EVAL" => DataCmdType::EVAL,
-            b"EVALSHA" => DataCmdType::EVALSHA,
-            b"DEL" => DataCmdType::DEL,
-            b"EXISTS" => DataCmdType::EXISTS,
-            b"BLPOP" => DataCmdType::BLPOP,
-            b"BRPOP" => DataCmdType::BRPOP,
-            b"BRPOPLPUSH" => DataCmdType::BRPOPLPUSH,
-            b"EXPIRE" => DataCmdType::EXPIRE,
-            b"EXPIREAT" => DataCmdType::EXPIREAT,
-            b"PEXPIRE" => DataCmdType::PEXPIRE,
-            b"PEXPIREAT" => DataCmdType::PEXPIREAT,
-            b"HDEL" => DataCmdType::HDEL,
-            b"LPOP" => DataCmdType::LPOP,
-            b"RPOP" => DataCmdType::RPOP,
-            b"RPOPLPUSH" => DataCmdType::RPOPLPUSH,
-            b"LREM" => DataCmdType::LREM,
-            b"LTRIM" => DataCmdType::LTRIM,
-            b"MOVE" => DataCmdType::MOVE,
-            b"RENAME" => DataCmdType::RENAME,
-            b"RENAMENX" => DataCmdType::RENAMENX,
-            b"SMOVE" => DataCmdType::SMOVE,
-            b"SPOP" => DataCmdType::SPOP,
-            b"SREM" => DataCmdType::SREM,
-            b"UNLINK" => DataCmdType::UNLINK,
-            b"ZPOPMAX" => DataCmdType::ZPOPMAX,
-            b"ZPOPMIN" => DataCmdType::ZPOPMIN,
-            b"BZPOPMAX" => DataCmdType::BZPOPMAX,
-            b"BZPOPMIN" => DataCmdType::BZPOPMIN,
-            b"ZREM" => DataCmdType::ZREM,
-            b"ZREMRANGEBYLEX" => DataCmdType::ZREMRANGEBYLEX,
-            b"ZREMRANGEBYRANK" => DataCmdType::ZREMRANGEBYRANK,
-            b"ZREMRANGEBYSCORE" => DataCmdType::ZREMRANGEBYSCORE,
+            b"APPEND" => DataCmdType::Append,
+            b"BITCOUNT" => DataCmdType::Bitcount,
+            b"BITFIELD" => DataCmdType::Bitfield,
+            b"BITOP" => DataCmdType::Bitop,
+            b"BITPOS" => DataCmdType::Bitpos,
+            b"DECR" => DataCmdType::Decr,
+            b"DECRBY" => DataCmdType::Decrby,
+            b"GET" => DataCmdType::Get,
+            b"GETBIT" => DataCmdType::Getbit,
+            b"GETRANGE" => DataCmdType::Getrange,
+            b"GETSET" => DataCmdType::Getset,
+            b"INCR" => DataCmdType::Incr,
+            b"INCRBY" => DataCmdType::Incrby,
+            b"INCRBYFLOAT" => DataCmdType::Incrbyfloat,
+            b"MGET" => DataCmdType::Mget,
+            b"MSET" => DataCmdType::Mset,
+            b"MSETNX" => DataCmdType::Msetnx,
+            b"PSETEX" => DataCmdType::Psetex,
+            b"SET" => DataCmdType::Set,
+            b"SETBIT" => DataCmdType::Setbit,
+            b"SETEX" => DataCmdType::Setex,
+            b"SETNX" => DataCmdType::Setnx,
+            b"SETRANGE" => DataCmdType::Setrange,
+            b"STRLEN" => DataCmdType::Strlen,
+            b"EVAL" => DataCmdType::Eval,
+            b"EVALSHA" => DataCmdType::Evalsha,
+            b"DEL" => DataCmdType::Del,
+            b"EXISTS" => DataCmdType::Exists,
+            b"BLPOP" => DataCmdType::Blpop,
+            b"BRPOP" => DataCmdType::Brpop,
+            b"BRPOPLPUSH" => DataCmdType::Brpoplpush,
+            b"EXPIRE" => DataCmdType::Expire,
+            b"EXPIREAT" => DataCmdType::Expireat,
+            b"PEXPIRE" => DataCmdType::Pexpire,
+            b"PEXPIREAT" => DataCmdType::Pexpireat,
+            b"HDEL" => DataCmdType::Hdel,
+            b"LPOP" => DataCmdType::Lpop,
+            b"RPOP" => DataCmdType::Rpop,
+            b"RPOPLPUSH" => DataCmdType::Rpoplpush,
+            b"LREM" => DataCmdType::Lrem,
+            b"LTRIM" => DataCmdType::Ltrim,
+            b"MOVE" => DataCmdType::Move,
+            b"RENAME" => DataCmdType::Rename,
+            b"RENAMENX" => DataCmdType::Renamenx,
+            b"SMOVE" => DataCmdType::Smove,
+            b"SPOP" => DataCmdType::Spop,
+            b"SREM" => DataCmdType::Srem,
+            b"UNLINK" => DataCmdType::Unlink,
+            b"ZPOPMAX" => DataCmdType::Zpopmax,
+            b"ZPOPMIN" => DataCmdType::Zpopmin,
+            b"BZPOPMAX" => DataCmdType::Bzpopmax,
+            b"BZPOPMIN" => DataCmdType::Bzpopmin,
+            b"ZREM" => DataCmdType::Zrem,
+            b"ZREMRANGEBYLEX" => DataCmdType::Zremrangebylex,
+            b"ZREMRANGEBYRANK" => DataCmdType::Zremrangebyrank,
+            b"ZREMRANGEBYSCORE" => DataCmdType::Zremrangebyscore,
             _ => DataCmdType::Others,
         }
     }
@@ -243,32 +243,32 @@ pub fn requires_blocking_migration(data_cmd_type: DataCmdType) -> bool {
     // Any commands that could possibly delete the key should be migrated in a blocking way.
     matches!(
         data_cmd_type,
-        DataCmdType::DEL
-            | DataCmdType::EVAL
-            | DataCmdType::EVALSHA
-            | DataCmdType::EXPIRE
-            | DataCmdType::EXPIREAT
-            | DataCmdType::HDEL
-            | DataCmdType::LPOP
-            | DataCmdType::RPOP
-            | DataCmdType::RPOPLPUSH
-            | DataCmdType::LREM
-            | DataCmdType::LTRIM
-            | DataCmdType::MOVE
-            | DataCmdType::PEXPIRE
-            | DataCmdType::PEXPIREAT
-            | DataCmdType::RENAME
-            | DataCmdType::RENAMENX
-            | DataCmdType::SMOVE
-            | DataCmdType::SPOP
-            | DataCmdType::SREM
-            | DataCmdType::UNLINK
-            | DataCmdType::ZPOPMAX
-            | DataCmdType::ZPOPMIN
-            | DataCmdType::ZREM
-            | DataCmdType::ZREMRANGEBYLEX
-            | DataCmdType::ZREMRANGEBYRANK
-            | DataCmdType::ZREMRANGEBYSCORE
+        DataCmdType::Del
+            | DataCmdType::Eval
+            | DataCmdType::Evalsha
+            | DataCmdType::Expire
+            | DataCmdType::Expireat
+            | DataCmdType::Hdel
+            | DataCmdType::Lpop
+            | DataCmdType::Rpop
+            | DataCmdType::Rpoplpush
+            | DataCmdType::Lrem
+            | DataCmdType::Ltrim
+            | DataCmdType::Move
+            | DataCmdType::Pexpire
+            | DataCmdType::Pexpireat
+            | DataCmdType::Rename
+            | DataCmdType::Renamenx
+            | DataCmdType::Smove
+            | DataCmdType::Spop
+            | DataCmdType::Srem
+            | DataCmdType::Unlink
+            | DataCmdType::Zpopmax
+            | DataCmdType::Zpopmin
+            | DataCmdType::Zrem
+            | DataCmdType::Zremrangebylex
+            | DataCmdType::Zremrangebyrank
+            | DataCmdType::Zremrangebyscore
     )
 }
 
@@ -293,7 +293,7 @@ impl CommandInfo {
 
     fn get_key(data_cmd_type: DataCmdType, packet: &RespPacket) -> Option<&[u8]> {
         match data_cmd_type {
-            DataCmdType::EVAL | DataCmdType::EVALSHA => packet.get_array_element(3),
+            DataCmdType::Eval | DataCmdType::Evalsha => packet.get_array_element(3),
             _ => packet.get_array_element(1),
         }
     }
@@ -548,9 +548,9 @@ mod tests {
 
     #[test]
     fn test_parse_data_cmd_type() {
-        assert_eq!(DataCmdType::from_cmd_name(b"aPPend"), DataCmdType::APPEND);
-        assert_eq!(DataCmdType::from_cmd_name(b"get"), DataCmdType::GET);
-        assert_eq!(DataCmdType::from_cmd_name(b"eVaL"), DataCmdType::EVAL);
+        assert_eq!(DataCmdType::from_cmd_name(b"aPPend"), DataCmdType::Append);
+        assert_eq!(DataCmdType::from_cmd_name(b"get"), DataCmdType::Get);
+        assert_eq!(DataCmdType::from_cmd_name(b"eVaL"), DataCmdType::Eval);
         assert_eq!(DataCmdType::from_cmd_name(b"HMGET"), DataCmdType::Others);
     }
 
@@ -562,7 +562,7 @@ mod tests {
         ])));
         let mut cmd = Command::new(Box::new(request));
         assert_eq!(cmd.get_type(), CmdType::Others);
-        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::GET);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::Get);
 
         assert!(cmd.wrap_cmd(vec![b"UMFORWARD".to_vec(), b"233".to_vec()]));
         assert_eq!(cmd.get_type(), CmdType::UmForward);
@@ -571,6 +571,6 @@ mod tests {
         let remaining = cmd.extract_inner_cmd(2).unwrap();
         assert_eq!(remaining, 2);
         assert_eq!(cmd.get_type(), CmdType::Others);
-        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::GET);
+        assert_eq!(cmd.get_data_cmd_type(), DataCmdType::Get);
     }
 }

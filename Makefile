@@ -41,8 +41,6 @@ flame:
 docker-build-test-image:
 	docker image build -f examples/Dockerfile-undermoon-test -t undermoon_test .
 
-# The release builder will build the binaries and move it out by `docker cp`.
-# When the release undermoon image is built, the binaries will be moved into it.
 docker-build-release:
 	docker image build -f examples/Dockerfile-undermoon-release -t undermoon .
 

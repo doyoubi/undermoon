@@ -20,7 +20,7 @@ use crate::proxy::blocking::{
 };
 use crate::proxy::cluster::ClusterSendError;
 use crate::proxy::command::CmdTypeTuple;
-use crate::proxy::migration_backend::RestoreDataCmdTaskHandler;
+use crate::proxy::migration_backend::{RestoreDataCmdTaskHandler, WaitableTask};
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use atomic_option::AtomicOption;
@@ -476,12 +476,15 @@ impl<T: CmdTask> Drop for MigratingTaskHandle<T> {
     }
 }
 
-pub struct RedisScanImportingTask<RCF, TSF, PTSF, CTF>
+pub struct RedisScanImportingTask<RCF, TSF, DTSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    DTSF: CmdTaskSenderFactory + ThreadSafe,
     PTSF: CmdTaskSenderFactory + ThreadSafe,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    <DTSF as CmdTaskSenderFactory>::Sender:
+        ThreadSafe + CmdTaskSender<Task = ReqTask<WaitableTask<CTF::Task>>>,
     <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
@@ -497,18 +500,22 @@ where
     cmd_handler: RestoreDataCmdTaskHandler<
         CTF,
         <TSF as CmdTaskSenderFactory>::Sender,
+        <DTSF as CmdTaskSenderFactory>::Sender,
         <PTSF as CmdTaskSenderFactory>::Sender,
     >,
     _cmd_task_factory: Arc<CTF>,
     active_redirection: bool,
 }
 
-impl<RCF, TSF, PTSF, CTF> RedisScanImportingTask<RCF, TSF, PTSF, CTF>
+impl<RCF, TSF, DTSF, PTSF, CTF> RedisScanImportingTask<RCF, TSF, DTSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    DTSF: CmdTaskSenderFactory + ThreadSafe,
     PTSF: CmdTaskSenderFactory + ThreadSafe,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    <DTSF as CmdTaskSenderFactory>::Sender:
+        ThreadSafe + CmdTaskSender<Task = ReqTask<WaitableTask<CTF::Task>>>,
     <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
@@ -521,11 +528,12 @@ where
         slot_range: SlotRange,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
+        dst_sender_factory: Arc<DTSF>,
         proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
     ) -> Self {
         let src_sender = sender_factory.create(meta.src_node_address.clone());
-        let dst_sender = sender_factory.create(meta.dst_node_address.clone());
+        let dst_sender = dst_sender_factory.create(meta.dst_node_address.clone());
         let src_proxy_sender = proxy_sender_factory.create(meta.src_proxy_address.clone());
         let cmd_handler = RestoreDataCmdTaskHandler::new(
             src_sender,
@@ -552,12 +560,15 @@ where
     }
 }
 
-impl<RCF, TSF, PTSF, CTF> ImportingTask for RedisScanImportingTask<RCF, TSF, PTSF, CTF>
+impl<RCF, TSF, DTSF, PTSF, CTF> ImportingTask for RedisScanImportingTask<RCF, TSF, DTSF, PTSF, CTF>
 where
     RCF: RedisClientFactory,
     TSF: CmdTaskSenderFactory + ThreadSafe,
+    DTSF: CmdTaskSenderFactory + ThreadSafe,
     PTSF: CmdTaskSenderFactory + ThreadSafe,
     <TSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
+    <DTSF as CmdTaskSenderFactory>::Sender:
+        ThreadSafe + CmdTaskSender<Task = ReqTask<WaitableTask<CTF::Task>>>,
     <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     CTF: CmdTaskFactory + ThreadSafe,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
@@ -583,7 +594,7 @@ where
                     error!("handler exited unexpectedly");
                 }
                 future::Either::Right((_, handler_task)) => {
-                    info!("Received stop signal. Wait for the handler to finish all the remaining commnands.");
+                    info!("Received stop signal. Wait for the handler to finish all the remaining commands.");
                     stop_handle.stop();
                     handler_task.await;
                 }

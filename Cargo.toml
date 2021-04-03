@@ -18,7 +18,7 @@ path="src/bin/mem_broker.rs"
 
 [dependencies]
 bytes = "0.5.4"
-tokio = { version = "0.2.17", features = ["net", "macros", "rt-threaded", "fs"] }
+tokio = { version = "0.2.25", features = ["net", "macros", "rt-threaded", "fs"] }
 tokio-util = { version = "0.2", features = ["codec"] }
 futures = "0.3.4"
 futures-timer = "3.0.1"
@@ -53,7 +53,7 @@ dashmap = "3.11.1"
 coarsetime = "0.1"
 arrayvec = "0.5.1"
 either = "1.5.3"
-mockall = "0.8"
+mockall = "0.9"
 backtrace = "0.3"
 jemallocator = "0.3.0"
 async-trait = "0.1"

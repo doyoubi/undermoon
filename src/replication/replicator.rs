@@ -134,9 +134,7 @@ pub fn encode_repl_meta(meta: ReplicatorMeta) -> Vec<String> {
         replicas,
     } = meta;
 
-    let mut args = Vec::new();
-    args.push(epoch.to_string());
-    args.push(flags.to_arg());
+    let mut args = vec![epoch.to_string(), flags.to_arg()];
 
     for master in masters.iter() {
         args.push("master".to_string());
