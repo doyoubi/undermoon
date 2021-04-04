@@ -32,6 +32,9 @@ pub struct CoordinatorConfig {
     pub thread_number: usize,
     pub proxy_timeout: usize,
     pub enable_compression: bool,
+    // In kubernetes we may need to disable failover
+    // to test normal case without failover.
+    pub disable_failover: bool,
 }
 
 impl CoordinatorConfig {
@@ -80,13 +83,17 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
     pub async fn run(&self) -> Result<(), CoordinateError> {
         info!("coordinator config: {:?}", self.config);
 
-        let futs: Vec<Pin<Box<dyn Future<Output = CoordResult> + Send>>> = vec![
+        let mut futs: Vec<Pin<Box<dyn Future<Output = CoordResult> + Send>>> = vec![
             Box::pin(self.loop_detect()),
             Box::pin(self.loop_proxy_sync()),
-            Box::pin(self.loop_failure_handler()),
             Box::pin(self.loop_migration_sync()),
             Box::pin(self.api_service.run()),
         ];
+        if self.config.disable_failover {
+            warn!("disable failover for server proxy");
+        } else {
+            futs.push(Box::pin(self.loop_failure_handler()));
+        }
 
         let (res, _, _) = select_all(futs).await;
         error!("service stopped: {:?}", res);
