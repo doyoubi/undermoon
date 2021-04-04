@@ -4,8 +4,7 @@ use super::query::MetaStoreQuery;
 use super::update::MetaStoreUpdate;
 use crate::common::cluster::ClusterName;
 use crate::common::cluster::{
-    Cluster, MigrationMeta, MigrationTaskMeta, Node, Proxy, Range, RangeList, SlotRange,
-    SlotRangeTag,
+    Cluster, MigrationMeta, MigrationTaskMeta, Node, Proxy, RangeList, SlotRange, SlotRangeTag,
 };
 use crate::common::config::ClusterConfig;
 use crate::common::version::UNDERMOON_MEM_BROKER_META_VERSION;
@@ -296,7 +295,7 @@ impl ClusterStore {
 
 #[derive(Debug, Clone)]
 pub struct MigrationSlots {
-    pub ranges: Vec<Range>,
+    pub ranges: RangeList,
     pub meta: MigrationMetaStore,
 }
 
