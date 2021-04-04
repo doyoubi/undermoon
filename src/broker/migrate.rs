@@ -125,7 +125,7 @@ impl<'a> MetaStoreMigrate<'a> {
                                     dst_chunk_index: src_chunk_num + (curr_dst_master_index / 2),
                                     dst_chunk_part: curr_dst_master_index % 2,
                                 },
-                                ranges: curr_dst_slots.drain(..).collect(),
+                                ranges: RangeList::new(curr_dst_slots.drain(..).collect()),
                             });
                             if curr_slots_num >= dst_final_num {
                                 curr_dst_master_index += 1;
@@ -243,7 +243,7 @@ impl<'a> MetaStoreMigrate<'a> {
                     .get_mut(meta.src_chunk_part)
                     .expect("assign_dst_slots");
                 let slot_range = MigrationSlotRangeStore {
-                    range_list: RangeList::new(ranges.clone()),
+                    range_list: ranges.clone(),
                     is_migrating: true,
                     meta: meta.clone(),
                 };
@@ -259,7 +259,7 @@ impl<'a> MetaStoreMigrate<'a> {
                     .get_mut(meta.dst_chunk_part)
                     .expect("assign_dst_slots");
                 let slot_range = MigrationSlotRangeStore {
-                    range_list: RangeList::new(ranges.clone()),
+                    range_list: ranges.clone(),
                     is_migrating: false,
                     meta,
                 };
@@ -417,7 +417,7 @@ impl<'a> MetaStoreMigrate<'a> {
                                     dst_chunk_index: curr_dst_master_index / 2,
                                     dst_chunk_part: curr_dst_master_index % 2,
                                 },
-                                ranges: curr_dst_slots.drain(..).collect(),
+                                ranges: RangeList::new(curr_dst_slots.drain(..).collect()),
                             });
                             if curr_slots_num + dst_existing >= dst_final_num {
                                 curr_dst_master_index += 1;

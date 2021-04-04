@@ -143,7 +143,9 @@ impl fmt::Display for RangeList {
 
 impl RangeList {
     pub fn new(ranges: Vec<Range>) -> Self {
-        Self(ranges)
+        let mut range_list = Self(ranges);
+        range_list.compact();
+        range_list
     }
 
     pub fn from_single_range(mut range: Range) -> Self {
@@ -158,9 +160,7 @@ impl RangeList {
         for RangeList(mut ranges) in range_lists.into_iter() {
             merged_ranges.append(&mut ranges);
         }
-        let mut range_list = Self(merged_ranges);
-        range_list.compact();
-        range_list
+        Self::new(merged_ranges)
     }
 
     pub fn merge_another(&mut self, range_list: &mut RangeList) {
@@ -177,9 +177,7 @@ impl RangeList {
         for _ in 0..ranges_num {
             ranges.push(Self::parse_slot_range(it.next()?)?);
         }
-        let mut range_list = Self(ranges);
-        range_list.compact();
-        Some(range_list)
+        Some(Self::new(ranges))
     }
 
     fn parse_slot_range(s: String) -> Option<Range> {
