@@ -433,6 +433,7 @@ where
             config.backend_flush_size,
             config.backend_low_flush_interval,
             config.backend_high_flush_interval,
+            config.backend_timeout,
         )
         .await;
         match res {
@@ -463,6 +464,7 @@ async fn handle_conn<H, S>(
     backend_flush_size: NonZeroUsize,
     backend_low_flush_interval: Duration,
     backend_high_flush_interval: Duration,
+    backend_timeout: Duration,
 ) -> Result<(), HandleConnErr<H::Task>>
 where
     H: CmdTaskResultHandler,
@@ -481,6 +483,10 @@ where
         backend_high_flush_interval,
         batch_stats.clone(),
     );
+
+    let mut timer = futures_timer::Delay::new(backend_timeout);
+    let mut response_received = false;
+    let mut task_empty = true;
 
     future::poll_fn(
         |cx: &mut Context<'_>| -> Poll<Result<(), HandleConnErr<H::Task>>> {
@@ -580,6 +586,8 @@ where
                     Poll::Pending => break Ok(()),
                 };
 
+                response_received = true;
+
                 let mut task = match tasks.pop_front() {
                     Some(task) => task,
                     None => {
@@ -596,6 +604,21 @@ where
                 let failed_tasks = tasks.drain(..).collect();
                 let retry_state = handle_conn_err(retry_times_opt, failed_tasks, &err);
                 return Poll::Ready(Err((err, retry_state)));
+            }
+
+            if let Poll::Ready(()) = Pin::new(&mut timer).poll(cx) {
+                if !task_empty && !response_received {
+                    let err = BackendError::Timeout;
+                    error!("backend read timeout");
+                    let failed_tasks = tasks.drain(..).collect();
+                    // For timeout we just don't retry as it will take a long time.
+                    let retry_state = handle_conn_err(Some(MAX_BACKEND_RETRY), failed_tasks, &err);
+                    return Poll::Ready(Err((err, retry_state)));
+                }
+
+                timer.reset(backend_timeout);
+                task_empty = tasks.is_empty();
+                response_received = false;
             }
 
             Poll::Pending
@@ -639,6 +662,7 @@ pub enum BackendError {
     InvalidAddress,
     Canceled,
     InvalidState,
+    Timeout,
 }
 
 impl BackendError {
@@ -650,6 +674,7 @@ impl BackendError {
             SenderBackendError::InvalidAddress => Either::Left(BackendError::InvalidAddress),
             SenderBackendError::Canceled => Either::Left(BackendError::Canceled),
             SenderBackendError::InvalidState => Either::Left(BackendError::InvalidState),
+            SenderBackendError::Timeout => Either::Left(BackendError::Timeout),
             SenderBackendError::Retry(task) => Either::Right(RetryError::new(task)),
         }
     }
@@ -682,6 +707,7 @@ pub enum SenderBackendError<T> {
     Canceled,
     InvalidState,
     Retry(T),
+    Timeout,
 }
 
 impl<T> SenderBackendError<T> {
@@ -693,6 +719,7 @@ impl<T> SenderBackendError<T> {
             BackendError::InvalidAddress => SenderBackendError::InvalidAddress,
             BackendError::Canceled => SenderBackendError::Canceled,
             BackendError::InvalidState => SenderBackendError::InvalidState,
+            BackendError::Timeout => SenderBackendError::Timeout,
         }
     }
 
@@ -709,6 +736,7 @@ impl<T> SenderBackendError<T> {
             Self::Canceled => SenderBackendError::Canceled,
             Self::InvalidState => SenderBackendError::InvalidState,
             Self::Retry(task) => SenderBackendError::Retry(f(task)),
+            Self::Timeout => SenderBackendError::Timeout,
         }
     }
 }
@@ -717,12 +745,13 @@ impl<T> fmt::Debug for SenderBackendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Io(io_err) => write!(f, "BackendError::Io({:?})", io_err),
-            Self::NodeNotFound => write!(f, "backendError::NodeNotFound"),
-            Self::InvalidProtocol => write!(f, "backendError::InvalidProtocol"),
-            Self::InvalidAddress => write!(f, "backendError::InvalidAddress"),
-            Self::Canceled => write!(f, "backendError::Canceled"),
-            Self::InvalidState => write!(f, "backendError::InvalidState"),
+            Self::NodeNotFound => write!(f, "BackendError::NodeNotFound"),
+            Self::InvalidProtocol => write!(f, "BackendError::InvalidProtocol"),
+            Self::InvalidAddress => write!(f, "BackendError::InvalidAddress"),
+            Self::Canceled => write!(f, "BackendError::Canceled"),
+            Self::InvalidState => write!(f, "BackendError::InvalidState"),
             Self::Retry(_) => write!(f, "BackendError::Retry"),
+            Self::Timeout => write!(f, "BackendError::Timeout"),
         }
     }
 }
@@ -874,6 +903,7 @@ mod tests {
             NonZeroUsize::new(1024).unwrap(),
             Duration::from_nanos(200_000),
             Duration::from_nanos(400_000),
+            Duration::from_secs(10),
         )
         .await;
 
@@ -943,6 +973,7 @@ mod tests {
             NonZeroUsize::new(1024).unwrap(),
             Duration::from_nanos(200_000),
             Duration::from_nanos(400_000),
+            Duration::from_secs(10),
         )
         .await;
 
@@ -956,5 +987,51 @@ mod tests {
                 _ => assert!(false),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_conn_timeout() {
+        test_handle_conn_timeout_helper(BatchStrategy::Disabled).await;
+        test_handle_conn_timeout_helper(BatchStrategy::Fixed).await;
+        test_handle_conn_timeout_helper(BatchStrategy::Dynamic).await;
+    }
+
+    async fn test_handle_conn_timeout_helper(strategy: BatchStrategy) {
+        let (sender, _dummy_receiver) = mpsc::unbounded::<RespVec>();
+        let (_dummy_sender, receiver) = mpsc::unbounded::<RespVec>();
+        let writer: ConnSink<RespVec> = Box::pin(sender.sink_map_err(|_| BackendError::Canceled));
+        let reader: ConnStream<RespVec> = Box::pin(receiver.map(Ok));
+
+        let (mut task_sender, mut task_receiver) = mpsc::unbounded();
+        for i in 0..3 {
+            let i: usize = i;
+            task_sender
+                .send(DummyCmdTask::new(RespVec::Simple(
+                    i.to_string().into_bytes(),
+                )))
+                .await
+                .unwrap();
+        }
+
+        let handler = Arc::new(CounterHandler::new());
+        let batch_stats = Arc::new(BatchStats::default());
+        let res = handle_conn(
+            writer,
+            reader,
+            &mut task_receiver,
+            handler.clone(),
+            None,
+            batch_stats,
+            strategy,
+            NonZeroUsize::new(1024).unwrap(),
+            Duration::from_nanos(200_000),
+            Duration::from_nanos(400_000),
+            Duration::from_secs(3),
+        )
+        .await;
+
+        let (err, _) = res.unwrap_err();
+        assert!(matches!(err, BackendError::Timeout));
+        assert!(handler.get_replies().is_empty());
     }
 }
