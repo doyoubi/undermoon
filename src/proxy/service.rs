@@ -33,6 +33,7 @@ pub struct ServerProxyConfig {
     pub backend_flush_size: NonZeroUsize,
     pub backend_low_flush_interval: Duration,
     pub backend_high_flush_interval: Duration,
+    pub backend_timeout: Duration,
 }
 
 impl ServerProxyConfig {
