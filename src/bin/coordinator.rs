@@ -59,6 +59,7 @@ fn gen_conf() -> CoordinatorConfig {
     let proxy_timeout = s.get::<usize>("proxy_timeout").unwrap_or(2);
 
     let enable_compression = s.get::<bool>("enable_compression").unwrap_or(false);
+    let disable_failover = s.get::<bool>("disable_failover").unwrap_or(false);
 
     CoordinatorConfig {
         address,
@@ -67,6 +68,7 @@ fn gen_conf() -> CoordinatorConfig {
         thread_number,
         proxy_timeout,
         enable_compression,
+        disable_failover,
     }
 }
 
