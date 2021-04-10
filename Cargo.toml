@@ -61,6 +61,7 @@ derivative = "2.1.1"
 flate2 = "1"
 base64 = "0.13.0"
 parking_lot = "0.11.1"
+lazy_static = "1.4.0"
 
 [profile.release]
 debug = true

@@ -16,6 +16,8 @@ extern crate log;
 extern crate derivative;
 #[macro_use(defer)]
 extern crate scopeguard;
+#[macro_use]
+extern crate lazy_static;
 
 pub mod broker;
 pub mod common;

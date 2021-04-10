@@ -3,7 +3,7 @@ use super::blocking::{
     gen_basic_blocking_sender_factory, gen_blocking_sender_factory, BasicBlockingSenderFactory,
     BlockingBackendSenderFactory, BlockingCmdTaskSender, BlockingMap, CounterTask,
 };
-use super::cluster::{ClusterBackendMap, ClusterMetaError, ClusterSendError, ClusterTag};
+use super::cluster::{ClusterBackendMap, ClusterMetaError, ClusterSendError};
 use super::reply::{DecompressCommitHandlerFactory, ReplyCommitHandlerFactory};
 use super::sender::{
     gen_migration_sender_factory, gen_sender_factory, BackendSenderFactory, CmdTaskSender,
@@ -15,7 +15,7 @@ use super::slowlog::TaskEvent;
 use crate::common::batch::BatchStats;
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
 use crate::common::config::ClusterConfig;
-use crate::common::proto::ProxyClusterMeta;
+use crate::common::proto::{ProxyClusterMeta, NodeMap};
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, RetryError};
@@ -36,10 +36,8 @@ use std::sync::Arc;
 
 pub struct MetaMap<S: CmdTaskSender, P: CmdTaskSender, T>
 where
-    <S as CmdTaskSender>::Task: ClusterTag,
-    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
-    T: CmdTask + ClusterTag,
+    T: CmdTask,
 {
     cluster_map: ClusterBackendMap<S, P>,
     migration_map: MigrationMap<T>,
@@ -47,10 +45,8 @@ where
 
 impl<S: CmdTaskSender, P: CmdTaskSender, T> MetaMap<S, P, T>
 where
-    <S as CmdTaskSender>::Task: ClusterTag,
-    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
-    T: CmdTask + ClusterTag,
+    T: CmdTask,
 {
     pub fn empty() -> Self {
         let cluster_map = ClusterBackendMap::default();
@@ -108,7 +104,9 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     sender_factory: SenderFactory<C>,
     peer_sender_factory: PeerSenderFactory<C>,
     blocking_map: Arc<BlockingMap<BasicSenderFactory<C>, BlockingTaskRetrySender<C>>>,
-    cluster_config: ClusterConfig,
+    // TODO: Remove `proxy_cluster_config`
+    // default ClusterConfig from server proxy config file
+    proxy_cluster_config: ClusterConfig,
     client_factory: Arc<F>,
     batch_stats: Arc<BatchStats>,
 }
@@ -116,7 +114,7 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
 impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> {
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        cluster_config: ClusterConfig,
+        proxy_cluster_config: ClusterConfig,
         client_factory: Arc<F>,
         conn_factory: Arc<C>,
         meta_map: SharedMetaMap<C>,
@@ -169,7 +167,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         ));
         let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let config_clone = config.clone();
-        let cluster_config_clone = cluster_config.clone();
+        let cluster_config_clone = proxy_cluster_config.clone();
         Self {
             config,
             meta_map,
@@ -192,41 +190,40 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             sender_factory,
             peer_sender_factory,
             blocking_map,
-            cluster_config,
+            proxy_cluster_config,
             client_factory,
             batch_stats,
         }
     }
 
-    pub fn gen_cluster_nodes(&self, cluster_name: ClusterName) -> String {
+    pub fn gen_cluster_nodes(&self) -> String {
         let meta_map = self.meta_map.load();
-        let migration_states = meta_map.migration_map.get_states(&cluster_name);
+        let migration_states = meta_map.migration_map.get_states();
         meta_map.cluster_map.gen_cluster_nodes(
-            cluster_name,
             self.config.announce_address.clone(),
             &migration_states,
         )
     }
 
-    pub fn gen_cluster_slots(&self, cluster_name: ClusterName) -> Result<RespVec, String> {
+    pub fn gen_cluster_slots(&self) -> Result<RespVec, String> {
         let meta_map = self.meta_map.load();
-        let migration_states = meta_map.migration_map.get_states(&cluster_name);
+        let migration_states = meta_map.migration_map.get_states();
         meta_map.cluster_map.gen_cluster_slots(
-            cluster_name,
             self.config.announce_address.clone(),
             &migration_states,
         )
     }
 
-    pub fn get_clusters(&self) -> Vec<ClusterName> {
-        self.meta_map.load().cluster_map.get_clusters()
+    pub fn get_cluster(&self) -> ClusterName {
+        self.meta_map.load().cluster_map.get_cluster()
     }
 
     pub fn set_meta(&self, cluster_meta: ProxyClusterMeta) -> Result<(), ClusterMetaError> {
+        let cluster_name = cluster_meta.get_cluster_name();
+
         // validation
-        if !cluster_meta
-            .get_local()
-            .check_hosts(self.config.announce_host.as_str())
+        let local = NodeMap::new(cluster_meta.get_local().clone());
+        if !local.check_hosts(self.config.announce_host.as_str(), cluster_name)
         {
             return Err(ClusterMetaError::NotMyMeta);
         }
@@ -236,7 +233,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let sender_factory = &self.sender_factory;
         let peer_sender_factory = &self.peer_sender_factory;
         let migration_manager = &self.migration_manager;
-        let cluster_config = &self.cluster_config;
+        let proxy_cluster_config = &self.proxy_cluster_config;
 
         {
             let _guard = self.lock.lock();
@@ -253,12 +250,13 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 sender_factory,
                 peer_sender_factory,
                 active_redirection,
-                cluster_config,
+                proxy_cluster_config,
             );
             let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
+                cluster_name.clone(),
                 &old_meta_map.migration_map,
                 cluster_meta.get_local(),
-                cluster_meta.get_configs(),
+                cluster_meta.get_config(),
                 self.blocking_map.clone(),
             );
 
@@ -340,7 +338,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             .meta_map
             .load()
             .cluster_map
-            .get_cluster_any_node(cmd_ctx.get_cluster_name())
+            .get_cluster_any_node()
         {
             None => {
                 return Resp::Error(response::ERR_CLUSTER_NOT_FOUND.to_string().into_bytes());
@@ -419,7 +417,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             .meta_map
             .lease()
             .migration_map
-            .keys_are_importing(cmd_ctx.get_cluster_name(), keys)
+            .keys_are_importing(keys)
         {
             return Ok(());
         }
@@ -455,27 +453,11 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         Ok(())
     }
 
-    pub fn try_select_cluster(&self, mut cmd_ctx: CmdCtx) -> CmdCtx {
-        let exists = self
-            .meta_map
-            .lease()
-            .cluster_map
-            .cluster_exists(cmd_ctx.get_cluster_name());
-        if exists {
-            return cmd_ctx;
-        }
-
-        if let Some(cluster_name) = self.meta_map.load().cluster_map.auto_select_cluster() {
-            cmd_ctx.set_cluster_name(cluster_name);
-        }
-        cmd_ctx
-    }
-
     pub fn get_epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }
 
-    pub fn is_ready(&self, cluster_name: ClusterName) -> bool {
+    pub fn is_ready(&self) -> bool {
         // This is used to determined whether this proxy could be
         // added or removed from the Service of kubernetes.
         //
@@ -495,7 +477,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             return true;
         }
         let meta_map = self.meta_map.load();
-        meta_map.cluster_map.is_ready(cluster_name)
+        meta_map.cluster_map.is_ready()
     }
 
     pub fn get_batch_stats(&self) -> &Arc<BatchStats> {
@@ -570,7 +552,7 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     if let Err(e) = res {
         match e {
             ClusterSendError::MissingKey => (),
-            ClusterSendError::ClusterNotFound { task, cluster_name } => {
+            ClusterSendError::ClusterNotFound { task } => {
                 match default_redirection_address {
                     Some(redirection_address) => match task.get_slot() {
                         None => {
@@ -585,10 +567,7 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
                         }
                     },
                     None => {
-                        let resp = Resp::Error(
-                            format!("{}: {}", response::ERR_CLUSTER_NOT_FOUND, cluster_name)
-                                .into_bytes(),
-                        );
+                        let resp = Resp::Error(response::ERR_CLUSTER_NOT_FOUND.to_string().into_bytes());
                         task.set_resp_result(Ok(resp));
                     }
                 }

@@ -1,8 +1,8 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, ProxyMetaRetriever, ProxyMetaSender};
-use crate::common::cluster::{ClusterName, Proxy, Role, SlotRange};
+use crate::common::cluster::{Proxy, Role, SlotRange, EMPTY_CLUSTER_NAME};
 use crate::common::proto::{
-    ClusterConfigMap, ClusterMapFlags, MetaCompressError, ProxyClusterMap, ProxyClusterMeta,
+    ClusterMapFlags, MetaCompressError, ProxyClusterMeta,
 };
 use crate::common::response::{ERR_NOT_MY_META, OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
@@ -69,18 +69,19 @@ impl<F: RedisClientFactory> ProxyMetaSender for ProxyMetaRespSender<F> {
 }
 
 fn filter_proxy_masters(proxy: Proxy) -> Proxy {
+    let cluster_name = proxy.get_cluster_name().cloned();
     let address = proxy.get_address().to_string();
     let epoch = proxy.get_epoch();
     let free_nodes = proxy.get_free_nodes().to_vec();
     let peers = proxy.get_peers().to_vec();
-    let clusters_config = proxy.get_clusters_config().clone();
+    let cluster_config = proxy.get_cluster_config().clone();
     let masters = proxy
         .into_nodes()
         .into_iter()
         .filter(|node| node.get_role() == Role::Master)
         .collect();
 
-    Proxy::new(address, epoch, masters, free_nodes, peers, clusters_config)
+    Proxy::new(cluster_name, address, epoch, masters, free_nodes, peers, cluster_config)
 }
 
 pub struct BrokerMetaRetriever<B: MetaDataBroker> {
@@ -111,30 +112,23 @@ fn generate_proxy_meta_cmd_args(
     proxy: Proxy,
 ) -> Result<Vec<String>, MetaCompressError> {
     let epoch = proxy.get_epoch();
-    let clusters_config = ClusterConfigMap::new(proxy.get_clusters_config().clone());
+    let clusters_config = proxy.get_cluster_config().clone();
 
-    let mut cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+    let mut peer_node_map: HashMap<String, Vec<SlotRange>> = HashMap::new();
 
     for peer_proxy in proxy.get_peers().iter() {
-        let clusters = cluster_map
-            .entry(peer_proxy.cluster_name.clone())
-            .or_insert_with(HashMap::new);
-        clusters.insert(peer_proxy.proxy_address.clone(), peer_proxy.slots.clone());
+        peer_node_map.insert(peer_proxy.proxy_address.clone(), peer_proxy.slots.clone());
     }
-    let peer = ProxyClusterMap::new(cluster_map);
 
-    let mut cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> = HashMap::new();
+    let cluster_name = proxy.get_cluster_name().cloned().unwrap_or_else(|| EMPTY_CLUSTER_NAME.clone());
+    let mut node_map: HashMap<String, Vec<SlotRange>> = HashMap::new();
 
     for node in proxy.into_nodes() {
-        let clusters = cluster_map
-            .entry(node.get_cluster_name().clone())
-            .or_insert_with(HashMap::new);
-        clusters.insert(node.get_address().to_string(), node.into_slots().clone());
+        node_map.insert(node.get_address().to_string(), node.into_slots().clone());
     }
-    let local = ProxyClusterMap::new(cluster_map);
 
     let proxy_cluster_meta =
-        ProxyClusterMeta::new(epoch, flags.clone(), local, peer, clusters_config);
+        ProxyClusterMeta::new(epoch, flags.clone(), cluster_name, node_map, peer_node_map, clusters_config);
 
     if flags.compress {
         return proxy_cluster_meta.to_compressed_args();
@@ -196,47 +190,49 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: ClusterMapFlags) -> Vec<Stri
     for free_node in proxy.get_free_nodes().iter() {
         // For free nodes we use empty cluster name.
         masters.push(MasterMeta {
-            cluster_name: ClusterName::empty(),
+            cluster_name: EMPTY_CLUSTER_NAME.clone(),
             master_node_address: free_node.clone(),
             replicas: Vec::new(),
         })
     }
 
-    for node in proxy.into_nodes().into_iter() {
-        let role = node.get_role();
-        let meta = node.get_repl_meta();
-        let cluster_name = node.get_cluster_name().clone();
-        match role {
-            Role::Master => {
-                // For importing nodes in 0.1 migration protocol,
-                // the role is also controlled by the migration progress.
-                // And the role cannot be affected by replicator set in this place.
-                // But this has been changed in 0.2 migration protocol.
-                // if node.get_slots().iter().any(|sr| sr.tag.is_importing()) {
-                //     continue;
-                // }
+    if let Some(cluster_name) = proxy.get_cluster_name().cloned() {
+        for node in proxy.into_nodes().into_iter() {
+            let role = node.get_role();
+            let meta = node.get_repl_meta();
+            match role {
+                Role::Master => {
+                    // For importing nodes in 0.1 migration protocol,
+                    // the role is also controlled by the migration progress.
+                    // And the role cannot be affected by replicator set in this place.
+                    // But this has been changed in 0.2 migration protocol.
+                    // if node.get_slots().iter().any(|sr| sr.tag.is_importing()) {
+                    //     continue;
+                    // }
 
-                let master_node_address = node.get_address().to_string();
-                let replicas = meta.get_peers().to_vec();
-                let master_meta = MasterMeta {
-                    cluster_name,
-                    master_node_address,
-                    replicas,
-                };
-                masters.push(master_meta);
-            }
-            Role::Replica => {
-                let replica_node_address = node.get_address().to_string();
-                let masters = meta.get_peers().to_vec();
-                let replica_meta = ReplicaMeta {
-                    cluster_name,
-                    replica_node_address,
-                    masters,
-                };
-                replicas.push(replica_meta);
+                    let master_node_address = node.get_address().to_string();
+                    let replicas = meta.get_peers().to_vec();
+                    let master_meta = MasterMeta {
+                        cluster_name: cluster_name.clone(),
+                        master_node_address,
+                        replicas,
+                    };
+                    masters.push(master_meta);
+                }
+                Role::Replica => {
+                    let replica_node_address = node.get_address().to_string();
+                    let masters = meta.get_peers().to_vec();
+                    let replica_meta = ReplicaMeta {
+                        cluster_name: cluster_name.clone(),
+                        replica_node_address,
+                        masters,
+                    };
+                    replicas.push(replica_meta);
+                }
             }
         }
-    }
+    };
+
 
     let repl_meta = ReplicatorMeta {
         epoch,
@@ -254,7 +250,7 @@ mod tests {
     use super::super::core::{ProxyMetaRespSynchronizer, ProxyMetaSynchronizer};
     use super::super::detector::BrokerProxiesRetriever;
     use super::*;
-    use crate::common::cluster::{Node, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag};
+    use crate::common::cluster::{Node, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag, ClusterName};
     use crate::common::config::ClusterConfig;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient, Resp};
     use futures::{stream, StreamExt};
@@ -279,19 +275,17 @@ mod tests {
         let nodes = vec![Node::new(
             "127.0.0.1:7001".to_string(),
             "127.0.0.1:6000".to_string(),
-            cluste_name.clone(),
             vec![slot_range],
             repl,
         )];
-        let mut clusters_config = HashMap::new();
-        clusters_config.insert(cluste_name, ClusterConfig::default());
         Proxy::new(
+            Some(cluste_name.clone()),
             "127.0.0.1:6000".to_string(),
             7799,
             nodes,
             vec![],
             vec![],
-            clusters_config,
+            ClusterConfig::default(),
         )
     }
 
@@ -344,26 +338,16 @@ mod tests {
     fn gen_set_cluster_compress_args() -> Vec<String> {
         let epoch = 7799;
         let flags = ClusterMapFlags::from_arg("COMPRESS");
+        let cluster_name = ClusterName::try_from("mycluster").unwrap();
 
-        let mut local_map = HashMap::new();
         let mut node_map = HashMap::new();
         let slots = vec!["1".to_string(), "233-666".to_string()];
         node_map.insert(
             "127.0.0.1:7001".to_string(),
             vec![SlotRange::from_strings(&mut slots.into_iter().peekable()).unwrap()],
         );
-        local_map.insert(ClusterName::try_from("mycluster").unwrap(), node_map);
-        let local = ProxyClusterMap::new(local_map);
 
-        let peer = ProxyClusterMap::new(HashMap::new());
-        let mut cluster_map = HashMap::new();
-        cluster_map.insert(
-            ClusterName::try_from("mycluster").unwrap(),
-            ClusterConfig::default(),
-        );
-        let clusters_config = ClusterConfigMap::new(cluster_map);
-
-        let meta = ProxyClusterMeta::new(epoch, flags, local, peer, clusters_config);
+        let meta = ProxyClusterMeta::new(epoch, flags, cluster_name, node_map, HashMap::new(), ClusterConfig::default());
         meta.to_compressed_args().unwrap()
     }
 

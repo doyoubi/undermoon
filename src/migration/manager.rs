@@ -1,8 +1,7 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
-use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRangeTag};
+use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRangeTag, EMPTY_CLUSTER_NAME, SlotRange};
 use crate::common::config::{AtomicMigrationConfig, ClusterConfig};
-use crate::common::proto::{ClusterConfigMap, ProxyClusterMap};
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{generate_slot, ThreadSafe};
 use crate::migration::task::MgrSubCmd;
@@ -10,7 +9,7 @@ use crate::protocol::Resp;
 use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientFactory, RespVec};
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHint, BlockingHintTask, TaskBlockingControllerFactory};
-use crate::proxy::cluster::{ClusterSendError, ClusterTag};
+use crate::proxy::cluster::{ClusterSendError};
 use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::migration_backend::WaitableTask;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
@@ -26,7 +25,6 @@ struct MgrTask<T: CmdTask> {
     _stop_handle: Option<Box<dyn Drop + Send + Sync + 'static>>,
 }
 type ClusterTask<T> = HashMap<MigrationTaskMeta, Arc<MgrTask<T>>>;
-type TaskMap<T> = HashMap<ClusterName, ClusterTask<T>>;
 type NewMigrationTuple<T> = (MigrationMap<T>, Vec<NewTask<T>>);
 
 pub struct NewTask<T: CmdTask> {
@@ -47,7 +45,6 @@ where
     <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     PTSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
-    CTF::Task: ClusterTag,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     config: Arc<ServerProxyConfig>,
@@ -71,7 +68,6 @@ where
     <PTSF as CmdTaskSenderFactory>::Sender: ThreadSafe + CmdTaskSender<Task = ReqTask<CTF::Task>>,
     PTSF: CmdTaskSenderFactory + ThreadSafe,
     CTF: CmdTaskFactory + ThreadSafe,
-    CTF::Task: ClusterTag,
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     #[allow(clippy::too_many_arguments)]
@@ -100,9 +96,10 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn create_new_migration_map<BCF: TaskBlockingControllerFactory>(
         &self,
+        cluster_name: ClusterName,
         old_migration_map: &MigrationMap<CTF::Task>,
-        local_cluster_map: &ProxyClusterMap,
-        cluster_config_map: &ClusterConfigMap,
+        local_cluster_map: &HashMap<String, Vec<SlotRange>>,
+        cluster_config: &ClusterConfig,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<CTF::Task> {
         // TODO: implement dynamic configuration through CONFIG command later.
@@ -110,8 +107,9 @@ where
             self.cluster_config.migration_config.clone(),
         ));
         old_migration_map.update_from_old_task_map(
+            cluster_name,
             local_cluster_map,
-            cluster_config_map,
+            cluster_config,
             self.config.clone(),
             mgr_config,
             self.client_factory.clone(),
@@ -202,67 +200,63 @@ where
 
 pub struct MigrationMap<T>
 where
-    T: CmdTask + ClusterTag,
+    T: CmdTask,
 {
     empty: bool,
-    task_map: TaskMap<T>,
+    cluster_name: ClusterName,
+    task_map: ClusterTask<T>,
 }
 
 impl<T> MigrationMap<T>
 where
-    T: CmdTask + ClusterTag,
+    T: CmdTask,
 {
     pub fn empty() -> Self {
         Self {
             empty: true,
+            cluster_name: EMPTY_CLUSTER_NAME.clone(),
             task_map: HashMap::new(),
         }
     }
 
     pub fn info(&self) -> RespVec {
-        let tasks = self
-            .task_map
-            .iter()
-            .map(|(cluster_name, tasks)| {
-                let mut lines = vec![format!("name: {}", cluster_name)];
-                for (task_meta, mgr_task) in tasks.iter() {
-                    if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
-                        let state = match &mgr_task.task {
-                            Either::Left(task) => task.get_state(),
-                            Either::Right(task) => task.get_state(),
-                        };
-                        lines.push(format!(
-                            "{} {} -> {} {}",
-                            task_meta
-                                .slot_range
-                                .range_list
-                                .clone()
-                                .to_strings()
-                                .join(" "),
-                            migration_meta.src_node_address,
-                            migration_meta.dst_node_address,
-                            state,
-                        ));
-                    } else {
-                        error!("invalid slot range migration meta");
-                    }
-                }
-                Resp::Arr(Array::Arr(
-                    lines
-                        .into_iter()
-                        .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
-                        .collect(),
-                ))
-            })
-            .collect::<Vec<RespVec>>();
-        Resp::Arr(Array::Arr(tasks))
+        let mut lines = vec![format!("name: {}", self.cluster_name)];
+        for (task_meta, mgr_task) in self.task_map.iter() {
+            if let Some(migration_meta) = task_meta.slot_range.tag.get_migration_meta() {
+                let state = match &mgr_task.task {
+                    Either::Left(task) => task.get_state(),
+                    Either::Right(task) => task.get_state(),
+                };
+                lines.push(format!(
+                    "{} {} -> {} {}",
+                    task_meta
+                        .slot_range
+                        .range_list
+                        .clone()
+                        .to_strings()
+                        .join(" "),
+                    migration_meta.src_node_address,
+                    migration_meta.dst_node_address,
+                    state,
+                ));
+            } else {
+                error!("invalid slot range migration meta");
+            }
+        }
+        Resp::Arr(Array::Arr(
+            lines
+                .into_iter()
+                .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+                .collect(),
+        ))
     }
 
     pub fn send(&self, mut cmd_task: T) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
         cmd_task.log_event(TaskEvent::SentToMigrationBackend);
 
         // Optimization for not having any migration.
-        if self.empty {
+        // When cluster_name is empty, it does not actually contain a cluster.
+        if self.empty || self.cluster_name.is_empty() {
             return Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
                 cmd_task,
                 BlockingHint::NotBlocking,
@@ -273,43 +267,34 @@ where
     }
 
     fn send_helper(
-        task_map: &TaskMap<T>,
+        task_map: &ClusterTask<T>,
         cmd_task: T,
     ) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
-        let cluster_name = cmd_task.get_cluster_name();
-        match task_map.get(cluster_name) {
-            Some(tasks) => {
-                let slot = match cmd_task.get_slot() {
-                    Some(slot) => slot,
-                    None => {
-                        let resp = Resp::Error("missing key".to_string().into_bytes());
-                        cmd_task.set_resp_result(Ok(resp));
-                        return Err(ClusterSendError::MissingKey);
-                    }
-                };
-
-                for mgr_task in tasks.values() {
-                    match &mgr_task.task {
-                        Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
-                            return migrating_task.send(cmd_task)
-                        }
-                        Either::Right(importing_task) if importing_task.contains_slot(slot) => {
-                            return importing_task.send(cmd_task)
-                        }
-                        _ => continue,
-                    }
-                }
-
-                Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                    cmd_task,
-                    BlockingHint::NotBlocking,
-                )))
+        let slot = match cmd_task.get_slot() {
+            Some(slot) => slot,
+            None => {
+                let resp = Resp::Error("missing key".to_string().into_bytes());
+                cmd_task.set_resp_result(Ok(resp));
+                return Err(ClusterSendError::MissingKey);
             }
-            None => Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
-                cmd_task,
-                BlockingHint::NotBlocking,
-            ))),
+        };
+
+        for mgr_task in task_map.values() {
+            match &mgr_task.task {
+                Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
+                    return migrating_task.send(cmd_task)
+                }
+                Either::Right(importing_task) if importing_task.contains_slot(slot) => {
+                    return importing_task.send(cmd_task)
+                }
+                _ => continue,
+            }
         }
+
+        Err(ClusterSendError::SlotNotFound(BlockingHintTask::new(
+            cmd_task,
+            BlockingHint::NotBlocking,
+        )))
     }
 
     pub fn send_sync_task(
@@ -326,24 +311,21 @@ where
             )));
         }
 
-        let cluster_name = cmd_task.get_cluster_name();
-        if let Some(tasks) = self.task_map.get(cluster_name) {
-            let slot = match cmd_task.get_slot() {
-                Some(slot) => slot,
-                None => {
-                    let resp = Resp::Error("missing key".to_string().into_bytes());
-                    cmd_task.set_resp_result(Ok(resp));
-                    return Err(ClusterSendError::MissingKey);
-                }
-            };
+        let slot = match cmd_task.get_slot() {
+            Some(slot) => slot,
+            None => {
+                let resp = Resp::Error("missing key".to_string().into_bytes());
+                cmd_task.set_resp_result(Ok(resp));
+                return Err(ClusterSendError::MissingKey);
+            }
+        };
 
-            for mgr_task in tasks.values() {
-                match &mgr_task.task {
-                    Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
-                        return migrating_task.send_sync_task(cmd_task)
-                    }
-                    _ => continue,
+        for mgr_task in self.task_map.values() {
+            match &mgr_task.task {
+                Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
+                    return migrating_task.send_sync_task(cmd_task)
                 }
+                _ => continue,
             }
         }
 
@@ -353,18 +335,16 @@ where
         )))
     }
 
-    pub fn keys_are_importing(&self, cluster_name: &ClusterName, keys: &[BinSafeStr]) -> bool {
-        if let Some(tasks) = self.task_map.get(cluster_name) {
-            let slots: Vec<usize> = keys
-                .iter()
-                .map(|key| generate_slot(key.as_slice()))
-                .collect();
-            for mgr_task in tasks.values() {
-                if let Either::Right(importing_task) = &mgr_task.task {
-                    for slot in slots.iter() {
-                        if importing_task.contains_slot(*slot) {
-                            return true;
-                        }
+    pub fn keys_are_importing(&self, keys: &[BinSafeStr]) -> bool {
+        let slots: Vec<usize> = keys
+            .iter()
+            .map(|key| generate_slot(key.as_slice()))
+            .collect();
+        for mgr_task in self.task_map.values() {
+            if let Either::Right(importing_task) = &mgr_task.task {
+                for slot in slots.iter() {
+                    if importing_task.contains_slot(*slot) {
+                        return true;
                     }
                 }
             }
@@ -376,8 +356,9 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn update_from_old_task_map<RCF, CTF, BCF, TSF, DTSF, PTSF>(
         &self,
-        local_cluster_map: &ProxyClusterMap,
-        cluster_config_map: &ClusterConfigMap,
+        cluster_name: ClusterName,
+        local_cluster_map: &HashMap<String, Vec<SlotRange>>,
+        cluster_config: &ClusterConfig,
         config: Arc<ServerProxyConfig>,
         mgr_config: Arc<AtomicMigrationConfig>,
         client_factory: Arc<RCF>,
@@ -402,12 +383,9 @@ where
     {
         let old_task_map = &self.task_map;
 
-        let new_cluster_map = local_cluster_map.get_map();
+        let mut migration_tasks = HashMap::new();
 
-        let mut migration_clusters = HashMap::new();
-
-        for (cluster_name, node_map) in new_cluster_map.iter() {
-            for (_node, slot_ranges) in node_map.iter() {
+            for slot_ranges in local_cluster_map.values() {
                 for slot_range in slot_ranges.iter() {
                     match slot_range.tag {
                         SlotRangeTag::Migrating(ref _meta) => {
@@ -415,14 +393,9 @@ where
                                 cluster_name: cluster_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(migrating_task) = old_task_map
-                                .get(cluster_name)
-                                .and_then(|tasks| tasks.get(&migration_meta))
+                            if let Some(migrating_task) = old_task_map.get(&migration_meta)
                             {
-                                let tasks = migration_clusters
-                                    .entry(cluster_name.clone())
-                                    .or_insert_with(HashMap::new);
-                                tasks.insert(migration_meta, migrating_task.clone());
+                                migration_tasks.insert(migration_meta, migrating_task.clone());
                             }
                         }
                         SlotRangeTag::Importing(ref _meta) => {
@@ -430,26 +403,19 @@ where
                                 cluster_name: cluster_name.clone(),
                                 slot_range: slot_range.clone(),
                             };
-                            if let Some(importing_task) = old_task_map
-                                .get(cluster_name)
-                                .and_then(|tasks| tasks.get(&migration_meta))
+                            if let Some(importing_task) = old_task_map.get(&migration_meta)
                             {
-                                let tasks = migration_clusters
-                                    .entry(cluster_name.clone())
-                                    .or_insert_with(HashMap::new);
-                                tasks.insert(migration_meta, importing_task.clone());
+                                migration_tasks.insert(migration_meta, importing_task.clone());
                             }
                         }
                         SlotRangeTag::None => continue,
                     }
                 }
             }
-        }
 
         let mut new_tasks = Vec::new();
 
-        for (cluster_name, node_map) in new_cluster_map.iter() {
-            for (_node, slot_ranges) in node_map.iter() {
+            for slot_ranges in local_cluster_map.values() {
                 for slot_range in slot_ranges {
                     match slot_range.tag {
                         SlotRangeTag::Migrating(ref meta) => {
@@ -459,22 +425,15 @@ where
                                 slot_range: slot_range.clone(),
                             };
 
-                            if Some(true)
-                                == migration_clusters
-                                    .get(cluster_name)
-                                    .map(|tasks| tasks.contains_key(&migration_meta))
+                            if migration_tasks.contains_key(&migration_meta)
                             {
                                 continue;
                             }
 
-                            let cluster_mgr_config = match cluster_config_map.get(cluster_name) {
-                                Some(cluster_config) => {
-                                    Arc::new(AtomicMigrationConfig::from_config(
-                                        cluster_config.migration_config,
-                                    ))
-                                }
-                                None => mgr_config.clone(),
-                            };
+                            let cluster_mgr_config = Arc::new(AtomicMigrationConfig::from_config(
+                                cluster_config.migration_config.clone(),
+                            ));
+
                             let ctrl = blocking_ctrl_factory.create(meta.src_node_address.clone());
                             let task = Arc::new(RedisScanMigratingTask::new(
                                 config.clone(),
@@ -491,15 +450,12 @@ where
                                 range_list: slot_range.to_range_list(),
                                 task: Either::Left(task.clone()),
                             });
-                            let tasks = migration_clusters
-                                .entry(cluster_name.clone())
-                                .or_insert_with(HashMap::new);
                             let stop_handle = task.get_stop_handle();
                             let mgr_task = MgrTask {
                                 task: Either::Left(task),
                                 _stop_handle: stop_handle,
                             };
-                            tasks.insert(migration_meta, Arc::new(mgr_task));
+                            migration_tasks.insert(migration_meta, Arc::new(mgr_task));
                         }
                         SlotRangeTag::Importing(ref meta) => {
                             let epoch = meta.epoch;
@@ -508,10 +464,7 @@ where
                                 slot_range: slot_range.clone(),
                             };
 
-                            if Some(true)
-                                == migration_clusters
-                                    .get(cluster_name)
-                                    .map(|tasks| tasks.contains_key(&migration_meta))
+                            if migration_tasks.contains_key(&migration_meta)
                             {
                                 continue;
                             }
@@ -533,28 +486,25 @@ where
                                 range_list: slot_range.to_range_list(),
                                 task: Either::Right(task.clone()),
                             });
-                            let tasks = migration_clusters
-                                .entry(cluster_name.clone())
-                                .or_insert_with(HashMap::new);
                             let stop_handle = task.get_stop_handle();
                             let mgr_task = MgrTask {
                                 task: Either::Right(task),
                                 _stop_handle: stop_handle,
                             };
-                            tasks.insert(migration_meta, Arc::new(mgr_task));
+                            migration_tasks.insert(migration_meta, Arc::new(mgr_task));
                         }
                         SlotRangeTag::None => continue,
                     }
                 }
             }
-        }
 
-        let empty = migration_clusters.is_empty();
+        let empty = migration_tasks.is_empty();
 
         (
             Self {
                 empty,
-                task_map: migration_clusters,
+                cluster_name,
+                task_map: migration_tasks,
             },
             new_tasks,
         )
@@ -565,34 +515,35 @@ where
         switch_arg: SwitchArg,
         sub_cmd: MgrSubCmd,
     ) -> Result<(), SwitchError> {
-        if let Some(tasks) = self.task_map.get(&switch_arg.meta.cluster_name) {
+        if self.cluster_name == switch_arg.meta.cluster_name {
             debug!(
                 "found tasks for cluster {} {}",
                 switch_arg.meta.cluster_name,
-                tasks.len()
+                self.task_map.len()
             );
 
-            if let Some(mgr_task) = tasks.get(&switch_arg.meta) {
+            if let Some(mgr_task) = self.task_map.get(&switch_arg.meta) {
                 debug!("found record for cluster {}", switch_arg.meta.cluster_name);
-                match &mgr_task.task {
+                return match &mgr_task.task {
                     Either::Left(_migrating_task) => {
                         error!(
                             "Received switch request when migrating {:?}",
                             switch_arg.meta
                         );
-                        return Err(SwitchError::PeerMigrating);
+                        Err(SwitchError::PeerMigrating)
                     }
                     Either::Right(importing_task) => {
-                        return importing_task.handle_switch(switch_arg, sub_cmd).map_err(
+                        importing_task.handle_switch(switch_arg, sub_cmd).map_err(
                             |e| match e {
                                 MigrationError::NotReady => SwitchError::NotReady,
                                 others => SwitchError::MgrErr(others),
                             },
-                        );
+                        )
                     }
                 }
             }
         }
+
         warn!("No corresponding task found {:?}", switch_arg.meta);
         Err(SwitchError::TaskNotFound)
     }
@@ -600,8 +551,7 @@ where
     pub fn get_finished_tasks(&self) -> Vec<MigrationTaskMeta> {
         let mut metadata = vec![];
         {
-            for (_cluster_name, tasks) in self.task_map.iter() {
-                for (meta, mgr_task) in tasks.iter() {
+                for (meta, mgr_task) in self.task_map.iter() {
                     let state = match &mgr_task.task {
                         Either::Left(migrating_task) => migrating_task.get_state(),
                         Either::Right(importing_task) => importing_task.get_state(),
@@ -610,22 +560,19 @@ where
                         metadata.push(meta.clone());
                     }
                 }
-            }
         }
         metadata
     }
 
-    pub fn get_states(&self, cluster_name: &ClusterName) -> HashMap<RangeList, MigrationState> {
+    pub fn get_states(&self) -> HashMap<RangeList, MigrationState> {
         let mut m = HashMap::new();
-        if let Some(tasks) = self.task_map.get(cluster_name) {
-            for (meta, mgr_task) in tasks.iter() {
+            for (meta, mgr_task) in self.task_map.iter() {
                 let state = match &mgr_task.task {
                     Either::Left(migrating_task) => migrating_task.get_state(),
                     Either::Right(importing_task) => importing_task.get_state(),
                 };
                 m.insert(meta.slot_range.to_range_list(), state);
             }
-        }
         m
     }
 }

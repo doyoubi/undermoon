@@ -104,7 +104,6 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
         address,
         announce_address,
         announce_host,
-        auto_select_cluster: s.get::<bool>("auto_select_cluster").unwrap_or(true),
         slowlog_len,
         slowlog_log_slower_than: AtomicI64::new(
             s.get::<i64>("slowlog_log_slower_than").unwrap_or(50000),

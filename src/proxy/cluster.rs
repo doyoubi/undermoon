@@ -1,7 +1,7 @@
 use super::backend::{BackendError, CmdTask, IntoTask, SenderBackendError};
 use super::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use super::slot::SlotMap;
-use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag};
+use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag, EMPTY_CLUSTER_NAME};
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::utils::gen_moved;
@@ -35,39 +35,30 @@ impl Error for ClusterMetaError {
     }
 }
 
-pub trait ClusterTag {
-    fn get_cluster_name(&self) -> &ClusterName;
-    fn set_cluster_name(&mut self, cluster_name: ClusterName);
-}
-
 pub struct ClusterBackendMap<S: CmdTaskSender, P: CmdTaskSender>
 where
-    <S as CmdTaskSender>::Task: ClusterTag,
-    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
-    local_clusters: HashMap<ClusterName, LocalCluster<S>>,
-    remote_clusters: HashMap<ClusterName, RemoteCluster<P>>,
+    cluster_name: ClusterName,
+    local_cluster: LocalCluster<S>,
+    remote_cluster: RemoteCluster<P>,
 }
 
 impl<S: CmdTaskSender, P: CmdTaskSender> Default for ClusterBackendMap<S, P>
 where
-    <S as CmdTaskSender>::Task: ClusterTag,
-    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     fn default() -> Self {
         Self {
-            local_clusters: HashMap::new(),
-            remote_clusters: HashMap::new(),
+            cluster_name: EMPTY_CLUSTER_NAME.clone(),
+            local_cluster: LocalCluster::default(),
+            remote_cluster: RemoteCluster::default(),
         }
     }
 }
 
 impl<S: CmdTaskSender, P: CmdTaskSender> ClusterBackendMap<S, P>
 where
-    <S as CmdTaskSender>::Task: ClusterTag,
-    <P as CmdTaskSender>::Task: ClusterTag,
     <S as CmdTaskSender>::Task: IntoTask<<P as CmdTaskSender>::Task>,
 {
     pub fn from_cluster_map<
@@ -78,72 +69,46 @@ where
         sender_factory: &F,
         peer_sender_factory: &PF,
         active_redirection: bool,
-        cluster_config: &ClusterConfig,
+        proxy_cluster_config: &ClusterConfig,
     ) -> Self {
         let epoch = cluster_meta.get_epoch();
+        let cluster_name = cluster_meta.get_cluster_name().clone();
+        let config = cluster_meta.get_config().clone();
 
-        let mut local_clusters = HashMap::new();
-        for (cluster_name, slot_ranges) in cluster_meta.get_local().get_map().iter() {
-            let config = cluster_meta
-                .get_configs()
-                .get(cluster_name)
-                .unwrap_or_else(|| cluster_config.clone());
+        let slot_ranges = cluster_meta.get_local().clone();
             let local_cluster = LocalCluster::from_slot_map(
                 sender_factory,
                 cluster_name.clone(),
                 epoch,
-                slot_ranges.clone(),
+                slot_ranges,
                 config,
             );
-            local_clusters.insert(cluster_name.clone(), local_cluster);
-        }
 
-        let mut remote_clusters = HashMap::new();
-        for (cluster_name, slot_ranges) in cluster_meta.get_peer().get_map().iter() {
+        let peer_slot_ranges = cluster_meta.get_peer().clone();
             let remote_cluster = RemoteCluster::from_slot_map(
                 peer_sender_factory,
                 cluster_name.clone(),
                 epoch,
-                slot_ranges.clone(),
+                peer_slot_ranges,
                 active_redirection,
             );
-            remote_clusters.insert(cluster_name.clone(), remote_cluster);
-        }
         Self {
-            local_clusters,
-            remote_clusters,
+            cluster_name,
+            local_cluster,
+            remote_cluster,
         }
     }
 
     pub fn info(&self) -> RespVec {
-        let local = self
-            .local_clusters
-            .iter()
-            .map(|(cluster_name, local_cluster)| {
-                let info = local_cluster.info();
-                Resp::Arr(Array::Arr(vec![
-                    Resp::Bulk(BulkStr::Str(cluster_name.as_bytes())),
-                    info,
-                ]))
-            })
-            .collect::<Vec<RespVec>>();
-        let peer = self
-            .remote_clusters
-            .iter()
-            .map(|(cluster_name, remote_cluster)| {
-                let info = remote_cluster.info();
-                Resp::Arr(Array::Arr(vec![
-                    Resp::Bulk(BulkStr::Str(cluster_name.as_bytes())),
-                    info,
-                ]))
-            })
-            .collect::<Vec<RespVec>>();
+        let local = self.local_cluster.info();
+        let peer = self.remote_cluster.info();
 
         Resp::Arr(Array::Arr(vec![
+            Resp::Bulk(BulkStr::Str(self.cluster_name.to_string().into_bytes())),
             Resp::Bulk(BulkStr::Str(b"local".to_vec())),
-            Resp::Arr(Array::Arr(local)),
+            local,
             Resp::Bulk(BulkStr::Str(b"peer".to_vec())),
-            Resp::Arr(Array::Arr(peer)),
+            peer,
         ]))
     }
 
@@ -151,34 +116,12 @@ where
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
     ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
-        let (cmd_task, cluster_exists) = match self.local_clusters.get(cmd_task.get_cluster_name())
-        {
-            Some(local_cluster) => match local_cluster.send(cmd_task) {
-                Err(ClusterSendError::SlotNotFound(cmd_task)) => (cmd_task, true),
-                others => return others,
-            },
-            None => (cmd_task, false),
+        let cmd_task = match self.local_cluster.send(cmd_task) {
+            Err(ClusterSendError::SlotNotFound(cmd_task)) => cmd_task,
+            others => return others,
         };
 
-        match self.remote_clusters.get(cmd_task.get_cluster_name()) {
-            Some(remote_cluster) => remote_cluster.send_remote(cmd_task),
-            None => {
-                if cluster_exists {
-                    let resp = Resp::Error(
-                        format!("slot not found: {}", cmd_task.get_cluster_name()).into_bytes(),
-                    );
-                    cmd_task.set_resp_result(Ok(resp));
-                    Err(ClusterSendError::SlotNotCovered)
-                } else {
-                    let cluster_name = cmd_task.get_cluster_name().to_string();
-                    debug!("cluster not found: {}", cluster_name);
-                    Err(ClusterSendError::ClusterNotFound {
-                        task: cmd_task,
-                        cluster_name,
-                    })
-                }
-            }
-        }
+        self.remote_cluster.send_remote(cmd_task)
     }
 
     pub fn send_remote_directly(
@@ -187,112 +130,60 @@ where
         slot: usize,
         address: String,
     ) -> Result<(), ClusterSendError<<P as CmdTaskSender>::Task>> {
-        match self.remote_clusters.get(cmd_task.get_cluster_name()) {
-            Some(remote_cluster) => {
-                remote_cluster.send_remote_directly(cmd_task, slot, address.as_str())
-            }
-            None => {
-                let resp = Resp::Error(
-                    format!("slot not found: {}", cmd_task.get_cluster_name()).into_bytes(),
-                );
-                cmd_task.set_resp_result(Ok(resp));
-                Err(ClusterSendError::SlotNotCovered)
-            }
-        }
+        self.remote_cluster.send_remote_directly(cmd_task, slot, address.as_str())
     }
 
-    pub fn get_clusters(&self) -> Vec<ClusterName> {
-        self.local_clusters.keys().cloned().collect()
+    pub fn get_cluster(&self) -> ClusterName {
+        self.cluster_name.clone()
     }
 
     pub fn gen_cluster_nodes(
         &self,
-        cluster_name: ClusterName,
         service_address: String,
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> String {
-        let local =
-            self.local_clusters
-                .get(&cluster_name)
-                .map_or("".to_string(), |local_cluster| {
-                    local_cluster.gen_local_cluster_nodes(service_address, migration_states)
-                });
-        let remote = self
-            .remote_clusters
-            .get(&cluster_name)
-            .map_or("".to_string(), |remote_cluster| {
-                remote_cluster.gen_remote_cluster_nodes(migration_states)
-            });
+        let local = self.local_cluster.gen_local_cluster_nodes(service_address, migration_states);
+        let remote = self.remote_cluster.gen_remote_cluster_nodes(migration_states);
+
         format!("{}{}", local, remote)
     }
 
     pub fn gen_cluster_slots(
         &self,
-        cluster_name: ClusterName,
         service_address: String,
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> Result<RespVec, String> {
-        let mut local =
-            self.local_clusters
-                .get(&cluster_name)
-                .map_or(Ok(vec![]), |local_cluster| {
-                    local_cluster.gen_local_cluster_slots(service_address, migration_states)
-                })?;
-        let mut remote = self
-            .remote_clusters
-            .get(&cluster_name)
-            .map_or(Ok(vec![]), |remote_cluster| {
-                remote_cluster.gen_remote_cluster_slots(migration_states)
-            })?;
+        let mut local = self.local_cluster.gen_local_cluster_slots(service_address, migration_states)?;
+        let mut remote = self.remote_cluster.gen_remote_cluster_slots(migration_states)?;
         local.append(&mut remote);
         Ok(Resp::Arr(Array::Arr(local)))
     }
 
-    pub fn is_ready(&self, cluster_name: ClusterName) -> bool {
-        self.local_clusters
-            .get(&cluster_name)
-            .map_or(false, |local_cluster| local_cluster.is_ready())
+    pub fn is_ready(&self) -> bool {
+        self.local_cluster.is_ready()
     }
 
-    pub fn auto_select_cluster(&self) -> Option<ClusterName> {
-        {
-            let local = &self.local_clusters;
-            match local.len() {
-                0 => (),
-                1 => return local.keys().next().cloned(),
-                _ => return None,
-            }
-        }
-        {
-            let remote = &self.remote_clusters;
-            if remote.len() == 1 {
-                return remote.keys().next().cloned();
-            }
-        }
-        None
+    pub fn get_config(&self) -> &ClusterConfig {
+        &self.local_cluster.config
     }
 
-    pub fn get_config(&self, cluster_name: &ClusterName) -> Option<&ClusterConfig> {
-        self.local_clusters
-            .get(cluster_name)
-            .map(|local_cluster| &local_cluster.config)
-    }
-
-    pub fn cluster_exists(&self, cluster_name: &ClusterName) -> bool {
-        self.local_clusters.contains_key(cluster_name)
-            || self.remote_clusters.contains_key(cluster_name)
-    }
-
-    pub fn get_cluster_any_node(&self, cluster_name: &ClusterName) -> Option<String> {
-        self.local_clusters
-            .get(cluster_name)
-            .and_then(|cluster| cluster.get_any_node())
+    pub fn get_cluster_any_node(&self) -> Option<String> {
+        self.local_cluster.get_any_node()
     }
 }
 
 struct SenderMap<S: CmdTaskSender> {
     nodes: HashMap<String, S>,
     slot_map: SlotMap,
+}
+
+impl<S: CmdTaskSender> Default for SenderMap<S> {
+    fn default() -> Self {
+        Self {
+            nodes: HashMap::default(),
+            slot_map: SlotMap::from_ranges(HashMap::default()),
+        }
+    }
 }
 
 impl<S: CmdTaskSender> SenderMap<S> {
@@ -312,11 +203,23 @@ impl<S: CmdTaskSender> SenderMap<S> {
 }
 
 pub struct LocalCluster<S: CmdTaskSender> {
-    name: ClusterName,
+    cluster_name: ClusterName,
     epoch: u64,
     local_backend: SenderMap<S>,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     config: ClusterConfig,
+}
+
+impl<S: CmdTaskSender> Default for LocalCluster<S> {
+    fn default() -> Self {
+        Self {
+            cluster_name: EMPTY_CLUSTER_NAME.clone(),
+            epoch: 0,
+            local_backend: SenderMap::default(),
+            slot_ranges: HashMap::default(),
+            config: ClusterConfig::default(),
+        }
+    }
 }
 
 impl<S: CmdTaskSender> LocalCluster<S> {
@@ -329,7 +232,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
     ) -> Self {
         let local_backend = SenderMap::from_slot_map(sender_factory, &slot_map);
         LocalCluster {
-            name,
+            cluster_name: name,
             epoch,
             local_backend,
             slot_ranges: slot_map,
@@ -339,7 +242,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
 
     pub fn info(&self) -> RespVec {
         let lines = vec![
-            format!("name: {}", self.name),
+            format!("name: {}", self.cluster_name),
             format!("epoch: {}", self.epoch),
             "nodes:".to_string(),
         ];
@@ -355,6 +258,12 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         &self,
         cmd_task: <S as CmdTaskSender>::Task,
     ) -> Result<(), ClusterSendError<<S as CmdTaskSender>::Task>> {
+        if self.cluster_name.is_empty() {
+            return Err(ClusterSendError::ClusterNotFound {
+                task: cmd_task,
+            })
+        }
+
         let slot = match cmd_task.get_slot() {
             Some(slot) => slot,
             None => {
@@ -391,7 +300,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
-        gen_cluster_nodes_helper(&self.name, self.epoch, &slot_ranges, migration_states, true)
+        gen_cluster_nodes_helper(&self.cluster_name, self.epoch, &slot_ranges, migration_states, true)
     }
 
     pub fn gen_local_cluster_slots(
@@ -407,7 +316,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
-        gen_cluster_slots_helper(&self.name, &slot_ranges, migration_states)
+        gen_cluster_slots_helper(&self.cluster_name, &slot_ranges, migration_states)
     }
 
     pub fn is_ready(&self) -> bool {
@@ -432,11 +341,23 @@ fn is_ready(slot_ranges: &HashMap<String, Vec<SlotRange>>) -> bool {
 }
 
 pub struct RemoteCluster<P: CmdTaskSender> {
-    name: ClusterName,
+    cluster_name: ClusterName,
     epoch: u64,
     slot_map: SlotMap,
     slot_ranges: HashMap<String, Vec<SlotRange>>,
     remote_backend: Option<SenderMap<P>>,
+}
+
+impl<P: CmdTaskSender> Default for RemoteCluster<P> {
+    fn default() -> Self {
+        Self {
+            cluster_name: EMPTY_CLUSTER_NAME.clone(),
+            epoch: 0,
+            slot_map: SlotMap::from_ranges(HashMap::default()),
+            slot_ranges: HashMap::default(),
+            remote_backend: None,
+        }
+    }
 }
 
 impl<P: CmdTaskSender> RemoteCluster<P> {
@@ -453,7 +374,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
             None
         };
         Self {
-            name,
+            cluster_name: name,
             epoch,
             slot_map: SlotMap::from_ranges(slot_map.clone()),
             slot_ranges: slot_map,
@@ -472,6 +393,12 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
     }
 
     pub fn send_remote<T: CmdTask>(&self, cmd_task: T) -> Result<(), ClusterSendError<T>> {
+        if self.cluster_name.is_empty() {
+            return Err(ClusterSendError::ClusterNotFound {
+                task: cmd_task,
+            })
+        }
+
         let slot = match cmd_task.get_slot() {
             Some(slot) => slot,
             None => {
@@ -531,7 +458,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> String {
         gen_cluster_nodes_helper(
-            &self.name,
+            &self.cluster_name,
             self.epoch,
             &self.slot_ranges,
             migration_states,
@@ -543,7 +470,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
         &self,
         migration_states: &HashMap<RangeList, MigrationState>,
     ) -> Result<Vec<RespVec>, String> {
-        gen_cluster_slots_helper(&self.name, &self.slot_ranges, migration_states)
+        gen_cluster_slots_helper(&self.cluster_name, &self.slot_ranges, migration_states)
     }
 }
 
@@ -587,7 +514,6 @@ pub enum ClusterSendError<T: CmdTask> {
     MissingKey,
     ClusterNotFound {
         task: T,
-        cluster_name: String,
     },
     SlotNotFound(T),
     SlotNotCovered,
@@ -622,8 +548,7 @@ impl<T: CmdTask> fmt::Debug for ClusterSendError<T> {
             Self::MissingKey => "ClusterSendError::MissingKey".to_string(),
             Self::ClusterNotFound {
                 task: _,
-                cluster_name,
-            } => format!("ClusterSendError::ClusterNotFound({})", cluster_name),
+            } => "ClusterSendError::ClusterNotFound".to_string(),
             Self::SlotNotFound(_) => "ClusterSendError::SlotNotFound".to_string(),
             Self::SlotNotCovered => "ClusterSendError::SlotNotCovered".to_string(),
             Self::Backend(err) => format!("ClusterSendError::Backend({})", err),
@@ -660,9 +585,8 @@ impl<T: CmdTask> ClusterSendError<T> {
     {
         match self {
             Self::MissingKey => ClusterSendError::MissingKey,
-            Self::ClusterNotFound { task, cluster_name } => ClusterSendError::ClusterNotFound {
+            Self::ClusterNotFound { task } => ClusterSendError::ClusterNotFound {
                 task: f(task),
-                cluster_name,
             },
             Self::SlotNotFound(task) => ClusterSendError::SlotNotFound(f(task)),
             Self::Backend(err) => ClusterSendError::Backend(err),

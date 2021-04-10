@@ -1,5 +1,5 @@
 use super::backend::{CmdTask, CmdTaskFactory, CmdTaskResult};
-use super::cluster::{ClusterTag, DEFAULT_CLUSTER};
+use super::cluster::{DEFAULT_CLUSTER};
 use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
     CommandResult, DataCmdType, TaskReply, TaskResult,
@@ -40,6 +40,7 @@ pub trait CmdCtxHandler {
         &self,
         cmd_ctx: CmdCtx,
         result_receiver: CmdReplyReceiver,
+        // TODO: Need to change this to password
         session_cluster_name: &parking_lot::RwLock<ClusterName>,
     ) -> CmdReplyFuture;
 }
@@ -49,13 +50,11 @@ pub struct CmdCtx {
     cmd: Command,
     reply_sender: CmdReplySender,
     slowlog: Slowlog,
-    cluster_name: ClusterName,
     redirection_times: Option<usize>,
 }
 
 impl CmdCtx {
     pub fn new(
-        cluster_name: ClusterName,
         cmd: Command,
         reply_sender: CmdReplySender,
         session_id: usize,
@@ -66,17 +65,12 @@ impl CmdCtx {
             cmd,
             reply_sender,
             slowlog,
-            cluster_name,
             redirection_times: None,
         }
     }
 
     pub fn get_cmd(&self) -> &Command {
         &self.cmd
-    }
-
-    pub fn get_cluster(&self) -> ClusterName {
-        self.cluster_name.clone()
     }
 
     pub fn get_session_id(&self) -> usize {
@@ -114,7 +108,6 @@ impl CmdCtx {
 }
 
 pub struct SessionContext {
-    cluster_name: ClusterName,
     session_id: usize,
     slowlog_enabled: bool,
 }
@@ -157,7 +150,6 @@ impl CmdTask for CmdCtx {
 
     fn get_context(&self) -> Self::Context {
         SessionContext {
-            cluster_name: self.cluster_name.clone(),
             session_id: self.get_session_id(),
             slowlog_enabled: self.slowlog.is_enabled(),
         }
@@ -172,16 +164,6 @@ impl CmdTask for CmdCtx {
 
     fn log_event(&mut self, event: TaskEvent) {
         self.slowlog.log_event(event);
-    }
-}
-
-impl ClusterTag for CmdCtx {
-    fn get_cluster_name(&self) -> &ClusterName {
-        &self.cluster_name
-    }
-
-    fn set_cluster_name(&mut self, cluster_name: ClusterName) {
-        self.cluster_name = cluster_name;
     }
 }
 
@@ -208,11 +190,10 @@ impl CmdTaskFactory for CmdCtxFactory {
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
         let SessionContext {
-            cluster_name,
             session_id,
             slowlog_enabled,
         } = context;
-        let cmd_ctx = CmdCtx::new(cluster_name, cmd, reply_sender, session_id, slowlog_enabled);
+        let cmd_ctx = CmdCtx::new(cmd, reply_sender, session_id, slowlog_enabled);
         let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
     }
@@ -247,13 +228,11 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
-        let cluster_name = self.cluster_name.read().clone();
 
         let slowlog_enabled = self
             .slow_request_logger
             .limit_rate(self.config.get_slowlog_sample_rate());
         let mut cmd_ctx = CmdCtx::new(
-            cluster_name,
             cmd,
             reply_sender,
             self.session_id,
@@ -411,7 +390,6 @@ impl Error for SessionError {
 mod tests {
     use super::*;
     use crate::protocol::{Array, BulkStr, Resp};
-    use std::convert::TryFrom;
     use tokio;
 
     #[tokio::test]
@@ -419,10 +397,9 @@ mod tests {
         let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(
             b"PING".to_vec(),
         ))])));
-        let cluster_name = ClusterName::try_from("mycluster").unwrap();
         let cmd = Command::new(Box::new(request));
         let (sender, receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799, true);
+        let cmd_ctx = CmdCtx::new(cmd, sender, 7799, true);
         drop(cmd_ctx);
         let err = match receiver.await {
             Ok(_) => panic!(),

@@ -1,5 +1,5 @@
 use super::backend::{CmdTask, CmdTaskFactory, ConnFactory};
-use super::cluster::{ClusterMetaError, ClusterTag};
+use super::cluster::{ClusterMetaError};
 use super::command::{CmdReplyReceiver, CmdType, DataCmdType, TaskResult};
 use super::compress::{CmdCompressor, CompressionError, CompressionStrategyMetaMapConfig};
 use super::manager::{MetaManager, SharedMetaMap};
@@ -30,7 +30,6 @@ use futures::channel::mpsc;
 use futures::future;
 use futures_timer::Delay;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::str;
 use std::sync::{self, Arc};
 use std::time::Duration;
@@ -162,36 +161,36 @@ where
 
     fn handle_auth(
         &self,
-        mut cmd_ctx: CmdCtx,
+        cmd_ctx: CmdCtx,
         session_cluster_name: &parking_lot::RwLock<ClusterName>,
     ) {
-        let key = cmd_ctx.get_key();
-        let cluster = match key {
-            None => {
-                return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Missing cluster name").into_bytes(),
-                )));
-            }
-            Some(cluster_name) => match str::from_utf8(&cluster_name) {
-                Ok(cluster) => cluster.to_string(),
-                Err(_) => {
-                    return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                        String::from("Invalid cluster name").into_bytes(),
-                    )));
-                }
-            },
-        };
-        let cluster_name = match ClusterName::try_from(cluster.as_str()) {
-            Ok(cluster_name) => cluster_name,
-            _err => {
-                return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Cluster name is too long").into_bytes(),
-                )));
-            }
-        };
-
-        *session_cluster_name.write() = cluster_name.clone();
-        cmd_ctx.set_cluster_name(cluster_name);
+        // let key = cmd_ctx.get_key();
+        // let cluster = match key {
+        //     None => {
+        //         return cmd_ctx.set_resp_result(Ok(Resp::Error(
+        //             String::from("Missing cluster name").into_bytes(),
+        //         )));
+        //     }
+        //     Some(cluster_name) => match str::from_utf8(&cluster_name) {
+        //         Ok(cluster) => cluster.to_string(),
+        //         Err(_) => {
+        //             return cmd_ctx.set_resp_result(Ok(Resp::Error(
+        //                 String::from("Invalid cluster name").into_bytes(),
+        //             )));
+        //         }
+        //     },
+        // };
+        // let cluster_name = match ClusterName::try_from(cluster.as_str()) {
+        //     Ok(cluster_name) => cluster_name,
+        //     _err => {
+        //         return cmd_ctx.set_resp_result(Ok(Resp::Error(
+        //             String::from("Cluster name is too long").into_bytes(),
+        //         )));
+        //     }
+        // };
+        //
+        // *session_cluster_name.write() = cluster_name.clone();
+        // cmd_ctx.set_cluster_name(cluster_name);
         cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
     }
 
@@ -204,12 +203,12 @@ where
         if str_ascii_case_insensitive_eq(&sub_cmd, "nodes") {
             let cluster_nodes = self
                 .manager
-                .gen_cluster_nodes(cmd_ctx.get_cluster_name().clone());
+                .gen_cluster_nodes();
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else if str_ascii_case_insensitive_eq(&sub_cmd, "slots") {
             let cluster_slots = self
                 .manager
-                .gen_cluster_slots(cmd_ctx.get_cluster_name().clone());
+                .gen_cluster_slots();
             match cluster_slots {
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
                 Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),
@@ -262,12 +261,9 @@ where
         let sub_cmd = sub_cmd.to_uppercase();
 
         if sub_cmd.eq("LISTCLUSTER") {
-            let clusters = self.manager.get_clusters();
-            let resps = clusters
-                .into_iter()
-                .map(|cluster_name| Resp::Bulk(BulkStr::Str(cluster_name.to_string().into_bytes())))
-                .collect();
-            cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
+            let cluster_name = self.manager.get_cluster();
+            let resp = Resp::Bulk(BulkStr::Str(cluster_name.to_string().into_bytes()));
+            cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![resp]))));
         } else if sub_cmd.eq("SETCLUSTER") {
             self.handle_umctl_set_cluster(cmd_ctx);
         } else if sub_cmd.eq("SETREPL") {
@@ -474,7 +470,7 @@ where
     }
 
     fn handle_umctl_ready(&self, cmd_ctx: CmdCtx) {
-        let is_ready = self.manager.is_ready(cmd_ctx.get_cluster());
+        let is_ready = self.manager.is_ready();
         let n = if is_ready { 1 } else { 0 };
         cmd_ctx.set_resp_result(Ok(Resp::Integer(n.to_string().into_bytes())))
     }
@@ -1311,11 +1307,6 @@ where
         reply_receiver: CmdReplyReceiver,
         session_cluster_name: &parking_lot::RwLock<ClusterName>,
     ) -> CmdReplyFuture {
-        let mut cmd_ctx = cmd_ctx;
-        if self.config.auto_select_cluster {
-            cmd_ctx = self.manager.try_select_cluster(cmd_ctx);
-        }
-
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {
             CmdType::Ping => {

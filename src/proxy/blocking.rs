@@ -2,7 +2,6 @@ use super::backend::{
     CmdTask, CmdTaskResultHandler, CmdTaskResultHandlerFactory, ConnFactory, IntoTask,
     SenderBackendError,
 };
-use super::cluster::ClusterTag;
 use super::command::{CommandError, CommandResult};
 use super::sender::{
     CachedSenderFactory, CmdTaskSender, CmdTaskSenderFactory, RecoverableBackendNodeFactory,
@@ -12,7 +11,6 @@ use super::service::ServerProxyConfig;
 use super::slowlog::TaskEvent;
 use crate::common::batch::BatchStats;
 use crate::common::biatomic::BiAtomicU32;
-use crate::common::cluster::ClusterName;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{ThreadSafe, Wrapper};
 use crate::protocol::{Resp, RespVec};
@@ -470,16 +468,6 @@ impl<T: CmdTask> From<CounterTask<T>> for Wrapper<T> {
     }
 }
 
-impl<T: CmdTask + ClusterTag> ClusterTag for CounterTask<T> {
-    fn get_cluster_name(&self) -> &ClusterName {
-        self.inner.get_cluster_name()
-    }
-
-    fn set_cluster_name(&mut self, cluster_name: ClusterName) {
-        self.inner.set_cluster_name(cluster_name)
-    }
-}
-
 impl<T: CmdTask> CmdTask for CounterTask<T> {
     type Pkt = T::Pkt;
     type TaskType = T::TaskType;
@@ -584,17 +572,7 @@ impl<T: CmdTask> CmdTask for BlockingHintTask<T> {
     }
 }
 
-impl<T: CmdTask + ClusterTag> ClusterTag for BlockingHintTask<T> {
-    fn get_cluster_name(&self) -> &ClusterName {
-        self.inner.get_cluster_name()
-    }
-
-    fn set_cluster_name(&mut self, cluster_name: ClusterName) {
-        self.inner.set_cluster_name(cluster_name)
-    }
-}
-
-impl<T: CmdTask + ClusterTag> IntoTask<T> for BlockingHintTask<T> {
+impl<T: CmdTask> IntoTask<T> for BlockingHintTask<T> {
     fn into_task(self) -> T {
         self.into_inner()
     }

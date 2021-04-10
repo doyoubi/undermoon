@@ -1104,12 +1104,10 @@ mod tests {
     use super::super::command::{new_command_pair, CmdReplyReceiver, Command};
     use super::super::session::{CmdCtx, CmdCtxFactory};
     use super::*;
-    use crate::common::cluster::ClusterName;
     use crate::protocol::RespPacket;
     use crate::protocol::{BulkStr, Resp};
     use dashmap::DashMap;
     use std::collections::HashMap;
-    use std::convert::TryFrom;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio;
 
@@ -1290,11 +1288,10 @@ mod tests {
                 .map(|s| Resp::Bulk(BulkStr::Str(s.to_string().into_bytes())))
                 .collect(),
         ));
-        let cluster = ClusterName::try_from("mycluster").unwrap();
         let packet = Box::new(RespPacket::from_resp_vec(resp));
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster, cmd, reply_sender, 0, true);
+        let cmd_ctx = CmdCtx::new(cmd, reply_sender, 0, true);
         (cmd_ctx, reply_receiver)
     }
 
