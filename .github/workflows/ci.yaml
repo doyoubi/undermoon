@@ -121,3 +121,17 @@ jobs:
         env:
           CLIENT_TEST_NODE_HOST: 127.0.0.1
           CLIENT_TEST_NODE_PORT: 5299
+      # Run python tests
+      - name: Install Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.8'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        working-directory: ./clienttest/python
+      - name: Run Python client tests
+        run: python redis_py_cluster_test.py
+        working-directory: ./clienttest/python
+        env:
+          CLIENT_TEST_NODE_HOST: 127.0.0.1
+          CLIENT_TEST_NODE_PORT: 5299
