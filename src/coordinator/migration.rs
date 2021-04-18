@@ -139,7 +139,7 @@ mod tests {
     use tokio;
 
     fn gen_testing_dummy_proxy(addr: &str) -> Proxy {
-        Proxy::new(None, addr.to_string(), 7799, vec![], vec![], vec![], None)
+        Proxy::new(None, addr.to_string(), 7799, vec![], vec![], None)
     }
 
     fn create_client_func(_enable_compression: bool) -> impl RedisClient {

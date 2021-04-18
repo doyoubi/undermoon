@@ -70,7 +70,6 @@ fn filter_proxy_masters(proxy: Proxy) -> Proxy {
     let cluster_name = proxy.get_cluster_name().cloned();
     let address = proxy.get_address().to_string();
     let epoch = proxy.get_epoch();
-    let free_nodes = proxy.get_free_nodes().to_vec();
     let peers = proxy.get_peers().to_vec();
     let cluster_config = proxy.get_cluster_config().cloned();
     let masters = proxy
@@ -79,15 +78,7 @@ fn filter_proxy_masters(proxy: Proxy) -> Proxy {
         .filter(|node| node.get_role() == Role::Master)
         .collect();
 
-    Proxy::new(
-        cluster_name,
-        address,
-        epoch,
-        masters,
-        free_nodes,
-        peers,
-        cluster_config,
-    )
+    Proxy::new(cluster_name, address, epoch, masters, peers, cluster_config)
 }
 
 pub struct BrokerMetaRetriever<B: MetaDataBroker> {
@@ -299,7 +290,6 @@ mod tests {
             "127.0.0.1:6000".to_string(),
             7799,
             nodes,
-            vec![],
             vec![],
             Some(ClusterConfig::default()),
         )

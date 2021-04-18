@@ -58,12 +58,23 @@ impl<'a> MetaStoreQuery<'a> {
         let cluster = match cluster_opt {
             Some(cluster_store) => Self::cluster_store_to_cluster(&cluster_store),
             None => {
+                let nodes = proxy_resource
+                    .node_addresses
+                    .iter()
+                    .map(|address| {
+                        Node::new(
+                            address.clone(),
+                            proxy_resource.proxy_address.clone(),
+                            vec![],
+                            ReplMeta::new_free(),
+                        )
+                    })
+                    .collect();
                 return Some(Proxy::new(
                     None,
                     address.to_string(),
                     self.store.global_epoch,
-                    vec![],
-                    proxy_resource.node_addresses.to_vec(),
+                    nodes,
                     vec![],
                     None,
                 ));
@@ -75,6 +86,7 @@ impl<'a> MetaStoreQuery<'a> {
         // But cluster epoch avoid updating the meta of this proxy
         // if only other clusters are changing.
         let epoch = cluster.get_epoch();
+        // `nodes` should not be empty
         let nodes: Vec<Node> = cluster
             .get_nodes()
             .iter()
@@ -82,35 +94,28 @@ impl<'a> MetaStoreQuery<'a> {
             .cloned()
             .collect();
 
-        let (peers, free_nodes) = if nodes.is_empty() {
-            let free_nodes = proxy_resource.node_addresses.to_vec();
-            (vec![], free_nodes)
-        } else {
-            let peers = cluster
-                .get_nodes()
-                .iter()
-                .filter(|n| n.get_role() == Role::Master && n.get_proxy_address() != address)
-                .cloned()
-                .group_by(|node| node.get_proxy_address().to_string())
-                .into_iter()
-                .map(|(proxy_address, nodes)| {
-                    // Collect all slots from masters.
-                    let slots = nodes.map(Node::into_slots).flatten().collect();
-                    PeerProxy {
-                        proxy_address,
-                        slots,
-                    }
-                })
-                .collect();
-            (peers, vec![])
-        };
+        let peers = cluster
+            .get_nodes()
+            .iter()
+            .filter(|n| n.get_role() == Role::Master && n.get_proxy_address() != address)
+            .cloned()
+            .group_by(|node| node.get_proxy_address().to_string())
+            .into_iter()
+            .map(|(proxy_address, nodes)| {
+                // Collect all slots from masters.
+                let slots = nodes.map(Node::into_slots).flatten().collect();
+                PeerProxy {
+                    proxy_address,
+                    slots,
+                }
+            })
+            .collect();
 
         let proxy = Proxy::new(
             Some(cluster_name),
             address.to_string(),
             epoch,
             nodes,
-            free_nodes,
             peers,
             Some(cluster.get_config()),
         );

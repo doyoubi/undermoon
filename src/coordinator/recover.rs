@@ -76,7 +76,6 @@ mod tests {
             7799,
             vec![],
             vec![],
-            vec![],
             None,
         )
     }
