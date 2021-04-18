@@ -67,17 +67,17 @@ mod tests {
     use crate::common::cluster::Proxy;
     use crate::coordinator::core::FailureHandler;
     use futures::{stream, StreamExt};
-    use std::collections::HashMap;
     use tokio;
 
     fn gen_testing_dummy_proxy() -> Proxy {
         Proxy::new(
+            None,
             "127.0.0.1:6000".to_string(),
             7799,
             vec![],
             vec![],
             vec![],
-            HashMap::new(),
+            None,
         )
     }
 

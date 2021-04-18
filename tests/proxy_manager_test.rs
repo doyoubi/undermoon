@@ -22,7 +22,6 @@ mod tests {
     use undermoon::common::cluster::{
         ClusterName, MigrationMeta, MigrationTaskMeta, Range, RangeList, SlotRange, SlotRangeTag,
     };
-    use undermoon::common::config::ClusterConfig;
     use undermoon::common::proto::{ClusterMapFlags, ProxyClusterMeta};
     use undermoon::common::response::{
         ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, ERR_TOO_MANY_REDIRECTIONS,
@@ -48,7 +47,6 @@ mod tests {
             address: "127.0.0.1:5299".to_string(),
             announce_address: "127.0.0.1:5299".to_string(),
             announce_host: "127.0.0.1".to_string(),
-            auto_select_cluster: true,
             slowlog_len: NonZeroUsize::new(1024).unwrap(),
             slowlog_log_slower_than: AtomicI64::new(0),
             slowlog_sample_rate: AtomicU64::new(1),
@@ -64,6 +62,7 @@ mod tests {
             backend_low_flush_interval: Duration::from_nanos(200_000),
             backend_high_flush_interval: Duration::from_nanos(800_000),
             backend_timeout: Duration::from_secs(3),
+            password: None,
         }
     }
 
@@ -78,7 +77,6 @@ mod tests {
         let future_registry = Arc::new(TrackedFutureRegistry::default());
         MetaManager::new(
             config,
-            ClusterConfig::default(),
             client_factory,
             conn_factory,
             meta_map,
@@ -87,7 +85,6 @@ mod tests {
     }
 
     fn gen_set_command(key: BinSafeStr) -> (CmdCtx, CmdReplyReceiver) {
-        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
         let resp = RespPacket::Data(Resp::Arr(Array::Arr(vec![
             Resp::Bulk(BulkStr::Str(b"SET".to_vec())),
             Resp::Bulk(BulkStr::Str(key)),
@@ -95,7 +92,7 @@ mod tests {
         ])));
         let command = Command::new(Box::new(resp));
         let (s, r) = new_command_pair(&command);
-        let cmd_ctx = CmdCtx::new(cluster_name, command, s, 233, true);
+        let cmd_ctx = CmdCtx::new(command, s, 233, true);
         (cmd_ctx, r)
     }
 
@@ -301,18 +298,18 @@ mod tests {
         dst_proxy_address: &str,
     ) -> ProxyClusterMeta {
         let s = if is_source_proxy {
-            format!("{epoch} NOFLAGS \
-            test_cluster 127.0.0.1:6379 1 0-8000 \
-            test_cluster 127.0.0.1:6379 migrating 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000 \
+            format!("{epoch} NOFLAGS test_cluster \
+            127.0.0.1:6379 1 0-8000 \
+            127.0.0.1:6379 migrating 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000 \
             PEER \
-            test_cluster {dst_proxy_address} importing 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000",
+            {dst_proxy_address} importing 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000",
                     epoch=epoch, src_proxy_address=src_proxy_address, dst_proxy_address=dst_proxy_address)
         } else {
-            format!("{epoch} NOFLAGS \
-            test_cluster 127.0.0.1:7000 importing 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000 \
+            format!("{epoch} NOFLAGS test_cluster \
+            127.0.0.1:7000 importing 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000 \
             PEER \
-            test_cluster {src_proxy_address} 1 0-8000 \
-            test_cluster {src_proxy_address} migrating 1 8001-16383 {epoch} {}src_proxy_address 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000",
+            {src_proxy_address} 1 0-8000 \
+            {src_proxy_address} migrating 1 8001-16383 {epoch} {}src_proxy_address 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000",
                     epoch=epoch, src_proxy_address=src_proxy_address, dst_proxy_address=dst_proxy_address)
         };
         let mut iter = s.split(' ').map(|s| s.to_string()).peekable();
@@ -329,19 +326,19 @@ mod tests {
     ) -> ProxyClusterMeta {
         let s = if is_source_proxy {
             format!(
-                "{epoch} NOFLAGS \
-            test_cluster 127.0.0.1:6379 1 0-8000 \
+                "{epoch} NOFLAGS test_cluster \
+            127.0.0.1:6379 1 0-8000 \
             PEER \
-            test_cluster {dst_proxy_address} 1 8001-16383",
+            {dst_proxy_address} 1 8001-16383",
                 epoch = epoch,
                 dst_proxy_address = dst_proxy_address
             )
         } else {
             format!(
-                "{epoch} NOFLAGS \
-            test_cluster 127.0.0.1:7000 1 8001-16383 \
+                "{epoch} NOFLAGS test_cluster \
+            127.0.0.1:7000 1 8001-16383 \
             PEER \
-            test_cluster {src_proxy_address} 1 0-8000",
+            {src_proxy_address} 1 0-8000",
                 epoch = epoch,
                 src_proxy_address = src_proxy_address
             )
@@ -773,20 +770,22 @@ mod tests {
     }
 
     fn gen_active_redirection_proxy1_cluster_meta() -> ProxyClusterMeta {
-        let mut iter = "1 NOFLAGS test_cluster 127.0.0.1:7001 1 0-8000 peer test_cluster 127.0.0.1:6002 1 8001-16383"
-            .split(' ')
-            .map(|s| s.to_string())
-            .peekable();
+        let mut iter =
+            "1 NOFLAGS test_cluster 127.0.0.1:7001 1 0-8000 peer 127.0.0.1:6002 1 8001-16383"
+                .split(' ')
+                .map(|s| s.to_string())
+                .peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
     }
 
     fn gen_active_redirection_proxy2_cluster_meta() -> ProxyClusterMeta {
-        let mut iter = "1 NOFLAGS test_cluster 127.0.0.1:7002 1 8001-16383 peer test_cluster 127.0.0.1:6001 1 0-8000"
-            .split(' ')
-            .map(|s| s.to_string())
-            .peekable();
+        let mut iter =
+            "1 NOFLAGS test_cluster 127.0.0.1:7002 1 8001-16383 peer 127.0.0.1:6001 1 0-8000"
+                .split(' ')
+                .map(|s| s.to_string())
+                .peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
@@ -871,41 +870,35 @@ mod tests {
 
     #[tokio::test]
     async fn test_readiness_stable_slots() {
-        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
-
         let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
-        assert!(!manager.is_ready(cluster_name.clone()));
+        assert!(!manager.is_ready());
 
         let meta = gen_repl_meta_with_both_master_and_replica();
         manager.update_replicators(meta).unwrap();
-        assert!(!manager.is_ready(cluster_name.clone()));
+        assert!(!manager.is_ready());
 
         let meta = gen_proxy_cluster_meta();
         manager.set_meta(meta).unwrap();
-        assert!(manager.is_ready(cluster_name));
+        assert!(manager.is_ready());
     }
 
     #[tokio::test]
     async fn test_readiness_all_masters() {
-        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
-
         let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
-        assert!(!manager.is_ready(cluster_name.clone()));
+        assert!(!manager.is_ready());
 
         let meta = gen_repl_meta_with_all_masters();
         manager.update_replicators(meta).unwrap();
-        assert!(!manager.is_ready(cluster_name));
+        assert!(!manager.is_ready());
     }
 
     #[tokio::test]
     async fn test_readiness_all_replicas() {
-        let cluster_name = ClusterName::try_from(TEST_CLUSTER).unwrap();
-
         let manager = gen_testing_manager(Arc::new(always_ok), gen_config());
-        assert!(!manager.is_ready(cluster_name.clone()));
+        assert!(!manager.is_ready());
 
         let meta = gen_repl_meta_with_all_replicas();
         manager.update_replicators(meta).unwrap();
-        assert!(manager.is_ready(cluster_name));
+        assert!(manager.is_ready());
     }
 }

@@ -1,5 +1,5 @@
 use super::backend::{CmdTask, CmdTaskFactory, ConnFactory};
-use super::cluster::{ClusterMetaError, ClusterTag};
+use super::cluster::ClusterMetaError;
 use super::command::{CmdReplyReceiver, CmdType, DataCmdType, TaskResult};
 use super::compress::{CmdCompressor, CompressionError, CompressionStrategyMetaMapConfig};
 use super::manager::{MetaManager, SharedMetaMap};
@@ -7,8 +7,6 @@ use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use super::table::CommandTable;
-use crate::common::cluster::ClusterName;
-use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
@@ -30,9 +28,8 @@ use futures::channel::mpsc;
 use futures::future;
 use futures_timer::Delay;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::str;
-use std::sync::{self, Arc};
+use std::sync::{self, atomic, Arc};
 use std::time::Duration;
 
 type NonBlockingCommandsWithKey = Vec<(Vec<u8>, RespVec)>;
@@ -61,7 +58,6 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        cluster_config: ClusterConfig,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
         meta_map: SharedMetaMap<C>,
@@ -72,7 +68,6 @@ where
         Self {
             handler: sync::Arc::new(ForwardHandler::new(
                 config,
-                cluster_config,
                 client_factory,
                 slow_request_logger,
                 meta_map,
@@ -93,10 +88,10 @@ where
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+        authenticated: &atomic::AtomicBool,
     ) -> CmdReplyFuture {
         self.handler
-            .handle_cmd_ctx(cmd_ctx, reply_receiver, session_cluster_name)
+            .handle_cmd_ctx(cmd_ctx, reply_receiver, authenticated)
     }
 }
 
@@ -118,7 +113,6 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        cluster_config: ClusterConfig,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
         meta_map: SharedMetaMap<C>,
@@ -130,7 +124,6 @@ where
             config: config.clone(),
             manager: MetaManager::new(
                 config,
-                cluster_config,
                 client_factory,
                 conn_factory,
                 meta_map.clone(),
@@ -160,39 +153,40 @@ where
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(content.into_bytes()))));
     }
 
-    fn handle_auth(
-        &self,
-        mut cmd_ctx: CmdCtx,
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
-    ) {
-        let key = cmd_ctx.get_key();
-        let cluster = match key {
+    fn handle_auth(&self, cmd_ctx: CmdCtx, authenticated: &atomic::AtomicBool) {
+        let password_opt = cmd_ctx.get_key();
+        let pwd = match password_opt {
             None => {
                 return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Missing cluster name").into_bytes(),
+                    String::from("Missing password").into_bytes(),
                 )));
             }
-            Some(cluster_name) => match str::from_utf8(&cluster_name) {
-                Ok(cluster) => cluster.to_string(),
+            Some(pwd) => match str::from_utf8(&pwd) {
+                Ok(pwd) => pwd.to_string(),
                 Err(_) => {
                     return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                        String::from("Invalid cluster name").into_bytes(),
+                        String::from("Invalid password").into_bytes(),
                     )));
                 }
             },
         };
-        let cluster_name = match ClusterName::try_from(cluster.as_str()) {
-            Ok(cluster_name) => cluster_name,
-            _err => {
-                return cmd_ctx.set_resp_result(Ok(Resp::Error(
-                    String::from("Cluster name is too long").into_bytes(),
-                )));
-            }
-        };
 
-        *session_cluster_name.write() = cluster_name.clone();
-        cmd_ctx.set_cluster_name(cluster_name);
-        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+        match self.config.password.as_ref() {
+            None => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(b"no password configured".to_vec())));
+            }
+            Some(conf_pwd) => {
+                if conf_pwd == &pwd {
+                    // Command handler does not run in parallel.
+                    authenticated.store(true, atomic::Ordering::Relaxed);
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple(
+                        response::OK_REPLY.to_string().into_bytes(),
+                    )));
+                } else {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(b"invalid password".to_vec())));
+                }
+            }
+        }
     }
 
     fn handle_cluster(&self, cmd_ctx: CmdCtx) {
@@ -202,14 +196,10 @@ where
         };
 
         if str_ascii_case_insensitive_eq(&sub_cmd, "nodes") {
-            let cluster_nodes = self
-                .manager
-                .gen_cluster_nodes(cmd_ctx.get_cluster_name().clone());
+            let cluster_nodes = self.manager.gen_cluster_nodes();
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else if str_ascii_case_insensitive_eq(&sub_cmd, "slots") {
-            let cluster_slots = self
-                .manager
-                .gen_cluster_slots(cmd_ctx.get_cluster_name().clone());
+            let cluster_slots = self.manager.gen_cluster_slots();
             match cluster_slots {
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
                 Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),
@@ -262,12 +252,9 @@ where
         let sub_cmd = sub_cmd.to_uppercase();
 
         if sub_cmd.eq("LISTCLUSTER") {
-            let clusters = self.manager.get_clusters();
-            let resps = clusters
-                .into_iter()
-                .map(|cluster_name| Resp::Bulk(BulkStr::Str(cluster_name.to_string().into_bytes())))
-                .collect();
-            cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(resps))));
+            let cluster_name = self.manager.get_cluster();
+            let resp = Resp::Bulk(BulkStr::Str(cluster_name.to_string().into_bytes()));
+            cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(vec![resp]))));
         } else if sub_cmd.eq("SETCLUSTER") {
             self.handle_umctl_set_cluster(cmd_ctx);
         } else if sub_cmd.eq("SETREPL") {
@@ -474,7 +461,7 @@ where
     }
 
     fn handle_umctl_ready(&self, cmd_ctx: CmdCtx) {
-        let is_ready = self.manager.is_ready(cmd_ctx.get_cluster());
+        let is_ready = self.manager.is_ready();
         let n = if is_ready { 1 } else { 0 };
         cmd_ctx.set_resp_result(Ok(Resp::Integer(n.to_string().into_bytes())))
     }
@@ -1309,20 +1296,15 @@ where
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+        authenticated: &atomic::AtomicBool,
     ) -> CmdReplyFuture {
-        let mut cmd_ctx = cmd_ctx;
-        if self.config.auto_select_cluster {
-            cmd_ctx = self.manager.try_select_cluster(cmd_ctx);
-        }
-
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {
             CmdType::Ping => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Info => self.handle_info(cmd_ctx),
-            CmdType::Auth => self.handle_auth(cmd_ctx, session_cluster_name),
+            CmdType::Auth => self.handle_auth(cmd_ctx, authenticated),
             CmdType::Quit => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
@@ -1357,7 +1339,17 @@ where
                 let err_msg = b"ERR unknown command `hello`";
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err_msg.to_vec())))
             }
-            CmdType::Others => return self.handle_data_cmd(cmd_ctx, reply_receiver),
+            CmdType::Others => {
+                if self.config.password.is_some() && !authenticated.load(atomic::Ordering::Relaxed)
+                {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        b"Password not given by AUTH command".to_vec(),
+                    )));
+                    return CmdReplyFuture::Left(reply_receiver);
+                }
+
+                return self.handle_data_cmd(cmd_ctx, reply_receiver);
+            }
         };
         CmdReplyFuture::Left(reply_receiver)
     }

@@ -60,6 +60,7 @@ impl ResourceChecker {
 mod tests {
     use super::super::utils::tests::add_testing_proxies;
     use super::*;
+    use crate::common::config::ClusterConfig;
 
     #[test]
     fn test_no_cluster() {
@@ -76,7 +77,9 @@ mod tests {
     fn test_enough_resources() {
         let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 2);
-        store.add_cluster("test_cluster".to_string(), 12).unwrap();
+        store
+            .add_cluster("test_cluster".to_string(), 12, ClusterConfig::default())
+            .unwrap();
 
         let checker = ResourceChecker::new(store);
         let res = checker.check_failure_tolerance(2);
@@ -88,7 +91,9 @@ mod tests {
     fn test_no_enough_resource() {
         let mut store = MetaStore::new(false);
         add_testing_proxies(&mut store, 4, 2);
-        store.add_cluster("test_cluster".to_string(), 16).unwrap();
+        store
+            .add_cluster("test_cluster".to_string(), 16, ClusterConfig::default())
+            .unwrap();
 
         let checker = ResourceChecker::new(store);
         let res = checker.check_failure_tolerance(2);

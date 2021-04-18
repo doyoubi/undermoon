@@ -1,17 +1,16 @@
 use super::backend::ConnFactory;
-use super::cluster::ClusterTag;
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use crate::common::cluster::ClusterName;
-use crate::common::config::{ClusterConfig, CompressionStrategy};
+use crate::common::config::CompressionStrategy;
 use crate::protocol::{Array, BulkStr, OptionalMulti, Resp, RespPacket};
 use std::error::Error;
 use std::fmt;
 use std::io;
 
+// CompressionStrategyConfig is used for easier mocking in unit tests.
 pub trait CompressionStrategyConfig {
-    fn get_config(&self, cluster_name: &ClusterName) -> CompressionStrategy;
+    fn get_config(&self) -> CompressionStrategy;
 }
 
 pub struct CompressionStrategyMetaMapConfig<C: ConnFactory<Pkt = RespPacket>> {
@@ -27,12 +26,9 @@ impl<C: ConnFactory<Pkt = RespPacket>> CompressionStrategyMetaMapConfig<C> {
 impl<C: ConnFactory<Pkt = RespPacket>> CompressionStrategyConfig
     for CompressionStrategyMetaMapConfig<C>
 {
-    fn get_config(&self, cluster_name: &ClusterName) -> CompressionStrategy {
+    fn get_config(&self) -> CompressionStrategy {
         let meta_map = self.meta_map.lease();
-        match meta_map.get_cluster_map().get_config(&cluster_name) {
-            Some(config) => config.compression_strategy,
-            None => ClusterConfig::default().compression_strategy,
-        }
+        meta_map.get_cluster_map().get_config().compression_strategy
     }
 }
 
@@ -46,7 +42,7 @@ impl<C: CompressionStrategyConfig> CmdCompressor<C> {
     }
 
     pub fn try_compressing_cmd_ctx(&self, cmd_ctx: &mut CmdCtx) -> Result<(), CompressionError> {
-        let strategy = self.config.get_config(cmd_ctx.get_cluster_name());
+        let strategy = self.config.get_config();
 
         if strategy == CompressionStrategy::Disabled {
             return Err(CompressionError::Disabled);
@@ -131,7 +127,7 @@ impl<C: CompressionStrategyConfig> CmdReplyDecompressor<C> {
         cmd_ctx: &CmdCtx,
         packet: &mut RespPacket,
     ) -> Result<(), CompressionError> {
-        let strategy = self.config.get_config(cmd_ctx.get_cluster_name());
+        let strategy = self.config.get_config();
 
         if strategy == CompressionStrategy::Disabled {
             return Err(CompressionError::Disabled);
@@ -229,7 +225,6 @@ mod tests {
     use super::*;
     use crate::protocol::BinSafeStr;
     use crate::proxy::command::{new_command_pair, Command};
-    use std::convert::TryFrom;
 
     fn gen_array_packet(array: Vec<String>) -> RespPacket {
         let arr = array
@@ -245,12 +240,10 @@ mod tests {
     }
 
     fn gen_cmd_ctx(cmd: Vec<String>) -> CmdCtx {
-        let cluster_name = ClusterName::try_from("mycluster").unwrap();
-
         let request = gen_array_packet(cmd);
         let cmd = Command::new(Box::new(request));
         let (sender, _) = new_command_pair(&cmd);
-        CmdCtx::new(cluster_name, cmd, sender, 233, false)
+        CmdCtx::new(cmd, sender, 233, false)
     }
 
     struct DummyConfig {
@@ -258,7 +251,7 @@ mod tests {
     }
 
     impl CompressionStrategyConfig for DummyConfig {
-        fn get_config(&self, _cluster_name: &ClusterName) -> CompressionStrategy {
+        fn get_config(&self) -> CompressionStrategy {
             self.strategy
         }
     }

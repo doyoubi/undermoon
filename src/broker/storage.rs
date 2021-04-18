@@ -2,6 +2,7 @@ use super::store::{ClusterInfo, MetaStoreError};
 use super::store::{MetaStore, NODES_PER_PROXY};
 use crate::broker::store::ScaleOp;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
+use crate::common::config::ClusterConfig;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ pub trait MetaStorage: Send + Sync + 'static {
         &self,
         cluster_name: String,
         node_num: usize,
+        default_cluster_config: ClusterConfig,
     ) -> Result<(), MetaStoreError>;
     async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError>;
     async fn auto_add_nodes(
@@ -227,8 +229,11 @@ impl MetaStorage for MemoryStorage {
         &self,
         cluster_name: String,
         node_num: usize,
+        default_cluster_config: ClusterConfig,
     ) -> Result<(), MetaStoreError> {
-        self.store.write().add_cluster(cluster_name, node_num)
+        self.store
+            .write()
+            .add_cluster(cluster_name, node_num, default_cluster_config)
     }
 
     async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {

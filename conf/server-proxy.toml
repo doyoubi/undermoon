@@ -2,12 +2,6 @@ address = "127.0.0.1:5299"
 # announce_address must be the same as the address registered in the broker.
 announce_address = "127.0.0.1:5299"
 
-# If this server proxy has one and only one cluster set,
-# server proxy will automatically set the cluster to default without
-# needing to send AUTH command.
-# This is for those clients or proxies like corvus which do not support AUTH.
-auto_select_cluster = true
-
 slowlog_len = 1024
 
 # In microseconds like redis.
@@ -26,6 +20,9 @@ backend_low_flush_interval = 200000
 backend_high_flush_interval = 600000
 # In millisecond
 backend_timeout = 3000
+
+# Password for AUTH command
+# password = "yourpwd"
 
 # Active Redirection Mode
 # When active_redirection is enabled,
@@ -46,23 +43,3 @@ max_redirections = 4
 # and try again.
 # Leave it empty to disable it.
 default_redirection_address = ""
-
-# Cluster Config
-# Cluster config can vary between clusters.
-# The config below is the default cluster config
-# and could be modified dynamically in the memory broker.
-
-# Enable string compression.
-# Since commands like INCR won't work when the actual stored string
-# is compressed, when string compression is enabled,
-# client can only use commands like SET, GET.
-#
-# Could only be "disabled", "set_get_only"
-compression_strategy = "disabled"
-# In seconds
-migration_max_migration_time = 3600
-# In milliseconds
-migration_max_blocking_time = 10000
-# In microseconds
-migration_scan_interval = 500
-migration_scan_count = 16

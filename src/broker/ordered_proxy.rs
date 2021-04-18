@@ -3,6 +3,7 @@ mod tests {
     use super::super::store::{MetaStore, MetaStoreError};
     use super::super::utils::tests::{check_cluster_and_proxy, check_cluster_slots};
     use crate::common::cluster::{Cluster, ClusterName, Role};
+    use crate::common::config::ClusterConfig;
     use std::collections::HashSet;
     use std::convert::TryFrom;
 
@@ -90,7 +91,9 @@ mod tests {
 
         check_cluster_and_proxy(&store);
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
         check_cluster_and_proxy(&store);
@@ -133,7 +136,9 @@ mod tests {
         assert_eq!(free_node_num, original_free_node_num - 4);
 
         let another_cluster = "another_cluster".to_string();
-        let err = store.add_cluster(another_cluster.clone(), 4).unwrap_err();
+        let err = store
+            .add_cluster(another_cluster.clone(), 4, ClusterConfig::default())
+            .unwrap_err();
         assert_eq!(err, MetaStoreError::OneClusterAlreadyExisted);
         check_cluster_and_proxy(&store);
 
@@ -227,11 +232,15 @@ mod tests {
         assert!(epoch2 < epoch3);
 
         let cluster_name = CLUSTER_NAME.to_string();
-        let err = store.add_cluster(cluster_name.clone(), 8).unwrap_err();
+        let err = store
+            .add_cluster(cluster_name.clone(), 8, ClusterConfig::default())
+            .unwrap_err();
         assert_eq!(err, MetaStoreError::ProxyResourceOutOfOrder);
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 1);
 
-        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
         let epoch4 = store.get_global_epoch();
         assert!(epoch3 < epoch4);
@@ -332,7 +341,9 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
 
-        store.add_cluster(cluster_name.clone(), 4).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let epoch1 = store.get_global_epoch();
         assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
         assert_eq!(

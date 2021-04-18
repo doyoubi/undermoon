@@ -20,7 +20,6 @@ pub struct ServerProxyConfig {
     pub address: String,
     pub announce_address: String,
     pub announce_host: String,
-    pub auto_select_cluster: bool,
     pub slowlog_len: NonZeroUsize,
     pub slowlog_log_slower_than: AtomicI64,
     pub slowlog_sample_rate: AtomicU64,
@@ -34,6 +33,7 @@ pub struct ServerProxyConfig {
     pub backend_low_flush_interval: Duration,
     pub backend_high_flush_interval: Duration,
     pub backend_timeout: Duration,
+    pub password: Option<String>,
 }
 
 impl ServerProxyConfig {
@@ -61,7 +61,6 @@ impl ServerProxyConfig {
             "address" => Ok(self.address.clone()),
             "announce_address" => Ok(self.announce_address.clone()),
             "announce_host" => Ok(self.announce_host.clone()),
-            "auto_select_cluster" => Ok(self.auto_select_cluster.to_string()),
             "slowlog_len" => Ok(self.slowlog_len.to_string()),
             "thread_number" => Ok(self.thread_number.to_string()),
             "backend_conn_num" => Ok(self.backend_conn_num.to_string()),
@@ -72,6 +71,7 @@ impl ServerProxyConfig {
                 .max_redirections
                 .map(|n| n.get().to_string())
                 .unwrap_or_else(|| "none".to_string())),
+            "password" => Err(ConfigError::Forbidden),
             _ => Err(ConfigError::FieldNotFound),
         }
     }
@@ -81,7 +81,6 @@ impl ServerProxyConfig {
             "address" => Err(ConfigError::ReadonlyField),
             "announce_address" => Err(ConfigError::ReadonlyField),
             "announce_host" => Err(ConfigError::ReadonlyField),
-            "auto_select_cluster" => Err(ConfigError::ReadonlyField),
             "slowlog_len" => Err(ConfigError::ReadonlyField),
             "thread_number" => Err(ConfigError::ReadonlyField),
             "backend_conn_num" => Err(ConfigError::ReadonlyField),
@@ -101,6 +100,7 @@ impl ServerProxyConfig {
             }
             "active_redirection" => Err(ConfigError::ReadonlyField),
             "max_redirections" => Err(ConfigError::ReadonlyField),
+            "password" => Err(ConfigError::ReadonlyField),
             _ => Err(ConfigError::FieldNotFound),
         }
     }

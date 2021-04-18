@@ -59,12 +59,13 @@ impl<'a> MetaStoreQuery<'a> {
             Some(cluster_store) => Self::cluster_store_to_cluster(&cluster_store),
             None => {
                 return Some(Proxy::new(
+                    None,
                     address.to_string(),
                     self.store.global_epoch,
                     vec![],
                     proxy_resource.node_addresses.to_vec(),
                     vec![],
-                    HashMap::new(),
+                    None,
                 ));
             }
         };
@@ -97,7 +98,6 @@ impl<'a> MetaStoreQuery<'a> {
                     let slots = nodes.map(Node::into_slots).flatten().collect();
                     PeerProxy {
                         proxy_address,
-                        cluster_name: cluster_name.clone(),
                         slots,
                     }
                 })
@@ -105,16 +105,14 @@ impl<'a> MetaStoreQuery<'a> {
             (peers, vec![])
         };
 
-        let mut cluster_config = HashMap::new();
-        cluster_config.insert(cluster_name, cluster.get_config());
-
         let proxy = Proxy::new(
+            Some(cluster_name),
             address.to_string(),
             epoch,
             nodes,
             free_nodes,
             peers,
-            cluster_config,
+            Some(cluster.get_config()),
         );
         Some(proxy)
     }
@@ -157,8 +155,6 @@ impl<'a> MetaStoreQuery<'a> {
     }
 
     pub fn cluster_store_to_cluster(cluster_store: &ClusterStore) -> Cluster {
-        let cluster_name = cluster_store.name.clone();
-
         let nodes = cluster_store
             .chunks
             .iter()
@@ -245,7 +241,7 @@ impl<'a> MetaStoreQuery<'a> {
                     };
                     let repl = ReplMeta::new(role, vec![peer]);
 
-                    let node = Node::new(address, proxy_address, cluster_name.clone(), slots, repl);
+                    let node = Node::new(address, proxy_address, slots, repl);
                     nodes.push(node);
                 }
                 nodes

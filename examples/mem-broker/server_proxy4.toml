@@ -1,2 +1,1 @@
 address = "server_proxy4:6004"
-auto_select_cluster = true

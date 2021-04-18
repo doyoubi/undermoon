@@ -1,12 +1,10 @@
 use super::backend::{CmdTask, CmdTaskFactory, CmdTaskResult};
-use super::cluster::{ClusterTag, DEFAULT_CLUSTER};
 use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
     CommandResult, DataCmdType, TaskReply, TaskResult,
 };
 use super::service::ServerProxyConfig;
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
-use crate::common::cluster::ClusterName;
 use crate::protocol::{
     new_simple_packet_codec, BinSafeStr, DecodeError, EncodeError, Resp, RespCodec, RespPacket,
     RespVec,
@@ -16,12 +14,12 @@ use futures::{future, Future, Sink, Stream, TryFutureExt};
 use futures::{StreamExt, TryStreamExt};
 use std::boxed::Box;
 use std::collections::VecDeque;
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::pin::Pin;
 use std::sync;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
@@ -40,7 +38,7 @@ pub trait CmdCtxHandler {
         &self,
         cmd_ctx: CmdCtx,
         result_receiver: CmdReplyReceiver,
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+        authenticated: &AtomicBool,
     ) -> CmdReplyFuture;
 }
 
@@ -49,13 +47,11 @@ pub struct CmdCtx {
     cmd: Command,
     reply_sender: CmdReplySender,
     slowlog: Slowlog,
-    cluster_name: ClusterName,
     redirection_times: Option<usize>,
 }
 
 impl CmdCtx {
     pub fn new(
-        cluster_name: ClusterName,
         cmd: Command,
         reply_sender: CmdReplySender,
         session_id: usize,
@@ -66,17 +62,12 @@ impl CmdCtx {
             cmd,
             reply_sender,
             slowlog,
-            cluster_name,
             redirection_times: None,
         }
     }
 
     pub fn get_cmd(&self) -> &Command {
         &self.cmd
-    }
-
-    pub fn get_cluster(&self) -> ClusterName {
-        self.cluster_name.clone()
     }
 
     pub fn get_session_id(&self) -> usize {
@@ -114,7 +105,6 @@ impl CmdCtx {
 }
 
 pub struct SessionContext {
-    cluster_name: ClusterName,
     session_id: usize,
     slowlog_enabled: bool,
 }
@@ -157,7 +147,6 @@ impl CmdTask for CmdCtx {
 
     fn get_context(&self) -> Self::Context {
         SessionContext {
-            cluster_name: self.cluster_name.clone(),
             session_id: self.get_session_id(),
             slowlog_enabled: self.slowlog.is_enabled(),
         }
@@ -172,16 +161,6 @@ impl CmdTask for CmdCtx {
 
     fn log_event(&mut self, event: TaskEvent) {
         self.slowlog.log_event(event);
-    }
-}
-
-impl ClusterTag for CmdCtx {
-    fn get_cluster_name(&self) -> &ClusterName {
-        &self.cluster_name
-    }
-
-    fn set_cluster_name(&mut self, cluster_name: ClusterName) {
-        self.cluster_name = cluster_name;
     }
 }
 
@@ -208,11 +187,10 @@ impl CmdTaskFactory for CmdCtxFactory {
         let cmd = Command::new(packet);
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
         let SessionContext {
-            cluster_name,
             session_id,
             slowlog_enabled,
         } = context;
-        let cmd_ctx = CmdCtx::new(cluster_name, cmd, reply_sender, session_id, slowlog_enabled);
+        let cmd_ctx = CmdCtx::new(cmd, reply_sender, session_id, slowlog_enabled);
         let fut = reply_receiver.map_ok(|reply| reply.into_resp_vec());
         (cmd_ctx, Box::pin(fut))
     }
@@ -220,7 +198,7 @@ impl CmdTaskFactory for CmdCtxFactory {
 
 pub struct Session<H: CmdCtxHandler> {
     session_id: usize,
-    cluster_name: sync::Arc<parking_lot::RwLock<ClusterName>>,
+    authenticated: AtomicBool,
     cmd_ctx_handler: H,
     slow_request_logger: sync::Arc<SlowRequestLogger>,
     config: Arc<ServerProxyConfig>,
@@ -233,10 +211,9 @@ impl<H: CmdCtxHandler> Session<H> {
         slow_request_logger: sync::Arc<SlowRequestLogger>,
         config: Arc<ServerProxyConfig>,
     ) -> Self {
-        let cluster_name = ClusterName::try_from(DEFAULT_CLUSTER).expect("Session::new");
         Session {
             session_id,
-            cluster_name: sync::Arc::new(parking_lot::RwLock::new(cluster_name)),
+            authenticated: AtomicBool::new(false),
             cmd_ctx_handler,
             slow_request_logger,
             config,
@@ -247,21 +224,14 @@ impl<H: CmdCtxHandler> Session<H> {
 impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     fn handle_cmd(&self, cmd: Command) -> CmdReplyFuture {
         let (reply_sender, reply_receiver) = new_command_pair(&cmd);
-        let cluster_name = self.cluster_name.read().clone();
 
         let slowlog_enabled = self
             .slow_request_logger
             .limit_rate(self.config.get_slowlog_sample_rate());
-        let mut cmd_ctx = CmdCtx::new(
-            cluster_name,
-            cmd,
-            reply_sender,
-            self.session_id,
-            slowlog_enabled,
-        );
+        let mut cmd_ctx = CmdCtx::new(cmd, reply_sender, self.session_id, slowlog_enabled);
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler
-            .handle_cmd_ctx(cmd_ctx, reply_receiver, &(*self.cluster_name))
+            .handle_cmd_ctx(cmd_ctx, reply_receiver, &self.authenticated)
     }
 
     fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog) {
@@ -411,7 +381,6 @@ impl Error for SessionError {
 mod tests {
     use super::*;
     use crate::protocol::{Array, BulkStr, Resp};
-    use std::convert::TryFrom;
     use tokio;
 
     #[tokio::test]
@@ -419,10 +388,9 @@ mod tests {
         let request = RespPacket::Data(Resp::Arr(Array::Arr(vec![Resp::Bulk(BulkStr::Str(
             b"PING".to_vec(),
         ))])));
-        let cluster_name = ClusterName::try_from("mycluster").unwrap();
         let cmd = Command::new(Box::new(request));
         let (sender, receiver) = new_command_pair(&cmd);
-        let cmd_ctx = CmdCtx::new(cluster_name, cmd, sender, 7799, true);
+        let cmd_ctx = CmdCtx::new(cmd, sender, 7799, true);
         drop(cmd_ctx);
         let err = match receiver.await {
             Ok(_) => panic!(),

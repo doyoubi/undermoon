@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use string_error::into_err;
 use undermoon::common::batch::BatchStrategy;
-use undermoon::common::config::ClusterConfig;
 use undermoon::common::track::TrackedFutureRegistry;
 use undermoon::common::utils::extract_host_from_address;
 use undermoon::protocol::SimpleRedisClientFactory;
@@ -31,7 +30,7 @@ use undermoon::MAX_REDIRECTIONS;
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
+fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
     let mut s = config::Config::new();
     // If config file is specified, load it.
     if let Some(conf_file_path) = env::args().nth(1) {
@@ -85,6 +84,8 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     let backend_timeout = NonZeroU64::new(s.get::<u64>("backend_timeout").unwrap_or(3_000))
         .ok_or("backend_timeout")?;
 
+    let password = s.get::<String>("password").ok();
+
     let mut max_redirections = s.get::<usize>("max_redirections").unwrap_or(0);
     if max_redirections != 0 {
         max_redirections = min(MAX_REDIRECTIONS, max_redirections);
@@ -104,7 +105,6 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
         address,
         announce_address,
         announce_host,
-        auto_select_cluster: s.get::<bool>("auto_select_cluster").unwrap_or(true),
         slowlog_len,
         slowlog_log_slower_than: AtomicI64::new(
             s.get::<i64>("slowlog_log_slower_than").unwrap_or(50000),
@@ -120,37 +120,20 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
         backend_low_flush_interval: Duration::from_nanos(backend_low_flush_interval.get()),
         backend_high_flush_interval: Duration::from_nanos(backend_high_flush_interval.get()),
         backend_timeout: Duration::from_millis(backend_timeout.get()),
+        password,
     };
 
-    let mut cluster_config = ClusterConfig::default();
-    let cluster_fields = [
-        "compression_strategy",
-        "migration_max_migration_time",
-        "migration_max_blocking_time",
-        "migration_scan_interval",
-        "migration_scan_count",
-    ];
-    for field in cluster_fields.iter() {
-        if let Ok(value) = s.get::<String>(*field) {
-            if cluster_config.set_field(*field, value.as_str()).is_err() {
-                return Err(*field);
-            }
-        }
-    }
-
-    Ok((config, cluster_config))
+    Ok(config)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
-    let (config, cluster_config) = gen_conf().map_err(|field| {
+    let config = gen_conf().map_err(|field| {
         let err_msg = format!("invalid field {}", field);
         into_err(err_msg)
     })?;
 
     info!("config: {:?}", config);
-    info!("cluster default config: {:?}", cluster_config);
-
     let config = Arc::new(config);
 
     let timeout = Duration::new(1, 0);
@@ -164,7 +147,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let forward_handler = SharedForwardHandler::new(
         config.clone(),
-        cluster_config,
         Arc::new(client_factory),
         slow_request_logger.clone(),
         meta_map,

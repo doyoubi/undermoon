@@ -135,19 +135,11 @@ mod tests {
     use crate::coordinator::core::MockProxyMetaSender;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient};
     use futures::{stream, StreamExt};
-    use std::collections::HashMap;
     use std::convert::TryFrom;
     use tokio;
 
     fn gen_testing_dummy_proxy(addr: &str) -> Proxy {
-        Proxy::new(
-            addr.to_string(),
-            7799,
-            vec![],
-            vec![],
-            vec![],
-            HashMap::new(),
-        )
+        Proxy::new(None, addr.to_string(), 7799, vec![], vec![], vec![], None)
     }
 
     fn create_client_func(_enable_compression: bool) -> impl RedisClient {

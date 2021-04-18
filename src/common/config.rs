@@ -238,6 +238,7 @@ pub enum ConfigError {
     ReadonlyField,
     FieldNotFound,
     InvalidValue,
+    Forbidden,
 }
 
 impl ToString for ConfigError {
@@ -246,6 +247,7 @@ impl ToString for ConfigError {
             Self::ReadonlyField => "READONLY_FIELD".to_string(),
             Self::FieldNotFound => "FIELD_NOT_FOUND".to_string(),
             Self::InvalidValue => "INVALID_VALUE".to_string(),
+            Self::Forbidden => "FORBIDDEN".to_string(),
         }
     }
 }

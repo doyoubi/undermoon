@@ -4,6 +4,7 @@ use super::store::{ClusterInfo, MetaStore, ScaleOp, NODES_PER_PROXY};
 use super::MetaStoreError;
 use crate::common::atomic_lock::{AtomicLock, AtomicLockGuard};
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
+use crate::common::config::ClusterConfig;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use futures_timer::Delay;
@@ -384,12 +385,13 @@ impl MetaStorage for ExternalHttpStorage {
         &self,
         cluster_name: String,
         node_num: usize,
+        default_cluster_config: ClusterConfig,
     ) -> Result<(), MetaStoreError> {
         let _guard = self.try_lock()?;
 
         let ExternalStore { mut store, version } =
             self.get_external_store_and_update_cache().await?;
-        store.add_cluster(cluster_name, node_num)?;
+        store.add_cluster(cluster_name, node_num, default_cluster_config)?;
         self.update_external_store_and_cache(ExternalStore { store, version })
             .await?;
         Ok(())

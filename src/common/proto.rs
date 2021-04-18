@@ -57,27 +57,31 @@ impl ClusterMapFlags {
     pub fn from_arg(flags_str: &str) -> Self {
         let force = has_flags(flags_str, ',', "FORCE");
         let compress = has_flags(flags_str, ',', "COMPRESS");
+
         ClusterMapFlags { force, compress }
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProxyClusterMetaData {
-    local: ProxyClusterMap,
-    peer: ProxyClusterMap,
-    clusters_config: ClusterConfigMap,
+    cluster_name: ClusterName,
+    local: NodeMap,
+    peer: NodeMap,
+    cluster_config: ClusterConfigData,
 }
 
 impl ProxyClusterMetaData {
     pub fn new(
-        local: ProxyClusterMap,
-        peer: ProxyClusterMap,
-        clusters_config: ClusterConfigMap,
+        cluster_name: ClusterName,
+        local: NodeMap,
+        peer: NodeMap,
+        clusters_config: ClusterConfigData,
     ) -> Self {
         Self {
+            cluster_name,
             local,
             peer,
-            clusters_config,
+            cluster_config: clusters_config,
         }
     }
 
@@ -124,25 +128,28 @@ const CONFIG_PREFIX: &str = "CONFIG";
 pub struct ProxyClusterMeta {
     epoch: u64,
     flags: ClusterMapFlags,
-    local: ProxyClusterMap,
-    peer: ProxyClusterMap,
-    clusters_config: ClusterConfigMap,
+    cluster_name: ClusterName,
+    local: HashMap<String, Vec<SlotRange>>,
+    peer: HashMap<String, Vec<SlotRange>>,
+    cluster_config: ClusterConfig,
 }
 
 impl ProxyClusterMeta {
     pub fn new(
         epoch: u64,
         flags: ClusterMapFlags,
-        local: ProxyClusterMap,
-        peer: ProxyClusterMap,
-        clusters_config: ClusterConfigMap,
+        cluster_name: ClusterName,
+        local: HashMap<String, Vec<SlotRange>>,
+        peer: HashMap<String, Vec<SlotRange>>,
+        cluster_config: ClusterConfig,
     ) -> Self {
         Self {
             epoch,
             flags,
+            cluster_name,
             local,
             peer,
-            clusters_config,
+            cluster_config,
         }
     }
 
@@ -154,22 +161,27 @@ impl ProxyClusterMeta {
         self.flags.clone()
     }
 
-    pub fn get_local(&self) -> &ProxyClusterMap {
+    pub fn get_cluster_name(&self) -> &ClusterName {
+        &self.cluster_name
+    }
+
+    pub fn get_local(&self) -> &HashMap<String, Vec<SlotRange>> {
         &self.local
     }
-    pub fn get_peer(&self) -> &ProxyClusterMap {
+    pub fn get_peer(&self) -> &HashMap<String, Vec<SlotRange>> {
         &self.peer
     }
 
-    pub fn get_configs(&self) -> &ClusterConfigMap {
-        &self.clusters_config
+    pub fn get_config(&self) -> &ClusterConfig {
+        &self.cluster_config
     }
 
     pub fn gen_data(&self) -> ProxyClusterMetaData {
         ProxyClusterMetaData {
-            local: self.local.clone(),
-            peer: self.peer.clone(),
-            clusters_config: self.clusters_config.clone(),
+            cluster_name: self.cluster_name.clone(),
+            local: NodeMap::new(self.local.clone()),
+            peer: NodeMap::new(self.peer.clone()),
+            cluster_config: ClusterConfigData(self.cluster_config.clone()),
         }
     }
 
@@ -219,34 +231,40 @@ impl ProxyClusterMeta {
                     CmdParseError {}
                 })?;
             let ProxyClusterMetaData {
+                cluster_name,
                 local,
                 peer,
-                clusters_config,
+                cluster_config,
             } = data;
             return Ok((
                 Self {
                     epoch,
                     flags,
-                    local,
-                    peer,
-                    clusters_config,
+                    cluster_name,
+                    local: local.into_inner(),
+                    peer: peer.into_inner(),
+                    cluster_config: cluster_config.into_inner(),
                 },
                 Ok(()),
             ));
         }
 
-        let local = ProxyClusterMap::parse(it)?;
-        let mut peer = ProxyClusterMap::new(HashMap::new());
-        let mut clusters_config = ClusterConfigMap::default();
+        let cluster_name = try_get!(it.next());
+        let cluster_name =
+            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
+
+        let local = NodeMap::parse(it)?.into_inner();
+        let mut peer = NodeMap::new(HashMap::default());
+        let mut cluster_config = ClusterConfigData::default();
         let mut extended_meta_result = Ok(());
 
         while let Some(token) = it.next() {
             match token.to_uppercase().as_str() {
-                PEER_PREFIX => peer = ProxyClusterMap::parse(it)?,
-                CONFIG_PREFIX => match ClusterConfigMap::parse(it) {
-                    Ok(c) => clusters_config = c,
+                PEER_PREFIX => peer = NodeMap::parse(it)?,
+                CONFIG_PREFIX => match ClusterConfigData::parse(it) {
+                    Ok(c) => cluster_config = c,
                     Err(_) => {
-                        if local.get_map().is_empty() || peer.get_map().is_empty() {
+                        if local.is_empty() || peer.get_map().is_empty() {
                             return Err(CmdParseError {});
                         } else {
                             error!("invalid cluster config from UMCTL SETCLUSTER but the local and peer metadata are complete. Ignore this error to protect the core functionality.");
@@ -262,19 +280,24 @@ impl ProxyClusterMeta {
             Self {
                 epoch,
                 flags,
+                cluster_name,
                 local,
-                peer,
-                clusters_config,
+                peer: peer.into_inner(),
+                cluster_config: cluster_config.into_inner(),
             },
             extended_meta_result,
         ))
     }
 
     pub fn to_args(&self) -> Vec<String> {
-        let mut args = vec![self.epoch.to_string(), self.flags.to_arg()];
-        let local = self.local.cluster_map_to_args();
-        let peer = self.peer.cluster_map_to_args();
-        let config = self.clusters_config.to_args();
+        let mut args = vec![
+            self.epoch.to_string(),
+            self.flags.to_arg(),
+            self.cluster_name.to_string(),
+        ];
+        let local = NodeMap::new(self.local.clone()).to_args();
+        let peer = NodeMap::new(self.peer.clone()).to_args();
+        let config = ClusterConfigData::new(self.cluster_config.clone()).to_args();
         args.extend_from_slice(&local);
         if !peer.is_empty() {
             args.push(PEER_PREFIX.to_string());
@@ -289,9 +312,10 @@ impl ProxyClusterMeta {
 
     pub fn to_compressed_args(&self) -> Result<Vec<String>, MetaCompressError> {
         let data = ProxyClusterMetaData::new(
-            self.local.clone(),
-            self.peer.clone(),
-            self.clusters_config.clone(),
+            self.cluster_name.clone(),
+            NodeMap::new(self.local.clone()),
+            NodeMap::new(self.peer.clone()),
+            ClusterConfigData::new(self.cluster_config.clone()),
         )
         .gen_compressed_data()?;
         let args = vec![self.epoch.to_string(), self.flags.to_arg(), data];
@@ -300,28 +324,27 @@ impl ProxyClusterMeta {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ProxyClusterMap {
-    cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>,
-}
+pub struct NodeMap(HashMap<String, Vec<SlotRange>>);
 
-impl ProxyClusterMap {
-    pub fn new(cluster_map: HashMap<ClusterName, HashMap<String, Vec<SlotRange>>>) -> Self {
-        Self { cluster_map }
+impl NodeMap {
+    pub fn new(node_map: HashMap<String, Vec<SlotRange>>) -> Self {
+        Self(node_map)
     }
 
-    pub fn get_map(&self) -> &HashMap<ClusterName, HashMap<String, Vec<SlotRange>>> {
-        &self.cluster_map
+    pub fn into_inner(self) -> HashMap<String, Vec<SlotRange>> {
+        self.0
     }
 
-    pub fn cluster_map_to_args(&self) -> Vec<String> {
+    pub fn get_map(&self) -> &HashMap<String, Vec<SlotRange>> {
+        &self.0
+    }
+
+    pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![];
-        for (cluster_name, node_map) in &self.cluster_map {
-            for (node, slot_ranges) in node_map {
-                for slot_range in slot_ranges {
-                    args.push(cluster_name.to_string());
-                    args.push(node.clone());
-                    args.extend(slot_range.clone().into_strings());
-                }
+        for (node, slot_ranges) in self.0.iter() {
+            for slot_range in slot_ranges {
+                args.push(node.clone());
+                args.extend(slot_range.clone().into_strings());
             }
         }
         args
@@ -331,7 +354,7 @@ impl ProxyClusterMap {
     where
         It: Iterator<Item = String>,
     {
-        let mut cluster_map = HashMap::new();
+        let mut node_map = HashMap::new();
 
         // To workaround lifetime problem.
         #[allow(clippy::while_let_loop)]
@@ -346,27 +369,21 @@ impl ProxyClusterMap {
                 None => break,
             }
 
-            let (cluster_name, address, slot_range) = try_parse!(Self::parse_cluster(it));
-            let cluster = cluster_map.entry(cluster_name).or_insert_with(HashMap::new);
-            let slots = cluster.entry(address).or_insert_with(Vec::new);
+            let (address, slot_range) = try_parse!(Self::parse_node(it));
+            let slots = node_map.entry(address).or_insert_with(Vec::new);
             slots.push(slot_range);
         }
 
-        Ok(Self { cluster_map })
+        Ok(Self(node_map))
     }
 
-    fn parse_cluster<It>(
-        it: &mut Peekable<It>,
-    ) -> Result<(ClusterName, String, SlotRange), CmdParseError>
+    fn parse_node<It>(it: &mut Peekable<It>) -> Result<(String, SlotRange), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
-        let cluster_name = try_get!(it.next());
-        let cluster_name =
-            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
         let addr = try_get!(it.next());
         let slot_range = try_parse!(Self::parse_tagged_slot_range(it));
-        Ok((cluster_name, addr, slot_range))
+        Ok((addr, slot_range))
     }
 
     fn parse_tagged_slot_range<It>(it: &mut Peekable<It>) -> Result<SlotRange, CmdParseError>
@@ -376,23 +393,21 @@ impl ProxyClusterMap {
         SlotRange::from_strings(it).ok_or(CmdParseError {})
     }
 
-    pub fn check_hosts(&self, announce_host: &str) -> bool {
-        for (cluster_name, nodes) in self.cluster_map.iter() {
-            for local_node_address in nodes.keys() {
-                let host = match extract_host_from_address(local_node_address.as_str()) {
-                    Some(host) => host,
-                    None => {
-                        error!("invalid local node address: {}", local_node_address);
-                        return false;
-                    }
-                };
-                if host != announce_host {
-                    error!(
-                        "not my announce host: {} {} != {}",
-                        cluster_name, announce_host, local_node_address
-                    );
+    pub fn check_hosts(&self, announce_host: &str, cluster_name: &ClusterName) -> bool {
+        for local_node_address in self.0.keys() {
+            let host = match extract_host_from_address(local_node_address.as_str()) {
+                Some(host) => host,
+                None => {
+                    error!("invalid local node address: {}", local_node_address);
                     return false;
                 }
+            };
+            if host != announce_host {
+                error!(
+                    "not my announce host: {} {} != {}",
+                    cluster_name, announce_host, local_node_address
+                );
+                return false;
             }
         }
         true
@@ -400,43 +415,32 @@ impl ProxyClusterMap {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ClusterConfigMap {
-    config_map: HashMap<ClusterName, ClusterConfig>,
-}
+pub struct ClusterConfigData(ClusterConfig);
 
-impl Default for ClusterConfigMap {
+impl Default for ClusterConfigData {
     fn default() -> Self {
-        Self {
-            config_map: HashMap::new(),
-        }
+        Self(ClusterConfig::default())
     }
 }
 
-impl ClusterConfigMap {
-    pub fn new(config_map: HashMap<ClusterName, ClusterConfig>) -> Self {
-        Self { config_map }
+impl ClusterConfigData {
+    pub fn new(config: ClusterConfig) -> Self {
+        Self(config)
     }
 
-    pub fn get_or_default(&self, cluster_name: &ClusterName) -> ClusterConfig {
-        self.config_map
-            .get(cluster_name)
-            .cloned()
-            .unwrap_or_else(ClusterConfig::default)
+    pub fn get_config(&self) -> &ClusterConfig {
+        &self.0
     }
 
-    pub fn get(&self, cluster_name: &ClusterName) -> Option<ClusterConfig> {
-        self.config_map.get(cluster_name).cloned()
-    }
-
-    pub fn get_map(&self) -> &HashMap<ClusterName, ClusterConfig> {
-        &self.config_map
+    pub fn into_inner(self) -> ClusterConfig {
+        self.0
     }
 
     fn parse<It>(it: &mut Peekable<It>) -> Result<Self, CmdParseError>
     where
         It: Iterator<Item = String>,
     {
-        let mut config_map = HashMap::new();
+        let mut config = ClusterConfig::default();
 
         // To workaround lifetime problem.
         #[allow(clippy::while_let_loop)]
@@ -451,39 +455,22 @@ impl ClusterConfigMap {
                 None => break,
             }
 
-            let (cluster_name, field, value) = try_parse!(Self::parse_config(it));
-            let cluster_config = config_map
-                .entry(cluster_name)
-                .or_insert_with(ClusterConfig::default);
-            if let Err(err) = cluster_config.set_field(&field, &value) {
+            let field = try_get!(it.next());
+            let value = try_get!(it.next());
+            if let Err(err) = config.set_field(&field, &value) {
                 warn!("failed to set config field {:?}", err);
                 return Err(CmdParseError {});
             }
         }
 
-        Ok(Self { config_map })
-    }
-
-    fn parse_config<It>(it: &mut It) -> Result<(ClusterName, String, String), CmdParseError>
-    where
-        It: Iterator<Item = String>,
-    {
-        let cluster_name = try_get!(it.next());
-        let cluster_name =
-            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
-        let field = try_get!(it.next());
-        let value = try_get!(it.next());
-        Ok((cluster_name, field, value))
+        Ok(Self(config))
     }
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![];
-        for (cluster_name, config) in &self.config_map {
-            for (k, v) in config.to_str_map().into_iter() {
-                args.push(cluster_name.to_string());
-                args.push(k);
-                args.push(v);
-            }
+        for (k, v) in self.0.to_str_map().into_iter() {
+            args.push(k);
+            args.push(v);
         }
         args
     }
@@ -499,181 +486,53 @@ mod tests {
 
     #[test]
     fn test_single_cluster() {
-        let args = vec!["cluster_name", "127.0.0.1:6379", "1", "0-1000"];
+        let args = vec!["127.0.0.1:6379", "1", "0-1000"];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
-        let r = ProxyClusterMap::parse(&mut arguments);
+        let r = NodeMap::parse(&mut arguments);
         assert!(r.is_ok());
-        let proxy_cluster_map = r.unwrap();
-        assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
+        let node_map = r.unwrap();
+        assert_eq!(node_map.get_map().len(), 1);
 
-        assert_eq!(proxy_cluster_map.cluster_map_to_args(), args);
+        assert_eq!(node_map.to_args(), args);
     }
 
     #[test]
     fn test_multiple_slots() {
         let args = vec![
-            "cluster_name",
             "127.0.0.1:6379",
             "1",
             "0-1000",
-            "cluster_name",
             "127.0.0.1:6379",
             "1",
             "1001-2000",
         ];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
 
-        let r = ProxyClusterMap::parse(&mut arguments);
-        assert!(r.is_ok());
-        let proxy_cluster_map = r.unwrap();
-        assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
-        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.1:6379")
-                .unwrap()
-                .len(),
-            2
-        );
+        let node_map = NodeMap::parse(&mut arguments).unwrap();
+        assert_eq!(node_map.get_map().len(), 1);
+        assert_eq!(node_map.get_map().get("127.0.0.1:6379").unwrap().len(), 2);
 
-        assert_eq!(proxy_cluster_map.cluster_map_to_args(), args);
+        assert_eq!(node_map.to_args(), args);
     }
 
     #[test]
     fn test_multiple_nodes() {
         let args = vec![
-            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
-            "cluster_name",
             "127.0.0.1:7001",
             "1",
             "1001-2000",
         ];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
-        let proxy_cluster_map = ProxyClusterMap::parse(&mut arguments).unwrap();
-        assert_eq!(proxy_cluster_map.cluster_map.len(), 1);
-        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.1:7000")
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.1:7001")
-                .unwrap()
-                .len(),
-            1
-        );
+        let node_map = NodeMap::parse(&mut arguments).unwrap();
+        assert_eq!(node_map.get_map().len(), 2);
+        assert_eq!(node_map.get_map().get("127.0.0.1:7000").unwrap().len(), 1);
+        assert_eq!(node_map.get_map().get("127.0.0.1:7001").unwrap().len(), 1);
 
         let mut expected_args = args.clone();
-        let mut actual_args = proxy_cluster_map.cluster_map_to_args();
-        expected_args.sort();
-        actual_args.sort();
-        assert_eq!(actual_args, expected_args);
-    }
-
-    #[test]
-    fn test_multiple_cluster() {
-        let args = vec![
-            "cluster_name",
-            "127.0.0.1:7000",
-            "1",
-            "0-1000",
-            "cluster_name",
-            "127.0.0.1:7001",
-            "1",
-            "1001-2000",
-            "another_cluster",
-            "127.0.0.1:7002",
-            "1",
-            "0-2000",
-        ];
-        let mut arguments = args.iter().map(|s| s.to_string()).peekable();
-        let r = ProxyClusterMap::parse(&mut arguments);
-        assert!(r.is_ok());
-        let proxy_cluster_map = r.unwrap();
-        assert_eq!(proxy_cluster_map.cluster_map.len(), 2);
-        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.1:7000")
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.1:7001")
-                .unwrap()
-                .len(),
-            1
-        );
-        let another_cluster = ClusterName::try_from("another_cluster").unwrap();
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&another_cluster)
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            proxy_cluster_map
-                .cluster_map
-                .get(&another_cluster)
-                .unwrap()
-                .get("127.0.0.1:7002")
-                .unwrap()
-                .len(),
-            1
-        );
-
-        let mut expected_args = args.clone();
-        let mut actual_args = proxy_cluster_map.cluster_map_to_args();
+        let mut actual_args = node_map.to_args();
         expected_args.sort();
         actual_args.sort();
         assert_eq!(actual_args, expected_args);
@@ -682,78 +541,45 @@ mod tests {
     #[test]
     fn test_clusters_config() {
         let args = vec![
-            "mycluster",
             "compression_strategy",
             "allow_all",
-            "othercluster",
             "migration_max_blocking_time",
             "66699",
-            "mycluster",
             "migration_max_migration_time",
             "666",
         ];
         let mut it = args.iter().map(|s| s.to_string()).peekable();
-        let clusters_config = ClusterConfigMap::parse(&mut it).unwrap();
-        assert_eq!(clusters_config.config_map.len(), 2);
-        let mycluster = ClusterName::try_from("mycluster").unwrap();
+        let cluster_config = ClusterConfigData::parse(&mut it).unwrap();
         assert_eq!(
-            clusters_config
-                .config_map
-                .get(&mycluster)
-                .unwrap()
-                .compression_strategy,
+            cluster_config.get_config().compression_strategy,
             CompressionStrategy::AllowAll
         );
         assert_eq!(
-            clusters_config
-                .config_map
-                .get(&mycluster)
-                .unwrap()
+            cluster_config
+                .get_config()
                 .migration_config
                 .max_migration_time,
             666
         );
         assert_eq!(
-            clusters_config
-                .config_map
-                .get(&ClusterName::try_from("othercluster").unwrap())
-                .unwrap()
+            cluster_config
+                .get_config()
                 .migration_config
                 .max_blocking_time,
             66699
         );
 
-        let mut result_args = clusters_config.to_args();
+        let mut result_args = cluster_config.to_args();
 
         let mut full_args = vec![
-            "mycluster",
             "compression_strategy",
             "allow_all",
-            "mycluster",
             "migration_max_migration_time",
             "666",
-            "mycluster",
-            "migration_max_blocking_time",
-            "10000",
-            "mycluster",
-            "migration_scan_interval",
-            "500",
-            "mycluster",
-            "migration_scan_count",
-            "16",
-            "othercluster",
-            "compression_strategy",
-            "disabled",
-            "othercluster",
-            "migration_max_migration_time",
-            "10800",
-            "othercluster",
             "migration_max_blocking_time",
             "66699",
-            "othercluster",
             "migration_scan_interval",
             "500",
-            "othercluster",
             "migration_scan_count",
             "16",
         ];
@@ -765,11 +591,10 @@ mod tests {
     #[test]
     fn test_to_map() {
         let arguments = vec![
-            "cluster_name",
             "127.0.0.1:7000",
             "1",
             "0-1000",
-            "cluster_name",
+            // another node
             "127.0.0.1:7001",
             "IMPORTING",
             "1",
@@ -779,7 +604,7 @@ mod tests {
             "127.0.0.2:6001",
             "127.0.0.1:7001",
             "127.0.0.1:6002",
-            "another_cluster",
+            // another node
             "127.0.0.1:7002",
             "MIGRATING",
             "1",
@@ -795,15 +620,13 @@ mod tests {
             .into_iter()
             .map(|s| s.to_string())
             .peekable();
-        let r = ProxyClusterMap::parse(&mut it);
-        let proxy_cluster_map = r.unwrap();
+        let node_map = NodeMap::parse(&mut it).unwrap();
 
-        let cluster_map = ProxyClusterMap::new(proxy_cluster_map.cluster_map);
-        let mut args = cluster_map.cluster_map_to_args();
-        let mut cluster_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
+        let mut args = node_map.to_args();
+        let mut origin_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         args.sort();
-        cluster_args.sort();
-        assert_eq!(args, cluster_args);
+        origin_args.sort();
+        assert_eq!(args, origin_args);
     }
 
     #[test]
@@ -815,21 +638,17 @@ mod tests {
             "127.0.0.1:7000",
             "1",
             "0-1000",
-            "cluster_name",
             "127.0.0.1:7001",
             "1",
             "1001-2000",
             "PEER",
-            "cluster_name",
             "127.0.0.2:7001",
             "1",
             "2001-3000",
-            "cluster_name",
             "127.0.0.2:7002",
             "1",
             "3001-4000",
             "CONFIG",
-            "cluster_name",
             "compression_strategy",
             "set_get_only",
         ];
@@ -843,75 +662,50 @@ mod tests {
         assert!(extended_res.is_ok());
         assert_eq!(cluster_meta.epoch, 233);
         assert!(cluster_meta.flags.force);
-        let local = cluster_meta.local.get_map();
-        let peer = cluster_meta.peer.get_map();
-        let config = cluster_meta.clusters_config.get_map();
-        assert_eq!(local.len(), 1);
-        let cluster_name = ClusterName::try_from("cluster_name").unwrap();
-        assert_eq!(local.get(&cluster_name).unwrap().len(), 2);
+        let local = cluster_meta.local.clone();
+        let peer = cluster_meta.peer.clone();
+        let config = cluster_meta.cluster_config.clone();
+        assert_eq!(local.len(), 2);
         assert_eq!(
-            local
-                .get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.1:7000")
-                .unwrap()[0]
+            local.get("127.0.0.1:7000").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
             0
         );
         assert_eq!(
-            local
-                .get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.1:7001")
-                .unwrap()[0]
+            local.get("127.0.0.1:7001").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
             1001
         );
-        assert_eq!(peer.len(), 1);
-        assert_eq!(peer.get(&cluster_name).unwrap().len(), 2);
+        assert_eq!(peer.len(), 2);
         assert_eq!(
-            peer.get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.2:7001")
-                .unwrap()[0]
+            peer.get("127.0.0.2:7001").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
             2001
         );
         assert_eq!(
-            peer.get(&cluster_name)
-                .unwrap()
-                .get("127.0.0.2:7002")
-                .unwrap()[0]
+            peer.get("127.0.0.2:7002").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
             3001
         );
-        assert_eq!(config.len(), 1);
-        assert_eq!(
-            config.get(&cluster_name).unwrap().compression_strategy,
-            CompressionStrategy::SetGetOnly
-        );
+        assert_eq!(config.compression_strategy, CompressionStrategy::SetGetOnly);
 
         let mut args = cluster_meta.to_args();
         let mut cluster_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
         let extended = vec![
-            "cluster_name",
             "migration_max_migration_time",
             "10800",
-            "cluster_name",
             "migration_max_blocking_time",
             "10000",
-            "cluster_name",
             "migration_scan_interval",
             "500",
-            "cluster_name",
             "migration_scan_count",
             "16",
         ]
@@ -938,7 +732,6 @@ mod tests {
             "1",
             "0-1000",
             "CONFIG",
-            "cluster_name",
             "compression_strategy",
             "set_get_only",
         ];
@@ -953,10 +746,7 @@ mod tests {
         assert_eq!(cluster_meta.epoch, 233);
         assert!(cluster_meta.flags.force);
         assert_eq!(
-            cluster_meta
-                .get_configs()
-                .get_or_default(&ClusterName::try_from("cluster_name").unwrap())
-                .compression_strategy,
+            cluster_meta.get_config().compression_strategy,
             CompressionStrategy::SetGetOnly
         );
 
@@ -976,13 +766,11 @@ mod tests {
             "1",
             "0-1000",
             "PEER",
-            "cluster_name",
             "127.0.0.2:7001",
             "1",
             "2001-3000",
             "CONFIG",
-            // "cluster_name", missing cluster_name
-            "compression_strategy",
+            // "compression_strategy", missing field name
             "set_get_only",
         ];
         let mut it = arguments
@@ -1012,12 +800,10 @@ mod tests {
             "1",
             "0-1000",
             "PEER",
-            "cluster_name",
             "127.0.0.2:7001",
             "1",
             "2001-3000",
             "CONFIG",
-            "cluster_name",
             "config_field_that_does_not_exist",
             "invalid_value",
         ];

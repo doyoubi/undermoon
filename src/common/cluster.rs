@@ -3,7 +3,6 @@ use crate::common::config::ClusterConfig;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::max;
-use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::iter::Peekable;
@@ -385,9 +384,14 @@ impl SlotRange {
     }
 }
 
-// To optimize the ClusterTag::get_cluster_name, we need to eliminate the heap allocation.
+// In previous version, to optimize the ClusterTag::get_cluster_name, we need to eliminate the heap allocation.
 // Thus we make ClusterName a stack string with limited size.
 pub const CLUSTER_NAME_MAX_LENGTH: usize = 31;
+
+// EMPTY_CLUSTER_NAME is used when the proxy is not in any cluster.
+lazy_static! {
+    pub static ref EMPTY_CLUSTER_NAME: ClusterName = ClusterName::empty();
+}
 
 #[derive(Debug)]
 pub struct InvalidClusterName;
@@ -419,6 +423,10 @@ impl TryFrom<&str> for ClusterName {
 impl ClusterName {
     pub fn empty() -> Self {
         Self(ClusterNameInner::new())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn as_str(&self) -> &str {
@@ -582,7 +590,6 @@ impl ReplMeta {
 pub struct Node {
     address: String,
     proxy_address: String,
-    cluster_name: ClusterName,
     slots: Vec<SlotRange>,
     repl: ReplMeta,
 }
@@ -591,14 +598,12 @@ impl Node {
     pub fn new(
         address: String,
         proxy_address: String,
-        cluster_name: ClusterName,
         slots: Vec<SlotRange>,
         repl: ReplMeta,
     ) -> Self {
         Node {
             address,
             proxy_address,
-            cluster_name,
             slots,
             repl,
         }
@@ -608,9 +613,6 @@ impl Node {
     }
     pub fn get_proxy_address(&self) -> &str {
         &self.proxy_address
-    }
-    pub fn get_cluster_name(&self) -> &ClusterName {
-        &self.cluster_name
     }
     pub fn get_slots(&self) -> &[SlotRange] {
         &self.slots
@@ -701,38 +703,48 @@ impl Cluster {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PeerProxy {
     pub proxy_address: String,
-    pub cluster_name: ClusterName,
     pub slots: Vec<SlotRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Proxy {
+    cluster_name: Option<ClusterName>,
     address: String,
     epoch: u64,
+    // We can change this to [Node; 2] but we don't
+    // because maybe others would like to support more than 2 nodes
+    // in a shard.
     nodes: Vec<Node>,
+    // TODO: remove `free_nodes`
     free_nodes: Vec<String>,
     peers: Vec<PeerProxy>,
     #[serde(default)]
-    clusters_config: HashMap<ClusterName, ClusterConfig>,
+    cluster_config: Option<ClusterConfig>,
 }
 
 impl Proxy {
     pub fn new(
+        cluster_name: Option<ClusterName>,
         address: String,
         epoch: u64,
         nodes: Vec<Node>,
         free_nodes: Vec<String>,
         peers: Vec<PeerProxy>,
-        clusters_config: HashMap<ClusterName, ClusterConfig>,
+        cluster_config: Option<ClusterConfig>,
     ) -> Self {
         Self {
+            cluster_name,
             address,
             epoch,
             nodes,
             free_nodes,
             peers,
-            clusters_config,
+            cluster_config,
         }
+    }
+
+    pub fn get_cluster_name(&self) -> Option<&ClusterName> {
+        self.cluster_name.as_ref()
     }
     pub fn get_address(&self) -> &str {
         &self.address
@@ -750,27 +762,18 @@ impl Proxy {
         &self.free_nodes
     }
 
-    pub fn add_node(&mut self, node: Node) {
-        self.nodes.push(node);
-    }
-    pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
-        let node = match self
-            .nodes
-            .iter()
-            .find(|node| node.get_address() == node_address)
-        {
-            Some(node) => node.clone(),
-            None => return None,
-        };
-        self.nodes.retain(|node| node.get_address() != node_address);
-        Some(node)
-    }
     pub fn get_peers(&self) -> &[PeerProxy] {
         &self.peers
     }
 
-    pub fn get_clusters_config(&self) -> &HashMap<ClusterName, ClusterConfig> {
-        &self.clusters_config
+    pub fn get_cluster_config(&self) -> Option<&ClusterConfig> {
+        self.cluster_config.as_ref()
+    }
+
+    pub fn get_cluster_config_or_default(&self) -> ClusterConfig {
+        self.cluster_config
+            .clone()
+            .unwrap_or_else(ClusterConfig::default)
     }
 }
 
@@ -829,6 +832,7 @@ mod tests {
     #[test]
     fn test_deserialize_proxy() {
         let proxy_str = r#"{
+            "cluster_name": "mycluster",
             "address": "server_proxy1:6001",
             "epoch": 1,
             "nodes": [
@@ -869,27 +873,23 @@ mod tests {
                 "cluster_name": "mycluster",
                 "slots": [{"range_list": [[5462, 10000]], "tag": "None"}]
             }],
-            "clusters_config": {
-                "mycluster": {
-                    "compression_strategy": "set_get_only"
-                }
+            "cluster_config": {
+                "compression_strategy": "set_get_only"
             }
         }"#;
         let proxy: Proxy = serde_json::from_str(proxy_str).unwrap();
 
         let mut config = ClusterConfig::default();
         config.compression_strategy = CompressionStrategy::SetGetOnly;
-        let mut clusters_config = HashMap::new();
-        clusters_config.insert(ClusterName::try_from("mycluster").unwrap(), config);
 
         let expected_proxy = Proxy::new(
+            Some(ClusterName::try_from("mycluster").unwrap()),
             "server_proxy1:6001".to_string(),
             1,
             vec![
                 Node::new(
                     "redis1:7001".to_string(),
                     "server_proxy1:6001".to_string(),
-                    ClusterName::try_from("mycluster").unwrap(),
                     vec![SlotRange {
                         range_list: RangeList::try_from("1 0-5461").unwrap(),
                         tag: SlotRangeTag::None,
@@ -905,7 +905,6 @@ mod tests {
                 Node::new(
                     "redis4:7004".to_string(),
                     "server_proxy1:6001".to_string(),
-                    ClusterName::try_from("mycluster").unwrap(),
                     vec![],
                     ReplMeta::new(
                         Role::Replica,
@@ -919,13 +918,12 @@ mod tests {
             Vec::new(),
             vec![PeerProxy {
                 proxy_address: "server_proxy2:6002".to_string(),
-                cluster_name: ClusterName::try_from("mycluster").unwrap(),
                 slots: vec![SlotRange {
                     range_list: RangeList::try_from("1 5462-10000").unwrap(),
                     tag: SlotRangeTag::None,
                 }],
             }],
-            clusters_config,
+            Some(config),
         );
         assert_eq!(expected_proxy, proxy);
     }
@@ -935,7 +933,7 @@ mod tests {
         assert_eq!(size_of::<ClusterName>(), CLUSTER_NAME_MAX_LENGTH + 1);
         // Align to 32 bytes.
         assert_eq!(size_of::<ClusterName>(), 32);
-        let mut name = ClusterName::empty();
+        let mut name = EMPTY_CLUSTER_NAME.clone();
         // ClusterName should be able to store ASCII with just a byte unlike char.
         for _ in 0..CLUSTER_NAME_MAX_LENGTH {
             name.try_push('a').unwrap();

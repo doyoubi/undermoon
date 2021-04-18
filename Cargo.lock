@@ -2307,6 +2307,7 @@ dependencies = [
  "futures-timer 3.0.2",
  "itertools",
  "jemallocator",
+ "lazy_static",
  "log",
  "memchr",
  "mockall",

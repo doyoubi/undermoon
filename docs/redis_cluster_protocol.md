@@ -59,7 +59,7 @@ $ redis-server
 ```bash
 > redis-cli -p 5299
 # Initialize the proxy by `UMCTL` commands.
-127.0.0.1:5299> UMCTL SETCLUSTER 1 NOFLAGS mydb 127.0.0.1:6379 1 0-8000 PEER mydb 127.0.0.1:7000 1 8001-16383
+127.0.0.1:5299> UMCTL SETCLUSTER 1 NOFLAGS mydb 127.0.0.1:6379 1 0-8000 PEER 127.0.0.1:7000 1 8001-16383
 
 # Done! We can use it like a Redis Cluster!
 # Unlike the official Redis Cluster, it only displays master nodes here
