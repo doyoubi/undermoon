@@ -556,6 +556,13 @@ pub struct ReplMeta {
 }
 
 impl ReplMeta {
+    pub fn new_free() -> Self {
+        Self {
+            role: Role::Master,
+            peers: vec![],
+        }
+    }
+
     pub fn new(role: Role, peers: Vec<ReplPeer>) -> Self {
         Self { role, peers }
     }
@@ -715,8 +722,6 @@ pub struct Proxy {
     // because maybe others would like to support more than 2 nodes
     // in a shard.
     nodes: Vec<Node>,
-    // TODO: remove `free_nodes`
-    free_nodes: Vec<String>,
     peers: Vec<PeerProxy>,
     #[serde(default)]
     cluster_config: Option<ClusterConfig>,
@@ -728,7 +733,6 @@ impl Proxy {
         address: String,
         epoch: u64,
         nodes: Vec<Node>,
-        free_nodes: Vec<String>,
         peers: Vec<PeerProxy>,
         cluster_config: Option<ClusterConfig>,
     ) -> Self {
@@ -737,7 +741,6 @@ impl Proxy {
             address,
             epoch,
             nodes,
-            free_nodes,
             peers,
             cluster_config,
         }
@@ -749,17 +752,29 @@ impl Proxy {
     pub fn get_address(&self) -> &str {
         &self.address
     }
-    pub fn get_nodes(&self) -> &[Node] {
-        &self.nodes
+    pub fn get_nodes(&self) -> Vec<Node> {
+        if self.cluster_name.is_none() {
+            return Vec::default();
+        }
+        self.nodes.clone()
     }
     pub fn get_epoch(&self) -> u64 {
         self.epoch
     }
     pub fn into_nodes(self) -> Vec<Node> {
+        if self.cluster_name.is_none() {
+            return Vec::default();
+        }
         self.nodes
     }
-    pub fn get_free_nodes(&self) -> &[String] {
-        &self.free_nodes
+    pub fn get_free_nodes(&self) -> Vec<String> {
+        if self.cluster_name.is_some() {
+            return Vec::default();
+        }
+        self.nodes
+            .iter()
+            .map(|node| node.get_address().to_string())
+            .collect()
     }
 
     pub fn get_peers(&self) -> &[PeerProxy] {
@@ -915,7 +930,6 @@ mod tests {
                     ),
                 ),
             ],
-            Vec::new(),
             vec![PeerProxy {
                 proxy_address: "server_proxy2:6002".to_string(),
                 slots: vec![SlotRange {
