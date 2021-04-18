@@ -762,21 +762,6 @@ impl Proxy {
         &self.free_nodes
     }
 
-    pub fn add_node(&mut self, node: Node) {
-        self.nodes.push(node);
-    }
-    pub fn remove_node(&mut self, node_address: &str) -> Option<Node> {
-        let node = match self
-            .nodes
-            .iter()
-            .find(|node| node.get_address() == node_address)
-        {
-            Some(node) => node.clone(),
-            None => return None,
-        };
-        self.nodes.retain(|node| node.get_address() != node_address);
-        Some(node)
-    }
     pub fn get_peers(&self) -> &[PeerProxy] {
         &self.peers
     }

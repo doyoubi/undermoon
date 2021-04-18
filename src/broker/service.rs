@@ -23,7 +23,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const MEM_BROKER_API_VERSION: &str = "/api/v2";
+pub const MEM_BROKER_API_VERSION: &str = "/api/v3";
 const MAX_PAYLOAD: usize = 128 * 1024 * 1024;
 
 pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
