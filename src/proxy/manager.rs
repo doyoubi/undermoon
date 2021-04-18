@@ -14,7 +14,6 @@ use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
 use crate::common::batch::BatchStats;
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
-use crate::common::config::ClusterConfig;
 use crate::common::proto::{ProxyClusterMeta, NodeMap};
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
@@ -104,9 +103,6 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
     sender_factory: SenderFactory<C>,
     peer_sender_factory: PeerSenderFactory<C>,
     blocking_map: Arc<BlockingMap<BasicSenderFactory<C>, BlockingTaskRetrySender<C>>>,
-    // TODO: Remove `proxy_cluster_config`
-    // default ClusterConfig from server proxy config file
-    proxy_cluster_config: ClusterConfig,
     client_factory: Arc<F>,
     batch_stats: Arc<BatchStats>,
 }
@@ -114,7 +110,6 @@ pub struct MetaManager<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> 
 impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> {
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        proxy_cluster_config: ClusterConfig,
         client_factory: Arc<F>,
         conn_factory: Arc<C>,
         meta_map: SharedMetaMap<C>,
@@ -167,7 +162,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         ));
         let cmd_ctx_factory = Arc::new(CmdCtxFactory::default());
         let config_clone = config.clone();
-        let cluster_config_clone = proxy_cluster_config.clone();
         Self {
             config,
             meta_map,
@@ -179,7 +173,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             ),
             migration_manager: MigrationManager::new(
                 config_clone,
-                cluster_config_clone,
                 client_factory.clone(),
                 migration_sender_factory,
                 migration_dst_sender_factory,
@@ -190,7 +183,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
             sender_factory,
             peer_sender_factory,
             blocking_map,
-            proxy_cluster_config,
             client_factory,
             batch_stats,
         }
@@ -233,7 +225,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         let sender_factory = &self.sender_factory;
         let peer_sender_factory = &self.peer_sender_factory;
         let migration_manager = &self.migration_manager;
-        let proxy_cluster_config = &self.proxy_cluster_config;
 
         {
             let _guard = self.lock.lock();
@@ -250,7 +241,6 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
                 sender_factory,
                 peer_sender_factory,
                 active_redirection,
-                proxy_cluster_config,
             );
             let (migration_map, new_tasks) = migration_manager.create_new_migration_map(
                 cluster_name.clone(),

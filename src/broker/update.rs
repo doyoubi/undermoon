@@ -136,6 +136,7 @@ impl<'a> MetaStoreUpdate<'a> {
         &mut self,
         cluster_name: String,
         node_num: usize,
+        default_cluster_config: ClusterConfig,
     ) -> Result<(), MetaStoreError> {
         if self.store.enable_ordered_proxy && !self.store.clusters.is_empty() {
             return Err(MetaStoreError::OneClusterAlreadyExisted);
@@ -165,7 +166,7 @@ impl<'a> MetaStoreUpdate<'a> {
             epoch,
             name: cluster_name.clone(),
             chunks: chunk_stores,
-            config: ClusterConfig::default(),
+            config: default_cluster_config,
         };
 
         // Tag the proxies as occupied

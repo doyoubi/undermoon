@@ -48,7 +48,6 @@ where
     CTF::Task: CmdTask<TaskType = CmdTypeTuple>,
 {
     config: Arc<ServerProxyConfig>,
-    cluster_config: ClusterConfig,
     client_factory: Arc<RCF>,
     sender_factory: Arc<TSF>,
     dst_sender_factory: Arc<DTSF>,
@@ -73,7 +72,6 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        cluster_config: ClusterConfig,
         client_factory: Arc<RCF>,
         sender_factory: Arc<TSF>,
         dst_sender_factory: Arc<DTSF>,
@@ -83,7 +81,6 @@ where
     ) -> Self {
         Self {
             config,
-            cluster_config,
             client_factory,
             sender_factory,
             dst_sender_factory,
@@ -102,9 +99,9 @@ where
         cluster_config: &ClusterConfig,
         blocking_ctrl_factory: Arc<BCF>,
     ) -> NewMigrationTuple<CTF::Task> {
-        // TODO: implement dynamic configuration through CONFIG command later.
+        // TODO: Remove AtomicMigrationConfig and use MigrationConfig directly.
         let mgr_config = Arc::new(AtomicMigrationConfig::from_config(
-            self.cluster_config.migration_config.clone(),
+            cluster_config.migration_config.clone(),
         ));
         old_migration_map.update_from_old_task_map(
             cluster_name,

@@ -11,6 +11,7 @@ use std::env;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
+use undermoon::common::config::ClusterConfig;
 use undermoon::broker::{
     configure_app, JsonFileStorage, JsonMetaReplicator, MemBrokerConfig, MemBrokerService,
     MetaPersistence, MetaStoreError, MetaSyncError, StorageConfig,
@@ -19,7 +20,7 @@ use undermoon::broker::{
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-fn gen_conf() -> MemBrokerConfig {
+fn gen_conf() -> Result<(MemBrokerConfig, ClusterConfig), &'static str> {
     let mut s = config::Config::new();
     if let Some(conf_file_path) = env::args().nth(1) {
         s.merge(config::File::with_name(&conf_file_path))
@@ -74,7 +75,7 @@ fn gen_conf() -> MemBrokerConfig {
 
     let debug = s.get::<bool>("debug").unwrap_or(false);
 
-    MemBrokerConfig {
+    let config = MemBrokerConfig {
         address: s
             .get::<String>("address")
             .unwrap_or_else(|_| "127.0.0.1:7799".to_string()),
@@ -94,7 +95,25 @@ fn gen_conf() -> MemBrokerConfig {
         enable_ordered_proxy: s.get::<bool>("enable_ordered_proxy").unwrap_or(false),
         storage,
         debug,
+    };
+
+    let mut cluster_config = ClusterConfig::default();
+    let cluster_fields = [
+        "compression_strategy",
+        "migration_max_migration_time",
+        "migration_max_blocking_time",
+        "migration_scan_interval",
+        "migration_scan_count",
+    ];
+    for field in cluster_fields.iter() {
+        if let Ok(value) = s.get::<String>(*field) {
+            if cluster_config.set_field(*field, value.as_str()).is_err() {
+                return Err(*field);
+            }
+        }
     }
+
+    Ok((config, cluster_config))
 }
 
 fn meta_sync_error_to_io_err(err: MetaSyncError) -> std::io::Error {
@@ -138,10 +157,13 @@ async fn sync_meta_to_replicas(service: Arc<MemBrokerService>, interval: Duratio
 }
 
 #[actix_rt::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<(), std::io::Error> {
     env_logger::init();
 
-    let config = gen_conf();
+    let (config, cluster_config) = gen_conf().map_err(|err| {
+        error!("config error: {}", err);
+        std::io::Error::new(std::io::ErrorKind::Other, err)
+    })?;
     let address = config.address.clone();
     let update_file_interval = config.update_meta_file_interval;
     let sync_meta_interval = config.sync_meta_interval;
@@ -160,7 +182,7 @@ async fn main() -> std::io::Result<()> {
     let meta_replicator = JsonMetaReplicator::new(config.replica_addresses.clone(), http_client);
     let meta_replicator = Arc::new(meta_replicator);
 
-    let service = MemBrokerService::new(config, meta_persistence, meta_replicator, meta_store)
+    let service = MemBrokerService::new(config, cluster_config, meta_persistence, meta_replicator, meta_store)
         .map_err(meta_error_to_io_error)?;
     let service = Arc::new(service);
 

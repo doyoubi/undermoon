@@ -22,7 +22,6 @@ mod tests {
     use undermoon::common::cluster::{
         ClusterName, MigrationMeta, MigrationTaskMeta, Range, RangeList, SlotRange, SlotRangeTag,
     };
-    use undermoon::common::config::ClusterConfig;
     use undermoon::common::proto::{ClusterMapFlags, ProxyClusterMeta};
     use undermoon::common::response::{
         ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, ERR_TOO_MANY_REDIRECTIONS,
@@ -78,7 +77,6 @@ mod tests {
         let future_registry = Arc::new(TrackedFutureRegistry::default());
         MetaManager::new(
             config,
-            ClusterConfig::default(),
             client_factory,
             conn_factory,
             meta_map,

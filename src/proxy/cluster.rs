@@ -69,7 +69,6 @@ where
         sender_factory: &F,
         peer_sender_factory: &PF,
         active_redirection: bool,
-        proxy_cluster_config: &ClusterConfig,
     ) -> Self {
         let epoch = cluster_meta.get_epoch();
         let cluster_name = cluster_meta.get_cluster_name().clone();

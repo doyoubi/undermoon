@@ -8,6 +8,7 @@ use crate::broker::external::ExternalHttpStorage;
 use crate::common::atomic_lock::AtomicLock;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
 use crate::common::version::UNDERMOON_VERSION;
+use crate::common::config::ClusterConfig;
 use crate::coordinator::http_mani_broker::ReplaceProxyResponse;
 use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailedProxiesPayload, FailuresPayload,
@@ -179,6 +180,7 @@ pub struct MemBrokerConfigPayload {
 
 pub struct MemBrokerService {
     config: MemBrokerConfig,
+    default_cluster_config: ClusterConfig,
     storage: Arc<dyn MetaStorage>,
     meta_persistence: Arc<dyn MetaPersistence + Send + Sync + 'static>,
     meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
@@ -188,6 +190,7 @@ pub struct MemBrokerService {
 impl MemBrokerService {
     pub fn new(
         config: MemBrokerConfig,
+        default_cluster_config: ClusterConfig,
         meta_persistence: Arc<dyn MetaPersistence + Send + Sync + 'static>,
         meta_replicator: Arc<dyn MetaReplicator + Send + Sync + 'static>,
         last_meta_store: Option<MetaStore>,
@@ -231,6 +234,7 @@ impl MemBrokerService {
 
         let service = Self {
             config,
+            default_cluster_config,
             storage,
             meta_persistence,
             meta_replicator,
@@ -337,7 +341,7 @@ impl MemBrokerService {
         cluster_name: String,
         node_num: usize,
     ) -> Result<(), MetaStoreError> {
-        self.storage.add_cluster(cluster_name, node_num).await
+        self.storage.add_cluster(cluster_name, node_num, self.default_cluster_config.clone()).await
     }
 
     pub async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {

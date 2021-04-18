@@ -7,7 +7,6 @@ use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use super::table::CommandTable;
-use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
@@ -60,7 +59,6 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        cluster_config: ClusterConfig,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
         meta_map: SharedMetaMap<C>,
@@ -71,7 +69,6 @@ where
         Self {
             handler: sync::Arc::new(ForwardHandler::new(
                 config,
-                cluster_config,
                 client_factory,
                 slow_request_logger,
                 meta_map,
@@ -117,7 +114,6 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<ServerProxyConfig>,
-        cluster_config: ClusterConfig,
         client_factory: Arc<F>,
         slow_request_logger: Arc<SlowRequestLogger>,
         meta_map: SharedMetaMap<C>,
@@ -129,7 +125,6 @@ where
             config: config.clone(),
             manager: MetaManager::new(
                 config,
-                cluster_config,
                 client_factory,
                 conn_factory,
                 meta_map.clone(),
