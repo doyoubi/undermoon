@@ -65,7 +65,6 @@ mod tests {
     use super::super::core::ParFailureHandler;
     use super::*;
     use crate::common::cluster::Proxy;
-    use crate::common::config::ClusterConfig;
     use crate::coordinator::core::FailureHandler;
     use futures::{stream, StreamExt};
     use tokio;
@@ -78,7 +77,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-            ClusterConfig::default(),
+            None,
         )
     }
 

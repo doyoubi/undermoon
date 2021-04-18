@@ -5,7 +5,6 @@ use super::store::{
 use crate::broker::store::ProxyResource;
 use crate::common::cluster::{Cluster, Node, PeerProxy, Proxy, ReplMeta, ReplPeer};
 use crate::common::cluster::{ClusterName, Role};
-use crate::common::config::ClusterConfig;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -66,7 +65,7 @@ impl<'a> MetaStoreQuery<'a> {
                     vec![],
                     proxy_resource.node_addresses.to_vec(),
                     vec![],
-                    ClusterConfig::default(),
+                    None,
                 ));
             }
         };
@@ -113,7 +112,7 @@ impl<'a> MetaStoreQuery<'a> {
             nodes,
             free_nodes,
             peers,
-            cluster.get_config(),
+            Some(cluster.get_config()),
         );
         Some(proxy)
     }

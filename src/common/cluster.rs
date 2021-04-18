@@ -719,7 +719,7 @@ pub struct Proxy {
     free_nodes: Vec<String>,
     peers: Vec<PeerProxy>,
     #[serde(default)]
-    cluster_config: ClusterConfig,
+    cluster_config: Option<ClusterConfig>,
 }
 
 impl Proxy {
@@ -730,7 +730,7 @@ impl Proxy {
         nodes: Vec<Node>,
         free_nodes: Vec<String>,
         peers: Vec<PeerProxy>,
-        cluster_config: ClusterConfig,
+        cluster_config: Option<ClusterConfig>,
     ) -> Self {
         Self {
             cluster_name,
@@ -781,8 +781,14 @@ impl Proxy {
         &self.peers
     }
 
-    pub fn get_cluster_config(&self) -> &ClusterConfig {
-        &self.cluster_config
+    pub fn get_cluster_config(&self) -> Option<&ClusterConfig> {
+        self.cluster_config.as_ref()
+    }
+
+    pub fn get_cluster_config_or_default(&self) -> ClusterConfig {
+        self.cluster_config
+            .clone()
+            .unwrap_or_else(ClusterConfig::default)
     }
 }
 
@@ -932,7 +938,7 @@ mod tests {
                     tag: SlotRangeTag::None,
                 }],
             }],
-            config,
+            Some(config),
         );
         assert_eq!(expected_proxy, proxy);
     }

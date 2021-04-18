@@ -72,7 +72,7 @@ fn filter_proxy_masters(proxy: Proxy) -> Proxy {
     let epoch = proxy.get_epoch();
     let free_nodes = proxy.get_free_nodes().to_vec();
     let peers = proxy.get_peers().to_vec();
-    let cluster_config = proxy.get_cluster_config().clone();
+    let cluster_config = proxy.get_cluster_config().cloned();
     let masters = proxy
         .into_nodes()
         .into_iter()
@@ -118,7 +118,7 @@ fn generate_proxy_meta_cmd_args(
     proxy: Proxy,
 ) -> Result<Vec<String>, MetaCompressError> {
     let epoch = proxy.get_epoch();
-    let clusters_config = proxy.get_cluster_config().clone();
+    let clusters_config = proxy.get_cluster_config_or_default();
 
     let mut peer_node_map: HashMap<String, Vec<SlotRange>> = HashMap::new();
 
@@ -301,7 +301,7 @@ mod tests {
             nodes,
             vec![],
             vec![],
-            ClusterConfig::default(),
+            Some(ClusterConfig::default()),
         )
     }
 
