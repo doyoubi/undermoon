@@ -14,7 +14,7 @@ use super::session::{CmdCtx, CmdCtxFactory};
 use super::slowlog::TaskEvent;
 use crate::common::batch::BatchStats;
 use crate::common::cluster::{ClusterName, MigrationTaskMeta, SlotRangeTag};
-use crate::common::proto::{ProxyClusterMeta, NodeMap};
+use crate::common::proto::{NodeMap, ProxyClusterMeta};
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{gen_moved, RetryError};
@@ -191,19 +191,17 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     pub fn gen_cluster_nodes(&self) -> String {
         let meta_map = self.meta_map.load();
         let migration_states = meta_map.migration_map.get_states();
-        meta_map.cluster_map.gen_cluster_nodes(
-            self.config.announce_address.clone(),
-            &migration_states,
-        )
+        meta_map
+            .cluster_map
+            .gen_cluster_nodes(self.config.announce_address.clone(), &migration_states)
     }
 
     pub fn gen_cluster_slots(&self) -> Result<RespVec, String> {
         let meta_map = self.meta_map.load();
         let migration_states = meta_map.migration_map.get_states();
-        meta_map.cluster_map.gen_cluster_slots(
-            self.config.announce_address.clone(),
-            &migration_states,
-        )
+        meta_map
+            .cluster_map
+            .gen_cluster_slots(self.config.announce_address.clone(), &migration_states)
     }
 
     pub fn get_cluster(&self) -> ClusterName {
@@ -215,8 +213,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
 
         // validation
         let local = NodeMap::new(cluster_meta.get_local().clone());
-        if !local.check_hosts(self.config.announce_host.as_str(), cluster_name)
-        {
+        if !local.check_hosts(self.config.announce_host.as_str(), cluster_name) {
             return Err(ClusterMetaError::NotMyMeta);
         }
 
@@ -324,12 +321,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub async fn send_to_any_local_node(&self, cmd_ctx: &CmdCtx) -> RespVec {
-        let address = match self
-            .meta_map
-            .load()
-            .cluster_map
-            .get_cluster_any_node()
-        {
+        let address = match self.meta_map.load().cluster_map.get_cluster_any_node() {
             None => {
                 return Resp::Error(response::ERR_CLUSTER_NOT_FOUND.to_string().into_bytes());
             }
@@ -403,12 +395,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         // This check and do will not result in race condition,
         // because in "not imported" state,
         // the keys are not owned by this proxy and will be "MOVED".
-        if !self
-            .meta_map
-            .lease()
-            .migration_map
-            .keys_are_importing(keys)
-        {
+        if !self.meta_map.lease().migration_map.keys_are_importing(keys) {
             return Ok(());
         }
 
@@ -542,26 +529,24 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     if let Err(e) = res {
         match e {
             ClusterSendError::MissingKey => (),
-            ClusterSendError::ClusterNotFound { task } => {
-                match default_redirection_address {
-                    Some(redirection_address) => match task.get_slot() {
-                        None => {
-                            let resp = Resp::Error("missing key".to_string().into_bytes());
-                            task.set_resp_result(Ok(resp));
-                        }
-                        Some(slot) => {
-                            let resp = Resp::Error(
-                                gen_moved(slot, redirection_address.clone()).into_bytes(),
-                            );
-                            task.set_resp_result(Ok(resp));
-                        }
-                    },
+            ClusterSendError::ClusterNotFound { task } => match default_redirection_address {
+                Some(redirection_address) => match task.get_slot() {
                     None => {
-                        let resp = Resp::Error(response::ERR_CLUSTER_NOT_FOUND.to_string().into_bytes());
+                        let resp = Resp::Error("missing key".to_string().into_bytes());
                         task.set_resp_result(Ok(resp));
                     }
+                    Some(slot) => {
+                        let resp =
+                            Resp::Error(gen_moved(slot, redirection_address.clone()).into_bytes());
+                        task.set_resp_result(Ok(resp));
+                    }
+                },
+                None => {
+                    let resp =
+                        Resp::Error(response::ERR_CLUSTER_NOT_FOUND.to_string().into_bytes());
+                    task.set_resp_result(Ok(resp));
                 }
-            }
+            },
             ClusterSendError::ActiveRedirection {
                 task,
                 slot,

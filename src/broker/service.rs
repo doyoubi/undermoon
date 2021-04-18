@@ -7,8 +7,8 @@ use crate::broker::epoch::{fetch_max_epoch, wait_for_proxy_epoch, EpochFetchResu
 use crate::broker::external::ExternalHttpStorage;
 use crate::common::atomic_lock::AtomicLock;
 use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Proxy};
-use crate::common::version::UNDERMOON_VERSION;
 use crate::common::config::ClusterConfig;
+use crate::common::version::UNDERMOON_VERSION;
 use crate::coordinator::http_mani_broker::ReplaceProxyResponse;
 use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailedProxiesPayload, FailuresPayload,
@@ -341,7 +341,9 @@ impl MemBrokerService {
         cluster_name: String,
         node_num: usize,
     ) -> Result<(), MetaStoreError> {
-        self.storage.add_cluster(cluster_name, node_num, self.default_cluster_config.clone()).await
+        self.storage
+            .add_cluster(cluster_name, node_num, self.default_cluster_config.clone())
+            .await
     }
 
     pub async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {

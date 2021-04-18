@@ -2,7 +2,7 @@ use super::backend::ConnFactory;
 use super::command::DataCmdType;
 use super::manager::SharedMetaMap;
 use super::session::CmdCtx;
-use crate::common::config::{CompressionStrategy};
+use crate::common::config::CompressionStrategy;
 use crate::protocol::{Array, BulkStr, OptionalMulti, Resp, RespPacket};
 use std::error::Error;
 use std::fmt;

@@ -1,9 +1,7 @@
 use super::broker::MetaDataBroker;
 use super::core::{CoordinateError, ProxyMetaRetriever, ProxyMetaSender};
 use crate::common::cluster::{Proxy, Role, SlotRange, EMPTY_CLUSTER_NAME};
-use crate::common::proto::{
-    ClusterMapFlags, MetaCompressError, ProxyClusterMeta,
-};
+use crate::common::proto::{ClusterMapFlags, MetaCompressError, ProxyClusterMeta};
 use crate::common::response::{ERR_NOT_MY_META, OK_REPLY, OLD_EPOCH_REPLY};
 use crate::protocol::{RedisClient, RedisClientFactory, Resp};
 use crate::replication::replicator::{encode_repl_meta, MasterMeta, ReplicaMeta, ReplicatorMeta};
@@ -81,7 +79,15 @@ fn filter_proxy_masters(proxy: Proxy) -> Proxy {
         .filter(|node| node.get_role() == Role::Master)
         .collect();
 
-    Proxy::new(cluster_name, address, epoch, masters, free_nodes, peers, cluster_config)
+    Proxy::new(
+        cluster_name,
+        address,
+        epoch,
+        masters,
+        free_nodes,
+        peers,
+        cluster_config,
+    )
 }
 
 pub struct BrokerMetaRetriever<B: MetaDataBroker> {
@@ -120,15 +126,24 @@ fn generate_proxy_meta_cmd_args(
         peer_node_map.insert(peer_proxy.proxy_address.clone(), peer_proxy.slots.clone());
     }
 
-    let cluster_name = proxy.get_cluster_name().cloned().unwrap_or_else(|| EMPTY_CLUSTER_NAME.clone());
+    let cluster_name = proxy
+        .get_cluster_name()
+        .cloned()
+        .unwrap_or_else(|| EMPTY_CLUSTER_NAME.clone());
     let mut node_map: HashMap<String, Vec<SlotRange>> = HashMap::new();
 
     for node in proxy.into_nodes() {
         node_map.insert(node.get_address().to_string(), node.into_slots().clone());
     }
 
-    let proxy_cluster_meta =
-        ProxyClusterMeta::new(epoch, flags.clone(), cluster_name, node_map, peer_node_map, clusters_config);
+    let proxy_cluster_meta = ProxyClusterMeta::new(
+        epoch,
+        flags.clone(),
+        cluster_name,
+        node_map,
+        peer_node_map,
+        clusters_config,
+    );
 
     if flags.compress {
         return proxy_cluster_meta.to_compressed_args();
@@ -233,7 +248,6 @@ fn generate_repl_meta_cmd_args(proxy: Proxy, flags: ClusterMapFlags) -> Vec<Stri
         }
     };
 
-
     let repl_meta = ReplicatorMeta {
         epoch,
         flags,
@@ -250,7 +264,9 @@ mod tests {
     use super::super::core::{ProxyMetaRespSynchronizer, ProxyMetaSynchronizer};
     use super::super::detector::BrokerProxiesRetriever;
     use super::*;
-    use crate::common::cluster::{Node, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag, ClusterName};
+    use crate::common::cluster::{
+        ClusterName, Node, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
+    };
     use crate::common::config::ClusterConfig;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient, Resp};
     use futures::{stream, StreamExt};
@@ -347,7 +363,14 @@ mod tests {
             vec![SlotRange::from_strings(&mut slots.into_iter().peekable()).unwrap()],
         );
 
-        let meta = ProxyClusterMeta::new(epoch, flags, cluster_name, node_map, HashMap::new(), ClusterConfig::default());
+        let meta = ProxyClusterMeta::new(
+            epoch,
+            flags,
+            cluster_name,
+            node_map,
+            HashMap::new(),
+            ClusterConfig::default(),
+        );
         meta.to_compressed_args().unwrap()
     }
 

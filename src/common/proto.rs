@@ -290,7 +290,11 @@ impl ProxyClusterMeta {
     }
 
     pub fn to_args(&self) -> Vec<String> {
-        let mut args = vec![self.epoch.to_string(), self.flags.to_arg(), self.cluster_name.to_string()];
+        let mut args = vec![
+            self.epoch.to_string(),
+            self.flags.to_arg(),
+            self.cluster_name.to_string(),
+        ];
         let local = NodeMap::new(self.local.clone()).to_args();
         let peer = NodeMap::new(self.peer.clone()).to_args();
         let config = ClusterConfigData::new(self.cluster_config.clone()).to_args();
@@ -324,7 +328,7 @@ pub struct NodeMap(HashMap<String, Vec<SlotRange>>);
 
 impl NodeMap {
     pub fn new(node_map: HashMap<String, Vec<SlotRange>>) -> Self {
-        Self ( node_map )
+        Self(node_map)
     }
 
     pub fn into_inner(self) -> HashMap<String, Vec<SlotRange>> {
@@ -337,12 +341,12 @@ impl NodeMap {
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![];
-            for (node, slot_ranges) in self.0.iter() {
-                for slot_range in slot_ranges {
-                    args.push(node.clone());
-                    args.extend(slot_range.clone().into_strings());
-                }
+        for (node, slot_ranges) in self.0.iter() {
+            for slot_range in slot_ranges {
+                args.push(node.clone());
+                args.extend(slot_range.clone().into_strings());
             }
+        }
         args
     }
 
@@ -370,12 +374,10 @@ impl NodeMap {
             slots.push(slot_range);
         }
 
-        Ok(Self ( node_map ))
+        Ok(Self(node_map))
     }
 
-    fn parse_node<It>(
-        it: &mut Peekable<It>,
-    ) -> Result<(String, SlotRange), CmdParseError>
+    fn parse_node<It>(it: &mut Peekable<It>) -> Result<(String, SlotRange), CmdParseError>
     where
         It: Iterator<Item = String>,
     {
@@ -392,22 +394,22 @@ impl NodeMap {
     }
 
     pub fn check_hosts(&self, announce_host: &str, cluster_name: &ClusterName) -> bool {
-            for local_node_address in self.0.keys() {
-                let host = match extract_host_from_address(local_node_address.as_str()) {
-                    Some(host) => host,
-                    None => {
-                        error!("invalid local node address: {}", local_node_address);
-                        return false;
-                    }
-                };
-                if host != announce_host {
-                    error!(
-                        "not my announce host: {} {} != {}",
-                        cluster_name, announce_host, local_node_address
-                    );
+        for local_node_address in self.0.keys() {
+            let host = match extract_host_from_address(local_node_address.as_str()) {
+                Some(host) => host,
+                None => {
+                    error!("invalid local node address: {}", local_node_address);
                     return false;
                 }
+            };
+            if host != announce_host {
+                error!(
+                    "not my announce host: {} {} != {}",
+                    cluster_name, announce_host, local_node_address
+                );
+                return false;
             }
+        }
         true
     }
 }
@@ -466,10 +468,10 @@ impl ClusterConfigData {
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![];
-            for (k, v) in self.0.to_str_map().into_iter() {
-                args.push(k);
-                args.push(v);
-            }
+        for (k, v) in self.0.to_str_map().into_iter() {
+            args.push(k);
+            args.push(v);
+        }
         args
     }
 }
@@ -508,14 +510,7 @@ mod tests {
 
         let node_map = NodeMap::parse(&mut arguments).unwrap();
         assert_eq!(node_map.get_map().len(), 1);
-        assert_eq!(
-            node_map
-                .get_map()
-                .get("127.0.0.1:6379")
-                .unwrap()
-                .len(),
-            2
-        );
+        assert_eq!(node_map.get_map().get("127.0.0.1:6379").unwrap().len(), 2);
 
         assert_eq!(node_map.to_args(), args);
     }
@@ -532,28 +527,9 @@ mod tests {
         ];
         let mut arguments = args.iter().map(|s| s.to_string()).peekable();
         let node_map = NodeMap::parse(&mut arguments).unwrap();
-        assert_eq!(
-            node_map
-                .get_map()
-                .len(),
-            2
-        );
-        assert_eq!(
-            node_map
-                .get_map()
-                .get("127.0.0.1:7000")
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            node_map
-                .get_map()
-                .get("127.0.0.1:7001")
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(node_map.get_map().len(), 2);
+        assert_eq!(node_map.get_map().get("127.0.0.1:7000").unwrap().len(), 1);
+        assert_eq!(node_map.get_map().get("127.0.0.1:7001").unwrap().len(), 1);
 
         let mut expected_args = args.clone();
         let mut actual_args = node_map.to_args();
@@ -575,9 +551,7 @@ mod tests {
         let mut it = args.iter().map(|s| s.to_string()).peekable();
         let cluster_config = ClusterConfigData::parse(&mut it).unwrap();
         assert_eq!(
-            cluster_config
-                .get_config()
-                .compression_strategy,
+            cluster_config.get_config().compression_strategy,
             CompressionStrategy::AllowAll
         );
         assert_eq!(
@@ -693,18 +667,14 @@ mod tests {
         let config = cluster_meta.cluster_config.clone();
         assert_eq!(local.len(), 2);
         assert_eq!(
-            local
-                .get("127.0.0.1:7000")
-                .unwrap()[0]
+            local.get("127.0.0.1:7000").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
             0
         );
         assert_eq!(
-            local
-                .get("127.0.0.1:7001")
-                .unwrap()[0]
+            local.get("127.0.0.1:7001").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
@@ -712,27 +682,20 @@ mod tests {
         );
         assert_eq!(peer.len(), 2);
         assert_eq!(
-            peer
-                .get("127.0.0.2:7001")
-                .unwrap()[0]
+            peer.get("127.0.0.2:7001").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
             2001
         );
         assert_eq!(
-            peer
-                .get("127.0.0.2:7002")
-                .unwrap()[0]
+            peer.get("127.0.0.2:7002").unwrap()[0]
                 .get_range_list()
                 .get_ranges()[0]
                 .start(),
             3001
         );
-        assert_eq!(
-            config.compression_strategy,
-            CompressionStrategy::SetGetOnly
-        );
+        assert_eq!(config.compression_strategy, CompressionStrategy::SetGetOnly);
 
         let mut args = cluster_meta.to_args();
         let mut cluster_args: Vec<String> = arguments.into_iter().map(|s| s.to_string()).collect();
@@ -783,9 +746,7 @@ mod tests {
         assert_eq!(cluster_meta.epoch, 233);
         assert!(cluster_meta.flags.force);
         assert_eq!(
-            cluster_meta
-                .get_config()
-                .compression_strategy,
+            cluster_meta.get_config().compression_strategy,
             CompressionStrategy::SetGetOnly
         );
 

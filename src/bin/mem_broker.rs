@@ -11,11 +11,11 @@ use std::env;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
-use undermoon::common::config::ClusterConfig;
 use undermoon::broker::{
     configure_app, JsonFileStorage, JsonMetaReplicator, MemBrokerConfig, MemBrokerService,
     MetaPersistence, MetaStoreError, MetaSyncError, StorageConfig,
 };
+use undermoon::common::config::ClusterConfig;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -182,8 +182,14 @@ async fn main() -> Result<(), std::io::Error> {
     let meta_replicator = JsonMetaReplicator::new(config.replica_addresses.clone(), http_client);
     let meta_replicator = Arc::new(meta_replicator);
 
-    let service = MemBrokerService::new(config, cluster_config, meta_persistence, meta_replicator, meta_store)
-        .map_err(meta_error_to_io_error)?;
+    let service = MemBrokerService::new(
+        config,
+        cluster_config,
+        meta_persistence,
+        meta_replicator,
+        meta_store,
+    )
+    .map_err(meta_error_to_io_error)?;
     let service = Arc::new(service);
 
     if let Some(interval) = update_file_interval {

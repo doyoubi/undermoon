@@ -749,7 +749,7 @@ mod tests {
     };
     use super::*;
     use crate::common::cluster::Role;
-    use crate::common::config::{CompressionStrategy, ClusterConfig};
+    use crate::common::config::{ClusterConfig, CompressionStrategy};
     use std::convert::TryFrom;
 
     #[test]
@@ -859,7 +859,9 @@ mod tests {
 
         check_cluster_and_proxy(&store);
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let epoch2 = store.get_global_epoch();
         assert!(epoch1 < epoch2);
         check_cluster_and_proxy(&store);
@@ -897,7 +899,9 @@ mod tests {
         assert_eq!(free_node_num, original_free_node_num - 4);
 
         let another_cluster = "another_cluster".to_string();
-        store.add_cluster(another_cluster.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(another_cluster.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let epoch3 = store.get_global_epoch();
         assert!(epoch2 <= epoch3);
         check_cluster_and_proxy(&store);
@@ -988,7 +992,11 @@ mod tests {
 
         {
             store
-                .add_cluster(CLUSTER_NAME.to_string(), (host_num - 1) * 2, ClusterConfig::default())
+                .add_cluster(
+                    CLUSTER_NAME.to_string(),
+                    (host_num - 1) * 2,
+                    ClusterConfig::default(),
+                )
                 .unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
@@ -1008,7 +1016,9 @@ mod tests {
         }
 
         {
-            store.add_cluster("testcluster2".to_string(), 4, ClusterConfig::default()).unwrap();
+            store
+                .add_cluster("testcluster2".to_string(), 4, ClusterConfig::default())
+                .unwrap();
             let mut count_map: HashMap<String, usize> = HashMap::new();
             for addr in store.get_proxies() {
                 let proxy = store.get_proxy_by_address(&addr, migration_limit).unwrap();
@@ -1071,7 +1081,9 @@ mod tests {
         assert!(epoch2 < epoch3);
 
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         assert_eq!(store.get_free_proxies().len(), ALL_PROXIES - 3);
         let epoch4 = store.get_global_epoch();
         assert!(epoch3 < epoch4);
@@ -1174,7 +1186,9 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
 
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let epoch1 = store.get_global_epoch();
         assert_eq!(store.get_free_proxies().len(), all_proxy_num - 2);
         assert_eq!(
@@ -1246,7 +1260,11 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
         store
-            .add_cluster(cluster_name.clone(), start_node_num, ClusterConfig::default())
+            .add_cluster(
+                cluster_name.clone(),
+                start_node_num,
+                ClusterConfig::default(),
+            )
             .unwrap();
         let cluster = store
             .get_cluster_by_name(&cluster_name, migration_limit)
@@ -1800,7 +1818,9 @@ mod tests {
         add_testing_proxies(&mut store, 4, 3);
 
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let cluster_config = store
             .get_cluster_by_name(&cluster_name, migration_limit)
             .unwrap()
@@ -1844,7 +1864,9 @@ mod tests {
 
         let migration_limit = 1;
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
         store.migrate_slots(cluster_name.clone()).unwrap();
         let cluster = store
@@ -1871,7 +1893,9 @@ mod tests {
 
         let migration_limit = 0;
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
         store.migrate_slots(cluster_name.clone()).unwrap();
         let cluster = store
@@ -1945,7 +1969,9 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), all_proxy_num);
 
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
 
         let proxy_address = cluster
@@ -2033,7 +2059,9 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), all_proxy_num);
 
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
 
         const NEW_EPOCH: u64 = 233;
@@ -2056,7 +2084,9 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), all_proxy_num);
 
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
 
         // The epoch of free proxy will be global epoch.
@@ -2079,7 +2109,9 @@ mod tests {
         assert_eq!(store.get_free_proxies().len(), all_proxy_num);
 
         let cluster_name = CLUSTER_NAME.to_string();
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         let cluster = store.get_cluster_by_name(&cluster_name, 1).unwrap();
 
         let new_epoch = cluster.get_epoch() + 1;
@@ -2105,7 +2137,9 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
 
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         check_cluster_and_proxy(&store);
 
         store.auto_add_nodes(cluster_name.clone(), 4).unwrap();
@@ -2148,7 +2182,9 @@ mod tests {
 
         let cluster_name = CLUSTER_NAME.to_string();
 
-        store.add_cluster(cluster_name.clone(), 4, ClusterConfig::default()).unwrap();
+        store
+            .add_cluster(cluster_name.clone(), 4, ClusterConfig::default())
+            .unwrap();
         check_cluster_and_proxy(&store);
 
         let (first_master_proxy, second_master_proxy) = {

@@ -19,10 +19,10 @@ use std::fmt;
 use std::io;
 use std::pin::Pin;
 use std::sync;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
-use std::sync::atomic::AtomicBool;
 
 // CmdReplyReceiver is the fast path without heap allocation.
 pub type CmdReplyFuture<'a> =
@@ -228,12 +228,7 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
         let slowlog_enabled = self
             .slow_request_logger
             .limit_rate(self.config.get_slowlog_sample_rate());
-        let mut cmd_ctx = CmdCtx::new(
-            cmd,
-            reply_sender,
-            self.session_id,
-            slowlog_enabled,
-        );
+        let mut cmd_ctx = CmdCtx::new(cmd, reply_sender, self.session_id, slowlog_enabled);
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler
             .handle_cmd_ctx(cmd_ctx, reply_receiver, &self.authenticated)

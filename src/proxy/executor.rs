@@ -1,5 +1,5 @@
 use super::backend::{CmdTask, CmdTaskFactory, ConnFactory};
-use super::cluster::{ClusterMetaError};
+use super::cluster::ClusterMetaError;
 use super::command::{CmdReplyReceiver, CmdType, DataCmdType, TaskResult};
 use super::compress::{CmdCompressor, CompressionError, CompressionStrategyMetaMapConfig};
 use super::manager::{MetaManager, SharedMetaMap};
@@ -29,9 +29,8 @@ use futures::future;
 use futures_timer::Delay;
 use std::collections::HashMap;
 use std::str;
-use std::sync::{self, Arc};
+use std::sync::{self, atomic, Arc};
 use std::time::Duration;
-use std::sync::atomic;
 
 type NonBlockingCommandsWithKey = Vec<(Vec<u8>, RespVec)>;
 
@@ -154,11 +153,7 @@ where
         cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(content.into_bytes()))));
     }
 
-    fn handle_auth(
-        &self,
-        cmd_ctx: CmdCtx,
-        authenticated: &atomic::AtomicBool,
-    ) {
+    fn handle_auth(&self, cmd_ctx: CmdCtx, authenticated: &atomic::AtomicBool) {
         let password_opt = cmd_ctx.get_key();
         let pwd = match password_opt {
             None => {
@@ -180,12 +175,16 @@ where
             None => {
                 cmd_ctx.set_resp_result(Ok(Resp::Error(b"no password configured".to_vec())));
             }
-            Some(conf_pwd) => if conf_pwd == &pwd {
-                // Command handler does not run in parallel.
-                authenticated.store(true, atomic::Ordering::Relaxed);
-                cmd_ctx.set_resp_result(Ok(Resp::Simple(response::OK_REPLY.to_string().into_bytes())));
-            } else {
-                cmd_ctx.set_resp_result(Ok(Resp::Error(b"invalid password".to_vec())));
+            Some(conf_pwd) => {
+                if conf_pwd == &pwd {
+                    // Command handler does not run in parallel.
+                    authenticated.store(true, atomic::Ordering::Relaxed);
+                    cmd_ctx.set_resp_result(Ok(Resp::Simple(
+                        response::OK_REPLY.to_string().into_bytes(),
+                    )));
+                } else {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(b"invalid password".to_vec())));
+                }
             }
         }
     }
@@ -197,14 +196,10 @@ where
         };
 
         if str_ascii_case_insensitive_eq(&sub_cmd, "nodes") {
-            let cluster_nodes = self
-                .manager
-                .gen_cluster_nodes();
+            let cluster_nodes = self.manager.gen_cluster_nodes();
             cmd_ctx.set_resp_result(Ok(Resp::Bulk(BulkStr::Str(cluster_nodes.into_bytes()))))
         } else if str_ascii_case_insensitive_eq(&sub_cmd, "slots") {
-            let cluster_slots = self
-                .manager
-                .gen_cluster_slots();
+            let cluster_slots = self.manager.gen_cluster_slots();
             match cluster_slots {
                 Ok(resp) => cmd_ctx.set_resp_result(Ok(resp)),
                 Err(s) => cmd_ctx.set_resp_result(Ok(Resp::Error(s.into_bytes()))),
@@ -1345,13 +1340,16 @@ where
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err_msg.to_vec())))
             }
             CmdType::Others => {
-                if self.config.password.is_some() && !authenticated.load(atomic::Ordering::Relaxed) {
-                    cmd_ctx.set_resp_result(Ok(Resp::Error(b"Password not given by AUTH command".to_vec())));
+                if self.config.password.is_some() && !authenticated.load(atomic::Ordering::Relaxed)
+                {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        b"Password not given by AUTH command".to_vec(),
+                    )));
                     return CmdReplyFuture::Left(reply_receiver);
                 }
 
-                return self.handle_data_cmd(cmd_ctx, reply_receiver)
-            },
+                return self.handle_data_cmd(cmd_ctx, reply_receiver);
+            }
         };
         CmdReplyFuture::Left(reply_receiver)
     }

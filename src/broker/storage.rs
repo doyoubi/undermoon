@@ -231,7 +231,9 @@ impl MetaStorage for MemoryStorage {
         node_num: usize,
         default_cluster_config: ClusterConfig,
     ) -> Result<(), MetaStoreError> {
-        self.store.write().add_cluster(cluster_name, node_num, default_cluster_config)
+        self.store
+            .write()
+            .add_cluster(cluster_name, node_num, default_cluster_config)
     }
 
     async fn remove_cluster(&self, cluster_name: String) -> Result<(), MetaStoreError> {

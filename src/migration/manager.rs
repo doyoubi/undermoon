@@ -1,6 +1,8 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
-use crate::common::cluster::{ClusterName, MigrationTaskMeta, RangeList, SlotRangeTag, EMPTY_CLUSTER_NAME, SlotRange};
+use crate::common::cluster::{
+    ClusterName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag, EMPTY_CLUSTER_NAME,
+};
 use crate::common::config::{AtomicMigrationConfig, ClusterConfig};
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{generate_slot, ThreadSafe};
@@ -9,7 +11,7 @@ use crate::protocol::Resp;
 use crate::protocol::{Array, BinSafeStr, BulkStr, RedisClientFactory, RespVec};
 use crate::proxy::backend::{CmdTask, CmdTaskFactory, ReqTask};
 use crate::proxy::blocking::{BlockingHint, BlockingHintTask, TaskBlockingControllerFactory};
-use crate::proxy::cluster::{ClusterSendError};
+use crate::proxy::cluster::ClusterSendError;
 use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::migration_backend::WaitableTask;
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
@@ -382,118 +384,114 @@ where
 
         let mut migration_tasks = HashMap::new();
 
-            for slot_ranges in local_cluster_map.values() {
-                for slot_range in slot_ranges.iter() {
-                    match slot_range.tag {
-                        SlotRangeTag::Migrating(ref _meta) => {
-                            let migration_meta = MigrationTaskMeta {
-                                cluster_name: cluster_name.clone(),
-                                slot_range: slot_range.clone(),
-                            };
-                            if let Some(migrating_task) = old_task_map.get(&migration_meta)
-                            {
-                                migration_tasks.insert(migration_meta, migrating_task.clone());
-                            }
+        for slot_ranges in local_cluster_map.values() {
+            for slot_range in slot_ranges.iter() {
+                match slot_range.tag {
+                    SlotRangeTag::Migrating(ref _meta) => {
+                        let migration_meta = MigrationTaskMeta {
+                            cluster_name: cluster_name.clone(),
+                            slot_range: slot_range.clone(),
+                        };
+                        if let Some(migrating_task) = old_task_map.get(&migration_meta) {
+                            migration_tasks.insert(migration_meta, migrating_task.clone());
                         }
-                        SlotRangeTag::Importing(ref _meta) => {
-                            let migration_meta = MigrationTaskMeta {
-                                cluster_name: cluster_name.clone(),
-                                slot_range: slot_range.clone(),
-                            };
-                            if let Some(importing_task) = old_task_map.get(&migration_meta)
-                            {
-                                migration_tasks.insert(migration_meta, importing_task.clone());
-                            }
-                        }
-                        SlotRangeTag::None => continue,
                     }
+                    SlotRangeTag::Importing(ref _meta) => {
+                        let migration_meta = MigrationTaskMeta {
+                            cluster_name: cluster_name.clone(),
+                            slot_range: slot_range.clone(),
+                        };
+                        if let Some(importing_task) = old_task_map.get(&migration_meta) {
+                            migration_tasks.insert(migration_meta, importing_task.clone());
+                        }
+                    }
+                    SlotRangeTag::None => continue,
                 }
             }
+        }
 
         let mut new_tasks = Vec::new();
 
-            for slot_ranges in local_cluster_map.values() {
-                for slot_range in slot_ranges {
-                    match slot_range.tag {
-                        SlotRangeTag::Migrating(ref meta) => {
-                            let epoch = meta.epoch;
-                            let migration_meta = MigrationTaskMeta {
-                                cluster_name: cluster_name.clone(),
-                                slot_range: slot_range.clone(),
-                            };
+        for slot_ranges in local_cluster_map.values() {
+            for slot_range in slot_ranges {
+                match slot_range.tag {
+                    SlotRangeTag::Migrating(ref meta) => {
+                        let epoch = meta.epoch;
+                        let migration_meta = MigrationTaskMeta {
+                            cluster_name: cluster_name.clone(),
+                            slot_range: slot_range.clone(),
+                        };
 
-                            if migration_tasks.contains_key(&migration_meta)
-                            {
-                                continue;
-                            }
-
-                            let cluster_mgr_config = Arc::new(AtomicMigrationConfig::from_config(
-                                cluster_config.migration_config.clone(),
-                            ));
-
-                            let ctrl = blocking_ctrl_factory.create(meta.src_node_address.clone());
-                            let task = Arc::new(RedisScanMigratingTask::new(
-                                config.clone(),
-                                cluster_mgr_config,
-                                cluster_name.clone(),
-                                slot_range.clone(),
-                                meta.clone(),
-                                client_factory.clone(),
-                                ctrl,
-                            ));
-                            new_tasks.push(NewTask {
-                                cluster_name: cluster_name.clone(),
-                                epoch,
-                                range_list: slot_range.to_range_list(),
-                                task: Either::Left(task.clone()),
-                            });
-                            let stop_handle = task.get_stop_handle();
-                            let mgr_task = MgrTask {
-                                task: Either::Left(task),
-                                _stop_handle: stop_handle,
-                            };
-                            migration_tasks.insert(migration_meta, Arc::new(mgr_task));
+                        if migration_tasks.contains_key(&migration_meta) {
+                            continue;
                         }
-                        SlotRangeTag::Importing(ref meta) => {
-                            let epoch = meta.epoch;
-                            let migration_meta = MigrationTaskMeta {
-                                cluster_name: cluster_name.clone(),
-                                slot_range: slot_range.clone(),
-                            };
 
-                            if migration_tasks.contains_key(&migration_meta)
-                            {
-                                continue;
-                            }
+                        let cluster_mgr_config = Arc::new(AtomicMigrationConfig::from_config(
+                            cluster_config.migration_config.clone(),
+                        ));
 
-                            let task = Arc::new(RedisScanImportingTask::new(
-                                config.clone(),
-                                mgr_config.clone(),
-                                meta.clone(),
-                                slot_range.clone(),
-                                client_factory.clone(),
-                                sender_factory.clone(),
-                                dst_sender_factory.clone(),
-                                proxy_sender_factory.clone(),
-                                cmd_task_factory.clone(),
-                            ));
-                            new_tasks.push(NewTask {
-                                cluster_name: cluster_name.clone(),
-                                epoch,
-                                range_list: slot_range.to_range_list(),
-                                task: Either::Right(task.clone()),
-                            });
-                            let stop_handle = task.get_stop_handle();
-                            let mgr_task = MgrTask {
-                                task: Either::Right(task),
-                                _stop_handle: stop_handle,
-                            };
-                            migration_tasks.insert(migration_meta, Arc::new(mgr_task));
-                        }
-                        SlotRangeTag::None => continue,
+                        let ctrl = blocking_ctrl_factory.create(meta.src_node_address.clone());
+                        let task = Arc::new(RedisScanMigratingTask::new(
+                            config.clone(),
+                            cluster_mgr_config,
+                            cluster_name.clone(),
+                            slot_range.clone(),
+                            meta.clone(),
+                            client_factory.clone(),
+                            ctrl,
+                        ));
+                        new_tasks.push(NewTask {
+                            cluster_name: cluster_name.clone(),
+                            epoch,
+                            range_list: slot_range.to_range_list(),
+                            task: Either::Left(task.clone()),
+                        });
+                        let stop_handle = task.get_stop_handle();
+                        let mgr_task = MgrTask {
+                            task: Either::Left(task),
+                            _stop_handle: stop_handle,
+                        };
+                        migration_tasks.insert(migration_meta, Arc::new(mgr_task));
                     }
+                    SlotRangeTag::Importing(ref meta) => {
+                        let epoch = meta.epoch;
+                        let migration_meta = MigrationTaskMeta {
+                            cluster_name: cluster_name.clone(),
+                            slot_range: slot_range.clone(),
+                        };
+
+                        if migration_tasks.contains_key(&migration_meta) {
+                            continue;
+                        }
+
+                        let task = Arc::new(RedisScanImportingTask::new(
+                            config.clone(),
+                            mgr_config.clone(),
+                            meta.clone(),
+                            slot_range.clone(),
+                            client_factory.clone(),
+                            sender_factory.clone(),
+                            dst_sender_factory.clone(),
+                            proxy_sender_factory.clone(),
+                            cmd_task_factory.clone(),
+                        ));
+                        new_tasks.push(NewTask {
+                            cluster_name: cluster_name.clone(),
+                            epoch,
+                            range_list: slot_range.to_range_list(),
+                            task: Either::Right(task.clone()),
+                        });
+                        let stop_handle = task.get_stop_handle();
+                        let mgr_task = MgrTask {
+                            task: Either::Right(task),
+                            _stop_handle: stop_handle,
+                        };
+                        migration_tasks.insert(migration_meta, Arc::new(mgr_task));
+                    }
+                    SlotRangeTag::None => continue,
                 }
             }
+        }
 
         let empty = migration_tasks.is_empty();
 
@@ -529,15 +527,13 @@ where
                         );
                         Err(SwitchError::PeerMigrating)
                     }
-                    Either::Right(importing_task) => {
-                        importing_task.handle_switch(switch_arg, sub_cmd).map_err(
-                            |e| match e {
-                                MigrationError::NotReady => SwitchError::NotReady,
-                                others => SwitchError::MgrErr(others),
-                            },
-                        )
-                    }
-                }
+                    Either::Right(importing_task) => importing_task
+                        .handle_switch(switch_arg, sub_cmd)
+                        .map_err(|e| match e {
+                            MigrationError::NotReady => SwitchError::NotReady,
+                            others => SwitchError::MgrErr(others),
+                        }),
+                };
             }
         }
 
@@ -548,28 +544,28 @@ where
     pub fn get_finished_tasks(&self) -> Vec<MigrationTaskMeta> {
         let mut metadata = vec![];
         {
-                for (meta, mgr_task) in self.task_map.iter() {
-                    let state = match &mgr_task.task {
-                        Either::Left(migrating_task) => migrating_task.get_state(),
-                        Either::Right(importing_task) => importing_task.get_state(),
-                    };
-                    if state == MigrationState::SwitchCommitted {
-                        metadata.push(meta.clone());
-                    }
+            for (meta, mgr_task) in self.task_map.iter() {
+                let state = match &mgr_task.task {
+                    Either::Left(migrating_task) => migrating_task.get_state(),
+                    Either::Right(importing_task) => importing_task.get_state(),
+                };
+                if state == MigrationState::SwitchCommitted {
+                    metadata.push(meta.clone());
                 }
+            }
         }
         metadata
     }
 
     pub fn get_states(&self) -> HashMap<RangeList, MigrationState> {
         let mut m = HashMap::new();
-            for (meta, mgr_task) in self.task_map.iter() {
-                let state = match &mgr_task.task {
-                    Either::Left(migrating_task) => migrating_task.get_state(),
-                    Either::Right(importing_task) => importing_task.get_state(),
-                };
-                m.insert(meta.slot_range.to_range_list(), state);
-            }
+        for (meta, mgr_task) in self.task_map.iter() {
+            let state = match &mgr_task.task {
+                Either::Left(migrating_task) => migrating_task.get_state(),
+                Either::Right(importing_task) => importing_task.get_state(),
+            };
+            m.insert(meta.slot_range.to_range_list(), state);
+        }
         m
     }
 }

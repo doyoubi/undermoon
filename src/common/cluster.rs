@@ -743,7 +743,9 @@ impl Proxy {
         }
     }
 
-    pub fn get_cluster_name(&self) -> Option<&ClusterName> { self.cluster_name.as_ref() }
+    pub fn get_cluster_name(&self) -> Option<&ClusterName> {
+        self.cluster_name.as_ref()
+    }
     pub fn get_address(&self) -> &str {
         &self.address
     }

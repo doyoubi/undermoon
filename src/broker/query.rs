@@ -5,10 +5,10 @@ use super::store::{
 use crate::broker::store::ProxyResource;
 use crate::common::cluster::{Cluster, Node, PeerProxy, Proxy, ReplMeta, ReplPeer};
 use crate::common::cluster::{ClusterName, Role};
+use crate::common::config::ClusterConfig;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use crate::common::config::ClusterConfig;
 
 pub struct MetaStoreQuery<'a> {
     store: &'a MetaStore,

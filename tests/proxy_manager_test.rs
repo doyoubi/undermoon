@@ -770,20 +770,22 @@ mod tests {
     }
 
     fn gen_active_redirection_proxy1_cluster_meta() -> ProxyClusterMeta {
-        let mut iter = "1 NOFLAGS test_cluster 127.0.0.1:7001 1 0-8000 peer 127.0.0.1:6002 1 8001-16383"
-            .split(' ')
-            .map(|s| s.to_string())
-            .peekable();
+        let mut iter =
+            "1 NOFLAGS test_cluster 127.0.0.1:7001 1 0-8000 peer 127.0.0.1:6002 1 8001-16383"
+                .split(' ')
+                .map(|s| s.to_string())
+                .peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
     }
 
     fn gen_active_redirection_proxy2_cluster_meta() -> ProxyClusterMeta {
-        let mut iter = "1 NOFLAGS test_cluster 127.0.0.1:7002 1 8001-16383 peer 127.0.0.1:6001 1 0-8000"
-            .split(' ')
-            .map(|s| s.to_string())
-            .peekable();
+        let mut iter =
+            "1 NOFLAGS test_cluster 127.0.0.1:7002 1 8001-16383 peer 127.0.0.1:6001 1 0-8000"
+                .split(' ')
+                .map(|s| s.to_string())
+                .peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
