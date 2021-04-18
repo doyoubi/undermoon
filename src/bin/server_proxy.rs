@@ -85,6 +85,8 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
     let backend_timeout = NonZeroU64::new(s.get::<u64>("backend_timeout").unwrap_or(3_000))
         .ok_or("backend_timeout")?;
 
+    let password = s.get::<String>("password").ok();
+
     let mut max_redirections = s.get::<usize>("max_redirections").unwrap_or(0);
     if max_redirections != 0 {
         max_redirections = min(MAX_REDIRECTIONS, max_redirections);
@@ -119,6 +121,7 @@ fn gen_conf() -> Result<(ServerProxyConfig, ClusterConfig), &'static str> {
         backend_low_flush_interval: Duration::from_nanos(backend_low_flush_interval.get()),
         backend_high_flush_interval: Duration::from_nanos(backend_high_flush_interval.get()),
         backend_timeout: Duration::from_millis(backend_timeout.get()),
+        password,
     };
 
     let mut cluster_config = ClusterConfig::default();

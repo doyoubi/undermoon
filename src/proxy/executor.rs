@@ -7,7 +7,6 @@ use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use super::table::CommandTable;
-use crate::common::cluster::ClusterName;
 use crate::common::config::ClusterConfig;
 use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
@@ -33,6 +32,7 @@ use std::collections::HashMap;
 use std::str;
 use std::sync::{self, Arc};
 use std::time::Duration;
+use std::sync::atomic;
 
 type NonBlockingCommandsWithKey = Vec<(Vec<u8>, RespVec)>;
 
@@ -92,10 +92,10 @@ where
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+        authenticated: &atomic::AtomicBool,
     ) -> CmdReplyFuture {
         self.handler
-            .handle_cmd_ctx(cmd_ctx, reply_receiver, session_cluster_name)
+            .handle_cmd_ctx(cmd_ctx, reply_receiver, authenticated)
     }
 }
 
@@ -162,36 +162,37 @@ where
     fn handle_auth(
         &self,
         cmd_ctx: CmdCtx,
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+        authenticated: &atomic::AtomicBool,
     ) {
-        // let key = cmd_ctx.get_key();
-        // let cluster = match key {
-        //     None => {
-        //         return cmd_ctx.set_resp_result(Ok(Resp::Error(
-        //             String::from("Missing cluster name").into_bytes(),
-        //         )));
-        //     }
-        //     Some(cluster_name) => match str::from_utf8(&cluster_name) {
-        //         Ok(cluster) => cluster.to_string(),
-        //         Err(_) => {
-        //             return cmd_ctx.set_resp_result(Ok(Resp::Error(
-        //                 String::from("Invalid cluster name").into_bytes(),
-        //             )));
-        //         }
-        //     },
-        // };
-        // let cluster_name = match ClusterName::try_from(cluster.as_str()) {
-        //     Ok(cluster_name) => cluster_name,
-        //     _err => {
-        //         return cmd_ctx.set_resp_result(Ok(Resp::Error(
-        //             String::from("Cluster name is too long").into_bytes(),
-        //         )));
-        //     }
-        // };
-        //
-        // *session_cluster_name.write() = cluster_name.clone();
-        // cmd_ctx.set_cluster_name(cluster_name);
-        cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())));
+        let password_opt = cmd_ctx.get_key();
+        let pwd = match password_opt {
+            None => {
+                return cmd_ctx.set_resp_result(Ok(Resp::Error(
+                    String::from("Missing password").into_bytes(),
+                )));
+            }
+            Some(pwd) => match str::from_utf8(&pwd) {
+                Ok(pwd) => pwd.to_string(),
+                Err(_) => {
+                    return cmd_ctx.set_resp_result(Ok(Resp::Error(
+                        String::from("Invalid password").into_bytes(),
+                    )));
+                }
+            },
+        };
+
+        match self.config.password.as_ref() {
+            None => {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(b"no password configured".to_vec())));
+            }
+            Some(conf_pwd) => if conf_pwd == &pwd {
+                // Command handler does not run in parallel.
+                authenticated.store(true, atomic::Ordering::Relaxed);
+                cmd_ctx.set_resp_result(Ok(Resp::Simple(response::OK_REPLY.to_string().into_bytes())));
+            } else {
+                cmd_ctx.set_resp_result(Ok(Resp::Error(b"invalid password".to_vec())));
+            }
+        }
     }
 
     fn handle_cluster(&self, cmd_ctx: CmdCtx) {
@@ -1305,7 +1306,7 @@ where
         &self,
         cmd_ctx: CmdCtx,
         reply_receiver: CmdReplyReceiver,
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+        authenticated: &atomic::AtomicBool,
     ) -> CmdReplyFuture {
         let cmd_type = cmd_ctx.get_cmd().get_type();
         match cmd_type {
@@ -1313,7 +1314,7 @@ where
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
             CmdType::Info => self.handle_info(cmd_ctx),
-            CmdType::Auth => self.handle_auth(cmd_ctx, session_cluster_name),
+            CmdType::Auth => self.handle_auth(cmd_ctx, authenticated),
             CmdType::Quit => {
                 cmd_ctx.set_resp_result(Ok(Resp::Simple(String::from("OK").into_bytes())))
             }
@@ -1348,7 +1349,14 @@ where
                 let err_msg = b"ERR unknown command `hello`";
                 cmd_ctx.set_resp_result(Ok(Resp::Error(err_msg.to_vec())))
             }
-            CmdType::Others => return self.handle_data_cmd(cmd_ctx, reply_receiver),
+            CmdType::Others => {
+                if self.config.password.is_some() && !authenticated.load(atomic::Ordering::Relaxed) {
+                    cmd_ctx.set_resp_result(Ok(Resp::Error(b"Password not given by AUTH command".to_vec())));
+                    return CmdReplyFuture::Left(reply_receiver);
+                }
+
+                return self.handle_data_cmd(cmd_ctx, reply_receiver)
+            },
         };
         CmdReplyFuture::Left(reply_receiver)
     }

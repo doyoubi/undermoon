@@ -1,12 +1,10 @@
 use super::backend::{CmdTask, CmdTaskFactory, CmdTaskResult};
-use super::cluster::{DEFAULT_CLUSTER};
 use super::command::{
     new_command_pair, CmdReplyReceiver, CmdReplySender, CmdType, Command, CommandError,
     CommandResult, DataCmdType, TaskReply, TaskResult,
 };
 use super::service::ServerProxyConfig;
 use super::slowlog::{SlowRequestLogger, Slowlog, TaskEvent};
-use crate::common::cluster::ClusterName;
 use crate::protocol::{
     new_simple_packet_codec, BinSafeStr, DecodeError, EncodeError, Resp, RespCodec, RespPacket,
     RespVec,
@@ -16,7 +14,6 @@ use futures::{future, Future, Sink, Stream, TryFutureExt};
 use futures::{StreamExt, TryStreamExt};
 use std::boxed::Box;
 use std::collections::VecDeque;
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -25,6 +22,7 @@ use std::sync;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
+use std::sync::atomic::AtomicBool;
 
 // CmdReplyReceiver is the fast path without heap allocation.
 pub type CmdReplyFuture<'a> =
@@ -40,8 +38,7 @@ pub trait CmdCtxHandler {
         &self,
         cmd_ctx: CmdCtx,
         result_receiver: CmdReplyReceiver,
-        // TODO: Need to change this to password
-        session_cluster_name: &parking_lot::RwLock<ClusterName>,
+        authenticated: &AtomicBool,
     ) -> CmdReplyFuture;
 }
 
@@ -201,7 +198,7 @@ impl CmdTaskFactory for CmdCtxFactory {
 
 pub struct Session<H: CmdCtxHandler> {
     session_id: usize,
-    cluster_name: sync::Arc<parking_lot::RwLock<ClusterName>>,
+    authenticated: AtomicBool,
     cmd_ctx_handler: H,
     slow_request_logger: sync::Arc<SlowRequestLogger>,
     config: Arc<ServerProxyConfig>,
@@ -214,10 +211,9 @@ impl<H: CmdCtxHandler> Session<H> {
         slow_request_logger: sync::Arc<SlowRequestLogger>,
         config: Arc<ServerProxyConfig>,
     ) -> Self {
-        let cluster_name = ClusterName::try_from(DEFAULT_CLUSTER).expect("Session::new");
         Session {
             session_id,
-            cluster_name: sync::Arc::new(parking_lot::RwLock::new(cluster_name)),
+            authenticated: AtomicBool::new(false),
             cmd_ctx_handler,
             slow_request_logger,
             config,
@@ -240,7 +236,7 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
         );
         cmd_ctx.log_event(TaskEvent::Created);
         self.cmd_ctx_handler
-            .handle_cmd_ctx(cmd_ctx, reply_receiver, &(*self.cluster_name))
+            .handle_cmd_ctx(cmd_ctx, reply_receiver, &self.authenticated)
     }
 
     fn handle_slowlog(&self, request: Box<RespPacket>, slowlog: Slowlog) {

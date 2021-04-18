@@ -21,6 +21,9 @@ backend_high_flush_interval = 600000
 # In millisecond
 backend_timeout = 3000
 
+# Password for AUTH command
+# password = "yourpwd"
+
 # Active Redirection Mode
 # When active_redirection is enabled,
 # all the server proxies will handle the redirection inside.

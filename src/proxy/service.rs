@@ -33,6 +33,7 @@ pub struct ServerProxyConfig {
     pub backend_low_flush_interval: Duration,
     pub backend_high_flush_interval: Duration,
     pub backend_timeout: Duration,
+    pub password: Option<String>,
 }
 
 impl ServerProxyConfig {
@@ -70,6 +71,7 @@ impl ServerProxyConfig {
                 .max_redirections
                 .map(|n| n.get().to_string())
                 .unwrap_or_else(|| "none".to_string())),
+            "password" => Err(ConfigError::Forbidden),
             _ => Err(ConfigError::FieldNotFound),
         }
     }
@@ -98,6 +100,7 @@ impl ServerProxyConfig {
             }
             "active_redirection" => Err(ConfigError::ReadonlyField),
             "max_redirections" => Err(ConfigError::ReadonlyField),
+            "password" => Err(ConfigError::ReadonlyField),
             _ => Err(ConfigError::FieldNotFound),
         }
     }

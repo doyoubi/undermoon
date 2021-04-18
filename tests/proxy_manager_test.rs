@@ -63,6 +63,7 @@ mod tests {
             backend_low_flush_interval: Duration::from_nanos(200_000),
             backend_high_flush_interval: Duration::from_nanos(800_000),
             backend_timeout: Duration::from_secs(3),
+            password: None,
         }
     }
 
