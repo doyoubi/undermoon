@@ -14,7 +14,15 @@ pub trait ThreadSafe: Send + Sync + 'static {}
 impl<T: Send + Sync + 'static> ThreadSafe for T {}
 
 #[derive(Debug)]
-pub struct CmdParseError {}
+pub enum CmdParseError {
+    InvalidVersion,
+    InvalidEpoch,
+    InvalidClusterName,
+    InvalidSlots,
+    InvalidConfig,
+    InvalidRole,
+    InvalidArgs,
+}
 
 pub fn has_flags(s: &str, delimiter: char, flag: &'static str) -> bool {
     s.split(delimiter)

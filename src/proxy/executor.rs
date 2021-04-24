@@ -7,7 +7,7 @@ use super::service::ServerProxyConfig;
 use super::session::{CmdCtx, CmdCtxFactory, CmdCtxHandler, CmdReplyFuture};
 use super::slowlog::{slowlogs_to_resp, SlowRequestLogger};
 use super::table::CommandTable;
-use crate::common::proto::{ProxyClusterMeta, SET_CLUSTER_API_VERSION};
+use crate::common::proto::ProxyClusterMeta;
 use crate::common::response;
 use crate::common::track::TrackedFutureRegistry;
 use crate::common::utils::{
@@ -293,23 +293,13 @@ where
         let (cluster_meta, extended_res) =
             match ProxyClusterMeta::from_resp(&cmd_ctx.get_cmd().get_resp_slice()) {
                 Ok(r) => r,
-                Err(_) => {
+                Err(err) => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(
-                        String::from("Invalid arguments").into_bytes(),
+                        format!("Failed to parse args: {:?}", err).into_bytes(),
                     )));
                     return;
                 }
             };
-
-        if cluster_meta.get_version() != SET_CLUSTER_API_VERSION {
-            let err_str = format!(
-                "invalid SETCLUSTER api version, expected {}, found {}",
-                SET_CLUSTER_API_VERSION,
-                cluster_meta.get_version()
-            );
-            cmd_ctx.set_resp_result(Ok(Resp::Error(err_str.into_bytes())));
-            return;
-        }
 
         match self.manager.set_meta(cluster_meta) {
             Ok(()) => match extended_res {
