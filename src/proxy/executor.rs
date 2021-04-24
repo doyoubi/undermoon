@@ -293,9 +293,9 @@ where
         let (cluster_meta, extended_res) =
             match ProxyClusterMeta::from_resp(&cmd_ctx.get_cmd().get_resp_slice()) {
                 Ok(r) => r,
-                Err(_) => {
+                Err(err) => {
                     cmd_ctx.set_resp_result(Ok(Resp::Error(
-                        String::from("Invalid arguments").into_bytes(),
+                        format!("Failed to parse args: {:?}", err).into_bytes(),
                     )));
                     return;
                 }

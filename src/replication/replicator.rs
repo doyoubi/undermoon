@@ -57,7 +57,7 @@ pub struct ReplicaMeta {
 fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, CmdParseError> {
     let arr = match resp {
         Resp::Arr(Array::Arr(ref arr)) => arr,
-        _ => return Err(CmdParseError {}),
+        _ => return Err(CmdParseError::InvalidArgs),
     };
 
     // Skip the "UMCTL SETREPL"
@@ -70,10 +70,12 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
     });
     let mut it = it.peekable();
 
-    let epoch_str = it.next().ok_or(CmdParseError {})?;
-    let epoch = epoch_str.parse::<u64>().map_err(|_e| CmdParseError {})?;
+    let epoch_str = it.next().ok_or(CmdParseError::InvalidEpoch)?;
+    let epoch = epoch_str
+        .parse::<u64>()
+        .map_err(|_e| CmdParseError::InvalidEpoch)?;
 
-    let flags = ClusterMapFlags::from_arg(&it.next().ok_or(CmdParseError {})?);
+    let flags = ClusterMapFlags::from_arg(&it.next().ok_or(CmdParseError::InvalidArgs)?);
 
     let mut master_meta_array = Vec::new();
     let mut replica_meta_array = Vec::new();
@@ -81,19 +83,19 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
     while it.peek().is_some() {
         let mut peers = Vec::new();
 
-        let role = it.next().ok_or(CmdParseError {})?;
-        let cluster_name = it.next().ok_or(CmdParseError {})?;
-        let cluster_name =
-            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
-        let node_address = it.next().ok_or(CmdParseError {})?;
+        let role = it.next().ok_or(CmdParseError::InvalidRole)?;
+        let cluster_name = it.next().ok_or(CmdParseError::InvalidClusterName)?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| CmdParseError::InvalidClusterName)?;
+        let node_address = it.next().ok_or(CmdParseError::InvalidArgs)?;
         let peer_num = it
             .next()
-            .ok_or(CmdParseError {})?
+            .ok_or(CmdParseError::InvalidArgs)?
             .parse::<usize>()
-            .map_err(|_| CmdParseError {})?;
+            .map_err(|_| CmdParseError::InvalidArgs)?;
         for _ in 0..peer_num {
-            let node_address = it.next().ok_or(CmdParseError {})?;
-            let proxy_address = it.next().ok_or(CmdParseError {})?;
+            let node_address = it.next().ok_or(CmdParseError::InvalidArgs)?;
+            let proxy_address = it.next().ok_or(CmdParseError::InvalidArgs)?;
             peers.push(ReplPeer {
                 node_address,
                 proxy_address,
@@ -114,7 +116,7 @@ fn parse_repl_meta<T: AsRef<[u8]>>(resp: &Resp<T>) -> Result<ReplicatorMeta, Cmd
             })
         } else {
             error!("invalid role {}", role);
-            return Err(CmdParseError {});
+            return Err(CmdParseError::InvalidRole);
         }
     }
 

@@ -17,7 +17,7 @@ macro_rules! try_parse {
     ($expression:expr) => {{
         match $expression {
             Ok(v) => (v),
-            Err(_) => return Err(CmdParseError {}),
+            Err(_) => return Err(CmdParseError::InvalidArgs),
         }
     }};
 }
@@ -26,7 +26,7 @@ macro_rules! try_get {
     ($expression:expr) => {{
         match $expression {
             Some(v) => (v),
-            None => return Err(CmdParseError {}),
+            None => return Err(CmdParseError::InvalidArgs),
         }
     }};
 }
@@ -124,8 +124,11 @@ pub enum MetaCompressError {
 const PEER_PREFIX: &str = "PEER";
 const CONFIG_PREFIX: &str = "CONFIG";
 
+pub const SET_CLUSTER_API_VERSION: &str = "v2";
+
 #[derive(Debug, Clone)]
 pub struct ProxyClusterMeta {
+    version: String,
     epoch: u64,
     flags: ClusterMapFlags,
     cluster_name: ClusterName,
@@ -144,6 +147,7 @@ impl ProxyClusterMeta {
         cluster_config: ClusterConfig,
     ) -> Self {
         Self {
+            version: SET_CLUSTER_API_VERSION.to_string(),
             epoch,
             flags,
             cluster_name,
@@ -151,6 +155,10 @@ impl ProxyClusterMeta {
             peer,
             cluster_config,
         }
+    }
+
+    pub fn get_version(&self) -> &str {
+        self.version.as_str()
     }
 
     pub fn get_epoch(&self) -> u64 {
@@ -190,7 +198,7 @@ impl ProxyClusterMeta {
     ) -> Result<(Self, Result<(), ParseExtendedMetaError>), CmdParseError> {
         let arr = match resp {
             Resp::Arr(Array::Arr(ref arr)) => arr,
-            _ => return Err(CmdParseError {}),
+            _ => return Err(CmdParseError::InvalidArgs),
         };
 
         // Skip the "UMCTL SETCLUSTER"
@@ -212,6 +220,11 @@ impl ProxyClusterMeta {
     where
         It: Iterator<Item = String>,
     {
+        let version = try_get!(it.next());
+        if version != SET_CLUSTER_API_VERSION {
+            return Err(CmdParseError::InvalidVersion);
+        }
+
         let epoch_str = try_get!(it.next());
         let epoch = try_parse!(epoch_str.parse::<u64>());
 
@@ -220,7 +233,7 @@ impl ProxyClusterMeta {
         if flags.compress {
             let compressed_data = it.next().ok_or_else(|| {
                 error!("failed to get compressed data for UMCTL SETCLUSTER");
-                CmdParseError {}
+                CmdParseError::InvalidArgs
             })?;
             let data =
                 ProxyClusterMetaData::from_compressed_data(compressed_data).map_err(|err| {
@@ -228,7 +241,7 @@ impl ProxyClusterMeta {
                         "failed to parse compressed data for UMCTL SETCLUSTER: {:?}",
                         err
                     );
-                    CmdParseError {}
+                    CmdParseError::InvalidArgs
                 })?;
             let ProxyClusterMetaData {
                 cluster_name,
@@ -238,6 +251,7 @@ impl ProxyClusterMeta {
             } = data;
             return Ok((
                 Self {
+                    version,
                     epoch,
                     flags,
                     cluster_name,
@@ -250,8 +264,8 @@ impl ProxyClusterMeta {
         }
 
         let cluster_name = try_get!(it.next());
-        let cluster_name =
-            ClusterName::try_from(cluster_name.as_str()).map_err(|_| CmdParseError {})?;
+        let cluster_name = ClusterName::try_from(cluster_name.as_str())
+            .map_err(|_| CmdParseError::InvalidClusterName)?;
 
         let local = NodeMap::parse(it)?.into_inner();
         let mut peer = NodeMap::new(HashMap::default());
@@ -265,19 +279,20 @@ impl ProxyClusterMeta {
                     Ok(c) => cluster_config = c,
                     Err(_) => {
                         if local.is_empty() || peer.get_map().is_empty() {
-                            return Err(CmdParseError {});
+                            return Err(CmdParseError::InvalidArgs);
                         } else {
                             error!("invalid cluster config from UMCTL SETCLUSTER but the local and peer metadata are complete. Ignore this error to protect the core functionality.");
                             extended_meta_result = Err(ParseExtendedMetaError {})
                         }
                     }
                 },
-                _ => return Err(CmdParseError {}),
+                _ => return Err(CmdParseError::InvalidArgs),
             }
         }
 
         Ok((
             Self {
+                version,
                 epoch,
                 flags,
                 cluster_name,
@@ -291,6 +306,7 @@ impl ProxyClusterMeta {
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![
+            self.version.clone(),
             self.epoch.to_string(),
             self.flags.to_arg(),
             self.cluster_name.to_string(),
@@ -318,7 +334,12 @@ impl ProxyClusterMeta {
             ClusterConfigData::new(self.cluster_config.clone()),
         )
         .gen_compressed_data()?;
-        let args = vec![self.epoch.to_string(), self.flags.to_arg(), data];
+        let args = vec![
+            self.version.clone(),
+            self.epoch.to_string(),
+            self.flags.to_arg(),
+            data,
+        ];
         Ok(args)
     }
 }
@@ -390,7 +411,7 @@ impl NodeMap {
     where
         It: Iterator<Item = String>,
     {
-        SlotRange::from_strings(it).ok_or(CmdParseError {})
+        SlotRange::from_strings(it).ok_or(CmdParseError::InvalidSlots)
     }
 
     pub fn check_hosts(&self, announce_host: &str, cluster_name: &ClusterName) -> bool {
@@ -459,7 +480,7 @@ impl ClusterConfigData {
             let value = try_get!(it.next());
             if let Err(err) = config.set_field(&field, &value) {
                 warn!("failed to set config field {:?}", err);
-                return Err(CmdParseError {});
+                return Err(CmdParseError::InvalidConfig);
             }
         }
 
@@ -632,6 +653,7 @@ mod tests {
     #[test]
     fn test_parse_proxy_cluster_meta() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -725,6 +747,7 @@ mod tests {
     #[test]
     fn test_parse_proxy_cluster_meta_without_peer() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -759,6 +782,7 @@ mod tests {
     #[test]
     fn test_missing_config_cluster() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -793,6 +817,7 @@ mod tests {
     #[test]
     fn test_invalid_config_field() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -827,6 +852,7 @@ mod tests {
     #[test]
     fn test_incomplete_main_meta_with_config_err() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
