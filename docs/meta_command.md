@@ -1,6 +1,7 @@
 # UMCTL Command
 ## UMCTL SETCLUSTER
 UMCTL SETCLUSTER
+- version (v2 for current version)
 - epoch
 - flag
 - dbname
@@ -10,6 +11,7 @@ UMCTL SETCLUSTER
 
 Sets the mapping relationship between the server-side proxy and its corresponding redis instances behind it.
 
+- `version` is the api version of `UMCTL SETCLUSTER`
 - `epoch` is the logical time of the configuration this command is sending used to decide which configuration is more up-to-date.
 Every running server-side proxy will store its epoch and will reject all the `UMCTL [SETCLUSTER|SETREPL]` requests which don't have higher epoch.
 - `flags` Currently it may be NOFLAG or combination of FORCE and COMPRESS("FORCE,COMPRESS").

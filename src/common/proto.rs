@@ -124,8 +124,11 @@ pub enum MetaCompressError {
 const PEER_PREFIX: &str = "PEER";
 const CONFIG_PREFIX: &str = "CONFIG";
 
+pub const SET_CLUSTER_API_VERSION: &str = "v2";
+
 #[derive(Debug, Clone)]
 pub struct ProxyClusterMeta {
+    version: String,
     epoch: u64,
     flags: ClusterMapFlags,
     cluster_name: ClusterName,
@@ -144,6 +147,7 @@ impl ProxyClusterMeta {
         cluster_config: ClusterConfig,
     ) -> Self {
         Self {
+            version: SET_CLUSTER_API_VERSION.to_string(),
             epoch,
             flags,
             cluster_name,
@@ -151,6 +155,10 @@ impl ProxyClusterMeta {
             peer,
             cluster_config,
         }
+    }
+
+    pub fn get_version(&self) -> &str {
+        self.version.as_str()
     }
 
     pub fn get_epoch(&self) -> u64 {
@@ -212,6 +220,8 @@ impl ProxyClusterMeta {
     where
         It: Iterator<Item = String>,
     {
+        let version = try_get!(it.next());
+
         let epoch_str = try_get!(it.next());
         let epoch = try_parse!(epoch_str.parse::<u64>());
 
@@ -238,6 +248,7 @@ impl ProxyClusterMeta {
             } = data;
             return Ok((
                 Self {
+                    version,
                     epoch,
                     flags,
                     cluster_name,
@@ -278,6 +289,7 @@ impl ProxyClusterMeta {
 
         Ok((
             Self {
+                version,
                 epoch,
                 flags,
                 cluster_name,
@@ -291,6 +303,7 @@ impl ProxyClusterMeta {
 
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![
+            self.version.clone(),
             self.epoch.to_string(),
             self.flags.to_arg(),
             self.cluster_name.to_string(),
@@ -318,7 +331,12 @@ impl ProxyClusterMeta {
             ClusterConfigData::new(self.cluster_config.clone()),
         )
         .gen_compressed_data()?;
-        let args = vec![self.epoch.to_string(), self.flags.to_arg(), data];
+        let args = vec![
+            self.version.clone(),
+            self.epoch.to_string(),
+            self.flags.to_arg(),
+            data,
+        ];
         Ok(args)
     }
 }
@@ -632,6 +650,7 @@ mod tests {
     #[test]
     fn test_parse_proxy_cluster_meta() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -725,6 +744,7 @@ mod tests {
     #[test]
     fn test_parse_proxy_cluster_meta_without_peer() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -759,6 +779,7 @@ mod tests {
     #[test]
     fn test_missing_config_cluster() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -793,6 +814,7 @@ mod tests {
     #[test]
     fn test_invalid_config_field() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",
@@ -827,6 +849,7 @@ mod tests {
     #[test]
     fn test_incomplete_main_meta_with_config_err() {
         let arguments = vec![
+            SET_CLUSTER_API_VERSION,
             "233",
             "FORCE",
             "cluster_name",

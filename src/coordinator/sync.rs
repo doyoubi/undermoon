@@ -259,6 +259,7 @@ mod tests {
         ClusterName, Node, RangeList, ReplMeta, ReplPeer, SlotRange, SlotRangeTag,
     };
     use crate::common::config::ClusterConfig;
+    use crate::common::proto::SET_CLUSTER_API_VERSION;
     use crate::protocol::{BinSafeStr, DummyRedisClientFactory, MockRedisClient, Resp};
     use futures::{stream, StreamExt};
     use std::convert::TryFrom;
@@ -329,6 +330,7 @@ mod tests {
 
     fn gen_set_cluster_args() -> Vec<String> {
         vec![
+            SET_CLUSTER_API_VERSION,
             "7799",
             "NOFLAG",
             "mycluster",

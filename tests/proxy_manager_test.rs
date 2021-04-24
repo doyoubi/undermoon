@@ -22,7 +22,7 @@ mod tests {
     use undermoon::common::cluster::{
         ClusterName, MigrationMeta, MigrationTaskMeta, Range, RangeList, SlotRange, SlotRangeTag,
     };
-    use undermoon::common::proto::{ClusterMapFlags, ProxyClusterMeta};
+    use undermoon::common::proto::{ClusterMapFlags, ProxyClusterMeta, SET_CLUSTER_API_VERSION};
     use undermoon::common::response::{
         ERR_BACKEND_CONNECTION, ERR_CLUSTER_NOT_FOUND, ERR_MOVED, ERR_TOO_MANY_REDIRECTIONS,
         OK_REPLY,
@@ -97,10 +97,11 @@ mod tests {
     }
 
     fn gen_proxy_cluster_meta() -> ProxyClusterMeta {
-        let mut iter = "1 NOFLAGS test_cluster 127.0.0.1:6379 1 0-16383"
-            .split(' ')
-            .map(|s| s.to_string())
-            .peekable();
+        let args = format!(
+            "{} 1 NOFLAGS test_cluster 127.0.0.1:6379 1 0-16383",
+            SET_CLUSTER_API_VERSION
+        );
+        let mut iter = args.split(' ').map(|s| s.to_string()).peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
@@ -298,19 +299,19 @@ mod tests {
         dst_proxy_address: &str,
     ) -> ProxyClusterMeta {
         let s = if is_source_proxy {
-            format!("{epoch} NOFLAGS test_cluster \
+            format!("{version} {epoch} NOFLAGS test_cluster \
             127.0.0.1:6379 1 0-8000 \
             127.0.0.1:6379 migrating 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000 \
             PEER \
             {dst_proxy_address} importing 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000",
-                    epoch=epoch, src_proxy_address=src_proxy_address, dst_proxy_address=dst_proxy_address)
+                    version=SET_CLUSTER_API_VERSION, epoch=epoch, src_proxy_address=src_proxy_address, dst_proxy_address=dst_proxy_address)
         } else {
-            format!("{epoch} NOFLAGS test_cluster \
+            format!("{version} {epoch} NOFLAGS test_cluster \
             127.0.0.1:7000 importing 1 8001-16383 {epoch} {src_proxy_address} 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000 \
             PEER \
             {src_proxy_address} 1 0-8000 \
             {src_proxy_address} migrating 1 8001-16383 {epoch} {}src_proxy_address 127.0.0.1:6379 {dst_proxy_address} 127.0.0.1:7000",
-                    epoch=epoch, src_proxy_address=src_proxy_address, dst_proxy_address=dst_proxy_address)
+                    version=SET_CLUSTER_API_VERSION, epoch=epoch, src_proxy_address=src_proxy_address, dst_proxy_address=dst_proxy_address)
         };
         let mut iter = s.split(' ').map(|s| s.to_string()).peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
@@ -326,19 +327,21 @@ mod tests {
     ) -> ProxyClusterMeta {
         let s = if is_source_proxy {
             format!(
-                "{epoch} NOFLAGS test_cluster \
+                "{version} {epoch} NOFLAGS test_cluster \
             127.0.0.1:6379 1 0-8000 \
             PEER \
             {dst_proxy_address} 1 8001-16383",
+                version = SET_CLUSTER_API_VERSION,
                 epoch = epoch,
                 dst_proxy_address = dst_proxy_address
             )
         } else {
             format!(
-                "{epoch} NOFLAGS test_cluster \
+                "{version} {epoch} NOFLAGS test_cluster \
             127.0.0.1:7000 1 8001-16383 \
             PEER \
             {src_proxy_address} 1 0-8000",
+                version = SET_CLUSTER_API_VERSION,
                 epoch = epoch,
                 src_proxy_address = src_proxy_address
             )
@@ -770,22 +773,22 @@ mod tests {
     }
 
     fn gen_active_redirection_proxy1_cluster_meta() -> ProxyClusterMeta {
-        let mut iter =
-            "1 NOFLAGS test_cluster 127.0.0.1:7001 1 0-8000 peer 127.0.0.1:6002 1 8001-16383"
-                .split(' ')
-                .map(|s| s.to_string())
-                .peekable();
+        let args = format!(
+            "{} 1 NOFLAGS test_cluster 127.0.0.1:7001 1 0-8000 peer 127.0.0.1:6002 1 8001-16383",
+            SET_CLUSTER_API_VERSION
+        );
+        let mut iter = args.split(' ').map(|s| s.to_string()).peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
     }
 
     fn gen_active_redirection_proxy2_cluster_meta() -> ProxyClusterMeta {
-        let mut iter =
-            "1 NOFLAGS test_cluster 127.0.0.1:7002 1 8001-16383 peer 127.0.0.1:6001 1 0-8000"
-                .split(' ')
-                .map(|s| s.to_string())
-                .peekable();
+        let args = format!(
+            "{} 1 NOFLAGS test_cluster 127.0.0.1:7002 1 8001-16383 peer 127.0.0.1:6001 1 0-8000",
+            SET_CLUSTER_API_VERSION
+        );
+        let mut iter = args.split(' ').map(|s| s.to_string()).peekable();
         let (meta, extended_args) = ProxyClusterMeta::parse(&mut iter).unwrap();
         assert!(extended_args.is_ok());
         meta
