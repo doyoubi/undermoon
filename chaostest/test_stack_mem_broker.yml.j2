@@ -15,10 +15,12 @@ services:
       - UNDERMOON_ADDRESS=0.0.0.0:{{ broker_port }}
       - UNDERMOON_FAILURE_QUORUM=2
       - UNDERMOON_MIGRATION_LIMIT=2
+      - UNDERMOON_STORAGE_TYPE=memory
       - UNDERMOON_DEBUG=true
 
 {% filter indent(width=2) %}
 {% for coordinator_id in range(coordinator_num) %}
+{% set coordinator_port = coordinator_port_start + coordinator_id -%}
 coordinator{{ coordinator_id }}:
   image: "undermoon"
   deploy:
@@ -29,28 +31,35 @@ coordinator{{ coordinator_id }}:
   environment:
   - RUST_LOG=undermoon=debug,coordinator=debug
   - RUST_BACKTRACE=full
+  - UNDERMOON_ADDRESS=coordinator{{ coordinator_id }}:{{ coordinator_port }}
   - UNDERMOON_BROKER_ADDRESS={{ broker_address }}
   - UNDERMOON_REPORTER_ID=coordinator{{ coordinator_id }}
+  ports:
+  - "{{ coordinator_port }}:{{ coordinator_port }}"
 {% endfor %}
 {% endfilter %}
 
 {% filter indent(width=2) %}
-{% for redis_port in redis_ports %}
-redis{{ redis_port }}:
+{% for redis_id in range(server_proxy_num * 2) %}
+{% set redis_port = redis_port_start + redis_id -%}
+{% set server_proxy_id = redis_id // 2 -%}
+redis{{ redis_id }}:
   image: "redis"
   deploy:
     restart_policy:
       condition: any
       delay: 30s
-  command: redis-server --port {{ redis_port }} --slave-announce-ip redis{{ redis_port }} --slave-announce-port {{ redis_port }} --maxmemory {{ redis_maxmemory }}
-  ports:
-  - "{{ redis_port }}:{{ redis_port }}"
+  command: redis-server --port {{ redis_port }} --slave-announce-ip server_proxy{{ server_proxy_id }} --slave-announce-port {{ redis_port }} --maxmemory {{ redis_maxmemory }}
+  network_mode: service:server_proxy{{ server_proxy_id }}
 {% endfor %}
 {% endfilter %}
 
 {% filter indent(width=2) %}
-{% for proxy_port in server_proxy_ports %}
-server_proxy{{ proxy_port }}:
+{% for proxy_id in range(server_proxy_num) %}
+{% set proxy_port = server_proxy_port_start + proxy_id -%}
+{% set redis_port1 = redis_port_start + 2 * proxy_id -%}
+{% set redis_port2 = redis_port_start + 2 * proxy_id + 1 -%}
+server_proxy{{ proxy_id }}:
   image: "undermoon"
   deploy:
     restart_policy:
@@ -59,11 +68,13 @@ server_proxy{{ proxy_port }}:
   command: server_proxy
   ports:
   - "{{ proxy_port }}:{{ proxy_port }}"
+  - "{{ redis_port1 }}:{{ redis_port1 }}"
+  - "{{ redis_port2 }}:{{ redis_port2 }}"
   environment:
   - RUST_LOG=undermoon=debug,server_proxy=debug
   - RUST_BACKTRACE=full
   - UNDERMOON_ADDRESS=0.0.0.0:{{ proxy_port }}
-  - UNDERMOON_ANNOUNCE_ADDRESS=server_proxy{{ proxy_port }}:{{ proxy_port }}
+  - UNDERMOON_ANNOUNCE_ADDRESS=server_proxy{{ proxy_id }}:{{ proxy_port }}
   - UNDERMOON_SLOWLOG_LEN=1024
   - UNDERMOON_SLOWLOG_LOG_SLOWER_THAN=50000
   - UNDERMOON_THREAD_NUMBER=1

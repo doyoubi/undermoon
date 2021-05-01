@@ -52,25 +52,19 @@ docker-mem-broker-example:
 
 start-func-test:
 	python chaostest/render_compose.py -t mem_broker
-	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+	docker-compose -f chaostest/chaos-docker-compose.yml up
 
 start-func-test-active:
 	python chaostest/render_compose.py -t mem_broker -a
-	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+	docker-compose -f chaostest/chaos-docker-compose.yml up
 
 start-chaos:
 	python chaostest/render_compose.py -t mem_broker -f
-	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
+	docker-compose -f chaostest/chaos-docker-compose.yml up
 
 start-chaos-active:
 	python chaostest/render_compose.py -t mem_broker -f -a
-	docker stack deploy --compose-file chaostest/chaos-docker-compose.yml chaos
-
-stop-chaos:
-	docker stack rm chaos
-
-list-chaos-services:
-	docker stack services chaos
+	docker-compose -f chaostest/chaos-docker-compose.yml up
 
 chaos-test:
 	python chaostest/random_test.py
