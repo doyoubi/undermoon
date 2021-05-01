@@ -1,2 +1,3 @@
 address = "mem_broker:7799"
 failure_ttl = 60
+storage_type = "memory"

@@ -9,12 +9,11 @@ services:
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6001:6001"
+    - "7001:7001"
+    - "7002:7002"
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
     - RUST_BACKTRACE=full
-    depends_on:
-    - "redis1"
-    - "redis2"
   server_proxy2:
     container_name: server_proxy2
     image: "undermoon"
@@ -24,12 +23,11 @@ services:
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6002:6002"
+    - "7003:7003"
+    - "7004:7004"
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
     - RUST_BACKTRACE=full
-    depends_on:
-    - "redis3"
-    - "redis4"
   server_proxy3:
     container_name: server_proxy3
     image: "undermoon"
@@ -39,12 +37,11 @@ services:
     command: bash /undermoon/run_proxy.sh
     ports:
     - "6003:6003"
+    - "7005:7005"
+    - "7006:7006"
     environment:
     - RUST_LOG=undermoon=debug,server_proxy=debug
     - RUST_BACKTRACE=full
-    depends_on:
-    - "redis5"
-    - "redis6"
 
   server_proxy4:
     container_name: server_proxy4
@@ -55,12 +52,11 @@ services:
     command: bash /undermoon/run_proxy.sh
     ports:
       - "6004:6004"
+      - "7007:7007"
+      - "7008:7008"
     environment:
       - RUST_LOG=undermoon=debug,server_proxy=debug
       - RUST_BACKTRACE=full
-    depends_on:
-      - "redis7"
-      - "redis8"
   server_proxy5:
     container_name: server_proxy5
     image: "undermoon"
@@ -70,12 +66,11 @@ services:
     command: bash /undermoon/run_proxy.sh
     ports:
       - "6005:6005"
+      - "7009:7009"
+      - "7010:7010"
     environment:
       - RUST_LOG=undermoon=debug,server_proxy=debug
       - RUST_BACKTRACE=full
-    depends_on:
-      - "redis9"
-      - "redis10"
   server_proxy6:
     container_name: server_proxy6
     image: "undermoon"
@@ -85,12 +80,11 @@ services:
     command: bash /undermoon/run_proxy.sh
     ports:
       - "6006:6006"
+      - "7011:7011"
+      - "7012:7012"
     environment:
       - RUST_LOG=undermoon=debug,server_proxy=debug
       - RUST_BACKTRACE=full
-    depends_on:
-      - "redis11"
-      - "redis12"
 
   coordinator1:
     container_name: coordinator1
@@ -102,6 +96,8 @@ services:
     environment:
     - RUST_LOG=undermoon=debug,coordinator=debug
     - RUST_BACKTRACE=full
+    ports:
+      - "8001:8001"
     depends_on:
     - "server_proxy1"
     - "server_proxy2"
@@ -120,6 +116,8 @@ services:
     environment:
     - RUST_LOG=undermoon=debug,coordinator=debug
     - RUST_BACKTRACE=full
+    ports:
+      - "8002:8002"
     depends_on:
     - "server_proxy1"
     - "server_proxy2"
@@ -145,72 +143,60 @@ services:
   redis1:
     container_name: redis1
     image: "redis"
-    command: redis-server --slave-announce-ip redis1
-    ports:
-    - "7001:6379"
+    command: redis-server --slave-announce-ip server_proxy1 --port 7001
+    network_mode: service:server_proxy1
   redis2:
     container_name: redis2
     image: "redis"
-    command: redis-server --slave-announce-ip redis2
-    ports:
-    - "7002:6379"
+    command: redis-server --slave-announce-ip server_proxy1 --port 7002
+    network_mode: service:server_proxy1
   redis3:
     container_name: redis3
     image: "redis"
-    command: redis-server --slave-announce-ip redis3
-    ports:
-    - "7003:6379"
+    command: redis-server --slave-announce-ip server_proxy2 --port 7003
+    network_mode: service:server_proxy2
   redis4:
     container_name: redis4
     image: "redis"
-    command: redis-server --slave-announce-ip redis4
-    ports:
-    - "7004:6379"
+    command: redis-server --slave-announce-ip server_proxy2 --port 7004
+    network_mode: service:server_proxy2
   redis5:
     container_name: redis5
     image: "redis"
-    command: redis-server --slave-announce-ip redis5
-    ports:
-    - "7005:6379"
+    command: redis-server --slave-announce-ip server_proxy3 --port 7005
+    network_mode: service:server_proxy3
   redis6:
     container_name: redis6
     image: "redis"
-    command: redis-server --slave-announce-ip redis6
-    ports:
-    - "7006:6379"
+    command: redis-server --slave-announce-ip server_proxy3 --port 7006
+    network_mode: service:server_proxy3
   redis7:
     container_name: redis7
     image: "redis"
-    command: redis-server --slave-announce-ip redis7
-    ports:
-      - "7007:6379"
+    command: redis-server --slave-announce-ip server_proxy4 --port 7007
+    network_mode: service:server_proxy4
   redis8:
     container_name: redis8
     image: "redis"
-    command: redis-server --slave-announce-ip redis8
-    ports:
-      - "7008:6379"
+    command: redis-server --slave-announce-ip server_proxy4 --port 7008
+    network_mode: service:server_proxy4
   redis9:
     container_name: redis9
     image: "redis"
-    command: redis-server --slave-announce-ip redis9
-    ports:
-      - "7009:6379"
+    command: redis-server --slave-announce-ip server_proxy5 --port 7009
+    network_mode: service:server_proxy5
   redis10:
     container_name: redis10
     image: "redis"
-    command: redis-server --slave-announce-ip redis10
-    ports:
-      - "7010:6379"
+    command: redis-server --slave-announce-ip server_proxy5 --port 7010
+    network_mode: service:server_proxy5
   redis11:
     container_name: redis11
     image: "redis"
-    command: redis-server --slave-announce-ip redis11
-    ports:
-      - "7011:6379"
+    command: redis-server --slave-announce-ip server_proxy6 --port 7011
+    network_mode: service:server_proxy6
   redis12:
     container_name: redis12
     image: "redis"
-    command: redis-server --slave-announce-ip redis12
-    ports:
-      - "7012:6379"
+    command: redis-server --slave-announce-ip server_proxy6 --port 7012
+    network_mode: service:server_proxy6

@@ -21,11 +21,11 @@ $ RUST_LOG=actix_web=info,undermoon=info,mem_broker=info UNDERMOON_REPLICA_ADDRE
 $ ./examples/mem-broker/init.sh
 
 # Verify that on master:
-curl localhost:7799/api/v2/metadata
+curl localhost:7799/api/v3/metadata
 ...
 
 # Verify tat on replica after 3 seconds:
-curl localhost:7799/api/v2/metadata
+curl localhost:7799/api/v3/metadata
 ...
 # Replica should have the same data as master.
 ```
@@ -57,6 +57,6 @@ to recover the service.
 
 So we also need to call this API after reconfiguring the coordinator.
 ```
-$ curl -XPUT localhost:7799/api/v2/epoch/recovery
+$ curl -XPUT localhost:7799/api/v3/epoch/recovery
 ```
 Now the system should be able to work again.

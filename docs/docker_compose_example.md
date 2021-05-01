@@ -27,7 +27,7 @@ $ ./examples/mem-broker/init.sh
 
 We have 6 available proxies.
 ```bash
-$ curl http://localhost:7799/api/v2/proxies/addresses
+$ curl http://localhost:7799/api/v3/proxies/addresses
 ```
 
 #### Create Cluster
@@ -36,7 +36,7 @@ Note that the number of a cluster could only be the multiples of 4.
 Let's create a cluster with 4 nodes.
 ```bash
 $ curl -XPOST -H 'Content-Type: application/json' \
-    http://localhost:7799/api/v2/clusters/meta/mycluster -d '{"node_number": 4}'
+    http://localhost:7799/api/v3/clusters/meta/mycluster -d '{"node_number": 4}'
 ```
 
 Before connecting to the cluster, you need to add these hosts to you `/etc/hosts`:
@@ -56,7 +56,7 @@ Note that you need to install the `jq` command to parse json easily for the comm
 
 ```bash
 # List the proxies of the our "mycluster`:
-$ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
+$ curl -s http://localhost:7799/api/v3/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
 "server_proxy5:6005"
 "server_proxy6:6006"
 ```
@@ -84,7 +84,7 @@ Great! We can use our created cluster just like the official Redis Cluster.
 It actually has 4 Redis nodes under the hood.
 ```bash
 # List the nodes of the our "mycluster`:
-$ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.nodes[].address'
+$ curl -s http://localhost:7799/api/v3/clusters/meta/mycluster | jq '.cluster.nodes[].address'
 "redis9:6379"
 "redis10:6379"
 "redis11:6379"
@@ -96,9 +96,9 @@ Let's scale up to 8 nodes:
 ```bash
 # Add 4 nodes
 $ curl -XPATCH -H 'Content-Type: application/json' \
-    http://localhost:7799/api/v2/clusters/nodes/mycluster -d '{"node_number": 4}'
+    http://localhost:7799/api/v3/clusters/nodes/mycluster -d '{"node_number": 4}'
 # Start migrating the data
-$ curl -XPOST http://localhost:7799/api/v2/clusters/migrations/expand/mycluster
+$ curl -XPOST http://localhost:7799/api/v3/clusters/migrations/expand/mycluster
 ```
 
 Now we have 4 server proxies:
@@ -114,7 +114,7 @@ mycluster___________9434df4158f3c5a4____ server_proxy4:6004 master - 0 0 12 conn
 and 8 nodes:
 ```bash
 # List the nodes of the our "mycluster`:
-$ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.nodes[].address'
+$ curl -s http://localhost:7799/api/v3/clusters/meta/mycluster | jq '.cluster.nodes[].address'
 "redis9:6379"
 "redis10:6379"
 "redis11:6379"
@@ -132,7 +132,7 @@ it can automatically replace the failed proxy,
 
 ```bash
 # List the proxies of the our "mycluster`:
-$ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
+$ curl -s http://localhost:7799/api/v3/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
 "server_proxy5:6005"
 "server_proxy6:6006"
 "server_proxy2:6002"
@@ -147,7 +147,7 @@ $ docker ps | grep server_proxy5 | awk '{print $1}' | xargs docker kill
 The `undermoon` will detect the failure, replace the failed proxy, promote the new master, and add new replica to the new master.
 ```bash
 # server_proxy5 is replaced by server_proxy3
-$ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
+$ curl -s http://localhost:7799/api/v3/clusters/meta/mycluster | jq '.cluster.nodes[].proxy_address' | uniq
 "server_proxy3:6003"
 "server_proxy6:6006"
 "server_proxy2:6002"
@@ -156,5 +156,5 @@ $ curl -s http://localhost:7799/api/v2/clusters/meta/mycluster | jq '.cluster.no
 
 And we can remove the server_proxy3 from the `undermoon` cluster now.
 ```bash
-$ curl -XDELETE http://localhost:7799/api/v2/proxies/meta/server_proxy3:6003
+$ curl -XDELETE http://localhost:7799/api/v3/proxies/meta/server_proxy3:6003
 ```
