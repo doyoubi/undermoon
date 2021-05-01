@@ -1,2 +1,3 @@
 broker_address = "mem_broker:7799"
+address = "127.0.0.1:8002"
 reporter_id = "127.0.0.1:8002"

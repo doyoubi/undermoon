@@ -59,26 +59,26 @@ But since we are deploying the whole `undermoon` cluster in one machine,
 we need to explicitly tell the memory broker they are in different hosts
 by specifying the `host` field to `localhost1` and `localhost2` in the posted json.
 ```bash
-curl -XPOST -H 'Content-Type: application/json' "http://localhost:7799/api/v2/proxies/meta" -d '{"proxy_address": "127.0.0.1:6001", "nodes": ["127.0.0.1:7001", "127.0.0.1:7002"], "host": "localhost1"}'
-curl -XPOST -H 'Content-Type: application/json' "http://localhost:7799/api/v2/proxies/meta" -d '{"proxy_address": "127.0.0.1:6002", "nodes": ["127.0.0.1:7003", "127.0.0.1:7004"], "host": "localhost2"}'
+curl -XPOST -H 'Content-Type: application/json' "http://localhost:7799/api/v3/proxies/meta" -d '{"proxy_address": "127.0.0.1:6001", "nodes": ["127.0.0.1:7001", "127.0.0.1:7002"], "host": "localhost1"}'
+curl -XPOST -H 'Content-Type: application/json' "http://localhost:7799/api/v3/proxies/meta" -d '{"proxy_address": "127.0.0.1:6002", "nodes": ["127.0.0.1:7003", "127.0.0.1:7004"], "host": "localhost2"}'
 ```
 
 Now we have 2 free server proxies with 4 nodes.
 ```bash
-$ curl http://localhost:7799/api/v2/proxies/addresses
+$ curl http://localhost:7799/api/v3/proxies/addresses
 {"addresses":["127.0.0.1:6001","127.0.0.1:6002"]}
 
-$ curl http://localhost:7799/api/v2/proxies/meta/127.0.0.1:6001
+$ curl http://localhost:7799/api/v3/proxies/meta/127.0.0.1:6001
 {"proxy":{"address":"127.0.0.1:6001","epoch":2,"nodes":[],"free_nodes":["127.0.0.1:7001","127.0.0.1:7002"],"peers":[],"clusters_config":{}}}
 
-$ curl http://localhost:7799/api/v2/proxies/meta/127.0.0.1:6002
+$ curl http://localhost:7799/api/v3/proxies/meta/127.0.0.1:6002
 {"proxy":{"address":"127.0.0.1:6002","epoch":2,"nodes":[],"free_nodes":["127.0.0.1:7003","127.0.0.1:7004"],"peers":[],"clusters_config":{}}}
 ```
 
 ## Create Cluster
 Create a cluster named `mycluster` with 4 Redis nodes.
 ```bash
-$ curl -XPOST -H 'Content-Type: application/json' http://localhost:7799/api/v2/clusters/meta/mycluster -d '{"node_number": 4}'
+$ curl -XPOST -H 'Content-Type: application/json' http://localhost:7799/api/v3/clusters/meta/mycluster -d '{"node_number": 4}'
 ```
 
 Now we can connect to the cluster:

@@ -8,7 +8,7 @@ from loguru import logger
 DOCKER_ENDPOINT = 'http+unix://%2Fvar%2Frun%2Fdocker.sock'
 BROKER_ENDPOINT = 'http://localhost:7799'
 
-BROKER_API_VERSION = 'v2'
+BROKER_API_VERSION = 'v3'
 
 
 class HttpClient:
@@ -221,7 +221,7 @@ class BrokerClient:
             proxy = self.get_proxy(addr)
             if not proxy:
                 continue
-            if not proxy['free_nodes']:
+            if proxy['cluster_name'] is not None:
                 continue
             free_proxies.append(addr)
         return free_proxies

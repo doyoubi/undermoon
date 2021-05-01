@@ -50,8 +50,7 @@ def run_monitor(address):
 # ...
 
 if __name__ == '__main__':
-    redis_ports = config.DOCKER_COMPOSE_CONFIG['redis_ports']
-    redis_addresses = ['redis{}:{}'.format(p, p) for p in redis_ports]
-    for i in range(0, len(redis_addresses)):
+    redis_addresses = config.DOCKER_COMPOSE_CONFIG['redis_addresses']
+    for addr in redis_addresses:
         # Python variable is a name. Need to use the whole array instead of a shared variable.
-        threading.Thread(target=lambda: run_monitor(redis_addresses[i])).start()
+        threading.Thread(target=lambda: run_monitor(addr)).start()

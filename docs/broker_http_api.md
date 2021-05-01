@@ -5,7 +5,7 @@ and use the HTTP 200 to indicate success or failure.
 
 HTTP Broker should at least implement the following apis to work with Coordinator:
 
-##### (1) GET /api/v2/clusters/names?offset=<int>&limit=<int>
+##### (1) GET /api/v3/clusters/names?offset=<int>&limit=<int>
 Get all the cluster names.
 `offset` starts from zero.
 ```
@@ -15,7 +15,7 @@ Response:
 }
 ```
 
-##### (2) GET /api/v2/clusters/meta/<cluster_name>
+##### (2) GET /api/v3/clusters/meta/<cluster_name>
 Get the meta data of <cluster_name>.
 ```
 Response:
@@ -50,7 +50,7 @@ If not:
 { "cluster": null }
 ```
 
-##### (3) GET /api/v2/proxies/addresses?offset=<int>&limit=<int>
+##### (3) GET /api/v3/proxies/addresses?offset=<int>&limit=<int>
 Get all the server-side proxy addresses.
 `offset` starts from zero.
 ```
@@ -60,7 +60,7 @@ Response:
 }
 ```
 
-##### (4) GET /api/v2/proxies/meta/<server_proxy_address>
+##### (4) GET /api/v3/proxies/meta/<server_proxy_address>
 Get the meta data of <server_proxy_address>
 ```
 Response:
@@ -105,14 +105,14 @@ If not:
 { "proxy": null }
 ```
 
-##### (5) POST /api/v2/failures/<server_proxy_address>/<reporter_id>
+##### (5) POST /api/v3/failures/<server_proxy_address>/<reporter_id>
 Report a suspected failure and tag it use a unique <reporter_id> for every Coordinator.
 ```
 Response:
 empty payload
 ```
 
-##### (6) GET /api/v2/failures
+##### (6) GET /api/v3/failures
 Get all the failures reported by coordinator but not committed to be failed yet.
 It's used by coordinator and you probably need to use (9) instead.
 ```
@@ -122,7 +122,7 @@ Response:
 }
 ```
 
-##### (7) POST /api/v2/proxies/failover/<server_proxy_address>
+##### (7) POST /api/v3/proxies/failover/<server_proxy_address>
 Try to do the failover for the specified proxy.
 In the memory broker implementation, if `enable_ordered_proxy` is on,
 this API will only change the role and will not replace the failed server proxy.
@@ -165,7 +165,7 @@ If not:
 HTTP 409
 ```
 
-##### (8) PUT /api/v2/clusters/migrations
+##### (8) PUT /api/v3/clusters/migrations
 Try to commit the migration.
 ```
 Request:
@@ -191,7 +191,7 @@ Response:
 }
 ```
 
-##### (9) GET /api/v2/proxies/failed/addresses
+##### (9) GET /api/v3/proxies/failed/addresses
 Get all the failed proxies.
 ```
 Response:
