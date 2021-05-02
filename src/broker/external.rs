@@ -192,7 +192,10 @@ impl ExternalHttpStorage {
         refresh_interval: Duration,
     ) -> ! {
         info!("try initializing the data");
-        self.try_init().await;
+        while self.try_init().await.is_err() && self.get_external_store().await.is_err() {
+            warn!("failed to init data, retry");
+            Delay::new(Duration::from_secs(1)).await;
+        }
 
         info!("external http storage start refreshing task");
         let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
@@ -223,7 +226,7 @@ impl ExternalHttpStorage {
         }
     }
 
-    async fn try_init(&self) {
+    async fn try_init(&self) -> Result<(), MetaStoreError> {
         let store = self.cached_store.lease().clone();
         // The external HTTP service should ignore this None version request
         // if there're already data.
@@ -235,7 +238,9 @@ impl ExternalHttpStorage {
             .await
         {
             warn!("failed to set init store: {:?}", err);
+            return Err(err);
         }
+        Ok(())
     }
 
     fn try_lock(&self) -> Result<AtomicLockGuard, MetaStoreError> {
