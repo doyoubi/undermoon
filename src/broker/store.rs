@@ -1223,8 +1223,13 @@ mod tests {
         added_node_num: usize,
         migration_limit: u64,
     ) {
-        let mut store =
-            init_migration_test_store(host_num, proxy_per_host, start_node_num, migration_limit);
+        let mut store = init_migration_test_store(
+            host_num,
+            proxy_per_host,
+            start_node_num,
+            migration_limit,
+            false,
+        );
         test_scaling(
             &mut store,
             host_num * proxy_per_host,
@@ -1238,8 +1243,9 @@ mod tests {
         proxy_per_host: usize,
         start_node_num: usize,
         migration_limit: u64,
+        enable_ordered_proxy: bool,
     ) -> MetaStore {
-        let mut store = MetaStore::new(false);
+        let mut store = MetaStore::new(enable_ordered_proxy);
         let all_proxy_num = host_num * proxy_per_host;
         add_testing_proxies(&mut store, host_num, proxy_per_host);
         assert_eq!(store.get_free_proxies().len(), all_proxy_num);
@@ -1424,8 +1430,13 @@ mod tests {
             for proxy_per_host in 1..=MAX_PROXY_PER_HOST {
                 for migration_limit in 0..=MAX_MIGRATION_LIMIT {
                     let sum_node_num = host_num * proxy_per_host * 2;
-                    let mut store =
-                        init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+                    let mut store = init_migration_test_store(
+                        host_num,
+                        proxy_per_host,
+                        4,
+                        migration_limit,
+                        false,
+                    );
                     let mut remnant = sum_node_num - 4;
                     while remnant > 4 {
                         test_scaling(&mut store, host_num * proxy_per_host, 4, migration_limit);
@@ -1515,7 +1526,8 @@ mod tests {
         assert_eq!(MAX_HOST_NUM * MAX_PROXY_PER_HOST % 2, 0);
         let migration_limit = 0;
 
-        let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+        let mut store =
+            init_migration_test_store(host_num, proxy_per_host, 4, migration_limit, false);
         let added_node_num = 4;
         assert!(store.get_free_proxies().len() >= host_num * proxy_per_host / 2);
         while store.get_free_proxies().len() >= host_num * proxy_per_host / 2 {
@@ -1650,8 +1662,13 @@ mod tests {
         removed_node_num: usize,
         migration_limit: u64,
     ) {
-        let mut store =
-            init_migration_test_store(host_num, proxy_per_host, start_node_num, migration_limit);
+        let mut store = init_migration_test_store(
+            host_num,
+            proxy_per_host,
+            start_node_num,
+            migration_limit,
+            false,
+        );
         test_scaling_down_helper(
             &mut store,
             host_num * proxy_per_host,
@@ -1712,6 +1729,7 @@ mod tests {
                         proxy_per_host,
                         start_node_num,
                         migration_limit,
+                        false,
                     );
                     let mut remnant = start_node_num;
                     while remnant > 4 {
@@ -1737,8 +1755,13 @@ mod tests {
         let migration_limit = 0;
         let start_node_num = 12;
 
-        let mut store =
-            init_migration_test_store(host_num, proxy_per_host, start_node_num, migration_limit);
+        let mut store = init_migration_test_store(
+            host_num,
+            proxy_per_host,
+            start_node_num,
+            migration_limit,
+            false,
+        );
         let removed_node_num = 4;
         test_scaling_down_helper(
             &mut store,
@@ -1756,8 +1779,13 @@ mod tests {
         let migration_limit = 0;
         let start_node_num = 24;
 
-        let mut store =
-            init_migration_test_store(host_num, proxy_per_host, start_node_num, migration_limit);
+        let mut store = init_migration_test_store(
+            host_num,
+            proxy_per_host,
+            start_node_num,
+            migration_limit,
+            false,
+        );
 
         test_scaling_down_helper(
             &mut store,
@@ -1890,7 +1918,8 @@ mod tests {
         let added_node_num = 4;
         let removed_node_num = 4;
 
-        let mut store = init_migration_test_store(host_num, proxy_per_host, 4, migration_limit);
+        let mut store =
+            init_migration_test_store(host_num, proxy_per_host, 4, migration_limit, false);
         test_scaling(
             &mut store,
             host_num * proxy_per_host,
@@ -2208,6 +2237,119 @@ mod tests {
             assert_eq!(second_slots.len(), 1);
             let second_slots_str = second_slots[0].clone().into_strings().join(" ");
             assert_eq!(second_slots_str, "1 8192-16383");
+        }
+    }
+
+    #[test]
+    fn test_failover_during_migration() {
+        let host_num = 4;
+        let proxy_per_host = 1;
+        let start_node_num = 4;
+        let migration_limit = 2;
+        let cluster_name = CLUSTER_NAME.to_string();
+
+        let mut store = init_migration_test_store(
+            host_num,
+            proxy_per_host,
+            start_node_num,
+            migration_limit,
+            true,
+        );
+
+        let added_node_num = 4;
+        let nodes = store
+            .auto_add_nodes(cluster_name.clone(), added_node_num)
+            .unwrap();
+        assert_eq!(nodes.len(), 4);
+
+        store.migrate_slots(cluster_name.clone()).unwrap();
+        let (failed_proxy_address, epoch1) = {
+            let cluster = store
+                .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap();
+            let mut epoch_opt = None;
+            for node in cluster.get_nodes().get(start_node_num..).unwrap() {
+                for slot_range in node.get_slots().iter() {
+                    assert!(matches!(slot_range.tag, SlotRangeTag::Importing(_)));
+                    let slot_range_epoch = slot_range.tag.get_migration_meta().unwrap().epoch;
+                    if let Some(epoch) = epoch_opt.clone() {
+                        assert_eq!(epoch, slot_range_epoch);
+                    } else {
+                        epoch_opt = Some(slot_range_epoch);
+                    }
+                }
+            }
+
+            let last_node = start_node_num + added_node_num - 1;
+            let failed_proxy_address = cluster.get_nodes()[last_node]
+                .get_proxy_address()
+                .to_string();
+            (failed_proxy_address, epoch_opt.unwrap())
+        };
+
+        // The first call should be able to bump the epoch of the migration task.
+        assert!(store
+            .replace_failed_proxy(failed_proxy_address.clone(), migration_limit)
+            .unwrap()
+            .is_none());
+        let epoch2 = {
+            let cluster = store
+                .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap();
+            let mut epoch_opt = None;
+            let nodes = vec![
+                &cluster.get_nodes()[start_node_num],
+                &cluster.get_nodes()[start_node_num + 1],
+            ];
+            for (i, node) in nodes.iter().enumerate() {
+                for slot_range in node.get_slots().iter() {
+                    assert!(matches!(slot_range.tag, SlotRangeTag::Importing(_)));
+                    let slot_range_epoch = slot_range.tag.get_migration_meta().unwrap().epoch;
+                    if i == 0 {
+                        assert_eq!(slot_range_epoch, epoch1);
+                    } else {
+                        assert!(slot_range_epoch > epoch1);
+                        epoch_opt = Some(slot_range_epoch);
+                    }
+                }
+            }
+
+            for node in cluster
+                .get_nodes()
+                .get(start_node_num + 2..start_node_num + 4)
+                .unwrap()
+            {
+                assert!(node.get_slots().is_empty());
+            }
+
+            epoch_opt.unwrap()
+        };
+
+        // The second call should not bump the epoch of the migration task
+        // as it will reset a task which does not need to be reset.
+        assert!(store
+            .replace_failed_proxy(failed_proxy_address, migration_limit)
+            .unwrap()
+            .is_none());
+        {
+            let cluster = store
+                .get_cluster_by_name(cluster_name.as_str(), migration_limit)
+                .unwrap();
+            let nodes = vec![
+                &cluster.get_nodes()[start_node_num],
+                &cluster.get_nodes()[start_node_num + 1],
+            ];
+            for (i, node) in nodes.iter().enumerate() {
+                for slot_range in node.get_slots().iter() {
+                    assert!(matches!(slot_range.tag, SlotRangeTag::Importing(_)));
+                    let slot_range_epoch = slot_range.tag.get_migration_meta().unwrap().epoch;
+                    if i == 0 {
+                        assert_eq!(slot_range_epoch, epoch1);
+                    } else {
+                        assert_eq!(slot_range_epoch, epoch2);
+                    }
+                }
+            }
         }
     }
 }
