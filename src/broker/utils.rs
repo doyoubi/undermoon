@@ -12,7 +12,7 @@ pub mod tests {
                     format!("127.0.0.{}:60{:02}", host_index, i * 2),
                     format!("127.0.0.{}:60{:02}", host_index, i * 2 + 1),
                 ];
-                let index = host_index * proxy_per_host + i;
+                let index = (host_index - 1) * proxy_per_host + (i - 1);
                 store
                     .add_proxy(proxy_address, node_addresses, None, Some(index))
                     .unwrap();

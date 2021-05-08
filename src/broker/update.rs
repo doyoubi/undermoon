@@ -852,6 +852,12 @@ impl<'a> MetaStoreUpdate<'a> {
 
         for chunk in cluster.chunks.iter_mut() {
             if chunk.proxy_addresses[0] == failed_proxy_address {
+                // We should never reset the tasks that they does not need to be.
+                // And note that `replace_failed_proxy` will be called again and again,
+                // which make the migration get reset again and again.
+                if chunk.role_position == ChunkRolePosition::SecondChunkMaster {
+                    return Ok(());
+                }
                 chunk.role_position = ChunkRolePosition::SecondChunkMaster;
 
                 for migrating_slot_range in chunk.migrating_slots[0].iter_mut() {
@@ -867,6 +873,9 @@ impl<'a> MetaStoreUpdate<'a> {
                 }
                 break;
             } else if chunk.proxy_addresses[1] == failed_proxy_address {
+                if chunk.role_position == ChunkRolePosition::FirstChunkMaster {
+                    return Ok(());
+                }
                 chunk.role_position = ChunkRolePosition::FirstChunkMaster;
 
                 for migrating_slot_range in chunk.migrating_slots[1].iter_mut() {
