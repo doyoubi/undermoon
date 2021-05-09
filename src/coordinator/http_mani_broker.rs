@@ -53,6 +53,10 @@ impl HttpMetaManipulationBroker {
             })?;
             Ok(proxy)
         } else {
+            if status == reqwest::StatusCode::CONFLICT {
+                return Err(MetaManipulationBrokerError::Retry);
+            }
+
             error!(
                 "replace_proxy: Failed to replace node: status code {:?}",
                 status
@@ -95,6 +99,10 @@ impl HttpMetaManipulationBroker {
         if status.is_success() || status.as_u16() == 404 {
             Ok(())
         } else {
+            if status == reqwest::StatusCode::CONFLICT {
+                return Err(MetaManipulationBrokerError::Retry);
+            }
+
             error!("Failed to commit migration status code {:?}", status);
             let result = response.text().await;
             match result {
