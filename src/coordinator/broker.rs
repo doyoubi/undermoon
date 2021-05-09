@@ -111,6 +111,7 @@ pub enum MetaManipulationBrokerError {
     ResourceNotAvailable,
     InvalidReply,
     NoBroker,
+    Retry,
 }
 
 impl fmt::Display for MetaManipulationBrokerError {
