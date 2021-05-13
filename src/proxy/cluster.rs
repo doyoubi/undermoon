@@ -645,7 +645,7 @@ fn gen_cluster_nodes_helper(
                     .collect();
                 Some(ranges)
             })
-            .filter_map(|s| s)
+            .flatten()
             .flatten()
             .collect::<Vec<String>>()
             .join(" ");

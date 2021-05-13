@@ -464,7 +464,7 @@ impl<T: CmdTask> MigratingTaskHandle<T> {
         self.task.stop();
         if let Some(sender) = self.stop_signal_sender.take() {
             if sender.send(()).is_err() {
-                warn!("failed to send stop signal");
+                info!("migrating task is already closed");
             }
         }
     }
@@ -671,7 +671,7 @@ impl ImportingTaskHandle {
         info!("stop importing task: {:?}", self.meta);
         if let Some(sender) = self.stop_signal_sender.take() {
             if sender.send(()).is_err() {
-                warn!("failed to send stop signal");
+                info!("importing task is already closed");
             }
         }
     }
