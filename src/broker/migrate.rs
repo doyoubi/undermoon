@@ -272,10 +272,8 @@ impl<'a> MetaStoreMigrate<'a> {
 
     fn compact_slots(cluster: &mut ClusterStore) {
         for chunk in cluster.chunks.iter_mut() {
-            for slots in chunk.stable_slots.iter_mut() {
-                if let Some(slots) = slots {
-                    slots.get_mut_range_list().compact();
-                }
+            for slots in chunk.stable_slots.iter_mut().flatten() {
+                slots.get_mut_range_list().compact();
             }
             for slots in chunk.migrating_slots.iter_mut() {
                 for store in slots.iter_mut() {

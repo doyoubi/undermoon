@@ -270,15 +270,12 @@ struct MgrCmdStateUmSync<F: CmdTaskFactory> {
 }
 
 impl<F: CmdTaskFactory> MgrCmdStateUmSync<F> {
-    fn from_state_exists(
-        state: MgrCmdStateExists<F>,
-        cmd_task_factory: &F,
+    fn from_task(
+        inner_task: F::Task,
+        key: BinSafeStr,
         lock_guard: KeyLockGuard,
+        cmd_task_factory: &F,
     ) -> (Self, ReqTask<F::Task>, ReplyFuture) {
-        let MgrCmdStateExists {
-            inner_task, key, ..
-        } = state;
-
         let (umsync_cmd_task, umsync_reply_fut) =
             cmd_task_factory.create_with_ctx(inner_task.get_context(), Self::gen_umsync_resp(&key));
 
@@ -388,12 +385,20 @@ impl MgrCmdStateDel {
     }
 }
 
+struct PendingUmSyncTask<T> {
+    cmd_task: T,
+    key: BinSafeStr,
+    lock_slot: usize,
+}
+
 type ExistsTaskSender<F> = UnboundedSender<(MgrCmdStateExists<F>, ReplyFuture)>;
 type ExistsTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateExists<F>, ReplyFuture)>;
 type DumpPttlTaskSender<F> = UnboundedSender<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
 type DumpPttlTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateDumpPttl<F>, DataEntryFuture)>;
 type RestoreTaskSender<F> = UnboundedSender<(MgrCmdStateRestoreForward<F>, ReplyFuture)>;
 type RestoreTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateRestoreForward<F>, ReplyFuture)>;
+type PendingUmSyncTaskSender<T> = UnboundedSender<PendingUmSyncTask<T>>;
+type PendingUmSyncTaskReceiver<T> = UnboundedReceiver<PendingUmSyncTask<T>>;
 type UmSyncTaskSender<F> = UnboundedSender<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type DeleteKeyTaskSender = UnboundedSender<ReplyFuture>;
@@ -415,6 +420,7 @@ where
     exists_task_sender: ExistsTaskSender<F>,
     dump_pttl_task_sender: DumpPttlTaskSender<F>,
     restore_task_sender: RestoreTaskSender<F>,
+    pending_umsync_task_sender: PendingUmSyncTaskSender<F::Task>,
     umsync_task_sender: UmSyncTaskSender<F>,
     del_task_sender: DeleteKeyTaskSender,
     wait_handle_sender: DstWaitHandleSender,
@@ -423,6 +429,7 @@ where
         ExistsTaskReceiver<F>,
         DumpPttlTaskReceiver<F>,
         RestoreTaskReceiver<F>,
+        PendingUmSyncTaskReceiver<F::Task>,
         UmSyncTaskReceiver<F>,
         DeleteKeyTaskReceiver,
         DstWaitHandleReceiver,
@@ -451,6 +458,7 @@ where
         let (exists_task_sender, exists_task_receiver) = unbounded();
         let (dump_pttl_task_sender, dump_pttl_task_receiver) = unbounded();
         let (restore_task_sender, restore_task_receiver) = unbounded();
+        let (pending_umsync_task_sender, pending_umsync_task_receiver) = unbounded();
         let (umsync_task_sender, umsync_task_receiver) = unbounded();
         let (del_task_sender, del_task_receiver) = unbounded();
         let (wait_handle_sender, wait_handle_receiver) = unbounded();
@@ -458,6 +466,7 @@ where
             exists_task_receiver,
             dump_pttl_task_receiver,
             restore_task_receiver,
+            pending_umsync_task_receiver,
             umsync_task_receiver,
             del_task_receiver,
             wait_handle_receiver,
@@ -470,6 +479,7 @@ where
             exists_task_sender,
             dump_pttl_task_sender,
             restore_task_sender,
+            pending_umsync_task_sender,
             umsync_task_sender,
             del_task_sender,
             wait_handle_sender,
@@ -505,6 +515,7 @@ where
             exists_task_receiver,
             dump_pttl_task_receiver,
             restore_task_receiver,
+            pending_umsync_task_receiver,
             umsync_task_receiver,
             del_task_receiver,
             wait_handle_receiver,
@@ -520,13 +531,21 @@ where
             exists_task_sender,
             exists_task_receiver,
             dump_pttl_task_sender,
-            umsync_task_sender,
             wait_handle_sender.clone(),
             src_sender.clone(),
             dst_sender.clone(),
-            src_proxy_sender,
             cmd_task_factory.clone(),
             key_lock.clone(),
+        );
+
+        let pending_umsync_task_handler = Self::handle_pending_umsync_task(
+            pending_umsync_task_receiver,
+            umsync_task_sender,
+            src_proxy_sender,
+            dst_sender.clone(),
+            wait_handle_sender.clone(),
+            key_lock.clone(),
+            cmd_task_factory.clone(),
         );
 
         let dump_pttl_task_handler = Self::handle_dump_pttl_task(
@@ -552,6 +571,7 @@ where
         let handle_wait_handler = Self::handle_wait_handle(wait_handle_receiver);
 
         let mut exists_task_handler = Box::pin(exists_task_handler.fuse());
+        let mut pending_umsync_task_handler = Box::pin(pending_umsync_task_handler.fuse());
         let mut dump_pttl_task_handler = Box::pin(dump_pttl_task_handler.fuse());
         let mut restore_task_handler = Box::pin(restore_task_handler.fuse());
         let mut umsync_task_handler = Box::pin(umsync_task_handler.fuse());
@@ -560,6 +580,7 @@ where
 
         select! {
             () = exists_task_handler => (),
+            () = pending_umsync_task_handler => (),
             () = dump_pttl_task_handler => (),
             () = restore_task_handler => (),
             () = umsync_task_handler => (),
@@ -568,6 +589,18 @@ where
         }
 
         // Need to finish the remaining commands before exiting.
+        info!("wait for pending umsync task");
+        self.pending_umsync_task_sender.close_channel();
+
+        select! {
+            () = pending_umsync_task_handler => (),
+            () = dump_pttl_task_handler => (),
+            () = restore_task_handler => (),
+            () = umsync_task_handler => (),
+            () = del_task_handler => (),
+            () = handle_wait_handler => (),
+        }
+
         info!("wait for dump and pttl task");
         self.dump_pttl_task_sender.close_channel();
 
@@ -615,11 +648,9 @@ where
         exists_task_sender: ExistsTaskSender<F>,
         mut exists_task_receiver: ExistsTaskReceiver<F>,
         dump_pttl_task_sender: DumpPttlTaskSender<F>,
-        umsync_task_sender: UmSyncTaskSender<F>,
         wait_handle_sender: DstWaitHandleSender,
         src_sender: Arc<S>,
         dst_sender: Arc<DS>,
-        src_proxy_sender: Arc<PS>,
         cmd_task_factory: Arc<F>,
         key_lock: Arc<KeyLock>,
     ) {
@@ -654,7 +685,7 @@ where
                         key,
                         lock_slot,
                     } = state;
-                    let (state, reply_receiver) = match Self::resend_to_exist_to_src(
+                    let (state, reply_receiver) = match Self::resend_to_exist_to_dst(
                         inner_task,
                         &(*cmd_task_factory),
                         key,
@@ -705,19 +736,6 @@ where
                     }
                 }
             };
-
-            let (_, data_cmd_type) = state.inner_task.get_type();
-            if requires_blocking_migration(data_cmd_type) {
-                let (state, req_task, reply_fut) =
-                    MgrCmdStateUmSync::from_state_exists(state, &(*cmd_task_factory), lock_guard);
-                if let Err(err) = src_proxy_sender.send(req_task) {
-                    debug!("failed to send umsync: {:?}", err);
-                }
-                if let Err(_err) = umsync_task_sender.unbounded_send((state, reply_fut)) {
-                    debug!("umsync_task_sender is canceled");
-                }
-                continue;
-            }
 
             let (state, req_task, reply_fut) =
                 MgrCmdStateDumpPttl::from_state_exists(state, &(*cmd_task_factory), lock_guard);
@@ -849,6 +867,70 @@ where
         }
     }
 
+    async fn handle_pending_umsync_task(
+        mut pending_umsync_task_receiver: PendingUmSyncTaskReceiver<F::Task>,
+        umsync_task_sender: UmSyncTaskSender<F>,
+        src_proxy_sender: Arc<PS>,
+        dst_sender: Arc<DS>,
+        wait_handle_sender: DstWaitHandleSender,
+        key_lock: Arc<KeyLock>,
+        cmd_task_factory: Arc<F>,
+    ) {
+        while let Some(pending_task) = pending_umsync_task_receiver.next().await {
+            let PendingUmSyncTask {
+                cmd_task,
+                key,
+                lock_slot,
+            } = pending_task;
+
+            let mut lock_guard_opt = None;
+            for _ in 0..10 {
+                if let Some(lock_guard) = key_lock.lock(key.clone(), lock_slot) {
+                    lock_guard_opt = Some(lock_guard);
+                    break;
+                }
+                Delay::new(Duration::from_millis(3)).await
+            }
+            let lock_guard = match lock_guard_opt {
+                Some(lock_guard) => lock_guard,
+                None => {
+                    cmd_task
+                        .set_resp_result(Ok(Resp::Error(b"MIGRATION_KEY_LOCK_TIMEOUT".to_vec())));
+                    continue;
+                }
+            };
+
+            let (state, req_task, reply_fut) =
+                MgrCmdStateUmSync::from_task(cmd_task, key, lock_guard, cmd_task_factory.as_ref());
+            if let Err(err) = src_proxy_sender.send(req_task) {
+                error!("failed to send umsync: {:?}", err);
+                state.inner_task.set_resp_result(Ok(Resp::Error(
+                    b"Failed to send UMSYNC during migration after pending".to_vec(),
+                )));
+                continue;
+            }
+            if let Err(err) = umsync_task_sender.unbounded_send((state, reply_fut)) {
+                // The queue has been closed so the migration should be done.
+                // We can safely send it to the dst_sender.
+                let MgrCmdStateUmSync { inner_task, .. } = err.into_inner().0;
+                let (task, wait_handle) = WaitableTask::new_with_handle(inner_task);
+                if let Err(err) = dst_sender.send(ReqTask::Simple(task)) {
+                    error!(
+                        "failed to send to dst sender after migration is done: {:?}",
+                        err
+                    );
+                    continue;
+                }
+                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
+                    warn!(
+                        "failed to send wait_handle in handle_pending_umsync_task: {:?}",
+                        err
+                    );
+                }
+            }
+        }
+    }
+
     async fn handle_umsync_task(
         mut umsync_task_receiver: UmSyncTaskReceiver<F>,
         wait_handle_sender: DstWaitHandleSender,
@@ -926,7 +1008,12 @@ where
             }
         };
 
-        let (state, reply_fut) = match Self::send_to_exist_to_src(
+        let (_, data_cmd_type) = cmd_task.get_type();
+        if requires_blocking_migration(data_cmd_type) {
+            return self.send_to_umsync(cmd_task, key, lock_slot);
+        }
+
+        let (state, reply_fut) = match Self::send_to_exist_to_dst(
             cmd_task,
             &(*self.cmd_task_factory),
             key,
@@ -951,7 +1038,52 @@ where
         Ok(())
     }
 
-    fn send_to_exist_to_src(
+    fn send_to_umsync(
+        &self,
+        cmd_task: F::Task,
+        key: BinSafeStr,
+        lock_slot: usize,
+    ) -> Result<(), RetryError<F::Task>> {
+        // Avoid restoring and deleting at the same time.
+        let (lock_guard, cmd_task) = match self.key_lock.lock(key.clone(), lock_slot) {
+            Some(lock_guard) => (lock_guard, cmd_task),
+            None => {
+                // Retry later
+                let res = self
+                    .pending_umsync_task_sender
+                    .unbounded_send(PendingUmSyncTask {
+                        cmd_task,
+                        key,
+                        lock_slot,
+                    });
+                if let Err(err) = res {
+                    // The queue has been closed, the migration should be done. Retry it.
+                    let PendingUmSyncTask { cmd_task: task, .. } = err.into_inner();
+                    return Err(RetryError::new(task));
+                }
+
+                return Ok(());
+            }
+        };
+
+        let (state, req_task, reply_fut) =
+            MgrCmdStateUmSync::from_task(cmd_task, key, lock_guard, self.cmd_task_factory.as_ref());
+        if let Err(err) = self.src_proxy_sender.send(req_task) {
+            error!("failed to send umsync: {:?}", err);
+            state.inner_task.set_resp_result(Ok(Resp::Error(
+                b"Failed to send UMSYNC during migration".to_vec(),
+            )));
+            return Ok(());
+        }
+        if let Err(err) = self.umsync_task_sender.unbounded_send((state, reply_fut)) {
+            // The queue has been closed, retry it.
+            let MgrCmdStateUmSync { inner_task, .. } = err.into_inner().0;
+            return Err(RetryError::new(inner_task));
+        }
+        Ok(())
+    }
+
+    fn send_to_exist_to_dst(
         cmd_task: F::Task,
         cmd_task_factory: &F,
         key: BinSafeStr,
@@ -983,7 +1115,7 @@ where
         Ok((state, reply_fut))
     }
 
-    fn resend_to_exist_to_src(
+    fn resend_to_exist_to_dst(
         cmd_task: F::Task,
         cmd_task_factory: &F,
         key: BinSafeStr,
@@ -1615,7 +1747,7 @@ mod tests {
         handler.handle_cmd_task(cmd_ctx).unwrap();
         let s = run_future(&handler, reply_receiver).await;
 
-        assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), Some(1));
+        assert_eq!(handler.dst_sender.get_cmd_count("EXISTS"), None);
         assert_eq!(handler.dst_sender.get_cmd_count("DEL"), Some(1));
         assert_eq!(handler.src_proxy_sender.get_cmd_count("UMSYNC"), Some(1));
         // These should be triggered by migrating task but not in this tests.
