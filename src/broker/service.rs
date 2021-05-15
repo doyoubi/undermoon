@@ -14,121 +14,250 @@ use crate::coordinator::http_meta_broker::{
     ClusterNamesPayload, ClusterPayload, FailedProxiesPayload, FailuresPayload,
     ProxyAddressesPayload, ProxyPayload,
 };
-use actix_http::ResponseBuilder;
-use actix_web::dev::Service;
-use actix_web::{error, http, web, HttpRequest, HttpResponse};
 use arc_swap::ArcSwap;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
+use warp::{http, Filter};
 
-pub const MEM_BROKER_API_VERSION: &str = "/api/v3";
-const MAX_PAYLOAD: usize = 128 * 1024 * 1024;
+pub const MEM_BROKER_API_VERSION: &str = "v3";
 
-pub fn configure_app(cfg: &mut web::ServiceConfig, service: Arc<MemBrokerService>) {
-    let service2 = service.clone();
-    cfg.data(service).service(
-        web::scope(MEM_BROKER_API_VERSION)
-            .app_data(actix_web::web::PayloadConfig::default().limit(MAX_PAYLOAD))
-            .app_data(actix_web::web::JsonConfig::default().limit(MAX_PAYLOAD))
-            .wrap_fn(move |req, srv| {
-                let method = req.method().clone();
-                let peer_addr = match req.peer_addr() {
-                    None => "".to_string(),
-                    Some(address) => format!("{:?}", address),
-                };
-                let req_str = format!("{} {} {} {:?} {}", req.method(), req.path(), req.query_string(), req.version(), peer_addr);
-                let fut = srv.call(req);
+pub async fn run_server(service: Arc<MemBrokerService>, address: std::net::SocketAddr) {
+    let svc = warp::any().map(move || service.clone());
+    let logger = warp::log::custom(|info| {
+        if *info.method() == http::Method::GET {
+            return;
+        }
+        info!(
+            target: "mem_broker",
+            "{} \"{} {} {:?}\" {} {:?}",
+            info.remote_addr().map(|addr| addr.to_string()).unwrap_or_default(),
+            info.method(),
+            info.path(),
+            info.version(),
+            info.status().as_u16(),
+            info.elapsed(),
+        );
+    });
 
-                let service = if service2.config.debug {
-                    Some(service2.clone())
-                } else {
-                    None
-                };
+    let get_version_hdl = warp::get().and(warp::path("version")).map(get_version);
 
-                async move {
-                    let res = fut.await;
-                    // The GET APIs are accessed too frequently so we don't log them.
-                    if method != http::Method::GET {
-                        match &res {
-                            Ok(response) => info!("{} status {}", req_str, response.status()),
-                            Err(err) => info!("{} err {}", req_str, err)
-                        }
-                    } else if let Some(service) = service {
-                        match service.check_metadata().await {
-                            Err(err) => {
-                                error!("failed to check metadata: {:?}", err);
-                            }
-                            Ok(None) => (),
-                            Ok(Some(invalid_meta_store)) => {
-                                error!("Invalid meta store: {:?}", invalid_meta_store);
-                            }
-                        }
-                    }
-                    res
-                }
-            })
-            .route("/version", web::get().to(get_version))
-            .route("/metadata", web::get().to(get_all_metadata))
-            .route("/metadata", web::put().to(restore_metadata))
-            // Broker api
-            .route("/clusters/names", web::get().to(get_cluster_names))
-            .route(
-                "/clusters/meta/{cluster_name}",
-                web::get().to(get_cluster_by_name),
-            )
-            .route("/proxies/addresses", web::get().to(get_proxy_addresses))
-            .route(
-                "/proxies/meta/{address}",
-                web::get().to(get_proxy_by_address),
-            )
-            .route("/failures", web::get().to(get_failures))
-            .route(
-                "/failures/{server_proxy_address}/{reporter_id}",
-                web::post().to(add_failure),
-            )
-            .route(
-                "/proxies/failover/{address}",
-                web::post().to(replace_failed_node),
-            )
-            .route("/clusters/migrations", web::put().to(commit_migration))
-            .route("/proxies/failed/addresses", web::get().to(get_failed_proxies))
+    let get_metadata_hdl = warp::get()
+        .and(warp::path("metadata"))
+        .and(svc.clone())
+        .and_then(get_all_metadata)
+        .with(warp::compression::gzip());
 
-            // Additional api
-            .route("/clusters/info/{cluster_name}", web::get().to(get_cluster_info_by_name))
-            .route("/clusters/meta/{cluster_name}", web::post().to(add_cluster))
-            .route("/clusters/meta/{cluster_name}", web::delete().to(remove_cluster))
-            .route(
-                "/clusters/nodes/{cluster_name}",
-                web::patch().to(auto_add_nodes),
-            )
-            .route(
-                "/clusters/nodes/{cluster_name}",
-                web::put().to(auto_scale_up_nodes),
-            )
-            .route("/clusters/free_nodes/{cluster_name}", web::delete().to(auto_delete_free_nodes))
-            .route(
-                "/clusters/migrations/shrink/{cluster_name}/{node_number}",
-                web::post().to(migrate_slots_to_scale_down),
-            )
-            .route("/clusters/migrations/expand/{cluster_name}", web::post().to(migrate_slots))
-            .route("/clusters/migrations/auto/{cluster_name}/{node_number}", web::post().to(auto_scale_node_number))
-            .route("/clusters/config/{cluster_name}", web::patch().to(change_config))
-            .route("/clusters/balance/{cluster_name}", web::put().to(balance_masters))
+    let put_metadata_hdl = warp::put()
+        .and(warp::path("metadata"))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .and_then(restore_metadata);
 
-            .route("/proxies/meta", web::post().to(add_proxy))
-            .route(
-                "/proxies/meta/{proxy_address}",
-                web::delete().to(remove_proxy),
-            )
-            .route("/resources/failures/check", web::post().to(check_resource_for_failures))
-            .route("/config", web::put().to(change_broker_config))
-            .route("/config", web::get().to(get_broker_config))
-            .route("/epoch", web::get().to(get_epoch))
-            .route("/epoch/recovery", web::put().to(recover_epoch))
-            .route("/epoch/{new_epoch}", web::put().to(bump_epoch)),
-    );
+    let get_cluster_names_hdl = warp::get()
+        .and(warp::path!("clusters" / "names"))
+        .and(warp::query::<Pagination>())
+        .and(svc.clone())
+        .and_then(get_cluster_names);
+
+    let get_cluster_by_name_hdl = warp::get()
+        .and(warp::path!("clusters" / "meta" / String))
+        .and(svc.clone())
+        .and_then(get_cluster_by_name)
+        .with(warp::compression::gzip());
+
+    let get_proxy_addresses_hdl = warp::get()
+        .and(warp::path!("proxies" / "addresses"))
+        .and(warp::query::<Pagination>())
+        .and(svc.clone())
+        .and_then(get_proxy_addresses);
+
+    let get_proxy_by_address_hdl = warp::get()
+        .and(warp::path!("proxies" / "meta" / String))
+        .and(svc.clone())
+        .and_then(get_proxy_by_address)
+        .with(warp::compression::gzip());
+
+    let get_failures_hdl = warp::get()
+        .and(warp::path("failures"))
+        .and(svc.clone())
+        .and_then(get_failures);
+
+    let add_failure_hdl = warp::post()
+        .and(warp::path!("failures" / String / String))
+        .and(svc.clone())
+        .and_then(add_failure);
+
+    let replace_failed_node_hdl = warp::post()
+        .and(warp::path!("proxies" / "failover" / String))
+        .and(svc.clone())
+        .and_then(replace_failed_node);
+
+    let commit_migration_hdl = warp::put()
+        .and(warp::path!("clusters" / "migrations"))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .and_then(commit_migration);
+
+    let get_failed_proxies_hdl = warp::get()
+        .and(warp::path!("proxies" / "failed" / "addresses"))
+        .and(svc.clone())
+        .and_then(get_failed_proxies);
+
+    let get_cluster_info_by_name_hdl = warp::get()
+        .and(warp::path!("clusters" / "info" / String))
+        .and(svc.clone())
+        .and_then(get_cluster_info_by_name);
+
+    let add_cluster_hdl = warp::post()
+        .and(warp::path!("clusters" / "meta" / String))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .and_then(add_cluster);
+
+    let remove_cluster_hdl = warp::delete()
+        .and(warp::path!("clusters" / "meta" / String))
+        .and(svc.clone())
+        .and_then(remove_cluster);
+
+    let auto_add_nodes_hdl = warp::patch()
+        .and(warp::path!("clusters" / "nodes" / String))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .and_then(auto_add_nodes);
+
+    let auto_scale_up_nodes_hdl = warp::put()
+        .and(warp::path!("clusters" / "nodes" / String))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .and_then(auto_scale_up_nodes);
+
+    let auto_delete_free_nodes_hdl = warp::delete()
+        .and(warp::path!("clusters" / "free_nodes" / String))
+        .and(svc.clone())
+        .and_then(auto_delete_free_nodes);
+
+    let migrate_slots_to_scale_down_hdl = warp::post()
+        .and(warp::path!(
+            "clusters" / "migrations" / "shrink" / String / usize
+        ))
+        .and(svc.clone())
+        .and_then(migrate_slots_to_scale_down);
+
+    let migrate_slots_hdl = warp::post()
+        .and(warp::path!("clusters" / "migrations" / "expand" / String))
+        .and(svc.clone())
+        .and_then(migrate_slots);
+
+    let auto_scale_node_number_hdl = warp::post()
+        .and(warp::path!(
+            "clusters" / "migrations" / "auto" / String / usize
+        ))
+        .and(svc.clone())
+        .and_then(auto_scale_node_number);
+
+    let change_config_hdl = warp::patch()
+        .and(warp::path!("clusters" / "config" / String))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .and_then(change_config);
+
+    let balance_masters_hdl = warp::put()
+        .and(warp::path!("clusters" / "balance" / String))
+        .and(svc.clone())
+        .and_then(balance_masters);
+
+    let add_proxy_hdl = warp::post()
+        .and(warp::path!("proxies" / "meta"))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .and_then(add_proxy);
+
+    let remove_proxy_hdl = warp::delete()
+        .and(warp::path!("proxies" / "meta" / String))
+        .and(svc.clone())
+        .and_then(remove_proxy);
+
+    let check_resource_for_failures_hdl = warp::post()
+        .and(warp::path!("resources" / "failures" / "check"))
+        .and(svc.clone())
+        .and_then(check_resource_for_failures);
+
+    let change_broker_config_hdl = warp::put()
+        .and(warp::path("config"))
+        .and(warp::body::json())
+        .and(svc.clone())
+        .map(change_broker_config);
+
+    let get_broker_config_hdl = warp::get()
+        .and(warp::path("config"))
+        .and(svc.clone())
+        .map(get_broker_config);
+
+    let get_epoch_hdl = warp::get()
+        .and(warp::path("epoch"))
+        .and(svc.clone())
+        .and_then(get_epoch);
+
+    let recover_epoch_hdl = warp::put()
+        .and(warp::path!("epoch" / "recovery"))
+        .and(svc.clone())
+        .and_then(recover_epoch);
+
+    let bump_epoch_hdl = warp::put()
+        .and(warp::path!("epoch" / u64))
+        .and(svc.clone())
+        .and_then(bump_epoch);
+
+    let routes = warp::path("api")
+        .and(warp::path(MEM_BROKER_API_VERSION))
+        .and(
+            get_version_hdl
+                .or(get_metadata_hdl)
+                .or(put_metadata_hdl)
+                // Broker api
+                .or(get_cluster_names_hdl)
+                .or(get_cluster_by_name_hdl)
+                .or(get_proxy_addresses_hdl)
+                .or(get_proxy_by_address_hdl)
+                .or(get_failures_hdl)
+                .or(add_failure_hdl)
+                .or(replace_failed_node_hdl)
+                .or(commit_migration_hdl)
+                .or(get_failed_proxies_hdl)
+                // Additional api
+                .or(get_cluster_info_by_name_hdl)
+                .or(add_cluster_hdl)
+                .or(remove_cluster_hdl)
+                .or(auto_add_nodes_hdl)
+                .or(auto_scale_up_nodes_hdl)
+                .or(auto_delete_free_nodes_hdl)
+                .or(migrate_slots_to_scale_down_hdl)
+                .or(migrate_slots_hdl)
+                .or(auto_scale_node_number_hdl)
+                .or(change_config_hdl)
+                .or(balance_masters_hdl)
+                .or(add_proxy_hdl)
+                .or(remove_proxy_hdl)
+                .or(check_resource_for_failures_hdl)
+                .or(change_broker_config_hdl)
+                .or(get_broker_config_hdl)
+                .or(get_epoch_hdl)
+                .or(recover_epoch_hdl)
+                .or(bump_epoch_hdl),
+        )
+        .with(logger);
+    warp::serve(routes).run(address).await
+}
+
+fn warp_json<T: serde::Serialize>(r: Result<T, MetaStoreError>) -> impl warp::reply::Reply {
+    let (res, code) = match r {
+        Ok(t) => (warp::reply::json(&t), http::StatusCode::OK),
+        Err(err) => (warp::reply::json(&err), err.status_code()),
+    };
+    warp::reply::with_status(res, code)
 }
 
 pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
@@ -545,24 +674,22 @@ impl MemBrokerService {
     }
 }
 
-type ServiceState = web::Data<Arc<MemBrokerService>>;
+type ServiceState = Arc<MemBrokerService>;
 
-async fn get_version(_req: HttpRequest) -> &'static str {
+fn get_version() -> &'static str {
     UNDERMOON_VERSION
 }
 
-async fn get_all_metadata(state: ServiceState) -> Result<web::Json<MetaStore>, MetaStoreError> {
-    let metadata = state.get_all_data().await?;
-    Ok(web::Json(metadata))
+async fn get_all_metadata(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
+    Ok(warp_json(state.get_all_data().await))
 }
 
 async fn restore_metadata(
-    (meta_store, state): (web::Json<MetaStore>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    state
-        .restore_metadata(meta_store.into_inner())
-        .await
-        .map(|_| "")
+    meta_store: MetaStore,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state.restore_metadata(meta_store).await.map(|_| "");
+    Ok(warp_json(res))
 }
 
 #[derive(Deserialize)]
@@ -572,51 +699,69 @@ struct Pagination {
 }
 
 async fn get_proxy_addresses(
-    (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
-) -> Result<web::Json<ProxyAddressesPayload>, MetaStoreError> {
+    pagination: Pagination,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
     let Pagination { offset, limit } = pagination;
-    let addresses = state.get_proxy_addresses(offset, limit).await?;
-    Ok(web::Json(ProxyAddressesPayload { addresses }))
+    let res = state
+        .get_proxy_addresses(offset, limit)
+        .await
+        .map(|addresses| ProxyAddressesPayload { addresses });
+    Ok(warp_json(res))
 }
 
 async fn get_proxy_by_address(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<web::Json<ProxyPayload>, MetaStoreError> {
-    let name = path.into_inner().0;
-    let proxy = state.get_proxy_by_address(&name).await?;
-    Ok(web::Json(ProxyPayload { proxy }))
+    address: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state
+        .get_proxy_by_address(&address)
+        .await
+        .map(|proxy| ProxyPayload { proxy });
+    Ok(warp_json(res))
 }
 
 async fn get_cluster_names(
-    (web::Query(pagination), state): (web::Query<Pagination>, ServiceState),
-) -> Result<web::Json<ClusterNamesPayload>, MetaStoreError> {
+    pagination: Pagination,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
     let Pagination { offset, limit } = pagination;
-    let names = state.get_cluster_names(offset, limit).await?;
-    Ok(web::Json(ClusterNamesPayload { names }))
+    let res = state
+        .get_cluster_names(offset, limit)
+        .await
+        .map(|names| ClusterNamesPayload { names });
+    Ok(warp_json(res))
 }
 
 async fn get_cluster_by_name(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<web::Json<ClusterPayload>, MetaStoreError> {
-    let name = path.into_inner().0;
-    let cluster = state.get_cluster_by_name(&name).await?;
-    Ok(web::Json(ClusterPayload { cluster }))
+    name: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state
+        .get_cluster_by_name(&name)
+        .await
+        .map(|cluster| ClusterPayload { cluster });
+    Ok(warp_json(res))
 }
 
 async fn get_cluster_info_by_name(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<web::Json<ClusterInfo>, MetaStoreError> {
-    let name = path.into_inner().0;
-    match state.get_cluster_info_by_name(&name).await {
-        Ok(Some(cluster_info)) => Ok(web::Json(cluster_info)),
+    name: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = match state.get_cluster_info_by_name(&name).await {
+        Ok(Some(cluster_info)) => Ok(cluster_info),
         Ok(None) => Err(MetaStoreError::ClusterNotFound),
         Err(err) => Err(err),
-    }
+    };
+    Ok(warp_json(res))
 }
 
-async fn get_failures(state: ServiceState) -> Result<web::Json<FailuresPayload>, MetaStoreError> {
-    let addresses = state.get_failures().await?;
-    Ok(web::Json(FailuresPayload { addresses }))
+async fn get_failures(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state
+        .get_failures()
+        .await
+        .map(|addresses| FailuresPayload { addresses });
+    Ok(warp_json(res))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -628,12 +773,17 @@ pub struct ProxyResourcePayload {
 }
 
 async fn add_proxy(
-    (proxy_resource, state): (web::Json<ProxyResourcePayload>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    // This may still successfully update the store even on error.
-    let res = state.add_proxy(proxy_resource.into_inner()).await;
-    state.trigger_update().await?;
-    res.map(|()| "")
+    proxy_resource: ProxyResourcePayload,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        // This may still successfully update the store even on error.
+        let res = state.add_proxy(proxy_resource).await;
+        state.trigger_update().await?;
+        res.map(|()| "")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -642,26 +792,31 @@ pub struct CreateClusterPayload {
 }
 
 async fn add_cluster(
-    (path, payload, state): (
-        web::Path<(String,)>,
-        web::Json<CreateClusterPayload>,
-        ServiceState,
-    ),
-) -> Result<&'static str, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    let CreateClusterPayload { node_number } = payload.into_inner();
-    state.add_cluster(cluster_name, node_number).await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    payload: CreateClusterPayload,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let CreateClusterPayload { node_number } = payload;
+    let res = async {
+        state.add_cluster(cluster_name, node_number).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn remove_cluster(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    state.remove_cluster(cluster_name).await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state.remove_cluster(cluster_name).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -670,20 +825,18 @@ pub struct AutoScaleUpNodesPayload {
 }
 
 async fn auto_scale_up_nodes(
-    (path, payload, state): (
-        web::Path<(String,)>,
-        web::Json<AutoScaleUpNodesPayload>,
-        ServiceState,
-    ),
-) -> Result<web::Json<Vec<Node>>, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    let node_num = payload.into_inner().cluster_node_number;
-    let res = state
-        .auto_scale_up_nodes(cluster_name, node_num)
-        .await
-        .map(web::Json)?;
-    state.trigger_update().await?;
-    Ok(res)
+    cluster_name: String,
+    payload: AutoScaleUpNodesPayload,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let node_num = payload.cluster_node_number;
+    let res = async {
+        let res = state.auto_scale_up_nodes(cluster_name, node_num).await?;
+        state.trigger_update().await?;
+        Ok(res)
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -692,71 +845,84 @@ pub struct AutoAddNodesPayload {
 }
 
 async fn auto_add_nodes(
-    (path, payload, state): (
-        web::Path<(String,)>,
-        web::Json<AutoAddNodesPayload>,
-        ServiceState,
-    ),
-) -> Result<web::Json<Vec<Node>>, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    let node_num = payload.into_inner().node_number;
-    let res = state
-        .auto_add_nodes(cluster_name, node_num)
-        .await
-        .map(web::Json)?;
-    state.trigger_update().await?;
-    Ok(res)
+    cluster_name: String,
+    payload: AutoAddNodesPayload,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let node_num = payload.node_number;
+    let res = async {
+        let res = state.auto_add_nodes(cluster_name, node_num).await?;
+        state.trigger_update().await?;
+        Ok(res)
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn auto_delete_free_nodes(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    state.auto_delete_free_nodes(cluster_name).await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state.auto_delete_free_nodes(cluster_name).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn change_config(
-    (path, config, state): (
-        web::Path<(String,)>,
-        web::Json<HashMap<String, String>>,
-        ServiceState,
-    ),
-) -> Result<&'static str, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    state
-        .change_config(cluster_name, config.into_inner())
-        .await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    config: HashMap<String, String>,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state.change_config(cluster_name, config).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn balance_masters(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let cluster_name = path.into_inner().0;
-    state.balance_masters(cluster_name).await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state.balance_masters(cluster_name).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn bump_epoch(
-    (path, state): (web::Path<(u64,)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let new_epoch = path.into_inner().0;
-    state.force_bump_all_epoch(new_epoch).await?;
-    state.trigger_update().await?;
-    Ok("")
+    new_epoch: u64,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state.force_bump_all_epoch(new_epoch).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn remove_proxy(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let (proxy_address,) = path.into_inner();
-    state.remove_proxy(proxy_address).await?;
-    state.trigger_update().await?;
-    Ok("")
+    proxy_address: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state.remove_proxy(proxy_address).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -766,95 +932,128 @@ pub struct ResourceFailureCheckPayload {
 
 async fn check_resource_for_failures(
     state: ServiceState,
-) -> Result<web::Json<ResourceFailureCheckPayload>, MetaStoreError> {
-    let hosts_cannot_fail = state.check_resource_for_failures().await?;
-    Ok(web::Json(ResourceFailureCheckPayload { hosts_cannot_fail }))
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state
+        .check_resource_for_failures()
+        .await
+        .map(|hosts_cannot_fail| ResourceFailureCheckPayload { hosts_cannot_fail });
+    Ok(warp_json(res))
 }
 
-async fn change_broker_config(
-    (state, config_payload): (ServiceState, web::Json<MemBrokerConfigPayload>),
-) -> Result<&'static str, MetaStoreError> {
-    state.change_broker_config(config_payload.into_inner())?;
-    Ok("")
-}
-
-async fn get_broker_config(
+fn change_broker_config(
+    config_payload: MemBrokerConfigPayload,
     state: ServiceState,
-) -> Result<web::Json<MemBrokerConfigPayload>, MetaStoreError> {
-    let payload = state.get_broker_config()?;
-    Ok(web::Json(payload))
+) -> impl warp::reply::Reply {
+    let res = state.change_broker_config(config_payload).map(|()| "");
+    warp_json(res)
+}
+
+fn get_broker_config(state: ServiceState) -> impl warp::reply::Reply {
+    let res = state.get_broker_config();
+    warp_json(res)
 }
 
 async fn migrate_slots(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let (cluster_name,) = path.into_inner();
-    state.migrate_slots(cluster_name).await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state.migrate_slots(cluster_name).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn migrate_slots_to_scale_down(
-    (path, state): (web::Path<(String, usize)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let (cluster_name, new_node_num) = path.into_inner();
-    state
-        .migrate_slots_to_scale_down(cluster_name, new_node_num)
-        .await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    new_node_num: usize,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state
+            .migrate_slots_to_scale_down(cluster_name, new_node_num)
+            .await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn auto_scale_node_number(
-    (path, state): (web::Path<(String, usize)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let (cluster, new_node_num) = path.into_inner();
-    state.auto_scale_node_number(cluster, new_node_num).await?;
-    state.trigger_update().await?;
-    Ok("")
+    cluster_name: String,
+    new_node_num: usize,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        state
+            .auto_scale_node_number(cluster_name, new_node_num)
+            .await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn add_failure(
-    (path, state): (web::Path<(String, String)>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    let (server_proxy_address, reporter_id) = path.into_inner();
-    state.add_failure(server_proxy_address, reporter_id).await?;
-    state.trigger_update().await?;
-    Ok("")
+    server_proxy_address: String,
+    reporter_id: String,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async move {
+        state.add_failure(server_proxy_address, reporter_id).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn commit_migration(
-    (task, state): (web::Json<MigrationTaskMeta>, ServiceState),
-) -> Result<&'static str, MetaStoreError> {
-    state.commit_migration(task.into_inner()).await?;
-    state.trigger_update().await?;
-    Ok("")
+    task: MigrationTaskMeta,
+    state: ServiceState,
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async move {
+        state.commit_migration(task).await?;
+        state.trigger_update().await?;
+        Ok("")
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
 async fn replace_failed_node(
-    (path, state): (web::Path<(String,)>, ServiceState),
-) -> Result<web::Json<ReplaceProxyResponse>, MetaStoreError> {
-    let (proxy_address,) = path.into_inner();
-    let res = state
-        .replace_failed_proxy(proxy_address)
-        .await
-        .map(|proxy| ReplaceProxyResponse { proxy })
-        .map(web::Json);
-    let sync_res = state.trigger_update().await;
-    let res = res?;
-    sync_res?;
-    Ok(res)
-}
-
-async fn get_failed_proxies(
+    proxy_address: String,
     state: ServiceState,
-) -> Result<web::Json<FailedProxiesPayload>, MetaStoreError> {
-    let addresses = state.get_failed_proxies().await?;
-    Ok(web::Json(FailedProxiesPayload { addresses }))
+) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = async {
+        let res = state
+            .replace_failed_proxy(proxy_address)
+            .await
+            .map(|proxy| ReplaceProxyResponse { proxy });
+        let sync_res = state.trigger_update().await;
+        let res = res?;
+        sync_res?;
+        Ok(res)
+    }
+    .await;
+    Ok(warp_json(res))
 }
 
-async fn get_epoch(state: ServiceState) -> Result<String, MetaStoreError> {
-    state.get_epoch().await.map(|epoch| epoch.to_string())
+async fn get_failed_proxies(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state
+        .get_failed_proxies()
+        .await
+        .map(|addresses| FailedProxiesPayload { addresses });
+    Ok(warp_json(res))
+}
+
+async fn get_epoch(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state.get_epoch().await;
+    Ok(warp_json(res))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -862,15 +1061,15 @@ struct RecoverEpochResult {
     failed_addresses: Vec<String>,
 }
 
-async fn recover_epoch(
-    state: ServiceState,
-) -> Result<web::Json<RecoverEpochResult>, MetaStoreError> {
-    let failed_addresses = state.recover_epoch().await?;
-    let result = RecoverEpochResult { failed_addresses };
-    Ok(web::Json(result))
+async fn recover_epoch(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
+    let res = state
+        .recover_epoch()
+        .await
+        .map(|failed_addresses| RecoverEpochResult { failed_addresses });
+    Ok(warp_json(res))
 }
 
-impl error::ResponseError for MetaStoreError {
+impl MetaStoreError {
     fn status_code(&self) -> http::StatusCode {
         match self {
             MetaStoreError::InUse => http::StatusCode::CONFLICT,
@@ -905,9 +1104,5 @@ impl error::ResponseError for MetaStoreError {
             MetaStoreError::EmptyExternalVersion => http::StatusCode::INTERNAL_SERVER_ERROR,
             MetaStoreError::ExternalTimeout => http::StatusCode::GATEWAY_TIMEOUT,
         }
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        ResponseBuilder::new(self.status_code()).json(self)
     }
 }

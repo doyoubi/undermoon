@@ -140,7 +140,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
             into_err(err_str)
         })?;
 
-        let mut listener = TcpListener::bind(&address).await.map_err(|err| {
+        let listener = TcpListener::bind(&address).await.map_err(|err| {
             error!("unable to bind address: {} {:?}", address, err);
             err
         })?;
@@ -153,7 +153,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
 
         let future_registry = self.future_registry.clone();
 
-        let mut s = listener.incoming();
+        let mut s = tokio_stream::wrappers::TcpListenerStream::new(listener);
         // For `select!`
         #[allow(clippy::panic)]
         loop {

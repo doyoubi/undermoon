@@ -484,7 +484,7 @@ where
         batch_stats.clone(),
     );
 
-    let mut timer = futures_timer::Delay::new(backend_timeout);
+    let mut timeout_interval = tokio::time::interval(backend_timeout);
     let mut response_received = false;
     let mut task_empty = true;
 
@@ -606,7 +606,7 @@ where
                 return Poll::Ready(Err((err, retry_state)));
             }
 
-            if let Poll::Ready(()) = Pin::new(&mut timer).poll(cx) {
+            if let Poll::Ready(_) = Pin::new(&mut timeout_interval).poll_tick(cx) {
                 if !task_empty && !response_received {
                     let err = BackendError::Timeout;
                     error!("backend read timeout");
@@ -616,7 +616,8 @@ where
                     return Poll::Ready(Err((err, retry_state)));
                 }
 
-                timer.reset(backend_timeout);
+                // The first tick of `timeout_interval` is triggered immediately after initialized
+                // so only set `task_empty` here.
                 task_empty = tasks.is_empty();
                 response_received = false;
             }

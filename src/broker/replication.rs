@@ -27,7 +27,7 @@ impl JsonMetaReplicator {
     }
 
     fn gen_url(address: &str) -> String {
-        format!("http://{}{}/metadata", address, MEM_BROKER_API_VERSION,)
+        format!("http://{}/api/{}/metadata", address, MEM_BROKER_API_VERSION,)
     }
 
     async fn sync_one_replica(

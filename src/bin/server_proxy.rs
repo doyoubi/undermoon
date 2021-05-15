@@ -161,9 +161,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         future_registry,
     );
 
-    let mut runtime = tokio::runtime::Builder::new()
-        .threaded_scheduler()
-        .core_threads(config.thread_number.get())
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(config.thread_number.get())
         .enable_all()
         .build()?;
 

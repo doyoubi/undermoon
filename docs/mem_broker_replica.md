@@ -8,12 +8,12 @@ $ cargo build
 
 Run the replica
 ```
-$ RUST_LOG=actix_web=info,undermoon=info,mem_broker=info UNDERMOON_ADDRESS=127.0.0.1:8899 UNDERMOON_META_FILENAME=metadata2 target/debug/mem_broker
+$ RUST_LOG=warp=info,undermoon=info,mem_broker=info UNDERMOON_ADDRESS=127.0.0.1:8899 UNDERMOON_META_FILENAME=metadata2 target/debug/mem_broker
 ```
 
 Run the master Memory
 ```
-$ RUST_LOG=actix_web=info,undermoon=info,mem_broker=info UNDERMOON_REPLICA_ADDRESSES=127.0.0.1:8899 UNDERMOON_SYNC_META_INTERVAL=3 target/debug/mem_broker
+$ RUST_LOG=warp=info,undermoon=info,mem_broker=info UNDERMOON_REPLICA_ADDRESSES=127.0.0.1:8899 UNDERMOON_SYNC_META_INTERVAL=3 target/debug/mem_broker
 ```
 
 ```
