@@ -17,7 +17,6 @@ use crate::protocol::RedisClientFactory;
 use arc_swap::ArcSwap;
 use futures::future::select_all;
 use futures::{Future, StreamExt};
-use futures_timer::Delay;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -165,7 +164,7 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
             {
                 error!("detector stream err {:?}", e);
             }
-            Delay::new(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
@@ -186,7 +185,7 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
                     error!("sync stream err {:?}", e);
                 }
             }
-            Delay::new(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
@@ -203,7 +202,7 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
                     error!("failure handler stream err {:?}", e)
                 }
             }
-            Delay::new(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
@@ -226,7 +225,7 @@ impl<DB: MetaDataBroker + ThreadSafe, MB: MetaManipulationBroker, F: RedisClient
                     error!("migration sync stream err {:?}", e)
                 }
             }
-            Delay::new(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 }

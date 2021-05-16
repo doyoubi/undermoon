@@ -26,7 +26,6 @@ use crate::proxy::service::ServerProxyConfig;
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
 use futures::{future, select, Future, FutureExt, TryFutureExt};
-use futures_timer::Delay;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
@@ -177,7 +176,7 @@ where
         let ctrl = self.blocking_ctrl.clone();
         let blocking_handle = ctrl.start_blocking();
         while !ctrl.blocking_done() {
-            Delay::new(Duration::from_millis(1)).await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
         state.set_state(MigrationState::PreSwitch);
         info!("pre_block done");
@@ -308,10 +307,12 @@ where
         let final_switch = self.final_switch();
 
         let timeout = Duration::from_secs(self.mgr_config.get_max_migration_time());
-        let mut timeout_fut = Delay::new(timeout).fuse();
-        select! {
-            () = timeout_fut => error!("migration timeout after {:?}, force to commit migration", timeout),
-            res = self.run_migration().fuse() => res?,
+        match tokio::time::timeout(timeout, self.run_migration().fuse()).await {
+            Err(err) => error!(
+                "migration timeout after {:?}: {}, force to commit migration",
+                timeout, err
+            ),
+            Ok(res) => res?,
         };
         final_switch.await;
 
@@ -336,7 +337,7 @@ where
 
         let max_blocking_time = self.mgr_config.get_max_blocking_time();
         let max_blocking_time = Duration::from_millis(max_blocking_time);
-        let blocking_timeout = Delay::new(max_blocking_time);
+        let blocking_timeout = tokio::time::sleep(max_blocking_time);
 
         let res = select! {
             () = blocking.fuse() => Ok(()),

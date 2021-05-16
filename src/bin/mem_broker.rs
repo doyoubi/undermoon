@@ -4,7 +4,6 @@ extern crate log;
 extern crate config;
 extern crate env_logger;
 use arc_swap::ArcSwap;
-use futures_timer::Delay;
 use std::env;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -136,7 +135,7 @@ fn meta_error_to_io_error(err: MetaStoreError) -> std::io::Error {
 
 async fn update_meta_file(service: Arc<MemBrokerService>, interval: Duration) {
     loop {
-        Delay::new(interval).await;
+        tokio::time::sleep(interval).await;
         trace!("periodically update meta file");
         if let Err(err) = service.update_meta_file().await {
             error!("failed to update meta file: {}", err);
@@ -146,7 +145,7 @@ async fn update_meta_file(service: Arc<MemBrokerService>, interval: Duration) {
 
 async fn sync_meta_to_replicas(service: Arc<MemBrokerService>, interval: Duration) {
     loop {
-        Delay::new(interval).await;
+        tokio::time::sleep(interval).await;
         trace!("periodically sync metadata to replicas");
         if let Err(err) = service.sync_meta().await {
             error!("failed to sync metadata to replicas: {}", err);

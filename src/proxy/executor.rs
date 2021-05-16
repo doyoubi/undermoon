@@ -26,7 +26,6 @@ use atoi::atoi;
 use btoi::btou;
 use futures::channel::mpsc;
 use futures::future;
-use futures_timer::Delay;
 use std::collections::HashMap;
 use std::str;
 use std::sync::{self, atomic, Arc};
@@ -1022,7 +1021,7 @@ where
             }
 
             retry_num += 1;
-            Delay::new(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 

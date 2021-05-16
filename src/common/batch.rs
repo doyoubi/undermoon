@@ -2,11 +2,9 @@ use core::mem;
 use core::pin::Pin;
 use futures::stream::{Fuse, FusedStream, Stream};
 use futures::task::{Context, Poll};
-use futures::Future;
 use futures::StreamExt;
 #[cfg(feature = "sink")]
 use futures_sink::Sink;
-use futures_timer::Delay;
 use pin_project::pin_project;
 use std::cmp::{max, min};
 use std::num::NonZeroUsize;
@@ -137,19 +135,20 @@ pub struct BatchState {
     strategy: BatchStrategy,
     flush_size: NonZeroUsize,
     low_flush_interval: Duration,
-    high_flush_interval: Duration,
     optimizer: Option<BatchOptimizer>,
 
     curr_wbuf_content_size: usize,
     last_flush_interval: Duration,
     last_flush_time: Instant,
     cached_now: Instant,
-    flush_timer: Delay,
+    flush_timer: tokio::time::Interval,
 
     stats: Arc<BatchStats>,
 }
 
 impl BatchState {
+    // The `high_flush_interval` is based on tokio::time::Interval
+    // whose precision is around 1.5ms.
     pub fn new(
         strategy: BatchStrategy,
         flush_size: NonZeroUsize,
@@ -168,13 +167,12 @@ impl BatchState {
             strategy,
             flush_size,
             low_flush_interval,
-            high_flush_interval,
             optimizer,
             curr_wbuf_content_size: 0,
             last_flush_interval: low_flush_interval,
             last_flush_time: now,
             cached_now: now,
-            flush_timer: Delay::new(high_flush_interval),
+            flush_timer: tokio::time::interval(high_flush_interval),
             stats,
         }
     }
@@ -212,14 +210,11 @@ impl BatchState {
         }
 
         let mut flush = false;
-        match Pin::new(&mut self.flush_timer).poll(cx) {
+        match Pin::new(&mut self.flush_timer).poll_tick(cx) {
             Poll::Pending => (),
-            Poll::Ready(()) => {
+            Poll::Ready(_) => {
                 flush = true;
             }
-        }
-        if flush {
-            self.flush_timer.reset(self.high_flush_interval);
         }
         flush
     }
@@ -253,7 +248,6 @@ impl BatchState {
 
 // The following codes are copied from github.com/mre/futures-batch
 // with some optimization which might not be for general purpose:
-// - Reset timer instead of setting `clock` to None for better performance.
 // - Has two different timeout to avoid triggering the real timer too many times.
 // - Flush if there's only one item even it's not timed out yet for non-pipeline requests.
 
@@ -282,7 +276,7 @@ pub struct TryChunksTimeout<St: Stream> {
     cap: NonZeroUsize,
     // https://github.com/rust-lang-nursery/futures-rs/issues/1475
     #[pin]
-    clock: Delay,
+    clock: tokio::time::Interval,
     min_duration: coarsetime::Duration,
     max_duration: Duration,
     last_flush_time: coarsetime::Instant,
@@ -303,7 +297,7 @@ where
             stream: stream.fuse(),
             items: Vec::with_capacity(capacity.get()),
             cap: capacity,
-            clock: Delay::new(max_duration),
+            clock: tokio::time::interval(max_duration),
             min_duration: coarsetime::Duration::from(min_duration),
             max_duration,
             last_flush_time: coarsetime::Instant::now(),
@@ -329,7 +323,6 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
     type Item = Vec<St::Item>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let start_empty = self.as_mut().items.is_empty();
         loop {
             match self.as_mut().project().stream.poll_next(cx) {
                 Poll::Ready(item) => match item {
@@ -381,15 +374,13 @@ impl<St: Stream> Stream for TryChunksTimeout<St> {
                 return self.flush(now);
             }
 
-            if start_empty {
-                let mut this = self.as_mut().project();
-                this.clock.reset(*this.max_duration);
-                // This return might cause the timer not to be able to wake up.
-                // return Poll::Pending;
-            }
+            // if start_empty {
+            //     // This return might cause the timer not to be able to wake up.
+            //     return Poll::Pending;
+            // }
 
-            match self.as_mut().project().clock.poll(cx) {
-                Poll::Ready(()) => {
+            match self.as_mut().project().clock.poll_tick(cx) {
+                Poll::Ready(_) => {
                     return self.flush(coarsetime::Instant::recent());
                 }
                 Poll::Pending => {}

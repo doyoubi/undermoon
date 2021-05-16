@@ -9,7 +9,6 @@ mod tests {
 
     use arc_swap::ArcSwap;
     use connection::DummyOkConnFactory;
-    use futures_timer::Delay;
     use redis_client::DummyClientFactory;
     use std::convert::TryFrom;
     use std::num::NonZeroUsize;
@@ -219,7 +218,7 @@ mod tests {
                         .starts_with(ERR_BACKEND_CONNECTION) =>
                 {
                     // The connection future is not ready.
-                    Delay::new(Duration::from_millis(1)).await;
+                    tokio::time::sleep(Duration::from_millis(1)).await;
                     continue;
                 }
                 _ => break,
@@ -503,7 +502,7 @@ mod tests {
             .unwrap();
 
         loop {
-            Delay::new(Duration::from_millis(1)).await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
             let info = src_manager.info();
             if !resp_contains(&info, MigrationState::Scanning.to_string().as_str()) {
                 continue;
@@ -551,7 +550,7 @@ mod tests {
             .unwrap();
 
         loop {
-            Delay::new(Duration::from_millis(1)).await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
             let info = src_manager.info();
             if !resp_contains(&info, MigrationState::SwitchCommitted.to_string().as_str()) {
                 continue;
@@ -639,7 +638,7 @@ mod tests {
             .unwrap();
 
         loop {
-            Delay::new(Duration::from_millis(1)).await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
             let info = src_manager.info();
             if !resp_contains(&info, MigrationState::SwitchCommitted.to_string().as_str()) {
                 continue;
@@ -727,7 +726,7 @@ mod tests {
             .unwrap();
 
         loop {
-            Delay::new(Duration::from_millis(1)).await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
             let info = src_manager.info();
             if !resp_contains(&info, MigrationState::SwitchCommitted.to_string().as_str()) {
                 continue;
@@ -810,7 +809,7 @@ mod tests {
                         .starts_with(ERR_BACKEND_CONNECTION) =>
                 {
                     // The connection future is not ready.
-                    Delay::new(Duration::from_millis(1)).await;
+                    tokio::time::sleep(Duration::from_millis(1)).await;
                     continue;
                 }
                 _ => break,

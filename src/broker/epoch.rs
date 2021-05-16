@@ -1,6 +1,5 @@
 use crate::protocol::{PooledRedisClientFactory, RedisClient, RedisClientFactory, Resp};
 use futures::future;
-use futures_timer::Delay;
 use std::cmp::max;
 use std::time::Duration;
 
@@ -46,7 +45,7 @@ pub async fn wait_for_proxy_epoch(proxy_addresses: Vec<String>, epoch: u64) -> R
 
     let mut i = 0;
     loop {
-        Delay::new(Duration::from_secs(RETRY_INTERVAL)).await;
+        tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL)).await;
         let min_epoch = match fetch_min_epoch(proxy_addresses.clone(), &client_factory).await {
             Ok(min_epoch) => min_epoch,
             Err(failed_address) => {

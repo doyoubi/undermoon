@@ -14,7 +14,6 @@ use futures::channel::{
     oneshot,
 };
 use futures::{select, Future, FutureExt, StreamExt};
-use futures_timer::Delay;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
@@ -729,7 +728,7 @@ where
                                 warn!("EXISTS channel is closed. Waiting to get lock.");
                                 match key_lock.lock(state.key.clone(), state.lock_slot) {
                                     Some(lock_guard) => break (lock_guard, state),
-                                    None => Delay::new(Duration::from_millis(3)).await,
+                                    None => tokio::time::sleep(Duration::from_millis(3)).await,
                                 }
                             }
                         }
@@ -889,7 +888,7 @@ where
                     lock_guard_opt = Some(lock_guard);
                     break;
                 }
-                Delay::new(Duration::from_millis(3)).await
+                tokio::time::sleep(Duration::from_millis(3)).await;
             }
             let lock_guard = match lock_guard_opt {
                 Some(lock_guard) => lock_guard,

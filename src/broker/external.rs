@@ -7,7 +7,6 @@ use crate::common::cluster::{Cluster, ClusterName, MigrationTaskMeta, Node, Prox
 use crate::common::config::ClusterConfig;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use futures_timer::Delay;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -195,13 +194,13 @@ impl ExternalHttpStorage {
         info!("try initializing the data");
         while self.try_init().await.is_err() && self.get_external_store().await.is_err() {
             warn!("failed to init data, retry");
-            Delay::new(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
         info!("external http storage start refreshing task");
         let failure_ttl = chrono::Duration::seconds(config.failure_ttl as i64);
         loop {
-            Delay::new(refresh_interval).await;
+            tokio::time::sleep(refresh_interval).await;
             let ExternalStore { mut store, version } = match self.get_external_store().await {
                 Ok(data) => data,
                 Err(err) => {

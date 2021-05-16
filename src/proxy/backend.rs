@@ -11,7 +11,6 @@ use either::Either;
 use futures::channel::mpsc;
 use futures::task::{Context, Poll};
 use futures::{future, select, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
-use futures_timer::Delay;
 use std::boxed::Box;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -397,7 +396,8 @@ where
                     }
                 }
 
-                let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
+                let timeout_fut = tokio::time::sleep(Duration::from_secs(1)).fuse();
+                tokio::pin!(timeout_fut);
                 // For `select!`
                 #[allow(clippy::panic)]
                 loop {
@@ -606,7 +606,7 @@ where
                 return Poll::Ready(Err((err, retry_state)));
             }
 
-            if let Poll::Ready(_) = Pin::new(&mut timeout_interval).poll_tick(cx) {
+            if Pin::new(&mut timeout_interval).poll_tick(cx).is_ready() {
                 if !task_empty && !response_received {
                     let err = BackendError::Timeout;
                     error!("backend read timeout");
@@ -887,7 +887,7 @@ mod tests {
 
         tokio::spawn(async move {
             while handler2.get_count() < 3 {
-                Delay::new(Duration::from_millis(20)).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
             task_sender.close().await.unwrap();
         });
@@ -957,7 +957,7 @@ mod tests {
 
         tokio::spawn(async move {
             while handler2.get_count() < 6 {
-                Delay::new(Duration::from_millis(20)).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
             task_sender.close().await.unwrap();
         });

@@ -23,7 +23,6 @@ tokio-util = { version = "0.6", features = ["codec"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 warp = { version = "0.3", features = ["compression"] }
 futures = "0.3"
-futures-timer = "3"
 atomic-option = "0.1"
 crc16 = "0.4.0"
 crc64 = "1.0.0"
