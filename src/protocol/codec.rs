@@ -24,11 +24,10 @@ impl<E: PacketEncoder, D: PacketDecoder> Decoder for RespCodec<E, D> {
     }
 }
 
-impl<E: PacketEncoder, D: PacketDecoder> Encoder for RespCodec<E, D> {
-    type Item = E::Pkt;
+impl<E: PacketEncoder, D: PacketDecoder> Encoder<E::Pkt> for RespCodec<E, D> {
     type Error = EncodeError<E::Pkt>;
 
-    fn encode(&mut self, item: Self::Item, buf: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: E::Pkt, buf: &mut BytesMut) -> Result<(), Self::Error> {
         self.encoder
             .encode(item, |data| buf.extend_from_slice(data))?;
         Ok(())

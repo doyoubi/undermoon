@@ -1,18 +1,15 @@
-extern crate actix_web;
 extern crate undermoon;
 #[macro_use]
 extern crate log;
 extern crate config;
 extern crate env_logger;
-use actix_web::{middleware, App, HttpServer};
 use arc_swap::ArcSwap;
-use futures_timer::Delay;
 use std::env;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 use undermoon::broker::{
-    configure_app, JsonFileStorage, JsonMetaReplicator, MemBrokerConfig, MemBrokerService,
+    run_server, JsonFileStorage, JsonMetaReplicator, MemBrokerConfig, MemBrokerService,
     MetaPersistence, MetaStoreError, MetaSyncError, StorageConfig,
 };
 use undermoon::common::config::ClusterConfig;
@@ -138,7 +135,7 @@ fn meta_error_to_io_error(err: MetaStoreError) -> std::io::Error {
 
 async fn update_meta_file(service: Arc<MemBrokerService>, interval: Duration) {
     loop {
-        Delay::new(interval).await;
+        tokio::time::sleep(interval).await;
         trace!("periodically update meta file");
         if let Err(err) = service.update_meta_file().await {
             error!("failed to update meta file: {}", err);
@@ -148,7 +145,7 @@ async fn update_meta_file(service: Arc<MemBrokerService>, interval: Duration) {
 
 async fn sync_meta_to_replicas(service: Arc<MemBrokerService>, interval: Duration) {
     loop {
-        Delay::new(interval).await;
+        tokio::time::sleep(interval).await;
         trace!("periodically sync metadata to replicas");
         if let Err(err) = service.sync_meta().await {
             error!("failed to sync metadata to replicas: {}", err);
@@ -156,8 +153,8 @@ async fn sync_meta_to_replicas(service: Arc<MemBrokerService>, interval: Duratio
     }
 }
 
-#[actix_rt::main]
-async fn main() -> Result<(), std::io::Error> {
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let (config, cluster_config) = gen_conf().map_err(|err| {
@@ -195,25 +192,20 @@ async fn main() -> Result<(), std::io::Error> {
     if let Some(interval) = update_file_interval {
         info!("start periodically updating meta file");
         let interval = Duration::from_secs(interval.get());
-        actix_rt::spawn(update_meta_file(service.clone(), interval));
+        tokio::spawn(update_meta_file(service.clone(), interval));
     }
 
     if let Some(interval) = sync_meta_interval {
         info!("start periodically sync meta to replicas");
         let interval = Duration::from_secs(interval.get());
-        actix_rt::spawn(sync_meta_to_replicas(service.clone(), interval));
+        tokio::spawn(sync_meta_to_replicas(service.clone(), interval));
     }
 
-    HttpServer::new(move || {
-        let service = service.clone();
-        App::new()
-            .wrap(middleware::Logger::default())
-            .wrap(middleware::Compress::default())
-            .configure(|cfg| configure_app(cfg, service.clone()))
-    })
-    .bind(&address)?
-    .keep_alive(300)
-    .shutdown_timeout(1)
-    .run()
-    .await
+    let address: std::net::SocketAddr = address.parse().map_err(|err| {
+        let err: Box<dyn std::error::Error> = Box::new(err);
+        err
+    })?;
+
+    run_server(service, address).await;
+    Ok(())
 }

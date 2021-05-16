@@ -106,9 +106,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let mut runtime = tokio::runtime::Builder::new()
-        .threaded_scheduler()
-        .core_threads(thread_number)
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(thread_number)
         .enable_all()
         .build()?;
     runtime.block_on(fut);

@@ -16,7 +16,6 @@ use crate::proxy::backend::CmdTask;
 use atomic_option::AtomicOption;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{future, Future, FutureExt, StreamExt};
-use futures_timer::Delay;
 use std::cmp::min;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
@@ -213,7 +212,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                 Ok(client) => client,
                 Err(err) => {
                     error!("failed to create redis client: {:?}", err);
-                    Delay::new(interval).await;
+                    tokio::time::sleep(interval).await;
                     continue;
                 }
             };
@@ -228,9 +227,8 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                             _ => None,
                         }
                     } else {
-                        match future::select(sync_tasks_receiver.next(), Delay::new(interval)).await
-                        {
-                            future::Either::Left((Some(cmd_tasks), _)) => Some(cmd_tasks),
+                        match tokio::time::timeout(interval, sync_tasks_receiver.next()).await {
+                            Ok(Some(cmd_tasks)) => Some(cmd_tasks),
                             _ => None,
                         }
                     }
@@ -300,7 +298,7 @@ impl<T: CmdTask> ScanMigrationTask<T> {
                     }
                 }
             }
-            Delay::new(interval).await;
+            tokio::time::sleep(interval).await;
         }
     }
 

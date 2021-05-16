@@ -8,7 +8,6 @@ use crate::protocol::{
 };
 use futures::{future, Future};
 use futures::{FutureExt, TryFutureExt};
-use futures_timer::Delay;
 use std::pin::Pin;
 use std::str;
 use std::sync::atomic::Ordering;
@@ -139,7 +138,7 @@ impl<F: RedisClientFactory> RedisReplicaReplicator<F> {
 
         while !self.stopped.load(Ordering::Relaxed) {
             if !first_sent {
-                Delay::new(interval).await;
+                tokio::time::sleep(interval).await;
             } else {
                 first_sent = false;
             }
@@ -276,7 +275,7 @@ mod tests {
         });
 
         while !called.load(Ordering::SeqCst) {
-            Delay::new(Duration::new(0, 100_000)).await;
+            tokio::time::sleep(Duration::new(0, 100_000)).await;
         }
 
         replicator.stop().unwrap();
@@ -342,14 +341,14 @@ mod tests {
         });
 
         while !replicator.started.load(Ordering::SeqCst) {
-            Delay::new(Duration::new(0, 100_000)).await;
+            tokio::time::sleep(Duration::new(0, 100_000)).await;
         }
 
         let err = replicator.start().await.unwrap_err();
         assert!(matches!(err, ReplicatorError::AlreadyStarted));
 
         while !called.load(Ordering::SeqCst) {
-            Delay::new(Duration::new(0, 100_000)).await;
+            tokio::time::sleep(Duration::new(0, 100_000)).await;
         }
 
         replicator.stop().unwrap();

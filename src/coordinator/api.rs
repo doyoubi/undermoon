@@ -37,7 +37,7 @@ impl ApiService {
             CoordinateError::InvalidAddress
         })?;
 
-        let mut listener = TcpListener::bind(&address).await.map_err(|err| {
+        let listener = TcpListener::bind(&address).await.map_err(|err| {
             error!("unable to bind address: {} {:?}", address, err);
             CoordinateError::Io(err)
         })?;
@@ -47,7 +47,7 @@ impl ApiService {
 
         let future_registry = self.future_registry.clone();
 
-        let mut s = listener.incoming();
+        let mut s = tokio_stream::wrappers::TcpListenerStream::new(listener);
         while let Some(sock) = s.next().await {
             let sock = sock.map_err(CoordinateError::Io)?;
 

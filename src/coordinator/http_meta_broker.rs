@@ -38,7 +38,7 @@ impl HttpMetaBroker {
         let num = broker_addresses.len();
         let curr_index = self.broker_index.fetch_add(1, Ordering::Relaxed);
         let broker = broker_addresses.get(curr_index % num)?;
-        let url = format!("http://{}{}{}", broker, MEM_BROKER_API_VERSION, path);
+        let url = format!("http://{}/api/{}{}", broker, MEM_BROKER_API_VERSION, path);
         Some(url)
     }
 

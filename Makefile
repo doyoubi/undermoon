@@ -26,13 +26,13 @@ coord:
 	RUST_LOG=undermoon=debug,coordinator=debug target/debug/coordinator conf/coordinator.toml
 
 broker:
-	RUST_LOG=actix_web=debug,undermoon=debug,mem_broker=debug target/debug/mem_broker conf/mem-broker.toml
+	RUST_LOG=warp=debug,undermoon=debug,mem_broker=debug target/debug/mem_broker conf/mem-broker.toml
 
 broker1:
-	RUST_LOG=actix_web=debug,undermoon=debug,mem_broker=debug UNDERMOON_REPLICA_ADDRESSES=127.0.0.1:8899 target/debug/mem_broker conf/mem-broker.toml
+	RUST_LOG=warp=debug,undermoon=debug,mem_broker=debug UNDERMOON_REPLICA_ADDRESSES=127.0.0.1:8899 target/debug/mem_broker conf/mem-broker.toml
 
 broker2:
-	RUST_LOG=actix_web=debug,undermoon=debug,mem_broker=debug UNDERMOON_ADDRESS=127.0.0.1:8899 UNDERMOON_META_FILENAME=metadata2 target/debug/mem_broker conf/mem-broker.toml
+	RUST_LOG=warp=debug,undermoon=debug,mem_broker=debug UNDERMOON_ADDRESS=127.0.0.1:8899 UNDERMOON_META_FILENAME=metadata2 target/debug/mem_broker conf/mem-broker.toml
 
 flame:
 	sudo flamegraph -o $(name).svg target/release/server_proxy conf/server-proxy.toml

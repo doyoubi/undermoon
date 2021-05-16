@@ -5,7 +5,6 @@ use crate::protocol::{
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
 use futures::{select, Future, FutureExt};
-use futures_timer::Delay;
 use std::pin::Pin;
 use std::str;
 use std::sync::atomic;
@@ -32,7 +31,7 @@ where
                 Ok(c) => c,
                 Err(err) => {
                     error!("failed to create client: {:?}", err);
-                    Delay::new(interval).await;
+                    tokio::time::sleep(interval).await;
                     continue;
                 }
             }
@@ -62,7 +61,7 @@ where
                 );
             }
         }
-        Delay::new(interval).await;
+        tokio::time::sleep(interval).await;
     }
 }
 
@@ -108,7 +107,7 @@ where
             Err(err) => return Err(err),
         };
         handle_result(response)?;
-        Delay::new(interval).await;
+        tokio::time::sleep(interval).await;
     }
 }
 
@@ -147,7 +146,7 @@ where
             Ok(client) => client,
             Err(err) => {
                 error!("failed to create redis client: {:?}", err);
-                Delay::new(interval).await;
+                tokio::time::sleep(interval).await;
                 continue;
             }
         };
@@ -160,9 +159,9 @@ where
                     break;
                 }
             };
-            Delay::new(interval).await;
+            tokio::time::sleep(interval).await;
         }
-        Delay::new(interval).await;
+        tokio::time::sleep(interval).await;
     }
 }
 

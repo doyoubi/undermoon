@@ -11,7 +11,6 @@ use either::Either;
 use futures::channel::mpsc;
 use futures::task::{Context, Poll};
 use futures::{future, select, Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
-use futures_timer::Delay;
 use std::boxed::Box;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -397,7 +396,8 @@ where
                     }
                 }
 
-                let mut timeout_fut = Delay::new(Duration::from_secs(1)).fuse();
+                let timeout_fut = tokio::time::sleep(Duration::from_secs(1)).fuse();
+                tokio::pin!(timeout_fut);
                 // For `select!`
                 #[allow(clippy::panic)]
                 loop {
@@ -484,7 +484,7 @@ where
         batch_stats.clone(),
     );
 
-    let mut timer = futures_timer::Delay::new(backend_timeout);
+    let mut timeout_interval = tokio::time::interval(backend_timeout);
     let mut response_received = false;
     let mut task_empty = true;
 
@@ -606,7 +606,7 @@ where
                 return Poll::Ready(Err((err, retry_state)));
             }
 
-            if let Poll::Ready(()) = Pin::new(&mut timer).poll(cx) {
+            if Pin::new(&mut timeout_interval).poll_tick(cx).is_ready() {
                 if !task_empty && !response_received {
                     let err = BackendError::Timeout;
                     error!("backend read timeout");
@@ -616,7 +616,8 @@ where
                     return Poll::Ready(Err((err, retry_state)));
                 }
 
-                timer.reset(backend_timeout);
+                // The first tick of `timeout_interval` is triggered immediately after initialized
+                // so only set `task_empty` here.
                 task_empty = tasks.is_empty();
                 response_received = false;
             }
@@ -886,7 +887,7 @@ mod tests {
 
         tokio::spawn(async move {
             while handler2.get_count() < 3 {
-                Delay::new(Duration::from_millis(20)).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
             task_sender.close().await.unwrap();
         });
@@ -956,7 +957,7 @@ mod tests {
 
         tokio::spawn(async move {
             while handler2.get_count() < 6 {
-                Delay::new(Duration::from_millis(20)).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
             task_sender.close().await.unwrap();
         });
