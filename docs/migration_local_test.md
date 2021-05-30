@@ -1,34 +1,22 @@
 # Test Migration Locally
 We can set up two redis servers and server proxies to test migration locally.
 
-## Run them all
-Run them in 4 different shell session:
+## Simple Tests
+### Run them all
 ```
-redis-server --port 7001
-```
-
-```
-redis-server --port 7002
+./scripts/run_two_shards.sh
 ```
 
-```
-UNDERMOON_ADDRESS=127.0.0.1:6001 UNDERMOON_ANNOUNCE_ADDRESS=127.0.0.1:6001 RUST_LOG=undermoon=debug,server_proxy=debug \
-    target/debug/server_proxy conf/server-proxy.toml
-```
+The logs will be inside `./local_tests`.
 
-```
-UNDERMOON_ADDRESS=127.0.0.1:6002 UNDERMOON_ANNOUNCE_ADDRESS=127.0.0.1:6002 RUST_LOG=undermoon=debug,server_proxy=debug \
-    target/debug/server_proxy conf/server-proxy.toml
-```
-
-## Write Some Data to Source Redis
+### Write Some Data to Source Redis
 Here we use redis 7001 and server proxy 6001 as the source part(the part migrating out the slots).
 
 ```
 for i in {0..50}; do redis-cli -p 7001 set $i $i; done
 ```
 
-## Start Migration
+### Start Migration
 ```
 redis-cli -p 6001 UMCTL SETCLUSTER v2 2 NOFLAGS mydb \
     127.0.0.1:7001 1 0-8000 \
@@ -49,10 +37,10 @@ echo '====================='
 redis-cli -p 7002 keys '*'
 ```
 
-## Commit Migration
+### Commit Migration
 ```
 redis-cli -p 6001 umctl setcluster v2 3 noflags mydb \
-    127.0.0.1:7001 1 0-8000 PEER 127.0.0.1:7002 1 8001-16383
+    127.0.0.1:7001 1 0-8000 PEER 127.0.0.1:6002 1 8001-16383
 redis-cli -p 6002 umctl setcluster v2 3 noflags mydb \
     127.0.0.1:7002 1 8001-16383 PEER 127.0.0.1:6001 1 0-8000
 ```
@@ -65,3 +53,18 @@ redis-cli -p 7001 keys '*'
 echo '====================='
 redis-cli -p 7002 keys '*'
 ```
+
+## Keep Running Migration
+```
+./scripts/run_two_shards.sh
+```
+
+Run this in another terminal:
+```
+./scripts/loop_migration_test.sh
+```
+
+The second script will keep moving the slots between 2 server proxies.
+
+Then we can use [checker](https://github.com/doyoubi/undermoon-operator/tree/master/checker)
+to see whether there's any data consistency problem.

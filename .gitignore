@@ -5,4 +5,5 @@ chaostest/chaos-docker-compose.yml
 *.pyc
 metadata
 .idea/
+local_tests/
 
