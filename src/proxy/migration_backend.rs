@@ -149,21 +149,32 @@ impl<F: CmdTaskFactory> MgrCmdStateExists<F> {
     }
 }
 
-struct MgrCmdStateForward;
+struct MgrCmdStateForward {
+    // Only hold the lock guard
+    _lock_guard: Option<KeyLockGuard>,
+}
 
 impl MgrCmdStateForward {
     fn from_state_exists<F: CmdTaskFactory>(
         state: MgrCmdStateExists<F>,
     ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
         let (inner_task, wait_handle) = WaitableTask::new_with_handle(state.into_inner());
-        (MgrCmdStateForward, ReqTask::Simple(inner_task), wait_handle)
+        (
+            MgrCmdStateForward { _lock_guard: None },
+            ReqTask::Simple(inner_task),
+            wait_handle,
+        )
     }
 
     fn from_state_dump_pttl<F: CmdTaskFactory>(
         state: MgrCmdStateDumpPttl<F>,
     ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
         let (inner_task, wait_handle) = WaitableTask::new_with_handle(state.into_inner());
-        (MgrCmdStateForward, ReqTask::Simple(inner_task), wait_handle)
+        (
+            MgrCmdStateForward { _lock_guard: None },
+            ReqTask::Simple(inner_task),
+            wait_handle,
+        )
     }
 
     fn from_state_umsync<F: CmdTaskFactory>(
@@ -173,9 +184,14 @@ impl MgrCmdStateForward {
             inner_task,
             lock_guard,
         } = state;
-        drop(lock_guard);
         let (inner_task, wait_handle) = WaitableTask::new_with_handle(inner_task);
-        (MgrCmdStateForward, ReqTask::Simple(inner_task), wait_handle)
+        (
+            MgrCmdStateForward {
+                _lock_guard: Some(lock_guard),
+            },
+            ReqTask::Simple(inner_task),
+            wait_handle,
+        )
     }
 }
 
@@ -309,7 +325,7 @@ struct MgrCmdStateRestoreForward<F: CmdTaskFactory> {
 }
 
 impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
-    fn from_state_exists(
+    fn from_state_dump(
         state: MgrCmdStateDumpPttl<F>,
         entry: DataEntry,
         cmd_task_factory: &F,
@@ -802,7 +818,7 @@ where
             };
 
             let (state, req_task, reply_receiver, wait_handles) =
-                MgrCmdStateRestoreForward::from_state_exists(state, entry, &(*cmd_task_factory));
+                MgrCmdStateRestoreForward::from_state_dump(state, entry, &(*cmd_task_factory));
 
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to send restore and forward: {:?}", err);
