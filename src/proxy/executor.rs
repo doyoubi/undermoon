@@ -1141,8 +1141,9 @@ where
         self.handle_data_cmd(cmd_ctx, reply_receiver)
     }
 
-    fn handle_umsync(&self, cmd_ctx: CmdCtx) {
-        self.manager.send_sync_task(cmd_ctx);
+    async fn handle_umsync(&self, cmd_ctx: CmdCtx, reply_receiver: CmdReplyReceiver) -> TaskResult {
+        self.manager.send_sync_task(cmd_ctx).await;
+        reply_receiver.await
     }
 
     fn get_non_blocking_name(
@@ -1325,7 +1326,9 @@ where
             ))),
             CmdType::UmCtl => self.handle_umctl(cmd_ctx),
             CmdType::UmForward => return self.handle_umforward(cmd_ctx, reply_receiver),
-            CmdType::UmSync => self.handle_umsync(cmd_ctx),
+            CmdType::UmSync => {
+                return CmdReplyFuture::Right(Box::pin(self.handle_umsync(cmd_ctx, reply_receiver)))
+            }
             CmdType::Cluster => self.handle_cluster(cmd_ctx),
             CmdType::Config => self.handle_config(cmd_ctx),
             CmdType::Command => return self.handle_command_cmd(cmd_ctx, reply_receiver),

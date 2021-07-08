@@ -25,6 +25,7 @@ use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
 use atomic_option::AtomicOption;
 use futures::channel::oneshot;
+use futures::future::BoxFuture;
 use futures::{future, select, Future, FutureExt, TryFutureExt};
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -54,7 +55,7 @@ where
     client_factory: Arc<RCF>,
     stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
     stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
-    task: Arc<ScanMigrationTask<T>>,
+    task: Arc<ScanMigrationTask<T, RCF>>,
     blocking_ctrl: Arc<BC>,
     phantom: PhantomData<T>,
     active_redirection: bool,
@@ -430,9 +431,11 @@ where
     fn send_sync_task(
         &self,
         cmd_task: Self::Task,
-    ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>> {
-        self.task.handle_sync_task(cmd_task);
-        Ok(())
+    ) -> BoxFuture<Result<(), ClusterSendError<BlockingHintTask<Self::Task>>>> {
+        Box::pin(async move {
+            self.task.handle_sync_task(cmd_task).await;
+            Ok(())
+        })
     }
 
     fn get_state(&self) -> MigrationState {
@@ -453,13 +456,13 @@ where
     }
 }
 
-pub struct MigratingTaskHandle<T: CmdTask> {
-    task: Arc<ScanMigrationTask<T>>,
+pub struct MigratingTaskHandle<T: CmdTask, F: RedisClientFactory> {
+    task: Arc<ScanMigrationTask<T, F>>,
     meta: MigrationMeta,
     stop_signal_sender: Option<oneshot::Sender<()>>,
 }
 
-impl<T: CmdTask> MigratingTaskHandle<T> {
+impl<T: CmdTask, F: RedisClientFactory> MigratingTaskHandle<T, F> {
     fn send_stop_signal(&mut self) {
         info!("stop migrating task: {:?}", self.meta);
         self.task.stop();
@@ -471,7 +474,7 @@ impl<T: CmdTask> MigratingTaskHandle<T> {
     }
 }
 
-impl<T: CmdTask> Drop for MigratingTaskHandle<T> {
+impl<T: CmdTask, F: RedisClientFactory> Drop for MigratingTaskHandle<T, F> {
     fn drop(&mut self) {
         self.send_stop_signal()
     }

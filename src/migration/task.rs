@@ -5,6 +5,7 @@ use crate::proxy::backend::CmdTask;
 use crate::proxy::blocking::BlockingHintTask;
 use crate::proxy::cluster::ClusterSendError;
 use crate::replication::replicator::ReplicatorError;
+use futures::future::BoxFuture;
 use futures::Future;
 use itertools::Itertools;
 use std::error::Error;
@@ -96,7 +97,7 @@ pub trait MigratingTask: ThreadSafe {
     fn send_sync_task(
         &self,
         cmd_task: Self::Task,
-    ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>>;
+    ) -> BoxFuture<Result<(), ClusterSendError<BlockingHintTask<Self::Task>>>>;
     fn get_state(&self) -> MigrationState;
     fn contains_slot(&self, slot: usize) -> bool;
     fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>>;

@@ -7,6 +7,7 @@ pub mod future_group;
 pub mod proto;
 pub mod resp_execution;
 pub mod response;
+pub mod slot_lock;
 pub mod track;
 pub mod try_chunks;
 pub mod utils;
