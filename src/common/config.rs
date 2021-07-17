@@ -122,7 +122,7 @@ impl Serialize for CompressionStrategy {
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.clone().to_str())
+        serializer.serialize_str((*self).to_str())
     }
 }
 

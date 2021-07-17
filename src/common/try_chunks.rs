@@ -79,7 +79,7 @@ impl<St: Stream> Stream for TryChunks<St> {
                     let last = if self.items.is_empty() {
                         None
                     } else {
-                        let full_buf = mem::replace(self.as_mut().project().items, Vec::new());
+                        let full_buf = mem::take(self.as_mut().project().items);
                         Some(full_buf)
                     };
 
