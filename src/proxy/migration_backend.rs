@@ -594,13 +594,13 @@ where
         let mut handle_wait_handler = Box::pin(handle_wait_handler.fuse());
 
         select! {
-            () = exists_task_handler => (),
-            () = pending_umsync_task_handler => (),
-            () = dump_pttl_task_handler => (),
-            () = restore_task_handler => (),
-            () = umsync_task_handler => (),
-            () = del_task_handler => (),
-            () = handle_wait_handler => (),
+            () = exists_task_handler => {},
+            () = pending_umsync_task_handler => {},
+            () = dump_pttl_task_handler => {},
+            () = restore_task_handler => {},
+            () = umsync_task_handler => {},
+            () = del_task_handler => {},
+            () = handle_wait_handler => {},
         }
 
         // Need to finish the remaining commands before exiting.
@@ -608,48 +608,48 @@ where
         self.pending_umsync_task_sender.close_channel();
 
         select! {
-            () = pending_umsync_task_handler => (),
-            () = dump_pttl_task_handler => (),
-            () = restore_task_handler => (),
-            () = umsync_task_handler => (),
-            () = del_task_handler => (),
-            () = handle_wait_handler => (),
+            () = pending_umsync_task_handler => {},
+            () = dump_pttl_task_handler => {},
+            () = restore_task_handler => {},
+            () = umsync_task_handler => {},
+            () = del_task_handler => {},
+            () = handle_wait_handler => {},
         }
 
         info!("wait for dump and pttl task");
         self.dump_pttl_task_sender.close_channel();
 
         select! {
-            () = dump_pttl_task_handler => (),
-            () = restore_task_handler => (),
-            () = umsync_task_handler => (),
-            () = del_task_handler => (),
-            () = handle_wait_handler => (),
+            () = dump_pttl_task_handler => {},
+            () = restore_task_handler => {},
+            () = umsync_task_handler => {},
+            () = del_task_handler => {},
+            () = handle_wait_handler => {},
         }
 
         self.restore_task_sender.close_channel();
         info!("wait for restore task");
 
         select! {
-            () = restore_task_handler => (),
-            () = umsync_task_handler => (),
-            () = del_task_handler => (),
-            () = handle_wait_handler => (),
+            () = restore_task_handler => {},
+            () = umsync_task_handler => {},
+            () = del_task_handler => {},
+            () = handle_wait_handler => {},
         }
 
         self.umsync_task_sender.close_channel();
         info!("wait for umsync task");
         select! {
-            () = umsync_task_handler => (),
-            () = del_task_handler => (),
-            () = handle_wait_handler => (),
+            () = umsync_task_handler => {},
+            () = del_task_handler => {},
+            () = handle_wait_handler => {},
         }
 
         self.del_task_sender.close_channel();
         info!("wait for del task");
         select! {
-            () = del_task_handler => (),
-            () = handle_wait_handler => (),
+            () = del_task_handler => {},
+            () = handle_wait_handler => {},
         }
 
         self.wait_handle_sender.close_channel();
