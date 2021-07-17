@@ -10,14 +10,15 @@ use crate::common::utils::{generate_lock_slot, pretty_print_bytes};
 use crate::common::yield_now::YieldNow;
 use crate::migration::task::MigrationError;
 use crate::protocol::{
-    BinSafeStr, BulkStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp,
-    RespVec,
+    BinSafeStr, BulkStr, OptionalMulti, Pool, RedisClient, RedisClientError, RedisClientFactory,
+    Resp, RespVec,
 };
 use crate::proxy::backend::CmdTask;
 use atomic_option::AtomicOption;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{future, Future, FutureExt, StreamExt};
 use std::cmp::min;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
@@ -68,9 +69,10 @@ pub struct ScanMigrationTask<T: CmdTask, F: RedisClientFactory> {
     sync_tasks_sender: UnboundedSender<T>,
     src_address: String,
     dst_address: String,
-    slot_ranges: SlotRangeArray,
     client_factory: Arc<F>,
     slot_mutex: Arc<SlotMutex>,
+    src_client_pool: Pool<F::Client>,
+    dst_client_pool: Pool<F::Client>,
 }
 
 impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
@@ -84,15 +86,19 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         let ranges = slot_range.to_range_list();
         let slot_ranges = SlotRangeArray::new(ranges);
         let (sender, receiver) = unbounded();
+        let slot_mutex = Arc::new(SlotMutex::default());
         let (fut, fut_handle) = Self::gen_future(
             src_address.clone(),
             dst_address.clone(),
-            slot_ranges.clone(),
+            slot_ranges,
             client_factory.clone(),
             sender.clone(),
             receiver,
             config,
+            slot_mutex.clone(),
         );
+
+        const POOL_SIZE: usize = 1024;
 
         Self {
             handle: AtomicOption::new(Box::new(fut_handle)),
@@ -100,9 +106,10 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             sync_tasks_sender: sender,
             src_address,
             dst_address,
-            slot_ranges,
             client_factory,
-            slot_mutex: Arc::new(SlotMutex::default()),
+            slot_mutex,
+            src_client_pool: Pool::new(POOL_SIZE),
+            dst_client_pool: Pool::new(POOL_SIZE),
         }
     }
 
@@ -129,60 +136,87 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             }
         };
 
-        // TODO: cache these clients
-        let mut src_client = match self
-            .client_factory
-            .create_client(self.src_address.clone())
-            .await
-        {
-            Ok(c) => c,
+        let mut src_client = {
+            match self.src_client_pool.get_raw() {
+                Ok(Some(c)) => c,
+                _ => match self
+                    .client_factory
+                    .create_client(self.src_address.clone())
+                    .await
+                {
+                    Ok(c) => c,
+                    Err(err) => {
+                        task.set_resp_result(Ok(Resp::Error(
+                            format!("failed to create src redis client: {:?}", err).into_bytes(),
+                        )));
+                        return;
+                    }
+                },
+            }
+        };
+
+        let mut dst_client = {
+            match self.dst_client_pool.get_raw() {
+                Ok(Some(c)) => c,
+                _ => match self
+                    .client_factory
+                    .create_client(self.dst_address.clone())
+                    .await
+                {
+                    Ok(c) => c,
+                    Err(err) => {
+                        task.set_resp_result(Ok(Resp::Error(
+                            format!("failed to create dst redis client: {:?}", err).into_bytes(),
+                        )));
+                        return;
+                    }
+                },
+            }
+        };
+
+        let entries = match Self::produce_entries(vec![key.clone()], &mut src_client).await {
+            Ok(entries) => entries,
             Err(err) => {
                 task.set_resp_result(Ok(Resp::Error(
-                    format!("failed to create src redis client: {:?}", err).into_bytes(),
+                    format!("failed to produce entries from src: {:?}", err).into_bytes(),
                 )));
                 return;
             }
         };
 
-        let dst_client = match self
-            .client_factory
-            .create_client(self.dst_address.clone())
-            .await
-        {
-            Ok(c) => c,
-            Err(err) => {
+        if !entries.is_empty() {
+            let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
+            dst_client = Self::forward_entries(
+                self.dst_address.clone(),
+                Some(dst_client),
+                self.client_factory.clone(),
+                entries,
+            )
+            .await;
+
+            if let Err(err) = Self::delete_keys(&mut src_client, transferred_keys).await {
                 task.set_resp_result(Ok(Resp::Error(
-                    format!("failed to create dst redis client: {:?}", err).into_bytes(),
+                    format!("failed to forward entries from dst: {:?}", err).into_bytes(),
                 )));
                 return;
             }
-        };
+        }
 
-        let entries =
-            match Self::produce_entries(&self.slot_ranges, vec![key], &mut src_client).await {
-                Ok(entries) => entries,
-                Err(err) => {
-                    task.set_resp_result(Ok(Resp::Error(
-                        format!("failed to produce entries from src: {:?}", err).into_bytes(),
-                    )));
-                    return;
-                }
-            };
-
-        let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
-        let _dst_client = Self::forward_entries(
-            self.dst_address.clone(),
-            Some(dst_client),
-            self.client_factory.clone(),
-            entries,
-        )
-        .await;
-
-        if let Err(err) = Self::delete_keys(&mut src_client, transferred_keys).await {
-            task.set_resp_result(Ok(Resp::Error(
-                format!("failed to forward entries from dst: {:?}", err).into_bytes(),
-            )));
-            return;
+        if self
+            .src_client_pool
+            .get_reclaim_sender()
+            .send(src_client)
+            .is_err()
+        {
+            warn!("src_client pool is full");
+        }
+        if self
+            .dst_client_pool
+            .get_reclaim_sender()
+            .send(dst_client)
+            .is_err()
+        {
+            warn!("dst_client pool is full");
         }
 
         task.set_resp_result(Ok(Resp::Simple(
@@ -218,6 +252,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         Err(RedisClientError::Done)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gen_future(
         src_address: String,
         dst_address: String,
@@ -226,6 +261,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         sync_tasks_sender: UnboundedSender<T>,
         sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
+        slot_mutex: Arc<SlotMutex>,
     ) -> (MgrFut, FutureAutoStopHandle) {
         let interval = min(
             Duration::from_micros(config.get_scan_interval()),
@@ -247,6 +283,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             sync_tasks_sender,
             sync_tasks_receiver,
             config,
+            slot_mutex,
         );
 
         let (send, handle) = new_auto_drop_future(send);
@@ -255,6 +292,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
     }
 
     #[allow(clippy::cognitive_complexity)]
+    #[allow(clippy::too_many_arguments)]
     async fn keep_migrating(
         src_address: String,
         dst_address: String,
@@ -263,6 +301,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         sync_tasks_sender: UnboundedSender<T>,
         mut sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
+        slot_mutex: Arc<SlotMutex>,
     ) -> Result<(), MigrationError> {
         const SLEEP_BATCH_TIMES: u64 = 10;
 
@@ -358,6 +397,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
                             dst_address.clone(),
                             client_factory.clone(),
                             scan_count,
+                            &slot_mutex,
                         )
                         .await
                     }
@@ -389,29 +429,59 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn scan_and_migrate_keys(
         slot_ranges: &SlotRangeArray,
         index: u64,
-        dst_client: Option<F::Client>,
+        mut dst_client: Option<F::Client>,
         src_client: &mut F::Client,
         dst_address: String,
         client_factory: Arc<F>,
         scan_count: u64,
+        slot_mutex: &SlotMutex,
     ) -> Result<(u64, Option<F::Client>), RedisClientError> {
         let ScanResponse { next_index, keys } =
             Self::scan_keys(src_client, index, scan_count).await?;
 
-        let entries = Self::produce_entries(slot_ranges, keys, src_client).await?;
-        if entries.is_empty() {
-            return Ok((next_index, dst_client));
+        let keys: Vec<_> = keys
+            .into_iter()
+            .filter(|key| slot_ranges.is_key_inside(key.as_slice()))
+            .collect();
+
+        let mut locks = vec![];
+        let mut locked_keys = vec![];
+        let mut locked_slots = HashSet::<usize>::default();
+        for key in keys.iter() {
+            let lock_slot = generate_lock_slot(key.as_slice());
+            if let Some(lock) = slot_mutex.lock(lock_slot) {
+                locks.push(lock);
+                locked_keys.push(key.clone());
+                locked_slots.insert(lock_slot);
+            } else if locked_slots.contains(&lock_slot) {
+                // Locked in this function call. Can also add this key.
+                locked_keys.push(key.clone());
+            }
         }
+        let need_retry = locked_keys.len() < keys.len();
 
-        let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
-        let dst_client =
-            Self::forward_entries(dst_address, dst_client, client_factory, entries).await;
+        let entries = Self::produce_entries(locked_keys, src_client).await?;
+        if !entries.is_empty() {
+            let transferred_keys: Vec<_> = entries.iter().map(|entry| entry.key.clone()).collect();
+            let dst_client_cache =
+                Self::forward_entries(dst_address, dst_client, client_factory, entries).await;
+            dst_client = Some(dst_client_cache);
 
-        Self::delete_keys(src_client, transferred_keys).await?;
-        Ok((next_index, Some(dst_client)))
+            Self::delete_keys(src_client, transferred_keys).await?;
+        }
+        drop(locks);
+
+        if need_retry {
+            // Some keys are missed in this round.
+            // Retry the last index again.
+            Ok((index, dst_client))
+        } else {
+            Ok((next_index, dst_client))
+        }
     }
 
     async fn handle_blocking_requests(
@@ -425,9 +495,10 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         let keys = cmd_tasks
             .iter()
             .filter_map(|t| t.get_key().map(|b| b.to_vec()))
+            .filter(|key| slot_ranges.is_key_inside(key.as_slice()))
             .collect();
 
-        let res = match Self::produce_entries(slot_ranges, keys, src_client).await {
+        let res = match Self::produce_entries(keys, src_client).await {
             Ok(entries) => {
                 if entries.is_empty() {
                     Ok(dst_client)
@@ -480,14 +551,9 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
     }
 
     async fn produce_entries<C: RedisClient>(
-        slot_ranges: &SlotRangeArray,
         keys: Vec<BinSafeStr>,
         client: &mut C,
     ) -> Result<Vec<DataEntry>, RedisClientError> {
-        let keys: Vec<_> = keys
-            .into_iter()
-            .filter(|key| slot_ranges.is_key_inside(key.as_slice()))
-            .collect();
         let key_num = keys.len();
 
         let mut commands = vec![];

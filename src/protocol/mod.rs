@@ -8,7 +8,7 @@ mod resp;
 mod stateless;
 
 pub use self::client::{
-    DummyRedisClientFactory, MockRedisClient, MockRedisClientFactory, PooledRedisClient,
+    DummyRedisClientFactory, MockRedisClient, MockRedisClientFactory, Pool, PooledRedisClient,
     PooledRedisClientFactory, PreCheckRedisClientFactory, RedisClient, RedisClientError,
     RedisClientFactory, SimpleRedisClient, SimpleRedisClientFactory,
 };
