@@ -358,9 +358,9 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         );
     }
 
-    pub fn send_sync_task(&self, cmd_ctx: CmdCtx) {
+    pub async fn send_sync_task(&self, cmd_ctx: CmdCtx) {
         let meta_map = self.meta_map.load();
-        if let Err(err) = meta_map.migration_map.send_sync_task(cmd_ctx) {
+        if let Err(err) = meta_map.migration_map.send_sync_task(cmd_ctx).await {
             match err {
                 ClusterSendError::SlotNotFound(task) => {
                     // When the migrating task is closed,

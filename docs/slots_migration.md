@@ -34,19 +34,20 @@ for multiple times sometimes though. We can perform a 3 stage migration to mimic
   to forward all the data inside the migrating slot ranges to peer importing Redis.
   The `RESTORE` does not set the `REPLACE` flag.
 - When the importing proxy processes commands, no matter read or write operation, it will first
-  - Send `EXISTS` and the processed command to local importing Redis,
-    if `EXISTS` returns true, forward the command to the local importing Redis.
-  - Then there are two cases:
-    - If the command will not delete the key, get the `key lock`,
+  - If the command will not delete the key, get the `key lock`,
+    - Send `EXISTS` and the processed command to local importing Redis,
+      if `EXISTS` returns true, forward the command to the local importing Redis.
+    - If `EXISTS` returns false,
       send `DUMP` and `PTTL`to migrating Redis to get the data,
       and `RESTORE` the data and forward the command to local Redis.
-    - If the command can possibly delete the key,
-      get the `key lock` and
-      send `UMSYNC` to the migrating proxy to let the migrating proxy
-      use `DUMP`, `PTTL`, `RESTORE`, `DEL` to transfer the key to the importing proxy.
-      Then finally forward the command to the local importing Redis
+      Then finally forward the command to the local importing Redis.
+  - If the command can possibly delete the key,
+    get the `key lock` and
+    send `UMSYNC` to the migrating proxy to let the migrating proxy
+    use `DUMP`, `PTTL`, `RESTORE`, `DEL` to transfer the key to the importing proxy.
+    Then finally forward the command to the local importing Redis
 - When the migrating proxy finishes the scanning,
-  it propose the `CommitSwitch` to the importing proxy.
+  it proposes the `CommitSwitch` to the importing proxy.
   Then the importing proxy will only need to process the command in local Redis.
 - Notify `coordinator` and wait for the final commit by `UMCTL SETCLUSTER`.
 

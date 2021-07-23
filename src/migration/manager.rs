@@ -296,7 +296,7 @@ where
         )))
     }
 
-    pub fn send_sync_task(
+    pub async fn send_sync_task(
         &self,
         mut cmd_task: T,
     ) -> Result<(), ClusterSendError<BlockingHintTask<T>>> {
@@ -322,7 +322,7 @@ where
         for mgr_task in self.task_map.values() {
             match &mgr_task.task {
                 Either::Left(migrating_task) if migrating_task.contains_slot(slot) => {
-                    return migrating_task.send_sync_task(cmd_task)
+                    return migrating_task.send_sync_task(cmd_task).await
                 }
                 _ => continue,
             }

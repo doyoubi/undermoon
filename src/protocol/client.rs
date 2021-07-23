@@ -193,13 +193,13 @@ impl From<RedisClientConnection> for TcpStream {
 }
 
 #[derive(Debug)]
-struct Pool<T> {
+pub struct Pool<T> {
     sender: Arc<crossbeam_channel::Sender<T>>,
     receiver: crossbeam_channel::Receiver<T>,
 }
 
 impl<T> Pool<T> {
-    fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         let (sender, receiver) = crossbeam_channel::bounded(capacity);
         Self {
             sender: Arc::new(sender),
@@ -208,18 +208,25 @@ impl<T> Pool<T> {
     }
 
     fn get(&self) -> Result<Option<PoolItemHandle<T>>, ()> {
-        match self.receiver.try_recv() {
-            Ok(item) => Ok(Some(PoolItemHandle {
+        self.get_raw().map(|r| {
+            r.map(|item| PoolItemHandle {
                 item,
-                reclaim_sender: self.get_reclaim_sender(),
-            })),
+                reclaim_sender: self.get_reclaim_sender().clone(),
+            })
+        })
+    }
+
+    #[allow(clippy::result_unit_err)]
+    pub fn get_raw(&self) -> Result<Option<T>, ()> {
+        match self.receiver.try_recv() {
+            Ok(item) => Ok(Some(item)),
             Err(crossbeam_channel::TryRecvError::Empty) => Ok(None),
             Err(crossbeam_channel::TryRecvError::Disconnected) => Err(()),
         }
     }
 
-    fn get_reclaim_sender(&self) -> Arc<crossbeam_channel::Sender<T>> {
-        self.sender.clone()
+    pub fn get_reclaim_sender(&self) -> &Arc<crossbeam_channel::Sender<T>> {
+        &self.sender
     }
 }
 
@@ -395,16 +402,16 @@ impl PooledRedisClientFactory {
                 let pool = entry.get_mut();
                 match pool.get() {
                     Ok(Some(conn_handle)) => Either::Left(conn_handle),
-                    Ok(None) => Either::Right(pool.get_reclaim_sender()),
+                    Ok(None) => Either::Right(pool.get_reclaim_sender().clone()),
                     Err(()) => {
                         *pool = Pool::new(self.capacity);
-                        Either::Right(pool.get_reclaim_sender())
+                        Either::Right(pool.get_reclaim_sender().clone())
                     }
                 }
             }
             Entry::Vacant(entry) => {
                 let pool = Pool::new(self.capacity);
-                let reclaim_sender = pool.get_reclaim_sender();
+                let reclaim_sender = pool.get_reclaim_sender().clone();
                 entry.insert(pool);
                 Either::Right(reclaim_sender)
             }
