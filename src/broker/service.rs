@@ -252,12 +252,24 @@ pub async fn run_server(service: Arc<MemBrokerService>, address: std::net::Socke
     warp::serve(routes).run(address).await
 }
 
-fn warp_json<T: serde::Serialize>(r: Result<T, MetaStoreError>) -> impl warp::reply::Reply {
-    let (res, code) = match r {
-        Ok(t) => (warp::reply::json(&t), http::StatusCode::OK),
-        Err(err) => (warp::reply::json(&err), err.status_code()),
+enum WarpRes<T> {
+    Json(T),
+    Empty,
+}
+
+fn warp_empty_res((): ()) -> WarpRes<()> {
+    WarpRes::Empty
+}
+
+fn warp_json<T: serde::Serialize>(
+    r: Result<WarpRes<T>, MetaStoreError>,
+) -> impl warp::reply::Reply {
+    let (res, code): (Box<dyn warp::Reply>, _) = match r {
+        Ok(WarpRes::Json(t)) => (Box::new(warp::reply::json(&t)), http::StatusCode::OK),
+        Ok(WarpRes::Empty) => (Box::new(warp::reply::reply()), http::StatusCode::OK),
+        Err(err) => (Box::new(warp::reply::json(&err)), err.status_code()),
     };
-    warp::reply::with_status(res, code)
+    warp::reply::with_status::<Box<dyn warp::Reply>>(res, code)
 }
 
 pub type ReplicaAddresses = Arc<ArcSwap<Vec<String>>>;
@@ -681,15 +693,15 @@ fn get_version() -> &'static str {
 }
 
 async fn get_all_metadata(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
-    Ok(warp_json(state.get_all_data().await))
+    Ok(warp_json(state.get_all_data().await.map(WarpRes::Json)))
 }
 
 async fn restore_metadata(
     meta_store: MetaStore,
     state: ServiceState,
 ) -> Result<impl warp::reply::Reply, Infallible> {
-    let res = state.restore_metadata(meta_store).await.map(|_| "");
-    Ok(warp_json(res))
+    let res = state.restore_metadata(meta_store).await;
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 #[derive(Deserialize)]
@@ -707,7 +719,7 @@ async fn get_proxy_addresses(
         .get_proxy_addresses(offset, limit)
         .await
         .map(|addresses| ProxyAddressesPayload { addresses });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn get_proxy_by_address(
@@ -718,7 +730,7 @@ async fn get_proxy_by_address(
         .get_proxy_by_address(&address)
         .await
         .map(|proxy| ProxyPayload { proxy });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn get_cluster_names(
@@ -730,7 +742,7 @@ async fn get_cluster_names(
         .get_cluster_names(offset, limit)
         .await
         .map(|names| ClusterNamesPayload { names });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn get_cluster_by_name(
@@ -741,7 +753,7 @@ async fn get_cluster_by_name(
         .get_cluster_by_name(&name)
         .await
         .map(|cluster| ClusterPayload { cluster });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn get_cluster_info_by_name(
@@ -753,7 +765,7 @@ async fn get_cluster_info_by_name(
         Ok(None) => Err(MetaStoreError::ClusterNotFound),
         Err(err) => Err(err),
     };
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn get_failures(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
@@ -761,7 +773,7 @@ async fn get_failures(state: ServiceState) -> Result<impl warp::reply::Reply, In
         .get_failures()
         .await
         .map(|addresses| FailuresPayload { addresses });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -780,10 +792,10 @@ async fn add_proxy(
         // This may still successfully update the store even on error.
         let res = state.add_proxy(proxy_resource).await;
         state.trigger_update().await?;
-        res.map(|()| "")
+        res
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -800,10 +812,10 @@ async fn add_cluster(
     let res = async {
         state.add_cluster(cluster_name, node_number).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn remove_cluster(
@@ -813,10 +825,10 @@ async fn remove_cluster(
     let res = async {
         state.remove_cluster(cluster_name).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -836,7 +848,7 @@ async fn auto_scale_up_nodes(
         Ok(res)
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -856,7 +868,7 @@ async fn auto_add_nodes(
         Ok(res)
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn auto_delete_free_nodes(
@@ -866,10 +878,10 @@ async fn auto_delete_free_nodes(
     let res = async {
         state.auto_delete_free_nodes(cluster_name).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn change_config(
@@ -880,10 +892,10 @@ async fn change_config(
     let res = async {
         state.change_config(cluster_name, config).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn balance_masters(
@@ -893,10 +905,10 @@ async fn balance_masters(
     let res = async {
         state.balance_masters(cluster_name).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn bump_epoch(
@@ -906,10 +918,10 @@ async fn bump_epoch(
     let res = async {
         state.force_bump_all_epoch(new_epoch).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn remove_proxy(
@@ -919,10 +931,10 @@ async fn remove_proxy(
     let res = async {
         state.remove_proxy(proxy_address).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -937,20 +949,20 @@ async fn check_resource_for_failures(
         .check_resource_for_failures()
         .await
         .map(|hosts_cannot_fail| ResourceFailureCheckPayload { hosts_cannot_fail });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 fn change_broker_config(
     config_payload: MemBrokerConfigPayload,
     state: ServiceState,
 ) -> impl warp::reply::Reply {
-    let res = state.change_broker_config(config_payload).map(|()| "");
-    warp_json(res)
+    let res = state.change_broker_config(config_payload);
+    warp_json(res.map(warp_empty_res))
 }
 
 fn get_broker_config(state: ServiceState) -> impl warp::reply::Reply {
     let res = state.get_broker_config();
-    warp_json(res)
+    warp_json(res.map(WarpRes::Json))
 }
 
 async fn migrate_slots(
@@ -960,10 +972,10 @@ async fn migrate_slots(
     let res = async {
         state.migrate_slots(cluster_name).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn migrate_slots_to_scale_down(
@@ -976,10 +988,10 @@ async fn migrate_slots_to_scale_down(
             .migrate_slots_to_scale_down(cluster_name, new_node_num)
             .await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn auto_scale_node_number(
@@ -992,10 +1004,10 @@ async fn auto_scale_node_number(
             .auto_scale_node_number(cluster_name, new_node_num)
             .await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn add_failure(
@@ -1006,10 +1018,10 @@ async fn add_failure(
     let res = async move {
         state.add_failure(server_proxy_address, reporter_id).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn commit_migration(
@@ -1019,10 +1031,10 @@ async fn commit_migration(
     let res = async move {
         state.commit_migration(task).await?;
         state.trigger_update().await?;
-        Ok("")
+        Ok(())
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(warp_empty_res)))
 }
 
 async fn replace_failed_node(
@@ -1040,7 +1052,7 @@ async fn replace_failed_node(
         Ok(res)
     }
     .await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn get_failed_proxies(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
@@ -1048,12 +1060,12 @@ async fn get_failed_proxies(state: ServiceState) -> Result<impl warp::reply::Rep
         .get_failed_proxies()
         .await
         .map(|addresses| FailedProxiesPayload { addresses });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 async fn get_epoch(state: ServiceState) -> Result<impl warp::reply::Reply, Infallible> {
     let res = state.get_epoch().await;
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1066,7 +1078,7 @@ async fn recover_epoch(state: ServiceState) -> Result<impl warp::reply::Reply, I
         .recover_epoch()
         .await
         .map(|failed_addresses| RecoverEpochResult { failed_addresses });
-    Ok(warp_json(res))
+    Ok(warp_json(res.map(WarpRes::Json)))
 }
 
 impl MetaStoreError {
