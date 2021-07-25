@@ -1,4 +1,5 @@
 use super::scan_task::{RedisScanImportingTask, RedisScanMigratingTask};
+use super::stats::MigrationStats;
 use super::task::{ImportingTask, MigratingTask, MigrationError, MigrationState, SwitchArg};
 use crate::common::cluster::{
     ClusterName, MigrationTaskMeta, RangeList, SlotRange, SlotRangeTag, EMPTY_CLUSTER_NAME,
@@ -56,6 +57,7 @@ where
     proxy_sender_factory: Arc<PTSF>,
     cmd_task_factory: Arc<CTF>,
     future_registry: Arc<TrackedFutureRegistry>,
+    stats: Arc<MigrationStats>,
 }
 
 impl<RCF, TSF, DTSF, PTSF, CTF> MigrationManager<RCF, TSF, DTSF, PTSF, CTF>
@@ -81,6 +83,7 @@ where
         cmd_task_factory: Arc<CTF>,
         future_registry: Arc<TrackedFutureRegistry>,
     ) -> Self {
+        let stats = Arc::new(MigrationStats::default());
         Self {
             config,
             client_factory,
@@ -89,6 +92,7 @@ where
             proxy_sender_factory,
             cmd_task_factory,
             future_registry,
+            stats,
         }
     }
 
@@ -117,6 +121,7 @@ where
             self.proxy_sender_factory.clone(),
             self.cmd_task_factory.clone(),
             blocking_ctrl_factory,
+            self.stats.clone(),
         )
     }
 
@@ -194,6 +199,10 @@ where
             }
         }
         info!("spawn finished");
+    }
+
+    pub fn get_stats(&self) -> Vec<(String, usize)> {
+        self.stats.to_lines_str()
     }
 }
 
@@ -366,6 +375,7 @@ where
         proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
         blocking_ctrl_factory: Arc<BCF>,
+        stats: Arc<MigrationStats>,
     ) -> (Self, Vec<NewTask<T>>)
     where
         RCF: RedisClientFactory,
@@ -439,6 +449,7 @@ where
                             meta.clone(),
                             client_factory.clone(),
                             ctrl,
+                            stats.clone(),
                         ));
                         new_tasks.push(NewTask {
                             cluster_name: cluster_name.clone(),
@@ -474,6 +485,7 @@ where
                             dst_sender_factory.clone(),
                             proxy_sender_factory.clone(),
                             cmd_task_factory.clone(),
+                            stats.clone(),
                         ));
                         new_tasks.push(NewTask {
                             cluster_name: cluster_name.clone(),

@@ -228,6 +228,14 @@ impl<T> Pool<T> {
     pub fn get_reclaim_sender(&self) -> &Arc<crossbeam_channel::Sender<T>> {
         &self.sender
     }
+
+    pub fn len(&self) -> usize {
+        self.receiver.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.receiver.is_empty()
+    }
 }
 
 #[derive(Debug)]

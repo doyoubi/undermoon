@@ -275,6 +275,8 @@ where
             self.handle_umctl_slowlog(cmd_ctx);
         } else if sub_cmd.eq("DEBUG") {
             self.handle_umctl_debug(cmd_ctx);
+        } else if sub_cmd.eq("STATS") {
+            self.handle_umctl_stats(cmd_ctx);
         } else if sub_cmd.eq("GETEPOCH") {
             self.handle_umctl_get_epoch(cmd_ctx);
         } else if sub_cmd.eq("READY") {
@@ -452,6 +454,16 @@ where
                 "invalid debug sub-command".to_string().into_bytes(),
             )))
         }
+    }
+
+    fn handle_umctl_stats(&self, cmd_ctx: CmdCtx) {
+        let stats = self.manager.get_stats();
+        cmd_ctx.set_resp_result(Ok(Resp::Arr(Array::Arr(
+            stats
+                .into_iter()
+                .map(|s| Resp::Bulk(BulkStr::Str(s.into_bytes())))
+                .collect(),
+        ))));
     }
 
     fn handle_umctl_get_epoch(&self, cmd_ctx: CmdCtx) {

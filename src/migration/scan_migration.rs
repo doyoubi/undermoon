@@ -1,3 +1,4 @@
+use super::stats::MigrationStats;
 use super::task::{ScanResponse, SlotRangeArray};
 use crate::common::cluster::SlotRange;
 use crate::common::config::AtomicMigrationConfig;
@@ -21,9 +22,9 @@ use std::cmp::min;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const PTTL_NO_EXPIRE: &[u8] = b"-1";
 pub const PTTL_KEY_NOT_FOUND: &[u8] = b"-2";
@@ -73,6 +74,8 @@ pub struct ScanMigrationTask<T: CmdTask, F: RedisClientFactory> {
     slot_mutex: Arc<SlotMutex>,
     src_client_pool: Pool<F::Client>,
     dst_client_pool: Pool<F::Client>,
+    stats: Arc<MigrationStats>,
+    stats_conn_last_update_time: AtomicU64,
 }
 
 impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
@@ -82,6 +85,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         slot_range: SlotRange,
         client_factory: Arc<F>,
         config: Arc<AtomicMigrationConfig>,
+        stats: Arc<MigrationStats>,
     ) -> Self {
         let ranges = slot_range.to_range_list();
         let slot_ranges = SlotRangeArray::new(ranges);
@@ -96,6 +100,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             receiver,
             config,
             slot_mutex.clone(),
+            stats.clone(),
         );
 
         const POOL_SIZE: usize = 1024;
@@ -110,6 +115,8 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             slot_mutex,
             src_client_pool: Pool::new(POOL_SIZE),
             dst_client_pool: Pool::new(POOL_SIZE),
+            stats,
+            stats_conn_last_update_time: AtomicU64::new(0),
         }
     }
 
@@ -125,6 +132,10 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         let guard = match self.slot_mutex.lock(lock_slot) {
             Some(guard) => guard,
             None => {
+                self.stats
+                    .migrating_active_sync_lock_failed
+                    .fetch_add(1, Ordering::Relaxed);
+
                 // The slot is locked. We put it into a slow path.
                 if let Err(err) = self.sync_tasks_sender.unbounded_send(task) {
                     let task = err.into_inner();
@@ -135,6 +146,9 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
                 return;
             }
         };
+        self.stats
+            .migrating_active_sync_lock_success
+            .fetch_add(1, Ordering::Relaxed);
 
         let mut src_client = {
             match self.src_client_pool.get_raw() {
@@ -223,6 +237,30 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             response::OK_REPLY.to_string().into_bytes(),
         )));
         drop(guard);
+
+        // `pool.len()` may be expensive. Just update it every second.
+        let last = self.stats_conn_last_update_time.load(Ordering::Relaxed);
+        let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(t) => t.as_secs(),
+            Err(err) => {
+                error!(
+                    "failed to get system time for updating for migration stats: {}",
+                    err
+                );
+                return;
+            }
+        };
+        const UPDATE_INTERVAL_SECS: u64 = 1;
+        if now > last + UPDATE_INTERVAL_SECS {
+            self.stats
+                .migrating_src_redis_conn
+                .store(self.src_client_pool.len(), Ordering::Relaxed);
+            self.stats
+                .migrating_dst_redis_conn
+                .store(self.dst_client_pool.len(), Ordering::Relaxed);
+            self.stats_conn_last_update_time
+                .store(now, Ordering::Relaxed);
+        }
     }
 
     pub fn start(&self) -> Option<MgrFut> {
@@ -262,6 +300,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
         slot_mutex: Arc<SlotMutex>,
+        stats: Arc<MigrationStats>,
     ) -> (MgrFut, FutureAutoStopHandle) {
         let interval = min(
             Duration::from_micros(config.get_scan_interval()),
@@ -284,6 +323,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             sync_tasks_receiver,
             config,
             slot_mutex,
+            stats,
         );
 
         let (send, handle) = new_auto_drop_future(send);
@@ -302,6 +342,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         mut sync_tasks_receiver: UnboundedReceiver<T>,
         config: Arc<AtomicMigrationConfig>,
         slot_mutex: Arc<SlotMutex>,
+        stats: Arc<MigrationStats>,
     ) -> Result<(), MigrationError> {
         const SLEEP_BATCH_TIMES: u64 = 10;
 
@@ -398,6 +439,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
                             client_factory.clone(),
                             scan_count,
                             &slot_mutex,
+                            &stats,
                         )
                         .await
                     }
@@ -439,6 +481,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         client_factory: Arc<F>,
         scan_count: u64,
         slot_mutex: &SlotMutex,
+        stats: &MigrationStats,
     ) -> Result<(u64, Option<F::Client>), RedisClientError> {
         let ScanResponse { next_index, keys } =
             Self::scan_keys(src_client, index, scan_count).await?;
@@ -463,6 +506,12 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
             }
         }
         let need_retry = locked_keys.len() < keys.len();
+        stats
+            .migrating_scan_lock_success
+            .fetch_add(locked_keys.len(), Ordering::Relaxed);
+        stats
+            .migrating_scan_lock_failed
+            .fetch_add(keys.len() - locked_keys.len(), Ordering::Relaxed);
 
         let entries = Self::produce_entries(locked_keys, src_client).await?;
         if !entries.is_empty() {
