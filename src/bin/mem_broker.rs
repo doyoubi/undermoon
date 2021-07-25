@@ -1,3 +1,6 @@
+// Complex path configuration requires high recursion_limit.
+#![recursion_limit = "256"]
+
 extern crate undermoon;
 #[macro_use]
 extern crate log;
