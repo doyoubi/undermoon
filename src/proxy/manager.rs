@@ -284,6 +284,14 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         ]))
     }
 
+    pub fn get_stats(&self) -> Vec<String> {
+        let mut lines = vec!["# Migration".to_string()];
+        for (k, v) in self.migration_manager.get_stats().into_iter() {
+            lines.push(format!("{}: {}", k, v));
+        }
+        lines
+    }
+
     pub fn handle_switch(
         &self,
         switch_arg: SwitchArg,

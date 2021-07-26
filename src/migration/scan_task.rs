@@ -1,4 +1,5 @@
 use super::scan_migration::ScanMigrationTask;
+use super::stats::MigrationStats;
 use super::task::{
     AtomicMigrationState, ImportingTask, MgrSubCmd, MigratingTask, MigrationError, MigrationState,
     SwitchArg,
@@ -76,6 +77,7 @@ where
         meta: MigrationMeta,
         client_factory: Arc<RCF>,
         blocking_ctrl: Arc<BC>,
+        stats: Arc<MigrationStats>,
     ) -> Self {
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let task = ScanMigrationTask::new(
@@ -84,6 +86,7 @@ where
             slot_range.clone(),
             client_factory.clone(),
             mgr_config.clone(),
+            stats,
         );
         let range_map = RangeMap::from(slot_range.get_range_list());
         let active_redirection = config.active_redirection;
@@ -535,6 +538,7 @@ where
         dst_sender_factory: Arc<DTSF>,
         proxy_sender_factory: Arc<PTSF>,
         cmd_task_factory: Arc<CTF>,
+        stats: Arc<MigrationStats>,
     ) -> Self {
         let src_sender = sender_factory.create(meta.src_node_address.clone());
         let dst_sender = dst_sender_factory.create(meta.dst_node_address.clone());
@@ -544,6 +548,7 @@ where
             dst_sender,
             src_proxy_sender,
             cmd_task_factory.clone(),
+            stats,
         );
         let (stop_signal_sender, stop_signal_receiver) = oneshot::channel();
         let range_map = RangeMap::from(slot_range.get_range_list());

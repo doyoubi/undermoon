@@ -5,6 +5,7 @@ use super::slowlog::TaskEvent;
 use crate::common::response;
 use crate::common::utils::{generate_lock_slot, pretty_print_bytes, RetryError, Wrapper};
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
+use crate::migration::stats::MigrationStats;
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use atomic_option::AtomicOption;
 use dashmap::DashSet;
@@ -451,6 +452,7 @@ where
     )>,
     cmd_task_factory: Arc<F>,
     key_lock: Arc<KeyLock>,
+    stats: Arc<MigrationStats>,
 }
 
 impl<F, S, DS, PS> RestoreDataCmdTaskHandler<F, S, DS, PS>
@@ -466,6 +468,7 @@ where
         dst_sender: DS,
         src_proxy_sender: PS,
         cmd_task_factory: Arc<F>,
+        stats: Arc<MigrationStats>,
     ) -> Self {
         let src_sender = Arc::new(src_sender);
         let dst_sender = Arc::new(dst_sender);
@@ -501,6 +504,7 @@ where
             task_receivers,
             cmd_task_factory,
             key_lock,
+            stats,
         }
     }
 
@@ -551,6 +555,7 @@ where
             dst_sender.clone(),
             cmd_task_factory.clone(),
             key_lock.clone(),
+            self.stats.clone(),
         );
 
         let pending_umsync_task_handler = Self::handle_pending_umsync_task(
@@ -561,6 +566,7 @@ where
             wait_handle_sender.clone(),
             key_lock.clone(),
             cmd_task_factory.clone(),
+            self.stats.clone(),
         );
 
         let dump_pttl_task_handler = Self::handle_dump_pttl_task(
@@ -569,6 +575,7 @@ where
             wait_handle_sender.clone(),
             dst_sender.clone(),
             cmd_task_factory.clone(),
+            self.stats.clone(),
         );
 
         let restore_task_handler = Self::handle_restore(
@@ -578,8 +585,12 @@ where
             cmd_task_factory,
         );
 
-        let umsync_task_handler =
-            Self::handle_umsync_task(umsync_task_receiver, wait_handle_sender.clone(), dst_sender);
+        let umsync_task_handler = Self::handle_umsync_task(
+            umsync_task_receiver,
+            wait_handle_sender.clone(),
+            dst_sender,
+            self.stats.clone(),
+        );
 
         let del_task_handler = Self::handle_del_task(del_task_receiver);
 
@@ -668,6 +679,7 @@ where
         dst_sender: Arc<DS>,
         cmd_task_factory: Arc<F>,
         key_lock: Arc<KeyLock>,
+        stats: Arc<MigrationStats>,
     ) {
         while let Some((state, reply_receiver)) = exists_task_receiver.next().await {
             let res = reply_receiver.await;
@@ -677,6 +689,10 @@ where
             };
 
             if key_exists {
+                stats
+                    .importing_dst_key_existed
+                    .fetch_add(1, Ordering::Relaxed);
+
                 let (_state, req_task, wait_handle) = MgrCmdStateForward::from_state_exists(state);
                 if let Err(err) = dst_sender.send(req_task) {
                     debug!("failed to forward: {:?}", err);
@@ -689,11 +705,22 @@ where
                 }
                 continue;
             }
+            stats
+                .importing_dst_key_not_existed
+                .fetch_add(1, Ordering::Relaxed);
 
             // Avoid restoring and deleting at the same time.
             let (lock_guard, state) = match key_lock.lock(state.key.clone(), state.lock_slot) {
-                Some(lock_guard) => (lock_guard, state),
+                Some(lock_guard) => {
+                    stats.importing_lock_success.fetch_add(1, Ordering::Relaxed);
+                    (lock_guard, state)
+                }
                 None => {
+                    stats.importing_lock_failed.fetch_add(1, Ordering::Relaxed);
+                    stats
+                        .importing_resend_exists
+                        .fetch_add(1, Ordering::Relaxed);
+
                     // Retry later
                     let MgrCmdStateExists {
                         inner_task,
@@ -719,6 +746,9 @@ where
                     match exists_task_sender.unbounded_send((state, reply_receiver)) {
                         Ok(()) => continue,
                         Err(err) => {
+                            stats
+                                .importing_resend_exists_failed
+                                .fetch_add(1, Ordering::Relaxed);
                             let (state, reply_receiver) = err.into_inner();
 
                             let key_exists = match Self::parse_exists_result(reply_receiver.await) {
@@ -741,6 +771,9 @@ where
                             }
 
                             loop {
+                                stats
+                                    .importing_lock_loop_retry
+                                    .fetch_add(1, Ordering::Relaxed);
                                 warn!("EXISTS channel is closed. Waiting to get lock.");
                                 match key_lock.lock(state.key.clone(), state.lock_slot) {
                                     Some(lock_guard) => break (lock_guard, state),
@@ -787,12 +820,21 @@ where
         wait_handle_sender: DstWaitHandleSender,
         dst_sender: Arc<DS>,
         cmd_task_factory: Arc<F>,
+        stats: Arc<MigrationStats>,
     ) {
         while let Some((state, reply_fut)) = dump_pttl_task_receiver.next().await {
             let res = reply_fut.await;
             let entry = match res {
-                Ok(Some(entry)) => entry,
+                Ok(Some(entry)) => {
+                    stats
+                        .importing_src_key_existed
+                        .fetch_add(1, Ordering::Relaxed);
+                    entry
+                }
                 Ok(None) => {
+                    stats
+                        .importing_src_key_not_existed
+                        .fetch_add(1, Ordering::Relaxed);
                     // The key also does not exist in source node.
                     let (_state, req_task, wait_handle) =
                         MgrCmdStateForward::from_state_dump_pttl(state);
@@ -808,6 +850,7 @@ where
                     continue;
                 }
                 Err(err) => {
+                    stats.importing_src_failed.fetch_add(1, Ordering::Relaxed);
                     let task = state.into_inner();
                     task.set_resp_result(Ok(Resp::Error(
                         format!("{}: {:?}", FAILED_TO_ACCESS_SOURCE, err).into_bytes(),
@@ -860,6 +903,7 @@ where
             const BUSYKEY: &[u8] = b"BUSYKEY";
             match resp {
                 Resp::Simple(_) => (),
+                // Key already existed
                 Resp::Error(err)
                     if err.get(..BUSYKEY.len()).map(|p| p == BUSYKEY) == Some(true) => {}
                 others => {
@@ -882,6 +926,7 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_pending_umsync_task(
         mut pending_umsync_task_receiver: PendingUmSyncTaskReceiver<F::Task>,
         umsync_task_sender: UmSyncTaskSender<F>,
@@ -890,6 +935,7 @@ where
         wait_handle_sender: DstWaitHandleSender,
         key_lock: Arc<KeyLock>,
         cmd_task_factory: Arc<F>,
+        stats: Arc<MigrationStats>,
     ) {
         while let Some(pending_task) = pending_umsync_task_receiver.next().await {
             let PendingUmSyncTask {
@@ -899,11 +945,15 @@ where
             } = pending_task;
 
             let mut lock_guard_opt = None;
-            for _ in 0..10 {
+            const RETRY_TIMES: usize = 10;
+            for _ in 0..RETRY_TIMES {
                 if let Some(lock_guard) = key_lock.lock(key.clone(), lock_slot) {
                     lock_guard_opt = Some(lock_guard);
                     break;
                 }
+                stats
+                    .importing_umsync_lock_failed_again
+                    .fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(Duration::from_millis(3)).await;
             }
             let lock_guard = match lock_guard_opt {
@@ -950,12 +1000,17 @@ where
         mut umsync_task_receiver: UmSyncTaskReceiver<F>,
         wait_handle_sender: DstWaitHandleSender,
         dst_sender: Arc<DS>,
+        stats: Arc<MigrationStats>,
     ) {
         while let Some((state, reply_fut)) = umsync_task_receiver.next().await {
             // The DUMP and RESTORE has already been processed in the source proxy.
             // We can safely drop the lock here after reply_fut is done.
             match reply_fut.await {
                 Err(err) => {
+                    stats
+                        .importing_umsync_failed
+                        .fetch_add(1, Ordering::Relaxed);
+
                     // drop the lock here
                     let task = state.into_inner();
                     task.set_resp_result(Ok(Resp::Error(
@@ -964,6 +1019,10 @@ where
                     continue;
                 }
                 Ok(Resp::Error(err)) if err != response::MIGRATION_TASK_NOT_FOUND.as_bytes() => {
+                    stats
+                        .importing_umsync_failed
+                        .fetch_add(1, Ordering::Relaxed);
+
                     error!("Invalid reply of UMSYNC {:?}", err);
                     // drop the lock here
                     let task = state.into_inner();
@@ -1025,8 +1084,15 @@ where
 
         let (_, data_cmd_type) = cmd_task.get_type();
         if requires_blocking_migration(data_cmd_type) {
+            self.stats
+                .importing_blocking_migration_commands
+                .fetch_add(1, Ordering::Relaxed);
             return self.send_to_umsync(cmd_task, key, lock_slot);
         }
+
+        self.stats
+            .importing_non_blocking_migration_commands
+            .fetch_add(1, Ordering::Relaxed);
 
         let (state, reply_fut) = match Self::send_to_exist_to_dst(
             cmd_task,
@@ -1063,6 +1129,9 @@ where
         let (lock_guard, cmd_task) = match self.key_lock.lock(key.clone(), lock_slot) {
             Some(lock_guard) => (lock_guard, cmd_task),
             None => {
+                self.stats
+                    .importing_umsync_lock_failed
+                    .fetch_add(1, Ordering::Relaxed);
                 // Retry later
                 let res = self
                     .pending_umsync_task_sender
@@ -1080,6 +1149,9 @@ where
                 return Ok(());
             }
         };
+        self.stats
+            .importing_umsync_lock_success
+            .fetch_add(1, Ordering::Relaxed);
 
         let (state, req_task, reply_fut) =
             MgrCmdStateUmSync::from_task(cmd_task, key, lock_guard, self.cmd_task_factory.as_ref());
@@ -1485,6 +1557,7 @@ mod tests {
             DummyWaitTaskSender::new(true, HashMap::new(), 666),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
+            Arc::new(MigrationStats::default()),
         );
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1508,6 +1581,7 @@ mod tests {
             DummyWaitTaskSender::new(false, HashMap::new(), 1),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
+            Arc::new(MigrationStats::default()),
         );
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1534,6 +1608,7 @@ mod tests {
             DummyWaitTaskSender::new(false, HashMap::new(), 233),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
+            Arc::new(MigrationStats::default()),
         );
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1565,6 +1640,7 @@ mod tests {
                 DummyWaitTaskSender::new(true, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
+                Arc::new(MigrationStats::default()),
             );
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1597,6 +1673,7 @@ mod tests {
                 DummyWaitTaskSender::new(true, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
+                Arc::new(MigrationStats::default()),
             );
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1633,6 +1710,7 @@ mod tests {
                 DummyWaitTaskSender::new(false, HashMap::new(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
+                Arc::new(MigrationStats::default()),
             );
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1665,6 +1743,7 @@ mod tests {
                 DummyWaitTaskSender::new(false, HashMap::new(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
+                Arc::new(MigrationStats::default()),
             );
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1697,6 +1776,7 @@ mod tests {
                 DummyWaitTaskSender::new(false, err_set.clone(), 666),
                 DummyCmdTaskSender::new(false, HashMap::new(), 0),
                 Arc::new(CmdCtxFactory::default()),
+                Arc::new(MigrationStats::default()),
             );
 
             let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1729,6 +1809,7 @@ mod tests {
             DummyWaitTaskSender::new(false, HashMap::new(), -2),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
+            Arc::new(MigrationStats::default()),
         );
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["GET", "somekey"]);
@@ -1755,6 +1836,7 @@ mod tests {
             DummyWaitTaskSender::new(false, HashMap::new(), 1),
             DummyCmdTaskSender::new(false, HashMap::new(), 0),
             Arc::new(CmdCtxFactory::default()),
+            Arc::new(MigrationStats::default()),
         );
 
         let (cmd_ctx, reply_receiver) = gen_test_cmd_ctx(vec!["DEL", "somekey"]);
