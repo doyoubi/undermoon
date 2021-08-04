@@ -7,6 +7,7 @@ use crate::common::utils::{generate_lock_slot, pretty_print_bytes, RetryError, W
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
 use crate::migration::stats::MigrationStats;
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
+use arc_swap::ArcSwapOption;
 use atomic_option::AtomicOption;
 use dashmap::DashSet;
 use either::Either;
@@ -17,38 +18,95 @@ use futures::channel::{
 use futures::{select, Future, FutureExt, StreamExt};
 use std::fmt;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 const KEY_NOT_EXISTS: &str = "0";
 const FAILED_TO_ACCESS_SOURCE: &str = "MIGRATION_FORWARD: failed to access source node";
 
+struct WaitRegistry {
+    pending: AtomicU64,
+    closed: AtomicBool,
+    signal: ArcSwapOption<oneshot::Sender<()>>,
+}
+
+impl WaitRegistry {
+    fn new() -> (Self, WaitHandle) {
+        let (s, r) = oneshot::channel();
+        let registry = Self {
+            pending: AtomicU64::new(0),
+            closed: AtomicBool::new(false),
+            signal: ArcSwapOption::new(Some(Arc::new(s))),
+        };
+        (registry, r)
+    }
+}
+
+impl WaitRegistry {
+    // Should not be closed yet.
+    fn register(&self) {
+        self.pending.fetch_add(1, Ordering::SeqCst);
+    }
+
+    // Can run concurrently with `close`
+    // Case 1: `closed.load` runs before `closed.store`
+    //   `signal` runs in `close()`
+    // Case 2: `closed.load` runs after `closed.store`
+    //   `signal` runs in `unregister()`
+    fn unregister(&self) {
+        if self.pending.fetch_sub(1, Ordering::SeqCst) == 1 && self.closed.load(Ordering::SeqCst) {
+            self.signal.swap(None);
+        }
+    }
+
+    // Should be called after all `register` calls.
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        if self.pending.load(Ordering::SeqCst) == 0 {
+            self.signal.swap(None);
+        }
+    }
+}
+
 type WaitHandle = oneshot::Receiver<()>;
+
+struct AutoDropWaitRegistry {
+    inner: Arc<WaitRegistry>,
+}
+
+impl AutoDropWaitRegistry {
+    fn new(inner: Arc<WaitRegistry>) -> Self {
+        Self { inner }
+    }
+}
+
+impl Drop for AutoDropWaitRegistry {
+    fn drop(&mut self) {
+        self.inner.unregister();
+    }
+}
 
 pub struct WaitableTask<T: CmdTask> {
     inner: T,
-    // We reply on the `drop` function of `sender`
+    // We reply on the `drop` function of `AutoDropWaitRegistry`
     #[allow(dead_code)]
-    sender: Option<oneshot::Sender<()>>,
+    _registry: Option<AutoDropWaitRegistry>,
 }
 
 impl<T: CmdTask> WaitableTask<T> {
-    fn new_with_handle(inner: T) -> (Self, WaitHandle) {
-        let (sender, receiver) = oneshot::channel();
-        (
-            Self {
-                inner,
-                sender: Some(sender),
-            },
-            receiver,
-        )
-    }
-
-    fn new_without_handle(inner: T) -> Self {
+    fn new_with_registry(inner: T, registry: Arc<WaitRegistry>) -> Self {
+        registry.register();
         Self {
             inner,
-            sender: None,
+            _registry: Some(AutoDropWaitRegistry::new(registry)),
+        }
+    }
+
+    fn new_without_registry(inner: T) -> Self {
+        Self {
+            inner,
+            _registry: None,
         }
     }
 
@@ -127,7 +185,7 @@ impl<F: CmdTaskFactory> MgrCmdStateExists<F> {
         let resp = Self::gen_exists_resp(&key);
         let (cmd_task, reply_fut) =
             cmd_task_factory.create_with_ctx(inner_task.get_context(), resp);
-        let task = ReqTask::Simple(WaitableTask::new_without_handle(cmd_task));
+        let task = ReqTask::Simple(WaitableTask::new_without_registry(cmd_task));
         let state = Self {
             inner_task,
             key,
@@ -158,40 +216,40 @@ struct MgrCmdStateForward {
 impl MgrCmdStateForward {
     fn from_state_exists<F: CmdTaskFactory>(
         state: MgrCmdStateExists<F>,
-    ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
-        let (inner_task, wait_handle) = WaitableTask::new_with_handle(state.into_inner());
+        registry: Arc<WaitRegistry>,
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>) {
+        let inner_task = WaitableTask::new_with_registry(state.into_inner(), registry);
         (
             MgrCmdStateForward { _lock_guard: None },
             ReqTask::Simple(inner_task),
-            wait_handle,
         )
     }
 
     fn from_state_dump_pttl<F: CmdTaskFactory>(
         state: MgrCmdStateDumpPttl<F>,
-    ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
-        let (inner_task, wait_handle) = WaitableTask::new_with_handle(state.into_inner());
+        registry: Arc<WaitRegistry>,
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>) {
+        let inner_task = WaitableTask::new_with_registry(state.into_inner(), registry);
         (
             MgrCmdStateForward { _lock_guard: None },
             ReqTask::Simple(inner_task),
-            wait_handle,
         )
     }
 
     fn from_state_umsync<F: CmdTaskFactory>(
         state: MgrCmdStateUmSync<F>,
-    ) -> (Self, ReqTask<WaitableTask<F::Task>>, WaitHandle) {
+        registry: Arc<WaitRegistry>,
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>) {
         let MgrCmdStateUmSync {
             inner_task,
             lock_guard,
         } = state;
-        let (inner_task, wait_handle) = WaitableTask::new_with_handle(inner_task);
+        let inner_task = WaitableTask::new_with_registry(inner_task, registry);
         (
             MgrCmdStateForward {
                 _lock_guard: Some(lock_guard),
             },
             ReqTask::Simple(inner_task),
-            wait_handle,
         )
     }
 }
@@ -330,12 +388,8 @@ impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
         state: MgrCmdStateDumpPttl<F>,
         entry: DataEntry,
         cmd_task_factory: &F,
-    ) -> (
-        Self,
-        ReqTask<WaitableTask<F::Task>>,
-        ReplyFuture,
-        [WaitHandle; 2],
-    ) {
+        registry: Arc<WaitRegistry>,
+    ) -> (Self, ReqTask<WaitableTask<F::Task>>, ReplyFuture) {
         let MgrCmdStateDumpPttl {
             inner_task,
             key,
@@ -347,9 +401,8 @@ impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
         let (restore_cmd_task, restore_reply_fut) =
             cmd_task_factory.create_with_ctx(inner_task.get_context(), resp);
 
-        let (restore_cmd_task, restore_wait_handle) =
-            WaitableTask::new_with_handle(restore_cmd_task);
-        let (inner_task, inner_wait_handle) = WaitableTask::new_with_handle(inner_task);
+        let restore_cmd_task = WaitableTask::new_with_registry(restore_cmd_task, registry.clone());
+        let inner_task = WaitableTask::new_with_registry(inner_task, registry);
 
         let task = ReqTask::Multi(vec![restore_cmd_task, inner_task]);
         (
@@ -360,7 +413,6 @@ impl<F: CmdTaskFactory> MgrCmdStateRestoreForward<F> {
             },
             task,
             restore_reply_fut,
-            [restore_wait_handle, inner_wait_handle],
         )
     }
 
@@ -419,8 +471,6 @@ type UmSyncTaskSender<F> = UnboundedSender<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type UmSyncTaskReceiver<F> = UnboundedReceiver<(MgrCmdStateUmSync<F>, ReplyFuture)>;
 type DeleteKeyTaskSender = UnboundedSender<ReplyFuture>;
 type DeleteKeyTaskReceiver = UnboundedReceiver<ReplyFuture>;
-type DstWaitHandleSender = UnboundedSender<WaitHandle>;
-type DstWaitHandleReceiver = UnboundedReceiver<WaitHandle>;
 
 pub struct RestoreDataCmdTaskHandler<F, S, DS, PS>
 where
@@ -439,7 +489,6 @@ where
     pending_umsync_task_sender: PendingUmSyncTaskSender<F::Task>,
     umsync_task_sender: UmSyncTaskSender<F>,
     del_task_sender: DeleteKeyTaskSender,
-    wait_handle_sender: DstWaitHandleSender,
     #[allow(clippy::type_complexity)]
     task_receivers: AtomicOption<(
         ExistsTaskReceiver<F>,
@@ -448,11 +497,12 @@ where
         PendingUmSyncTaskReceiver<F::Task>,
         UmSyncTaskReceiver<F>,
         DeleteKeyTaskReceiver,
-        DstWaitHandleReceiver,
+        WaitHandle,
     )>,
     cmd_task_factory: Arc<F>,
     key_lock: Arc<KeyLock>,
     stats: Arc<MigrationStats>,
+    registry: Arc<WaitRegistry>,
 }
 
 impl<F, S, DS, PS> RestoreDataCmdTaskHandler<F, S, DS, PS>
@@ -479,7 +529,7 @@ where
         let (pending_umsync_task_sender, pending_umsync_task_receiver) = unbounded();
         let (umsync_task_sender, umsync_task_receiver) = unbounded();
         let (del_task_sender, del_task_receiver) = unbounded();
-        let (wait_handle_sender, wait_handle_receiver) = unbounded();
+        let (registry, wait_handle) = WaitRegistry::new();
         let task_receivers = AtomicOption::new(Box::new((
             exists_task_receiver,
             dump_pttl_task_receiver,
@@ -487,7 +537,7 @@ where
             pending_umsync_task_receiver,
             umsync_task_receiver,
             del_task_receiver,
-            wait_handle_receiver,
+            wait_handle,
         )));
         let key_lock = Arc::new(KeyLock::new(LOCK_SHARD_SIZE));
         Self {
@@ -500,11 +550,11 @@ where
             pending_umsync_task_sender,
             umsync_task_sender,
             del_task_sender,
-            wait_handle_sender,
             task_receivers,
             cmd_task_factory,
             key_lock,
             stats,
+            registry: Arc::new(registry),
         }
     }
 
@@ -521,7 +571,6 @@ where
         let dump_pttl_task_sender = self.dump_pttl_task_sender.clone();
         let umsync_task_sender = self.umsync_task_sender.clone();
         let del_task_sender = self.del_task_sender.clone();
-        let wait_handle_sender = self.wait_handle_sender.clone();
         let src_sender = self.src_sender.clone();
         let dst_sender = self.dst_sender.clone();
         let src_proxy_sender = self.src_proxy_sender.clone();
@@ -537,7 +586,7 @@ where
             pending_umsync_task_receiver,
             umsync_task_receiver,
             del_task_receiver,
-            wait_handle_receiver,
+            wait_handle,
         ) = match receiver_opt {
             Some(r) => r,
             None => {
@@ -550,12 +599,12 @@ where
             exists_task_sender,
             exists_task_receiver,
             dump_pttl_task_sender,
-            wait_handle_sender.clone(),
             src_sender.clone(),
             dst_sender.clone(),
             cmd_task_factory.clone(),
             key_lock.clone(),
             self.stats.clone(),
+            self.registry.clone(),
         );
 
         let pending_umsync_task_handler = Self::handle_pending_umsync_task(
@@ -563,19 +612,19 @@ where
             umsync_task_sender,
             src_proxy_sender,
             dst_sender.clone(),
-            wait_handle_sender.clone(),
             key_lock.clone(),
             cmd_task_factory.clone(),
             self.stats.clone(),
+            self.registry.clone(),
         );
 
         let dump_pttl_task_handler = Self::handle_dump_pttl_task(
             dump_pttl_task_receiver,
             restore_task_sender,
-            wait_handle_sender.clone(),
             dst_sender.clone(),
             cmd_task_factory.clone(),
             self.stats.clone(),
+            self.registry.clone(),
         );
 
         let restore_task_handler = Self::handle_restore(
@@ -587,14 +636,12 @@ where
 
         let umsync_task_handler = Self::handle_umsync_task(
             umsync_task_receiver,
-            wait_handle_sender.clone(),
             dst_sender,
             self.stats.clone(),
+            self.registry.clone(),
         );
 
         let del_task_handler = Self::handle_del_task(del_task_receiver);
-
-        let handle_wait_handler = Self::handle_wait_handle(wait_handle_receiver);
 
         let mut exists_task_handler = Box::pin(exists_task_handler.fuse());
         let mut pending_umsync_task_handler = Box::pin(pending_umsync_task_handler.fuse());
@@ -602,7 +649,7 @@ where
         let mut restore_task_handler = Box::pin(restore_task_handler.fuse());
         let mut umsync_task_handler = Box::pin(umsync_task_handler.fuse());
         let mut del_task_handler = Box::pin(del_task_handler.fuse());
-        let mut handle_wait_handler = Box::pin(handle_wait_handler.fuse());
+        let mut handle_wait_handler = Box::pin(wait_handle.map(|_| ()).fuse());
 
         select! {
             () = exists_task_handler => {},
@@ -663,7 +710,7 @@ where
             () = handle_wait_handler => {},
         }
 
-        self.wait_handle_sender.close_channel();
+        self.registry.close();
         info!("wait for wait_handle task");
         handle_wait_handler.await;
         info!("All remaining tasks in migration backend are finished");
@@ -674,12 +721,12 @@ where
         exists_task_sender: ExistsTaskSender<F>,
         mut exists_task_receiver: ExistsTaskReceiver<F>,
         dump_pttl_task_sender: DumpPttlTaskSender<F>,
-        wait_handle_sender: DstWaitHandleSender,
         src_sender: Arc<S>,
         dst_sender: Arc<DS>,
         cmd_task_factory: Arc<F>,
         key_lock: Arc<KeyLock>,
         stats: Arc<MigrationStats>,
+        registry: Arc<WaitRegistry>,
     ) {
         while let Some((state, reply_receiver)) = exists_task_receiver.next().await {
             let res = reply_receiver.await;
@@ -693,15 +740,10 @@ where
                     .importing_dst_key_existed
                     .fetch_add(1, Ordering::Relaxed);
 
-                let (_state, req_task, wait_handle) = MgrCmdStateForward::from_state_exists(state);
+                let (_state, req_task) =
+                    MgrCmdStateForward::from_state_exists(state, registry.clone());
                 if let Err(err) = dst_sender.send(req_task) {
                     debug!("failed to forward: {:?}", err);
-                }
-                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                    warn!(
-                        "failed to send wait_handle in handle_exists_task: {:?}",
-                        err
-                    );
                 }
                 continue;
             }
@@ -756,16 +798,10 @@ where
                                 Err(()) => continue,
                             };
                             if key_exists {
-                                let (_state, req_task, wait_handle) =
-                                    MgrCmdStateForward::from_state_exists(state);
+                                let (_state, req_task) =
+                                    MgrCmdStateForward::from_state_exists(state, registry.clone());
                                 if let Err(err) = dst_sender.send(req_task) {
                                     debug!("failed to forward: {:?}", err);
-                                }
-                                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                                    warn!(
-                                        "failed to send wait_handle in handle_exists_task: {:?}",
-                                        err
-                                    );
                                 }
                                 continue;
                             }
@@ -817,10 +853,10 @@ where
     async fn handle_dump_pttl_task(
         mut dump_pttl_task_receiver: DumpPttlTaskReceiver<F>,
         restore_task_sender: RestoreTaskSender<F>,
-        wait_handle_sender: DstWaitHandleSender,
         dst_sender: Arc<DS>,
         cmd_task_factory: Arc<F>,
         stats: Arc<MigrationStats>,
+        registry: Arc<WaitRegistry>,
     ) {
         while let Some((state, reply_fut)) = dump_pttl_task_receiver.next().await {
             let res = reply_fut.await;
@@ -836,16 +872,10 @@ where
                         .importing_src_key_not_existed
                         .fetch_add(1, Ordering::Relaxed);
                     // The key also does not exist in source node.
-                    let (_state, req_task, wait_handle) =
-                        MgrCmdStateForward::from_state_dump_pttl(state);
+                    let (_state, req_task) =
+                        MgrCmdStateForward::from_state_dump_pttl(state, registry.clone());
                     if let Err(err) = dst_sender.send(req_task) {
                         debug!("failed to send forward: {:?}", err);
-                    }
-                    if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                        warn!(
-                            "failed to send wait_handle in handle_dump_pttl_task: {:?}",
-                            err
-                        );
                     }
                     continue;
                 }
@@ -860,17 +890,15 @@ where
                 }
             };
 
-            let (state, req_task, reply_receiver, wait_handles) =
-                MgrCmdStateRestoreForward::from_state_dump(state, entry, &(*cmd_task_factory));
+            let (state, req_task, reply_receiver) = MgrCmdStateRestoreForward::from_state_dump(
+                state,
+                entry,
+                &(*cmd_task_factory),
+                registry.clone(),
+            );
 
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to send restore and forward: {:?}", err);
-            }
-
-            for wait_handle in std::array::IntoIter::new(wait_handles) {
-                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                    warn!("failed to send wait_handle to queue: {:?}", err);
-                }
             }
 
             if let Err(err) = restore_task_sender.unbounded_send((state, reply_receiver)) {
@@ -932,10 +960,10 @@ where
         umsync_task_sender: UmSyncTaskSender<F>,
         src_proxy_sender: Arc<PS>,
         dst_sender: Arc<DS>,
-        wait_handle_sender: DstWaitHandleSender,
         key_lock: Arc<KeyLock>,
         cmd_task_factory: Arc<F>,
         stats: Arc<MigrationStats>,
+        registry: Arc<WaitRegistry>,
     ) {
         while let Some(pending_task) = pending_umsync_task_receiver.next().await {
             let PendingUmSyncTask {
@@ -978,7 +1006,7 @@ where
                 // The queue has been closed so the migration should be done.
                 // We can safely send it to the dst_sender.
                 let MgrCmdStateUmSync { inner_task, .. } = err.into_inner().0;
-                let (task, wait_handle) = WaitableTask::new_with_handle(inner_task);
+                let task = WaitableTask::new_with_registry(inner_task, registry.clone());
                 if let Err(err) = dst_sender.send(ReqTask::Simple(task)) {
                     error!(
                         "failed to send to dst sender after migration is done: {:?}",
@@ -986,21 +1014,15 @@ where
                     );
                     continue;
                 }
-                if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                    warn!(
-                        "failed to send wait_handle in handle_pending_umsync_task: {:?}",
-                        err
-                    );
-                }
             }
         }
     }
 
     async fn handle_umsync_task(
         mut umsync_task_receiver: UmSyncTaskReceiver<F>,
-        wait_handle_sender: DstWaitHandleSender,
         dst_sender: Arc<DS>,
         stats: Arc<MigrationStats>,
+        registry: Arc<WaitRegistry>,
     ) {
         while let Some((state, reply_fut)) = umsync_task_receiver.next().await {
             // The DUMP and RESTORE has already been processed in the source proxy.
@@ -1034,15 +1056,9 @@ where
                 _ => (),
             };
 
-            let (_state, req_task, wait_handle) = MgrCmdStateForward::from_state_umsync(state);
+            let (_state, req_task) = MgrCmdStateForward::from_state_umsync(state, registry.clone());
             if let Err(err) = dst_sender.send(req_task) {
                 debug!("failed to forward: {:?}", err);
-            }
-            if let Err(err) = wait_handle_sender.unbounded_send(wait_handle) {
-                warn!(
-                    "failed to send wait_handle in handle_umsync_task: {:?}",
-                    err
-                );
             }
         }
     }
@@ -1062,12 +1078,6 @@ where
                     err
                 );
             }
-        }
-    }
-
-    async fn handle_wait_handle(mut wait_handle_receiver: DstWaitHandleReceiver) {
-        while let Some(wait_handle) = wait_handle_receiver.next().await {
-            wait_handle.await.unwrap_or(());
         }
     }
 
@@ -1872,6 +1882,57 @@ mod tests {
             let _guard = lock.lock(some_key.clone(), 233).unwrap();
             assert!(lock.lock(some_key.clone(), 0).is_none());
             assert!(lock.lock(another_key.clone(), 0).is_some());
+        }
+    }
+
+    async fn assert_ready<F: Future<Output = ()> + Unpin>(f: F) {
+        use futures::future::{ready, select, Either};
+
+        match select(f, ready(())).await {
+            Either::Left(((), _)) => (),
+            Either::Right(((), _)) => assert!(false),
+        };
+    }
+
+    async fn assert_not_ready<F: Future<Output = ()> + Unpin>(f: F) -> F {
+        use futures::future::{ready, select, Either};
+
+        let f_opt = match select(f, ready(())).await {
+            Either::Left(((), _)) => None,
+            Either::Right(((), f)) => Some(f),
+        };
+        f_opt.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_waitable_task() {
+        let (registry, handle) = WaitRegistry::new();
+        let handle = handle.map(|_| ());
+
+        let handle = assert_not_ready(handle).await;
+        registry.register();
+        let handle = assert_not_ready(handle).await;
+        registry.unregister();
+        let handle = assert_not_ready(handle).await;
+
+        registry.register();
+        registry.register();
+        let handle = assert_not_ready(handle).await;
+        registry.unregister();
+        registry.unregister();
+        let handle = assert_not_ready(handle).await;
+
+        registry.close();
+        assert_ready(handle).await;
+
+        {
+            let (registry, handle) = WaitRegistry::new();
+            let handle = handle.map(|_| ());
+            registry.register();
+            registry.close();
+            let handle = assert_not_ready(handle).await;
+            registry.unregister();
+            assert_ready(handle).await;
         }
     }
 }
