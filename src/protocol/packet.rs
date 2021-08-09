@@ -123,7 +123,7 @@ impl RespPacket {
     pub fn get_array_element(&self, index: usize) -> Option<&[u8]> {
         match self {
             Self::Indexed(indexed_resp) => indexed_resp.get_array_element(index),
-            Self::Data(resp) => get_command_element(&resp, index),
+            Self::Data(resp) => get_command_element(resp, index),
         }
     }
 
@@ -136,7 +136,7 @@ impl RespPacket {
     pub fn get_array_len(&self) -> Option<usize> {
         match self {
             Self::Indexed(indexed_resp) => indexed_resp.get_array_len(),
-            Self::Data(resp) => get_command_len(&resp),
+            Self::Data(resp) => get_command_len(resp),
         }
     }
 

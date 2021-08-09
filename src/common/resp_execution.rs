@@ -52,7 +52,7 @@ where
             Err(err) => {
                 let debug_cmd = opt_multi_cmd.clone().map(|cmd| {
                     cmd.iter()
-                        .map(|b| pretty_print_bytes(&b))
+                        .map(|b| pretty_print_bytes(b))
                         .collect::<Vec<String>>()
                 });
                 error!(

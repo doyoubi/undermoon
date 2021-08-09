@@ -281,8 +281,8 @@ struct CommandInfo {
 
 impl CommandInfo {
     fn new(packet: &RespPacket) -> Self {
-        let cmd_type = CmdType::from_packet(&packet);
-        let data_cmd_type = DataCmdType::from_packet(&packet);
+        let cmd_type = CmdType::from_packet(packet);
+        let data_cmd_type = DataCmdType::from_packet(packet);
         let slot = Self::get_key(data_cmd_type, packet).map(generate_slot);
         Self {
             cmd_type,

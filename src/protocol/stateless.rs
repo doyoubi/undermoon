@@ -30,7 +30,7 @@ impl Error for ParseError {
 }
 
 pub fn parse_indexed_resp(buf: &mut BytesMut) -> Result<IndexedResp, ParseError> {
-    let (resp, consumed) = parse_resp(&buf)?;
+    let (resp, consumed) = parse_resp(buf)?;
     let data = buf.split_to(consumed).freeze();
     Ok(IndexedResp::new(resp, data))
 }
@@ -117,12 +117,12 @@ fn parse_len(buf: &[u8]) -> Result<(i64, usize), ParseError> {
         .get(data_index.to_range())
         .ok_or(ParseError::UnexpectedErr)?;
 
-    let len = btoi(&next_buf).map_err(|_| ParseError::InvalidProtocol)?;
+    let len = btoi(next_buf).map_err(|_| ParseError::InvalidProtocol)?;
     Ok((len, consumed))
 }
 
 fn parse_line(buf: &[u8]) -> Result<(DataIndex, usize), ParseError> {
-    let lf_index = memchr(LF, &buf).ok_or(ParseError::NotEnoughData)?;
+    let lf_index = memchr(LF, buf).ok_or(ParseError::NotEnoughData)?;
     if lf_index == 0 {
         return Err(ParseError::InvalidProtocol);
     }

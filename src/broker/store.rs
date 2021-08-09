@@ -566,7 +566,7 @@ impl MetaStore {
     }
 
     pub fn get_free_proxies(&self) -> Vec<HostProxy> {
-        MetaStoreQuery::new(&self).get_free_proxies()
+        MetaStoreQuery::new(self).get_free_proxies()
     }
 
     pub fn replace_failed_proxy(

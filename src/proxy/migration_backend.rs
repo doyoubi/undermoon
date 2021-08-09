@@ -935,7 +935,7 @@ where
                 Resp::Error(err)
                     if err.get(..BUSYKEY.len()).map(|p| p == BUSYKEY) == Some(true) => {}
                 others => {
-                    let pretty_resp = others.as_ref().map(|s| pretty_print_bytes(&s));
+                    let pretty_resp = others.as_ref().map(|s| pretty_print_bytes(s));
                     error!("unexpected RESTORE result: {:?}", pretty_resp);
                     continue;
                 }

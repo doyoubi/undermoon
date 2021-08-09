@@ -323,7 +323,7 @@ impl<'a> MetaStoreUpdate<'a> {
             Some(cluster_store) => {
                 cluster_store.chunks.append(&mut chunks);
                 cluster_store.epoch = new_epoch;
-                MetaStoreQuery::cluster_store_to_cluster(&cluster_store)
+                MetaStoreQuery::cluster_store_to_cluster(cluster_store)
             }
         };
 
@@ -467,7 +467,7 @@ impl<'a> MetaStoreUpdate<'a> {
         proxy_num: NonZeroUsize,
         first_index: usize,
     ) -> Result<Vec<[ProxyResource; CHUNK_HALF_NODE_NUM]>, MetaStoreError> {
-        let mut host_proxies = MetaStoreQuery::new(&self.store).get_free_proxy_resource();
+        let mut host_proxies = MetaStoreQuery::new(self.store).get_free_proxy_resource();
         if host_proxies.len() < proxy_num.get() {
             return Err(MetaStoreError::NoAvailableResource);
         }
@@ -515,7 +515,7 @@ impl<'a> MetaStoreUpdate<'a> {
     fn generate_free_host_proxies(&self) -> HashMap<String, Vec<String>> {
         // host => proxies
         let mut host_proxies: HashMap<String, Vec<String>> = HashMap::new();
-        for host_proxy in MetaStoreQuery::new(&self.store)
+        for host_proxy in MetaStoreQuery::new(self.store)
             .get_free_proxies()
             .into_iter()
         {
@@ -681,7 +681,7 @@ impl<'a> MetaStoreUpdate<'a> {
             .map(|(peer_host, _)| peer_host)
             .ok_or(MetaStoreError::NoAvailableResource)?;
 
-        let peer_proxy = MetaStoreQuery::new(&self.store)
+        let peer_proxy = MetaStoreQuery::new(self.store)
             .get_free_proxies()
             .iter()
             .find(|host_proxy| peer_host == &host_proxy.host)

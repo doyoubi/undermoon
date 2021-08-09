@@ -21,7 +21,7 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
     fn parse_migration_task_meta(element: &RespVec) -> Option<MigrationTaskMeta> {
         match element {
             Resp::Bulk(BulkStr::Str(s)) => {
-                let data = str::from_utf8(&s).ok()?;
+                let data = str::from_utf8(s).ok()?;
                 let mut it = data
                     .split(' ')
                     .map(ToString::to_string)
@@ -59,7 +59,7 @@ impl<F: RedisClientFactory> MigrationStateRespChecker<F> {
             Resp::Arr(Array::Arr(arr)) => {
                 let mut metadata = vec![];
                 for element in arr.iter() {
-                    match Self::parse_migration_task_meta(&element) {
+                    match Self::parse_migration_task_meta(element) {
                         Some(meta) => metadata.push(meta),
                         None => {
                             error!("failed to parse migration task meta data {:?}", element);

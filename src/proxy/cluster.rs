@@ -628,7 +628,7 @@ fn gen_cluster_nodes_helper(
         let slot_range = ranges
             .iter()
             .map(|slot_range| {
-                if should_ignore_slots(&slot_range, &migration_states) {
+                if should_ignore_slots(slot_range, migration_states) {
                     return None;
                 }
                 let ranges: Vec<String> = slot_range
