@@ -160,7 +160,7 @@ where
                     String::from("Missing password").into_bytes(),
                 )));
             }
-            Some(pwd) => match str::from_utf8(&pwd) {
+            Some(pwd) => match str::from_utf8(pwd) {
                 Ok(pwd) => pwd.to_string(),
                 Err(_) => {
                     return cmd_ctx.set_resp_result(Ok(Resp::Error(
@@ -417,7 +417,7 @@ where
             let limit = cmd_ctx
                 .get_cmd()
                 .get_command_element(3)
-                .and_then(|element| atoi::<usize>(&element));
+                .and_then(|element| atoi::<usize>(element));
             let logs = self.slow_request_logger.get(limit);
             let reply = slowlogs_to_resp(logs);
             cmd_ctx.set_resp_result(Ok(reply));

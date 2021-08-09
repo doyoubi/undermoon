@@ -121,7 +121,7 @@ impl SlowlogRecord {
     }
 
     fn get_brief_command(request: &RespPacket) -> Vec<String> {
-        let data_to_string = |data: &[u8]| match str::from_utf8(&data) {
+        let data_to_string = |data: &[u8]| match str::from_utf8(data) {
             Ok(s) => s.to_string(),
             _ => format!("{:?}", data),
         };
@@ -144,7 +144,7 @@ impl SlowlogRecord {
                     .iter()
                     .take(LOG_ELEMENT_NUMBER)
                     .map(|element| match element {
-                        Resp::Bulk(BulkStr::Str(data)) => data_to_string(&data),
+                        Resp::Bulk(BulkStr::Str(data)) => data_to_string(data),
                         others => format!("{:?}", others),
                     })
                     .map(limit_len)

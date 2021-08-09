@@ -27,7 +27,7 @@ impl ClusterConfig {
         match field.as_str() {
             "compression_strategy" => {
                 let strategy =
-                    CompressionStrategy::from_str(&value).map_err(|_| ConfigError::InvalidValue)?;
+                    CompressionStrategy::from_str(value).map_err(|_| ConfigError::InvalidValue)?;
                 self.compression_strategy = strategy;
             }
             _ => {

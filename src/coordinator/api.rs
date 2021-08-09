@@ -98,14 +98,14 @@ impl CoordCmdHandler {
     }
 
     fn handle_config(&self, cmd: &Command) -> RespVec {
-        let sub_cmd = match Self::get_sub_arg(&cmd, 1) {
+        let sub_cmd = match Self::get_sub_arg(cmd, 1) {
             Ok(sub_cmd) => sub_cmd.to_uppercase(),
             Err(err) => {
                 return Resp::Error(err.into_bytes());
             }
         };
 
-        let field = match Self::get_sub_arg(&cmd, 2) {
+        let field = match Self::get_sub_arg(cmd, 2) {
             Ok(field) => field,
             Err(err) => {
                 return Resp::Error(err.into_bytes());
@@ -124,7 +124,7 @@ impl CoordCmdHandler {
                 Resp::Bulk(BulkStr::Str(value.into_bytes()))
             }
             "SET" => {
-                let value = match Self::get_sub_arg(&cmd, 3) {
+                let value = match Self::get_sub_arg(cmd, 3) {
                     Ok(value) => value,
                     Err(err) => {
                         return Resp::Error(err.into_bytes());
@@ -149,14 +149,14 @@ impl CoordCmdHandler {
     }
 
     fn handle_umctl(&self, cmd: &Command) -> RespVec {
-        let sub_cmd = match Self::get_sub_arg(&cmd, 1) {
+        let sub_cmd = match Self::get_sub_arg(cmd, 1) {
             Ok(sub_cmd) => sub_cmd.to_uppercase(),
             Err(err) => {
                 return Resp::Error(err.into_bytes());
             }
         };
 
-        let second_sub_cmd = match Self::get_sub_arg(&cmd, 2) {
+        let second_sub_cmd = match Self::get_sub_arg(cmd, 2) {
             Ok(sub_cmd) => sub_cmd.to_uppercase(),
             Err(err) => {
                 return Resp::Error(err.into_bytes());

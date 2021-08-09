@@ -69,7 +69,7 @@ async fn fetch_min_epoch(
 ) -> Result<u64, String> {
     let futs: Vec<_> = proxy_addresses
         .into_iter()
-        .map(|address| fetch_proxy_epoch(address, &client_factory))
+        .map(|address| fetch_proxy_epoch(address, client_factory))
         .collect();
     let results = future::join_all(futs).await;
 

@@ -66,7 +66,10 @@ impl IndexedResp {
 
     pub fn to_resp_vec(&self) -> RespVec {
         self.resp.as_ref().map(|DataIndex(s, e)| {
-            (&self.data.get(*s..*e).expect("IndexedResp::to_resp_vec")).to_vec()
+            self.data
+                .get(*s..*e)
+                .expect("IndexedResp::to_resp_vec")
+                .to_vec()
         })
     }
 
@@ -300,7 +303,7 @@ impl RespIndex {
 
 impl PacketSizeHint for RespVec {
     fn get_size_hint(&self) -> Option<usize> {
-        match get_resp_size_hint(&self) {
+        match get_resp_size_hint(self) {
             Ok(n) => Some(n),
             Err(_) => {
                 error!("FATAL: failed to get size hint");
