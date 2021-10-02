@@ -25,6 +25,7 @@ use std::sync::Arc;
 type TaskRecord<T> = Either<Arc<dyn MigratingTask<Task = T>>, Arc<dyn ImportingTask<Task = T>>>;
 struct MgrTask<T: CmdTask> {
     task: TaskRecord<T>,
+    #[allow(dyn_drop)]
     _stop_handle: Option<Box<dyn Drop + Send + Sync + 'static>>,
 }
 type ClusterTask<T> = HashMap<MigrationTaskMeta, Arc<MgrTask<T>>>;
