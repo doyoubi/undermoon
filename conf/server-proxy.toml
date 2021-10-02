@@ -12,7 +12,10 @@ slowlog_sample_rate = 1000
 thread_number = 2
 
 backend_conn_num = 2
-backend_batch_strategy = "fixed"
+# "disabled" should be good enough for most cases.
+# For larger throughput with pipline enabled,
+# we can try "fixed" or "dynamic" for higher throughput.
+backend_batch_strategy = "disabled"
 # In bytes
 backend_flush_size = 1024
 # In nanoseconds

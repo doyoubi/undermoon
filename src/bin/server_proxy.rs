@@ -65,9 +65,9 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
             "disabled" => BatchStrategy::Disabled,
             "fixed" => BatchStrategy::Fixed,
             "dynamic" => BatchStrategy::Dynamic,
-            _ => BatchStrategy::Fixed,
+            _ => BatchStrategy::Disabled,
         })
-        .unwrap_or_else(|_| BatchStrategy::Fixed);
+        .unwrap_or_else(|_| BatchStrategy::Disabled);
     let backend_flush_size =
         NonZeroUsize::new(s.get::<usize>("backend_flush_size").unwrap_or(1024))
             .ok_or("backend_flush_size")?;
