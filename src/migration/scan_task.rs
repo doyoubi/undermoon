@@ -449,6 +449,7 @@ where
         self.range_map.contains_slot(slot)
     }
 
+    #[allow(dyn_drop)]
     fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>> {
         let handle = MigratingTaskHandle {
             task: self.task.clone(),
@@ -644,6 +645,7 @@ where
         self.range_map.contains_slot(slot)
     }
 
+    #[allow(dyn_drop)]
     fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>> {
         let handle = ImportingTaskHandle {
             meta: self.meta.clone(),

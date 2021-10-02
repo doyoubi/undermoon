@@ -100,6 +100,9 @@ pub trait MigratingTask: ThreadSafe {
     ) -> BoxFuture<Result<(), ClusterSendError<BlockingHintTask<Self::Task>>>>;
     fn get_state(&self) -> MigrationState;
     fn contains_slot(&self, slot: usize) -> bool;
+    // Rust implements `drop` for all types.
+    // We just explicitly tag `Drop` here for better understanding.
+    #[allow(dyn_drop)]
     fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>>;
 }
 
@@ -114,6 +117,9 @@ pub trait ImportingTask: ThreadSafe {
     ) -> Result<(), ClusterSendError<BlockingHintTask<Self::Task>>>;
     fn get_state(&self) -> MigrationState;
     fn contains_slot(&self, slot: usize) -> bool;
+    // Rust implements `drop` for all types.
+    // We just explicitly tag `Drop` here for better understanding.
+    #[allow(dyn_drop)]
     fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>>;
     fn handle_switch(
         &self,
