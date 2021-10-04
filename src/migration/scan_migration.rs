@@ -450,8 +450,8 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
                         error!("failed to scan and migrate {:?}", err);
                         break;
                     }
-                    Ok((new_scan_index, dst_client)) => {
-                        if new_scan_index == 0 {
+                    Ok((new_scan_index, scan_finished, dst_client)) => {
+                        if scan_finished {
                             sync_tasks_sender.close_channel();
                             while let Some(cmd_tasks) = sync_tasks_receiver.next().await {
                                 for cmd_task in cmd_tasks.into_iter() {
@@ -471,6 +471,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         }
     }
 
+    // Returns (next_index, scan_finished, cached_client) on success
     #[allow(clippy::too_many_arguments)]
     async fn scan_and_migrate_keys(
         slot_ranges: &SlotRangeArray,
@@ -482,7 +483,7 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         scan_count: u64,
         slot_mutex: &SlotMutex,
         stats: &MigrationStats,
-    ) -> Result<(u64, Option<F::Client>), RedisClientError> {
+    ) -> Result<(u64, bool, Option<F::Client>), RedisClientError> {
         let ScanResponse { next_index, keys } =
             Self::scan_keys(src_client, index, scan_count).await?;
 
@@ -527,9 +528,9 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         if need_retry {
             // Some keys are missed in this round.
             // Retry the last index again.
-            Ok((index, dst_client))
+            Ok((index, false, dst_client))
         } else {
-            Ok((next_index, dst_client))
+            Ok((next_index, next_index == 0, dst_client))
         }
     }
 
