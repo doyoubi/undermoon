@@ -23,7 +23,7 @@ use undermoon::protocol::SimpleRedisClientFactory;
 use undermoon::proxy::backend::DefaultConnFactory;
 use undermoon::proxy::executor::SharedForwardHandler;
 use undermoon::proxy::manager::MetaMap;
-use undermoon::proxy::service::{ServerProxyConfig, ServerProxyService};
+use undermoon::proxy::service::{ClusterNodesVersion, ServerProxyConfig, ServerProxyService};
 use undermoon::proxy::slowlog::SlowRequestLogger;
 use undermoon::MAX_REDIRECTIONS;
 
@@ -101,6 +101,20 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
         Some(default_redirection_address)
     };
 
+    let cluster_nodes_version = s.get::<String>("cluster_nodes_version");
+    let command_cluster_nodes_version = match cluster_nodes_version.as_ref().map(|s| s.as_str()) {
+        Ok("v1") => ClusterNodesVersion::V1,
+        Ok("v2") => ClusterNodesVersion::V2,
+        Ok(others) => {
+            error!(
+                "Unexpected CLUSTER NODES version {}. Make it default v2",
+                others
+            );
+            ClusterNodesVersion::V2
+        }
+        Err(_) => ClusterNodesVersion::V2,
+    };
+
     let config = ServerProxyConfig {
         address,
         announce_address,
@@ -121,6 +135,7 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
         backend_high_flush_interval: Duration::from_nanos(backend_high_flush_interval.get()),
         backend_timeout: Duration::from_millis(backend_timeout.get()),
         password,
+        command_cluster_nodes_version,
     };
 
     Ok(config)

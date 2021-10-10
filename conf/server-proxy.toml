@@ -46,3 +46,9 @@ max_redirections = 4
 # and try again.
 # Leave it empty to disable it.
 default_redirection_address = ""
+
+# In v1, the format of node address is just <ip:port>
+# In v2, the format of node address is <ip:port@cport>,
+# where `cport` is used in the gossip protocol in the official Redis Cluster.
+# In undermoon, `cport` will always be 5299.
+cluster_nodes_version = "v2"
