@@ -1,5 +1,6 @@
 use super::backend::{BackendError, CmdTask, IntoTask, SenderBackendError};
 use super::sender::{CmdTaskSender, CmdTaskSenderFactory};
+use super::service::ClusterNodesVersion;
 use super::slot::SlotMap;
 use crate::common::cluster::{ClusterName, RangeList, SlotRange, SlotRangeTag, EMPTY_CLUSTER_NAME};
 use crate::common::config::ClusterConfig;
@@ -15,6 +16,7 @@ use std::fmt;
 use std::iter::Iterator;
 
 pub const DEFAULT_CLUSTER: &str = "admin";
+const CLUSTER_NODES_CPORT: usize = 5299;
 
 #[derive(Debug)]
 pub enum ClusterMetaError {
@@ -141,13 +143,16 @@ where
         &self,
         service_address: String,
         migration_states: &HashMap<RangeList, MigrationState>,
+        cluster_nodes_version: ClusterNodesVersion,
     ) -> String {
-        let local = self
-            .local_cluster
-            .gen_local_cluster_nodes(service_address, migration_states);
+        let local = self.local_cluster.gen_local_cluster_nodes(
+            service_address,
+            migration_states,
+            cluster_nodes_version,
+        );
         let remote = self
             .remote_cluster
-            .gen_remote_cluster_nodes(migration_states);
+            .gen_remote_cluster_nodes(migration_states, cluster_nodes_version);
 
         format!("{}{}", local, remote)
     }
@@ -297,6 +302,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         &self,
         service_address: String,
         migration_states: &HashMap<RangeList, MigrationState>,
+        cluster_nodes_version: ClusterNodesVersion,
     ) -> String {
         let slots: Vec<SlotRange> = self
             .slot_ranges
@@ -312,6 +318,7 @@ impl<S: CmdTaskSender> LocalCluster<S> {
             &slot_ranges,
             migration_states,
             true,
+            cluster_nodes_version,
         )
     }
 
@@ -466,6 +473,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
     pub fn gen_remote_cluster_nodes(
         &self,
         migration_states: &HashMap<RangeList, MigrationState>,
+        cluster_nodes_version: ClusterNodesVersion,
     ) -> String {
         gen_cluster_nodes_helper(
             &self.cluster_name,
@@ -473,6 +481,7 @@ impl<P: CmdTaskSender> RemoteCluster<P> {
             &self.slot_ranges,
             migration_states,
             false,
+            cluster_nodes_version,
         )
     }
 
@@ -618,11 +627,16 @@ fn gen_cluster_nodes_helper(
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<RangeList, MigrationState>,
     local: bool,
+    cluster_nodes_version: ClusterNodesVersion,
 ) -> String {
     let mut cluster_nodes = String::from("");
     let name_seg = gen_cluster_name_seg(name);
     for (addr, ranges) in slot_ranges {
         let id = gen_node_id(name_seg.as_str(), addr.as_str());
+        let address = match cluster_nodes_version {
+            ClusterNodesVersion::V1 => addr.clone(),
+            ClusterNodesVersion::V2 => format!("{}@{}", addr, CLUSTER_NODES_CPORT),
+        };
 
         let mut slot_range_str = String::new();
         let slot_range = ranges
@@ -657,8 +671,8 @@ fn gen_cluster_nodes_helper(
         let flags = if local { "myself,master" } else { "master" };
 
         let line = format!(
-            "{id} {addr} {flags} {master} {ping_sent} {pong_recv} {epoch} {link_state}{slot_range}\n",
-            id=id, addr=addr, flags=flags, master="-", ping_sent=0, pong_recv=0, epoch=epoch,
+            "{id} {address} {flags} {master} {ping_sent} {pong_recv} {epoch} {link_state}{slot_range}\n",
+            id=id, address=address, flags=flags, master="-", ping_sent=0, pong_recv=0, epoch=epoch,
             link_state="connected", slot_range=slot_range_str,
         );
         cluster_nodes.push_str(&line);
@@ -803,8 +817,9 @@ mod tests {
             &slot_ranges,
             &m,
             true,
+            ClusterNodesVersion::V2,
         );
-        assert_eq!(output, "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected 0-100 300\n");
+        assert_eq!(output, "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-100 300\n");
     }
 
     #[test]
@@ -820,8 +835,9 @@ mod tests {
             &slot_ranges,
             &m,
             false,
+            ClusterNodesVersion::V2,
         );
-        assert_eq!(output, format!("testcluster_________a744988af9aa86ed____ {} master - 0 0 233 connected 0-100 300\n", long_address));
+        assert_eq!(output, format!("testcluster_________a744988af9aa86ed____ {}@5299 master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
     #[test]
@@ -835,10 +851,11 @@ mod tests {
             &slot_ranges,
             &m,
             false,
+            ClusterNodesVersion::V2,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -857,10 +874,11 @@ mod tests {
             &slot_ranges,
             &m,
             true,
+            ClusterNodesVersion::V2,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected\n"
         );
     }
 
@@ -879,10 +897,11 @@ mod tests {
             &slot_ranges,
             &m,
             true,
+            ClusterNodesVersion::V2,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -897,10 +916,11 @@ mod tests {
             &slot_ranges,
             &m,
             false,
+            ClusterNodesVersion::V2,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 master - 0 0 233 connected\n"
         );
     }
 
@@ -919,10 +939,11 @@ mod tests {
             &slot_ranges,
             &m,
             true,
+            ClusterNodesVersion::V2,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected 0-1000\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -941,10 +962,11 @@ mod tests {
             &slot_ranges,
             &m,
             true,
+            ClusterNodesVersion::V2,
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299 myself,master - 0 0 233 connected\n"
+            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected\n"
         );
     }
 

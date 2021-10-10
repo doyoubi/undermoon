@@ -189,11 +189,14 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
     }
 
     pub fn gen_cluster_nodes(&self) -> String {
+        let cluster_nodes_version = self.config.command_cluster_nodes_version;
         let meta_map = self.meta_map.load();
         let migration_states = meta_map.migration_map.get_states();
-        meta_map
-            .cluster_map
-            .gen_cluster_nodes(self.config.announce_address.clone(), &migration_states)
+        meta_map.cluster_map.gen_cluster_nodes(
+            self.config.announce_address.clone(),
+            &migration_states,
+            cluster_nodes_version,
+        )
     }
 
     pub fn gen_cluster_slots(&self) -> Result<RespVec, String> {

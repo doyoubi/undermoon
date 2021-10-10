@@ -34,7 +34,7 @@ mod tests {
     use undermoon::proxy::command::{new_command_pair, CmdReplyReceiver, Command};
     use undermoon::proxy::manager::MetaManager;
     use undermoon::proxy::manager::MetaMap;
-    use undermoon::proxy::service::ServerProxyConfig;
+    use undermoon::proxy::service::{ClusterNodesVersion, ServerProxyConfig};
     use undermoon::proxy::session::CmdCtx;
     use undermoon::replication::replicator::{MasterMeta, ReplicaMeta, ReplicatorMeta};
 
@@ -62,6 +62,7 @@ mod tests {
             backend_high_flush_interval: Duration::from_nanos(800_000),
             backend_timeout: Duration::from_secs(3),
             password: None,
+            command_cluster_nodes_version: ClusterNodesVersion::V2,
         }
     }
 

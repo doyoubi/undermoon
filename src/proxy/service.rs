@@ -34,6 +34,7 @@ pub struct ServerProxyConfig {
     pub backend_high_flush_interval: Duration,
     pub backend_timeout: Duration,
     pub password: Option<String>,
+    pub command_cluster_nodes_version: ClusterNodesVersion,
 }
 
 impl ServerProxyConfig {
@@ -104,6 +105,16 @@ impl ServerProxyConfig {
             _ => Err(ConfigError::FieldNotFound),
         }
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum ClusterNodesVersion {
+    // In V1, the format of node address is just <ip:port>
+    V1,
+    // In V2, the format of node address is <ip:port@cport>,
+    // where `cport` is used in the gossip protocol in the official Redis Cluster.
+    // In undermoon, `cport` will always be 5299.
+    V2,
 }
 
 #[derive(Clone)]
