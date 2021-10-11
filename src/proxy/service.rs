@@ -193,7 +193,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                 Ok(address) => address.to_string(),
                 Err(e) => format!("Failed to get peer {}", e),
             };
-            info!("accept conn: {}", peer);
+            debug!("accept conn: {}", peer);
 
             let curr_session_id = session_id.fetch_add(1, Ordering::SeqCst);
 
@@ -210,7 +210,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
 
             let desc = format!("session: session_id={} peer={}", curr_session_id, peer);
             let fut = session_handler.map(move |res| match res {
-                Ok(()) => info!("session IO closed {}", peer),
+                Ok(()) => debug!("session IO closed {}", peer),
                 Err(err) => error!("session IO error {:?} {}", err, peer),
             });
             let fut = TrackedFutureRegistry::wrap(future_registry.clone(), fut, desc);
