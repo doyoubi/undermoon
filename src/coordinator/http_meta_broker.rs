@@ -202,7 +202,8 @@ impl MetaDataBroker for HttpMetaBroker {
                 self.get_cluster_names_impl(offset, PAGE_SIZE)
             })
             .take_while(|names_res| match names_res {
-                Err(_) => future::ready(true),
+                // Returning true for error could result in encountering error again and again
+                Err(_) => future::ready(false),
                 Ok(names) => future::ready(!names.is_empty()),
             })
             .map(vec_result_to_stream)
@@ -227,7 +228,8 @@ impl MetaDataBroker for HttpMetaBroker {
                 self.get_proxy_addresses_impl(offset, PAGE_SIZE)
             })
             .take_while(|names_res| match names_res {
-                Err(_) => future::ready(true),
+                // Returning true for error could result in encountering error again and again
+                Err(_) => future::ready(false),
                 Ok(names) => future::ready(!names.is_empty()),
             })
             .map(vec_result_to_stream)

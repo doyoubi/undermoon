@@ -7,8 +7,6 @@
 - Cluster management through HTTP API
 - Automatic failover for both master and replica
 - Fast scaling
-- Both cluster-mode clients and non-cluster-mode clients.
-- String value compression
 
 Any storage system implementing redis protocol could also somehow work with undermoon,
 such as [KeyDB](https://github.com/JohnSully/KeyDB).
