@@ -258,7 +258,7 @@ where
         loop {
             match Pin::new(&mut reader).poll_next(cx) {
                 Poll::Ready(None) => {
-                    info!("Session is closed by peer");
+                    debug!("Session is closed by peer");
                     return Poll::Ready(Ok(()));
                 }
                 Poll::Ready(Some(req)) => {
