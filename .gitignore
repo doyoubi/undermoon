@@ -5,5 +5,6 @@ chaostest/chaos-docker-compose.yml
 *.pyc
 metadata
 .idea/
-local_tests/
-
+local_tests/**/*log
+local_tests/**/dump.rdb
+local_tests/**/nodes.conf

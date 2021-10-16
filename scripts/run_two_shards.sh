@@ -6,13 +6,13 @@ mkdir -p local_tests/2
 trap "exit" INT TERM
 trap "kill 0" EXIT
 
-cd local_tests/1 && redis-server --port 7001 &> redis-1.log &
-cd local_tests/2 && redis-server --port 7002 &> redis-2.log &
+cd local_tests/1 && redis-server redis.conf --port 7001 &> redis-1.log &
+cd local_tests/2 && redis-server redis.conf --port 7002 &> redis-2.log &
 
-proxy="${PWD}/target/debug/server_proxy"
+proxy="${PWD}/target/release/server_proxy"
 conf="${PWD}/conf/server-proxy.toml"
 
-export RUST_LOG=undermoon=debug,server_proxy=debug
+export RUST_LOG=undermoon=info,server_proxy=info
 export UNDERMOON_ADDRESS=127.0.0.1:6001 UNDERMOON_ANNOUNCE_ADDRESS=127.0.0.1:6001
 cd local_tests/1 && "${proxy}" "${conf}" &> proxy-1.log &
 export UNDERMOON_ADDRESS=127.0.0.1:6002 UNDERMOON_ANNOUNCE_ADDRESS=127.0.0.1:6002

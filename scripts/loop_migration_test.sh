@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+one_shot="$1"
+if [ "${one_shot}" == 'one_shot' ]; then
+    echo 'just run once'
+fi
+
+migration_scan_interval=0
+
 function wait_for_migration() {
     while true; do
         sleep 1
@@ -47,11 +54,13 @@ while true; do
         redis-cli -p 6001 UMCTL SETCLUSTER v2 "${epoch}" NOFLAGS mydb \
             127.0.0.1:7001 1 0-8000 \
             127.0.0.1:7001 migrating 1 8001-16383 "${epoch}" 127.0.0.1:6001 127.0.0.1:7001 127.0.0.1:6002 127.0.0.1:7002 \
-            PEER 127.0.0.1:6002 importing 1 8001-16383 "${epoch}" 127.0.0.1:6001 127.0.0.1:7001 127.0.0.1:6002 127.0.0.1:7002
+            PEER 127.0.0.1:6002 importing 1 8001-16383 "${epoch}" 127.0.0.1:6001 127.0.0.1:7001 127.0.0.1:6002 127.0.0.1:7002 \
+            config migration_scan_interval ${migration_scan_interval}
         redis-cli -p 6002 UMCTL SETCLUSTER v2 "${epoch}" NOFLAGS mydb \
             127.0.0.1:7002 importing 1 8001-16383 "${epoch}" 127.0.0.1:6001 127.0.0.1:7001 127.0.0.1:6002 127.0.0.1:7002 \
             PEER 127.0.0.1:6001 1 0-8000 \
-            127.0.0.1:6001 migrating 1 8001-16383 "${epoch}" 127.0.0.1:6001 127.0.0.1:7001 127.0.0.1:6002 127.0.0.1:7002
+            127.0.0.1:6001 migrating 1 8001-16383 "${epoch}" 127.0.0.1:6001 127.0.0.1:7001 127.0.0.1:6002 127.0.0.1:7002 \
+            config migration_scan_interval ${migration_scan_interval}
 
         wait_for_migration
         epoch=$(get_epoch)
@@ -71,11 +80,13 @@ while true; do
         redis-cli -p 6001 UMCTL SETCLUSTER v2 "${epoch}" NOFLAGS mydb \
             127.0.0.1:7001 1 0-8000 \
             127.0.0.1:7001 importing 1 8001-16383 "${epoch}" 127.0.0.1:6002 127.0.0.1:7002 127.0.0.1:6001 127.0.0.1:7001 \
-            PEER 127.0.0.1:6002 migrating 1 8001-16383 "${epoch}" 127.0.0.1:6002 127.0.0.1:7002 127.0.0.1:6001 127.0.0.1:7001
+            PEER 127.0.0.1:6002 migrating 1 8001-16383 "${epoch}" 127.0.0.1:6002 127.0.0.1:7002 127.0.0.1:6001 127.0.0.1:7001 \
+            config migration_scan_interval ${migration_scan_interval}
         redis-cli -p 6002 UMCTL SETCLUSTER v2 "${epoch}" NOFLAGS mydb \
             127.0.0.1:7002 migrating 1 8001-16383 "${epoch}" 127.0.0.1:6002 127.0.0.1:7002 127.0.0.1:6001 127.0.0.1:7001 \
             PEER 127.0.0.1:6001 1 0-8000 \
-            127.0.0.1:6001 importing 1 8001-16383 "${epoch}" 127.0.0.1:6002 127.0.0.1:7002 127.0.0.1:6001 127.0.0.1:7001
+            127.0.0.1:6001 importing 1 8001-16383 "${epoch}" 127.0.0.1:6002 127.0.0.1:7002 127.0.0.1:6001 127.0.0.1:7001 \
+            config migration_scan_interval ${migration_scan_interval}
 
         wait_for_migration
         epoch=$(get_epoch)
@@ -86,6 +97,11 @@ while true; do
             127.0.0.1:7001 1 0-16383
         redis-cli -p 6002 UMCTL SETCLUSTER v2 "${epoch}" noflags mydb \
             PEER 127.0.0.1:6001 1 0-16383
+    fi
+
+    date
+    if [ "${one_shot}" == 'one_shot' ]; then
+        break
     fi
 
     sleep 3
