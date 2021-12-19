@@ -21,6 +21,9 @@ backend_flush_size = 1024
 # In nanoseconds
 backend_low_flush_interval = 200000
 backend_high_flush_interval = 600000
+
+# In millisecond. Set 0 to disable session timeout.
+session_timeout = 0
 # In millisecond
 backend_timeout = 3000
 

@@ -60,6 +60,7 @@ mod tests {
             backend_flush_size: NonZeroUsize::new(1024).unwrap(),
             backend_low_flush_interval: Duration::from_nanos(200_000),
             backend_high_flush_interval: Duration::from_nanos(800_000),
+            session_timeout: None,
             backend_timeout: Duration::from_secs(3),
             password: None,
             command_cluster_nodes_version: ClusterNodesVersion::V2,

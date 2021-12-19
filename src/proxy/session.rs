@@ -239,7 +239,11 @@ impl<H: CmdCtxHandler> CmdHandler for Session<H> {
     }
 }
 
-pub async fn handle_session<H>(handler: sync::Arc<H>, sock: TcpStream) -> Result<(), SessionError>
+pub async fn handle_session<H>(
+    handler: sync::Arc<H>,
+    sock: TcpStream,
+    session_timeout: Option<std::time::Duration>,
+) -> Result<(), SessionError>
 where
     H: CmdHandler + Send + Sync + 'static,
 {
@@ -254,6 +258,9 @@ where
     let mut reply_receiver_list = VecDeque::<CmdReplyFuture>::with_capacity(SESSION_BATCH_BUF);
     let mut replies = VecDeque::<Box<RespPacket>>::with_capacity(SESSION_BATCH_BUF);
 
+    let mut timeout_interval = session_timeout.map(tokio::time::interval);
+    let mut data_received = false;
+
     future::poll_fn(|cx: &mut Context<'_>| -> Poll<Result<(), SessionError>> {
         loop {
             match Pin::new(&mut reader).poll_next(cx) {
@@ -262,6 +269,8 @@ where
                     return Poll::Ready(Ok(()));
                 }
                 Poll::Ready(Some(req)) => {
+                    data_received = true;
+
                     let packet = match req {
                         Ok(packet) => packet,
                         Err(err) => {
@@ -334,6 +343,17 @@ where
             };
         };
 
+        if let Some(interval) = timeout_interval.as_mut() {
+            if Pin::new(interval).poll_tick(cx).is_ready() {
+                // Ignore the check on `replies.is_empty()` as write operation may be also blocking.
+                if !data_received && reply_receiver_list.is_empty() {
+                    return Poll::Ready(Err(SessionError::Timeout));
+                }
+
+                data_received = false;
+            }
+        }
+
         match poll_res {
             Poll::Pending | Poll::Ready(Ok(())) => Poll::Pending,
             Poll::Ready(Err(err)) => {
@@ -354,6 +374,7 @@ pub enum SessionError {
     CmdErr(CommandError),
     InvalidProtocol,
     Canceled,
+    Timeout,
     InvalidState,
 }
 
