@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
+const COORDINATOR_SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub struct ApiService {
     config: Arc<CoordinatorConfig>,
     future_registry: Arc<TrackedFutureRegistry>,
@@ -70,6 +72,7 @@ impl ApiService {
                     future_registry.clone(),
                 )),
                 sock,
+                Some(COORDINATOR_SESSION_TIMEOUT),
             );
 
             let desc = format!("session: session_id={} peer={}", curr_session_id, peer);

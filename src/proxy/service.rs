@@ -32,6 +32,7 @@ pub struct ServerProxyConfig {
     pub backend_flush_size: NonZeroUsize,
     pub backend_low_flush_interval: Duration,
     pub backend_high_flush_interval: Duration,
+    pub session_timeout: Option<Duration>,
     pub backend_timeout: Duration,
     pub password: Option<String>,
     pub command_cluster_nodes_version: ClusterNodesVersion,
@@ -206,6 +207,7 @@ impl<H: CmdCtxHandler + ThreadSafe + Clone> ServerProxyService<H> {
                     config.clone(),
                 )),
                 sock,
+                config.session_timeout,
             );
 
             let desc = format!("session: session_id={} peer={}", curr_session_id, peer);

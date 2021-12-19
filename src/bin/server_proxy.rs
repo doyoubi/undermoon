@@ -81,6 +81,13 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
             .unwrap_or(600_000),
     )
     .ok_or("backend_high_flush_interval")?;
+
+    let session_timeout = s.get::<u64>("session_timeout").unwrap_or(0);
+    let session_timeout = if session_timeout == 0 {
+        None
+    } else {
+        Some(Duration::from_millis(session_timeout))
+    };
     let backend_timeout = NonZeroU64::new(s.get::<u64>("backend_timeout").unwrap_or(3_000))
         .ok_or("backend_timeout")?;
 
@@ -133,6 +140,7 @@ fn gen_conf() -> Result<ServerProxyConfig, &'static str> {
         backend_flush_size,
         backend_low_flush_interval: Duration::from_nanos(backend_low_flush_interval.get()),
         backend_high_flush_interval: Duration::from_nanos(backend_high_flush_interval.get()),
+        session_timeout,
         backend_timeout: Duration::from_millis(backend_timeout.get()),
         password,
         command_cluster_nodes_version,
