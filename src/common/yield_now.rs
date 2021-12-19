@@ -3,14 +3,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 // Copied from tokio::task::yield_now so that this future could be `Pin`.
+#[derive(Default)]
 pub struct YieldNow {
     yielded: bool,
-}
-
-impl Default for YieldNow {
-    fn default() -> Self {
-        Self { yielded: false }
-    }
 }
 
 impl Future for YieldNow {

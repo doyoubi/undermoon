@@ -435,14 +435,8 @@ impl NodeMap {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct ClusterConfigData(ClusterConfig);
-
-impl Default for ClusterConfigData {
-    fn default() -> Self {
-        Self(ClusterConfig::default())
-    }
-}
 
 impl ClusterConfigData {
     pub fn new(config: ClusterConfig) -> Self {

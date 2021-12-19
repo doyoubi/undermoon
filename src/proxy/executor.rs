@@ -417,7 +417,7 @@ where
             let limit = cmd_ctx
                 .get_cmd()
                 .get_command_element(3)
-                .and_then(|element| atoi::<usize>(element));
+                .and_then(atoi::<usize>);
             let logs = self.slow_request_logger.get(limit);
             let reply = slowlogs_to_resp(logs);
             cmd_ctx.set_resp_result(Ok(reply));
