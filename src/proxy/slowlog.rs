@@ -28,7 +28,7 @@ pub enum TaskEvent {
 const EVENT_NUMBER: usize = 8;
 const LOG_ELEMENT_NUMBER: usize = 5;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct RequestEventMap {
     events: [i64; EVENT_NUMBER],
 }
@@ -56,12 +56,6 @@ impl RequestEventMap {
             let created_time = self.get_event_time(TaskEvent::Created);
             t - created_time
         }
-    }
-}
-
-impl Default for RequestEventMap {
-    fn default() -> Self {
-        Self { events: [0; 8] }
     }
 }
 

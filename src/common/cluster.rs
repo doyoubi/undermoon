@@ -786,9 +786,7 @@ impl Proxy {
     }
 
     pub fn get_cluster_config_or_default(&self) -> ClusterConfig {
-        self.cluster_config
-            .clone()
-            .unwrap_or_else(ClusterConfig::default)
+        self.cluster_config.clone().unwrap_or_default()
     }
 }
 

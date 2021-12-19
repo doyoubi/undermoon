@@ -4,21 +4,12 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct ClusterConfig {
     #[serde(default)]
     pub compression_strategy: CompressionStrategy,
     #[serde(default)]
     pub migration_config: MigrationConfig,
-}
-
-impl Default for ClusterConfig {
-    fn default() -> Self {
-        Self {
-            compression_strategy: CompressionStrategy::default(),
-            migration_config: MigrationConfig::default(),
-        }
-    }
 }
 
 impl ClusterConfig {
@@ -33,8 +24,8 @@ impl ClusterConfig {
             _ => {
                 if field.starts_with("migration_") {
                     let f = field
-                        .splitn(2, '_')
-                        .nth(1)
+                        .split_once('_')
+                        .map(|(_prefix, f)| f)
                         .ok_or(ConfigError::FieldNotFound)?;
                     return self.migration_config.set_field(f, value);
                 } else {
