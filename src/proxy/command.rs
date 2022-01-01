@@ -498,6 +498,7 @@ pub enum CommandError {
     UnexpectedResponse,
     Dropped,
     Canceled,
+    BackendError,
     InnerError,
 }
 
@@ -511,6 +512,7 @@ impl Clone for CommandError {
             Self::UnexpectedResponse => Self::UnexpectedResponse,
             Self::Dropped => Self::Dropped,
             Self::Canceled => Self::Canceled,
+            Self::BackendError => Self::BackendError,
             Self::InnerError => Self::InnerError,
         }
     }

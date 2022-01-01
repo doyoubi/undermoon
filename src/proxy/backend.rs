@@ -142,7 +142,10 @@ impl<T: CmdTask> CmdTask for ReqTask<T> {
             Self::Simple(t) => match result {
                 Ok(res) => match *res {
                     OptionalMulti::Single(r) => t.set_result(Ok(Box::new(r))),
-                    OptionalMulti::Multi(_) => t.set_result(Err(CommandError::InnerError)),
+                    OptionalMulti::Multi(rs) => {
+                        error!("ReqTask expect Single, Multi({}) found", rs.len());
+                        t.set_result(Err(CommandError::InnerError))
+                    }
                 },
                 Err(err) => t.set_result(Err(err)),
             },
@@ -154,12 +157,18 @@ impl<T: CmdTask> CmdTask for ReqTask<T> {
                 }
                 Ok(res) => match *res {
                     OptionalMulti::Single(_) => {
+                        error!("ReqTask expect Multi({}), Single found", v.len());
                         for t in v {
                             t.set_result(Err(CommandError::InnerError))
                         }
                     }
                     OptionalMulti::Multi(results) => {
                         if v.len() != results.len() {
+                            error!(
+                                "ReqTask expect Multi({}), found Multi({})",
+                                v.len(),
+                                results.len()
+                            );
                             for t in v.into_iter() {
                                 t.set_result(Err(CommandError::InnerError));
                             }
@@ -640,7 +649,7 @@ fn handle_conn_err<T: CmdTask>(
                 BackendError::Io(e) => CommandError::Io(io::Error::from(e.kind())),
                 others => {
                     error!("unexpected backend error: {:?}", others);
-                    CommandError::InnerError
+                    CommandError::BackendError
                 }
             };
             task.set_result(Err(cmd_err));
