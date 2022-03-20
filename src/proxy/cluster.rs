@@ -630,9 +630,8 @@ fn gen_cluster_nodes_helper(
     cluster_nodes_version: ClusterNodesVersion,
 ) -> String {
     let mut cluster_nodes = String::from("");
-    let name_seg = gen_cluster_name_seg(name);
     for (addr, ranges) in slot_ranges {
-        let id = gen_node_id(name_seg.as_str(), addr.as_str());
+        let id = gen_node_id(name, addr.as_str());
         let address = match cluster_nodes_version {
             ClusterNodesVersion::V1 => addr.clone(),
             ClusterNodesVersion::V2 => format!("{}@{}", addr, CLUSTER_NODES_CPORT),
@@ -681,17 +680,15 @@ fn gen_cluster_nodes_helper(
 }
 
 #[inline]
-fn gen_cluster_name_seg(cluster_name: &ClusterName) -> String {
-    let mut name_seg = format!("{:_<20}", cluster_name.to_string());
-    name_seg.truncate(20);
-    name_seg
-}
+fn gen_node_id(cluster_name: &ClusterName, addr: &str) -> String {
+    // 24 bytes cluster name + 16 bytes address hash
+    // format!("{:x}", u64::MAX).len() == 16
+    let mut name_seg = format!("{:_<24}", cluster_name.to_string());
+    name_seg.truncate(24);
 
-#[inline]
-fn gen_node_id(cluster_name_seg: &str, addr: &str) -> String {
-    let mut addr_hash_seg = format!("{:_<20x}", crc64(0, addr.as_bytes()));
-    addr_hash_seg.truncate(20);
-    format!("{}{}", cluster_name_seg, addr_hash_seg)
+    let mut addr_hash_seg = format!("{:_<16x}", crc64(0, addr.as_bytes()));
+    addr_hash_seg.truncate(16);
+    format!("{}{}", name_seg, addr_hash_seg)
 }
 
 fn should_ignore_slots(
@@ -720,8 +717,6 @@ fn gen_cluster_slots_helper(
     slot_ranges: &HashMap<String, Vec<SlotRange>>,
     migration_states: &HashMap<RangeList, MigrationState>,
 ) -> Result<Vec<RespVec>, String> {
-    let name_seg = gen_cluster_name_seg(name);
-
     let mut slot_range_element = Vec::new();
     for (addr, ranges) in slot_ranges {
         let mut segs = addr.split(':');
@@ -737,7 +732,7 @@ fn gen_cluster_slots_helper(
                 continue;
             }
 
-            let node_id = gen_node_id(name_seg.as_str(), addr.as_str());
+            let node_id = gen_node_id(name, addr.as_str());
             let ip_port_array = Resp::Arr(Array::Arr(vec![
                 Resp::Bulk(BulkStr::Str(host.as_bytes().to_vec())),
                 Resp::Integer(port.as_bytes().to_vec()),
@@ -764,6 +759,21 @@ mod tests {
     use crate::protocol::{Array, BulkStr};
     use std::convert::TryFrom;
     use std::iter::repeat;
+
+    #[test]
+    fn test_gen_node_id() {
+        assert_eq!(format!("{:x}", u64::MAX).len(), 16);
+
+        let short_cluster_name: String = (0..10).map(|_| 'x').collect();
+        let short = ClusterName::try_from(short_cluster_name.as_str()).unwrap();
+        let node_id = gen_node_id(&short, "127.0.0.1:6379");
+        assert_eq!(node_id.len(), 40);
+
+        let long_cluster_name: String = (0..30).map(|_| 'x').collect();
+        let long = ClusterName::try_from(long_cluster_name.as_str()).unwrap();
+        let node_id = gen_node_id(&long, "127.0.0.1:6379");
+        assert_eq!(node_id.len(), 40);
+    }
 
     fn gen_testing_slot_ranges(address: &str) -> HashMap<String, Vec<SlotRange>> {
         let mut slot_ranges = HashMap::new();
@@ -819,7 +829,7 @@ mod tests {
             true,
             ClusterNodesVersion::V2,
         );
-        assert_eq!(output, "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-100 300\n");
+        assert_eq!(output, "testcluster_____________9f8fca2805923328 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-100 300\n");
     }
 
     #[test]
@@ -837,7 +847,7 @@ mod tests {
             false,
             ClusterNodesVersion::V2,
         );
-        assert_eq!(output, format!("testcluster_________a744988af9aa86ed____ {}@5299 master - 0 0 233 connected 0-100 300\n", long_address));
+        assert_eq!(output, format!("testcluster_____________a744988af9aa86ed {}@5299 master - 0 0 233 connected 0-100 300\n", long_address));
     }
 
     #[test]
@@ -855,7 +865,7 @@ mod tests {
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 master - 0 0 233 connected 0-1000\n"
+            "testcluster_____________9f8fca2805923328 127.0.0.1:5299@5299 master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -878,7 +888,7 @@ mod tests {
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected\n"
+            "testcluster_____________9f8fca2805923328 127.0.0.1:5299@5299 myself,master - 0 0 233 connected\n"
         );
     }
 
@@ -901,7 +911,7 @@ mod tests {
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-1000\n"
+            "testcluster_____________9f8fca2805923328 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -920,7 +930,7 @@ mod tests {
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 master - 0 0 233 connected\n"
+            "testcluster_____________9f8fca2805923328 127.0.0.1:5299@5299 master - 0 0 233 connected\n"
         );
     }
 
@@ -943,7 +953,7 @@ mod tests {
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-1000\n"
+            "testcluster_____________9f8fca2805923328 127.0.0.1:5299@5299 myself,master - 0 0 233 connected 0-1000\n"
         );
     }
 
@@ -966,7 +976,7 @@ mod tests {
         );
         assert_eq!(
             output,
-            "testcluster_________9f8fca2805923328____ 127.0.0.1:5299@5299 myself,master - 0 0 233 connected\n"
+            "testcluster_____________9f8fca2805923328 127.0.0.1:5299@5299 myself,master - 0 0 233 connected\n"
         );
     }
 
@@ -983,7 +993,7 @@ mod tests {
                 Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
                 Resp::Integer(5299.to_string().into_bytes()),
                 Resp::Bulk(BulkStr::Str(
-                    b"test_cluster_name___9f8fca2805923328____".to_vec(),
+                    b"test_cluster_name_______9f8fca2805923328".to_vec(),
                 )),
             ])),
         ]));
@@ -994,7 +1004,7 @@ mod tests {
                 Resp::Bulk(BulkStr::Str("127.0.0.1".to_string().into_bytes())),
                 Resp::Integer(5299.to_string().into_bytes()),
                 Resp::Bulk(BulkStr::Str(
-                    b"test_cluster_name___9f8fca2805923328____".to_vec(),
+                    b"test_cluster_name_______9f8fca2805923328".to_vec(),
                 )),
             ])),
         ]));
