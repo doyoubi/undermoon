@@ -307,8 +307,8 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         let slots: Vec<SlotRange> = self
             .slot_ranges
             .values()
-            .cloned()
             .flatten()
+            .cloned()
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
@@ -330,8 +330,8 @@ impl<S: CmdTaskSender> LocalCluster<S> {
         let slots: Vec<SlotRange> = self
             .slot_ranges
             .values()
-            .cloned()
             .flatten()
+            .cloned()
             .collect::<Vec<SlotRange>>();
         let mut slot_ranges = HashMap::new();
         slot_ranges.insert(service_address, slots);
@@ -640,7 +640,7 @@ fn gen_cluster_nodes_helper(
         let mut slot_range_str = String::new();
         let slot_range = ranges
             .iter()
-            .map(|slot_range| {
+            .flat_map(|slot_range| {
                 if should_ignore_slots(slot_range, migration_states) {
                     return None;
                 }
@@ -658,7 +658,6 @@ fn gen_cluster_nodes_helper(
                     .collect();
                 Some(ranges)
             })
-            .flatten()
             .flatten()
             .collect::<Vec<String>>()
             .join(" ");

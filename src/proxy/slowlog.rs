@@ -197,7 +197,7 @@ impl SlowRequestLogger {
     }
 
     pub fn get(&self, limit: Option<usize>) -> Vec<Arc<SlowlogRecord>> {
-        let num = limit.unwrap_or_else(|| self.slowlogs.len());
+        let num = limit.unwrap_or(self.slowlogs.len());
         self.slowlogs
             .iter()
             .filter_map(arc_swap::ArcSwapAny::load)
