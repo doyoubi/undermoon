@@ -21,16 +21,18 @@ use undermoon::common::config::ClusterConfig;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn gen_conf() -> Result<(MemBrokerConfig, ClusterConfig), &'static str> {
-    let mut s = config::Config::new();
+    let mut config_builder = config::Config::builder();
     if let Some(conf_file_path) = env::args().nth(1) {
-        s.merge(config::File::with_name(&conf_file_path))
-            .map(|_| ())
-            .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
+        config_builder = config_builder.add_source(config::File::with_name(&conf_file_path));
     }
     // e.g. UNDERMOON_ADDRESS='127.0.0.1:7799'
-    s.merge(config::Environment::with_prefix("undermoon"))
-        .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read config from env vars {:?}", e));
+    let s = config_builder
+        .add_source(config::Environment::with_prefix("undermoon"))
+        .build()
+        .map_err(|e| {
+            warn!("failed to read config from file or env vars {:?}", e);
+            "failed to read config"
+        })?;
 
     let replica_addresses = s
         .get::<Vec<String>>("replica_addresses")

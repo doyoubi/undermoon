@@ -27,7 +27,7 @@ impl<C: ConnFactory<Pkt = RespPacket>> CompressionStrategyConfig
     for CompressionStrategyMetaMapConfig<C>
 {
     fn get_config(&self) -> CompressionStrategy {
-        let meta_map = self.meta_map.lease();
+        let meta_map = self.meta_map.load();
         meta_map.get_cluster_map().get_config().compression_strategy
     }
 }

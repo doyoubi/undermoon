@@ -24,7 +24,7 @@ impl HttpMetaManipulationBroker {
 
 impl HttpMetaManipulationBroker {
     fn gen_url(&self, path: &str) -> Option<String> {
-        let broker_addresses = self.broker_addresses.lease();
+        let broker_addresses = self.broker_addresses.load();
         let num = broker_addresses.len();
         let curr_index = self.broker_index.fetch_add(1, Ordering::Relaxed);
         let broker = broker_addresses.get(curr_index % num)?;

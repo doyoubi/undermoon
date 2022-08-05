@@ -200,7 +200,7 @@ impl SlowRequestLogger {
         let num = limit.unwrap_or(self.slowlogs.len());
         self.slowlogs
             .iter()
-            .filter_map(arc_swap::ArcSwapAny::load)
+            .filter_map(arc_swap::ArcSwapAny::load_full)
             .take(num)
             .collect()
     }

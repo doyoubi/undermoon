@@ -227,7 +227,7 @@ impl ExternalHttpStorage {
     }
 
     async fn try_init(&self) -> Result<(), MetaStoreError> {
-        let store = self.cached_store.lease().clone();
+        let store = (**self.cached_store.load()).clone();
         // The external HTTP service should ignore this None version request
         // if there're already data.
         if let Err(err) = self
@@ -254,14 +254,14 @@ impl ExternalHttpStorage {
 #[async_trait]
 impl MetaStorage for ExternalHttpStorage {
     async fn get_all_metadata(&self) -> Result<MetaStore, MetaStoreError> {
-        let store = self.cached_store.lease();
-        Ok(store.clone())
+        let store = self.cached_store.load();
+        Ok((**store).clone())
     }
 
     // This will NOT update the remote store as it does not contains `version`.
     async fn restore_metadata(&self, meta_store: MetaStore) -> Result<(), MetaStoreError> {
         // Avoid updating the store frequently.
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         if store.get_global_epoch() >= meta_store.get_global_epoch() {
             return Ok(());
         }
@@ -275,7 +275,7 @@ impl MetaStorage for ExternalHttpStorage {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> Result<Vec<ClusterName>, MetaStoreError> {
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         let names = store.get_cluster_names_with_pagination(offset, limit);
         Ok(names)
     }
@@ -285,7 +285,7 @@ impl MetaStorage for ExternalHttpStorage {
         name: &str,
         migration_limit: u64,
     ) -> Result<Option<Cluster>, MetaStoreError> {
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         let cluster = store.get_cluster_by_name(name, migration_limit);
         Ok(cluster)
     }
@@ -295,7 +295,7 @@ impl MetaStorage for ExternalHttpStorage {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> Result<Vec<String>, MetaStoreError> {
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         let addresses = store.get_proxies_with_pagination(offset, limit);
         Ok(addresses)
     }
@@ -305,7 +305,7 @@ impl MetaStorage for ExternalHttpStorage {
         address: &str,
         migration_limit: u64,
     ) -> Result<Option<Proxy>, MetaStoreError> {
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         let proxy = store.get_proxy_by_address(address, migration_limit);
         Ok(proxy)
     }
@@ -315,7 +315,7 @@ impl MetaStorage for ExternalHttpStorage {
         failure_ttl: chrono::Duration,
         failure_quorum: u64,
     ) -> Result<Vec<String>, MetaStoreError> {
-        let mut store = self.cached_store.lease().clone();
+        let mut store = (**self.cached_store.load()).clone();
         // Move to periodic update `refresh_cache`
         let failures = store.get_failures(failure_ttl, failure_quorum);
         Ok(failures)
@@ -370,7 +370,7 @@ impl MetaStorage for ExternalHttpStorage {
     }
 
     async fn get_failed_proxies(&self) -> Result<Vec<String>, MetaStoreError> {
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         let failures = store.get_failed_proxies();
         Ok(failures)
     }
@@ -380,7 +380,7 @@ impl MetaStorage for ExternalHttpStorage {
         cluster_name: &str,
         migration_limit: u64,
     ) -> Result<Option<ClusterInfo>, MetaStoreError> {
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         let cluster = store.get_cluster_info_by_name(cluster_name, migration_limit);
         Ok(cluster)
     }
@@ -570,7 +570,7 @@ impl MetaStorage for ExternalHttpStorage {
     }
 
     async fn get_global_epoch(&self) -> Result<u64, MetaStoreError> {
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         let epoch = store.get_global_epoch();
         Ok(epoch)
     }
@@ -599,7 +599,7 @@ impl MetaStorage for ExternalHttpStorage {
 
     async fn check_metadata(&self) -> Result<Option<MetaStore>, MetaStoreError> {
         // Now this is called frequently so just get data from cache.
-        let store = self.cached_store.lease();
+        let store = self.cached_store.load();
         match store.check() {
             Ok(()) => Ok(None),
             Err(store) => Ok(Some(store)),
