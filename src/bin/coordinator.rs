@@ -20,18 +20,20 @@ use undermoon::protocol::PooledRedisClientFactory;
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-fn gen_conf() -> CoordinatorConfig {
-    let mut s = config::Config::new();
+fn gen_conf() -> Result<CoordinatorConfig, Box<dyn Error>> {
+    let mut config_builder = config::Config::builder();
     // If config file is specified, load it.
     if let Some(conf_file_path) = env::args().nth(1) {
-        s.merge(config::File::with_name(&conf_file_path))
-            .map(|_| ())
-            .unwrap_or_else(|e| warn!("failed to read config file: {:?}", e));
+        config_builder = config_builder.add_source(config::File::with_name(&conf_file_path));
     }
     // e.g. UNDERMOON_ADDRESS_LIST='127.0.0.1:5299'
-    s.merge(config::Environment::with_prefix("undermoon"))
-        .map(|_| ())
-        .unwrap_or_else(|e| warn!("failed to read config from env vars: {:?}", e));
+    let s = config_builder
+        .add_source(config::Environment::with_prefix("undermoon"))
+        .build()
+        .map_err(|e| {
+            warn!("failed to read config from file or env vars {:?}", e);
+            "failed to read config"
+        })?;
 
     let address = s
         .get::<String>("address")
@@ -61,7 +63,7 @@ fn gen_conf() -> CoordinatorConfig {
     let enable_compression = s.get::<bool>("enable_compression").unwrap_or(false);
     let disable_failover = s.get::<bool>("disable_failover").unwrap_or(false);
 
-    CoordinatorConfig {
+    let config = CoordinatorConfig {
         address,
         broker_addresses: Arc::new(ArcSwap::new(Arc::new(broker_address_list))),
         reporter_id,
@@ -69,7 +71,8 @@ fn gen_conf() -> CoordinatorConfig {
         proxy_timeout,
         enable_compression,
         disable_failover,
-    }
+    };
+    Ok(config)
 }
 
 fn gen_service(
@@ -96,7 +99,7 @@ fn gen_service(
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
-    let config = gen_conf();
+    let config = gen_conf()?;
     let thread_number = config.thread_number;
 
     let service = gen_service(config);

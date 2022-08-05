@@ -28,7 +28,7 @@ use crate::proxy::backend::CmdTaskFactory;
 use crate::proxy::migration_backend::WaitableTask;
 use crate::replication::manager::ReplicatorManager;
 use crate::replication::replicator::ReplicatorMeta;
-use arc_swap::{ArcSwap, Lease};
+use arc_swap::ArcSwap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -406,7 +406,7 @@ impl<F: RedisClientFactory, C: ConnFactory<Pkt = RespPacket>> MetaManager<F, C> 
         // This check and do will not result in race condition,
         // because in "not imported" state,
         // the keys are not owned by this proxy and will be "MOVED".
-        if !self.meta_map.lease().migration_map.keys_are_importing(keys) {
+        if !self.meta_map.load().migration_map.keys_are_importing(keys) {
             return Ok(());
         }
 
@@ -506,7 +506,7 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
     max_redirections: Option<NonZeroUsize>,
     default_redirection_address: Option<&String>,
 ) -> Result<(), RetryError<CmdCtx>> {
-    let meta_map = meta_map.lease();
+    let meta_map = meta_map.load();
     let mut cmd_ctx = match meta_map.migration_map.send(cmd_ctx) {
         Ok(()) => return Ok(()),
         Err(e) => match e {
@@ -584,7 +584,7 @@ pub fn send_cmd_ctx<C: ConnFactory<Pkt = RespPacket>>(
 }
 
 fn send_cmd_ctx_to_remote_directly<C: ConnFactory<Pkt = RespPacket>>(
-    meta_map: &Lease<Arc<ProxyMetaMap<C>>>,
+    meta_map: &arc_swap::Guard<Arc<ProxyMetaMap<C>>>,
     mut cmd_ctx: CmdCtx,
     slot: usize,
     address: String,

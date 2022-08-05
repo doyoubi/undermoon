@@ -70,7 +70,7 @@ impl JsonMetaReplicator {
     }
 
     async fn sync_meta_impl(&self, store: Arc<MetaStore>) -> Result<(), MetaSyncError> {
-        let replica_addresses = self.replica_addresses.lease();
+        let replica_addresses = self.replica_addresses.load();
         let futs = replica_addresses
             .iter()
             .map(|address| self.sync_one_replica(store.clone(), address.as_str()))

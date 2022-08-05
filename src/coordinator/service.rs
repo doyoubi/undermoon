@@ -38,7 +38,7 @@ pub struct CoordinatorConfig {
 
 impl CoordinatorConfig {
     pub fn get_broker_addresses(&self) -> Vec<String> {
-        self.broker_addresses.lease().clone()
+        (**self.broker_addresses.load()).clone()
     }
 
     pub fn set_broker_addresses(&self, addresses: Vec<String>) {

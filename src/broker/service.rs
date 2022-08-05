@@ -400,7 +400,7 @@ impl MemBrokerService {
     }
 
     pub async fn sync_meta(&self) -> Result<(), MetaStoreError> {
-        if self.config.replica_addresses.lease().is_empty() {
+        if self.config.replica_addresses.load().is_empty() {
             return Ok(());
         }
         let store = self.storage.get_all_metadata().await?;
@@ -561,7 +561,7 @@ impl MemBrokerService {
 
     pub fn get_broker_config(&self) -> Result<MemBrokerConfigPayload, MetaStoreError> {
         let payload = MemBrokerConfigPayload {
-            replica_addresses: (*self.config.replica_addresses.load()).clone(),
+            replica_addresses: (**self.config.replica_addresses.load()).clone(),
         };
         Ok(payload)
     }
