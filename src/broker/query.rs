@@ -103,7 +103,7 @@ impl<'a> MetaStoreQuery<'a> {
             .into_iter()
             .map(|(proxy_address, nodes)| {
                 // Collect all slots from masters.
-                let slots = nodes.map(Node::into_slots).flatten().collect();
+                let slots = nodes.flat_map(Node::into_slots).collect();
                 PeerProxy {
                     proxy_address,
                     slots,
@@ -163,7 +163,7 @@ impl<'a> MetaStoreQuery<'a> {
         let nodes = cluster_store
             .chunks
             .iter()
-            .map(|chunk| {
+            .flat_map(|chunk| {
                 let mut nodes = vec![];
                 for i in 0..CHUNK_NODE_NUM {
                     let address = chunk
@@ -251,7 +251,6 @@ impl<'a> MetaStoreQuery<'a> {
                 }
                 nodes
             })
-            .flatten()
             .collect();
 
         Cluster::new(
