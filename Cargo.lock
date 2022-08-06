@@ -88,12 +88,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atomic-option"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0db678acb667b525ac40a324fc5f7d3390e29239b31c7327bb8157f5b4fff593"
-
-[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1852,7 +1846,6 @@ dependencies = [
  "arrayvec",
  "async-trait",
  "atoi",
- "atomic-option",
  "backtrace",
  "base64",
  "btoi",

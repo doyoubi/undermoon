@@ -15,9 +15,9 @@ use crate::protocol::{
     Resp, RespVec,
 };
 use crate::proxy::backend::CmdTask;
-use atomic_option::AtomicOption;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{future, Future, FutureExt, StreamExt};
+use parking_lot::Mutex;
 use std::cmp::min;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
@@ -65,8 +65,8 @@ struct DataEntry {
 type MgrFut = Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send>>;
 
 pub struct ScanMigrationTask<T: CmdTask, F: RedisClientFactory> {
-    handle: AtomicOption<FutureAutoStopHandle>, // once this task get dropped, the future will stop.
-    fut: AtomicOption<MgrFut>,
+    handle: Arc<Mutex<Option<FutureAutoStopHandle>>>, // once this task get dropped, the future will stop.
+    fut: Arc<Mutex<Option<MgrFut>>>,
     sync_tasks_sender: UnboundedSender<T>,
     src_address: String,
     dst_address: String,
@@ -106,8 +106,8 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
         const POOL_SIZE: usize = 1024;
 
         Self {
-            handle: AtomicOption::new(Box::new(fut_handle)),
-            fut: AtomicOption::new(Box::new(fut)),
+            handle: Arc::new(Mutex::new(Some(fut_handle))),
+            fut: Arc::new(Mutex::new(Some(fut))),
             sync_tasks_sender: sender,
             src_address,
             dst_address,
@@ -264,11 +264,11 @@ impl<T: CmdTask, F: RedisClientFactory> ScanMigrationTask<T, F> {
     }
 
     pub fn start(&self) -> Option<MgrFut> {
-        self.fut.take(Ordering::SeqCst).map(|t| *t)
+        self.fut.lock().take()
     }
 
     pub fn stop(&self) -> bool {
-        self.handle.take(Ordering::SeqCst).is_some()
+        self.handle.lock().take().is_some()
     }
 
     fn handle_forward(opt_multi_resp: OptionalMulti<RespVec>) -> Result<(), RedisClientError> {

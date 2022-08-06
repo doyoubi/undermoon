@@ -2,9 +2,9 @@ use crate::common::utils::pretty_print_bytes;
 use crate::protocol::{
     BinSafeStr, OptionalMulti, RedisClient, RedisClientError, RedisClientFactory, Resp, RespVec,
 };
-use atomic_option::AtomicOption;
 use futures::channel::oneshot;
 use futures::{select, Future, FutureExt};
+use parking_lot::Mutex;
 use std::pin::Pin;
 use std::str;
 use std::sync::atomic;
@@ -169,8 +169,8 @@ type RetrieverFut = Pin<Box<dyn Future<Output = Result<(), RedisClientError>> + 
 
 pub struct I64Retriever<F: RedisClientFactory> {
     data: Arc<atomic::AtomicI64>,
-    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
-    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
+    stop_signal_sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    stop_signal_receiver: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
     client_factory: Arc<F>,
 }
 
@@ -179,8 +179,8 @@ impl<F: RedisClientFactory> I64Retriever<F> {
         let (sender, receiver) = oneshot::channel();
         let data = Arc::new(atomic::AtomicI64::new(init_data));
 
-        let stop_signal_sender = AtomicOption::new(Box::new(sender));
-        let stop_signal_receiver = AtomicOption::new(Box::new(receiver));
+        let stop_signal_sender = Arc::new(Mutex::new(Some(sender)));
+        let stop_signal_receiver = Arc::new(Mutex::new(Some(receiver)));
         Self {
             data,
             stop_signal_sender,
@@ -207,8 +207,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
             + Sync
             + 'static,
     {
-        if let Some(stop_signal_receiver) = self.stop_signal_receiver.take(atomic::Ordering::SeqCst)
-        {
+        if let Some(stop_signal_receiver) = self.stop_signal_receiver.lock().take() {
             let data_clone = self.data.clone();
             let handle_result = move |resp: RespVec| -> Result<(), RedisClientError> {
                 handle_func(resp, &data_clone)
@@ -245,7 +244,7 @@ impl<F: RedisClientFactory> I64Retriever<F> {
     }
 
     pub fn try_stop(&self) -> bool {
-        match self.stop_signal_sender.take(atomic::Ordering::SeqCst) {
+        match self.stop_signal_sender.lock().take() {
             Some(sender) => sender.send(()).is_ok(),
             None => false,
         }
