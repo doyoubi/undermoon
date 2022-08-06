@@ -8,7 +8,6 @@ use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT
 use crate::migration::stats::MigrationStats;
 use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
 use arc_swap::ArcSwapOption;
-use atomic_option::AtomicOption;
 use dashmap::DashSet;
 use either::Either;
 use futures::channel::{
@@ -490,15 +489,19 @@ where
     umsync_task_sender: UmSyncTaskSender<F>,
     del_task_sender: DeleteKeyTaskSender,
     #[allow(clippy::type_complexity)]
-    task_receivers: AtomicOption<(
-        ExistsTaskReceiver<F>,
-        DumpPttlTaskReceiver<F>,
-        RestoreTaskReceiver<F>,
-        PendingUmSyncTaskReceiver<F::Task>,
-        UmSyncTaskReceiver<F>,
-        DeleteKeyTaskReceiver,
-        WaitHandle,
-    )>,
+    task_receivers: Arc<
+        parking_lot::Mutex<
+            Option<(
+                ExistsTaskReceiver<F>,
+                DumpPttlTaskReceiver<F>,
+                RestoreTaskReceiver<F>,
+                PendingUmSyncTaskReceiver<F::Task>,
+                UmSyncTaskReceiver<F>,
+                DeleteKeyTaskReceiver,
+                WaitHandle,
+            )>,
+        >,
+    >,
     cmd_task_factory: Arc<F>,
     key_lock: Arc<KeyLock>,
     stats: Arc<MigrationStats>,
@@ -530,7 +533,7 @@ where
         let (umsync_task_sender, umsync_task_receiver) = unbounded();
         let (del_task_sender, del_task_receiver) = unbounded();
         let (registry, wait_handle) = WaitRegistry::new();
-        let task_receivers = AtomicOption::new(Box::new((
+        let task_receivers = Arc::new(parking_lot::Mutex::new(Some((
             exists_task_receiver,
             dump_pttl_task_receiver,
             restore_task_receiver,
@@ -538,7 +541,7 @@ where
             umsync_task_receiver,
             del_task_receiver,
             wait_handle,
-        )));
+        ))));
         let key_lock = Arc::new(KeyLock::new(LOCK_SHARD_SIZE));
         Self {
             src_sender,
@@ -578,7 +581,7 @@ where
         let cmd_task_factory = self.cmd_task_factory.clone();
         let key_lock = self.key_lock.clone();
 
-        let receiver_opt = self.task_receivers.take(Ordering::SeqCst).map(|p| *p);
+        let receiver_opt = self.task_receivers.lock().take();
         let (
             exists_task_receiver,
             dump_pttl_task_receiver,

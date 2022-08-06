@@ -24,13 +24,12 @@ use crate::proxy::command::CmdTypeTuple;
 use crate::proxy::migration_backend::{RestoreDataCmdTaskHandler, WaitableTask};
 use crate::proxy::sender::{CmdTaskSender, CmdTaskSenderFactory};
 use crate::proxy::service::ServerProxyConfig;
-use atomic_option::AtomicOption;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::{future, select, Future, FutureExt, TryFutureExt};
+use parking_lot::Mutex;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,8 +53,8 @@ where
     meta: MigrationMeta,
     state: Arc<AtomicMigrationState>,
     client_factory: Arc<RCF>,
-    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
-    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
+    stop_signal_sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    stop_signal_receiver: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
     task: Arc<ScanMigrationTask<T, RCF>>,
     blocking_ctrl: Arc<BC>,
     phantom: PhantomData<T>,
@@ -98,8 +97,8 @@ where
             meta,
             state: Arc::new(AtomicMigrationState::initial_state()),
             client_factory,
-            stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
-            stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
+            stop_signal_sender: Arc::new(Mutex::new(Some(stop_signal_sender))),
+            stop_signal_receiver: Arc::new(Mutex::new(Some(stop_signal_receiver))),
             task: Arc::new(task),
             blocking_ctrl,
             phantom: PhantomData,
@@ -367,7 +366,7 @@ where
     fn start<'s>(
         &'s self,
     ) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
-        let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
+        let receiver = match self.stop_signal_receiver.lock().take() {
             Some(r) => r,
             None => return Box::pin(future::err(MigrationError::AlreadyStarted)),
         };
@@ -454,7 +453,7 @@ where
         let handle = MigratingTaskHandle {
             task: self.task.clone(),
             meta: self.meta.clone(),
-            stop_signal_sender: Some(*self.stop_signal_sender.take(Ordering::SeqCst)?),
+            stop_signal_sender: Some(self.stop_signal_sender.lock().take()?),
         };
         Some(Box::new(handle))
     }
@@ -503,8 +502,8 @@ where
     state: Arc<AtomicMigrationState>,
     _client_factory: Arc<RCF>,
     _sender_factory: Arc<TSF>,
-    stop_signal_sender: AtomicOption<oneshot::Sender<()>>,
-    stop_signal_receiver: AtomicOption<oneshot::Receiver<()>>,
+    stop_signal_sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    stop_signal_receiver: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
     cmd_handler: RestoreDataCmdTaskHandler<
         CTF,
         <TSF as CmdTaskSenderFactory>::Sender,
@@ -561,8 +560,8 @@ where
             state: Arc::new(AtomicMigrationState::initial_state()),
             _client_factory: client_factory,
             _sender_factory: sender_factory,
-            stop_signal_sender: AtomicOption::new(Box::new(stop_signal_sender)),
-            stop_signal_receiver: AtomicOption::new(Box::new(stop_signal_receiver)),
+            stop_signal_sender: Arc::new(Mutex::new(Some(stop_signal_sender))),
+            stop_signal_receiver: Arc::new(Mutex::new(Some(stop_signal_receiver))),
             cmd_handler,
             _cmd_task_factory: cmd_task_factory,
             active_redirection,
@@ -588,7 +587,7 @@ where
     fn start<'s>(
         &'s self,
     ) -> Pin<Box<dyn Future<Output = Result<(), MigrationError>> + Send + 's>> {
-        let receiver = match self.stop_signal_receiver.take(Ordering::SeqCst) {
+        let receiver = match self.stop_signal_receiver.lock().take() {
             Some(r) => r,
             None => return Box::pin(future::err(MigrationError::AlreadyStarted)),
         };
@@ -649,7 +648,7 @@ where
     fn get_stop_handle(&self) -> Option<Box<dyn Drop + Send + Sync + 'static>> {
         let handle = ImportingTaskHandle {
             meta: self.meta.clone(),
-            stop_signal_sender: Some(*self.stop_signal_sender.take(Ordering::SeqCst)?),
+            stop_signal_sender: Some(self.stop_signal_sender.lock().take()?),
         };
         Some(Box::new(handle))
     }
