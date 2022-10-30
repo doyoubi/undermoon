@@ -1,19 +1,19 @@
 # Use https://crates.io/crates/cargo-chef to cache dependencies.
 
-FROM rust:1.55-buster as planner
+FROM rust:1.64-buster as planner
 WORKDIR /undermoon
 RUN cargo install cargo-chef
 COPY src /undermoon/src
 COPY Cargo.toml Cargo.lock /undermoon/
 RUN cargo chef prepare  --recipe-path recipe.json
 
-FROM rust:1.55-buster as cacher
+FROM rust:1.64-buster as cacher
 WORKDIR /undermoon
 RUN cargo install cargo-chef
 COPY --from=planner /undermoon/recipe.json recipe.json
 RUN cargo chef cook --recipe-path recipe.json
 
-FROM rust:1.55-buster as builder
+FROM rust:1.64-buster as builder
 WORKDIR /undermoon
 COPY src /undermoon/src
 COPY Cargo.toml Cargo.lock /undermoon/
