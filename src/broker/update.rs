@@ -575,7 +575,7 @@ impl<'a> MetaStoreUpdate<'a> {
                     .iter()
                     .filter(|(host, _)| {
                         let free_count = host_proxies.get(*host).map(|proxies| proxies.len());
-                        **host != first_host && free_count != None && free_count != Some(0)
+                        **host != first_host && free_count.is_some() && free_count != Some(0)
                     })
                     .min_by(|(host1, count1), (host2, count2)| {
                         Self::second_host_cmp(

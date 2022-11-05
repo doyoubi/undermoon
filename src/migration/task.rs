@@ -33,7 +33,7 @@ impl MgrSubCmd {
     }
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum MigrationState {
     PreCheck = 0,
     PreBlocking = 1,

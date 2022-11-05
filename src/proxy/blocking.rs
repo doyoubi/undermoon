@@ -280,7 +280,7 @@ where
         // Since CmdTaskSender::send has to be `&self`, we have to implement something similar ourselves.
         // Add `running_cmd` anyway to hold this "lock".
         // TODO: this counter increment (reader lock) might starve the waiting side (writer lock).
-        let counter = RefAutoCounter::new(&(*self.running_cmd));
+        let counter = RefAutoCounter::new(&self.running_cmd);
         let BlockingState { blocking, term } = self.get_blocking_state();
         if !blocking {
             let blocking = match cmd_blocking_hint {

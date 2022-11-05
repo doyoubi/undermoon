@@ -36,14 +36,14 @@ pub struct HostProxy {
     pub proxy_address: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ChunkRolePosition {
     Normal,
     FirstChunkMaster,
     SecondChunkMaster,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MigrationSlotRangeStore {
     pub range_list: RangeList,
     pub is_migrating: bool, // migrating or importing
@@ -121,7 +121,7 @@ impl MigrationSlotRangeStore {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MigrationMetaStore {
     pub epoch: u64,
     pub src_chunk_index: usize,
@@ -614,6 +614,7 @@ impl MetaStore {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn check(&self) -> Result<(), Self> {
         if MetaStoreQuery::new(self).check_metadata() {
             Ok(())

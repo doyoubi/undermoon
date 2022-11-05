@@ -19,7 +19,7 @@ pub type BulkStrSlice<'a> = BulkStr<&'a [u8]>;
 pub type ArraySlice<'a> = Array<&'a [u8]>;
 pub type RespSlice<'a> = Resp<&'a [u8]>;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataIndex(pub usize, pub usize);
 
 pub type BulkStrIndex = BulkStr<DataIndex>;
@@ -78,19 +78,19 @@ impl IndexedResp {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum BulkStr<T> {
     Str(T),
     Nil,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Array<T> {
     Arr(Vec<Resp<T>>),
     Nil,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Resp<T> {
     Error(T),
     Simple(T),

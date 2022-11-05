@@ -40,14 +40,14 @@ impl ReplicatorMeta {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct MasterMeta {
     pub cluster_name: ClusterName,
     pub master_node_address: String,
     pub replicas: Vec<ReplPeer>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ReplicaMeta {
     pub cluster_name: ClusterName,
     pub replica_node_address: String,

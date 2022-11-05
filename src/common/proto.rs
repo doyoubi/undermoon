@@ -31,7 +31,7 @@ macro_rules! try_get {
     }};
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterMapFlags {
     pub force: bool,
     pub compress: bool,
