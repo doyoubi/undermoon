@@ -18,9 +18,7 @@ use crate::common::version::UNDERMOON_VERSION;
 use crate::migration::manager::SwitchError;
 use crate::migration::task::parse_switch_command;
 use crate::migration::task::MgrSubCmd;
-use crate::protocol::{
-    Array, BulkStr, RFunctor, RedisClientFactory, Resp, RespPacket, RespVec, VFunctor,
-};
+use crate::protocol::{Array, BulkStr, Functor, RedisClientFactory, Resp, RespPacket, RespVec};
 use crate::replication::replicator::ReplicatorMeta;
 use atoi::atoi;
 use btoi::btou;

@@ -1,5 +1,5 @@
 use super::encoder::get_resp_size_hint;
-use super::fp::{ForAll, Plug, RFunctor, Unplug, VFunctor};
+use super::fp::Functor;
 use super::packet::PacketSizeHint;
 use bytes::Bytes;
 use std::ops::Range;
@@ -99,45 +99,37 @@ pub enum Resp<T> {
     Arr(Array<T>),
 }
 
-impl<A, B> Plug<A> for BulkStr<B> {
-    type Result = BulkStr<A>;
-}
-
-impl<T> Unplug for BulkStr<T> {
-    type F = BulkStr<ForAll>;
+impl<T> Functor for BulkStr<T> {
     type A = T;
-}
+    type Wrap<A> = BulkStr<A>;
 
-impl<A> VFunctor for BulkStr<A> {
-    fn map<B, F>(self, f: F) -> <Self as Plug<B>>::Result
+    fn map<B, F>(self, f: F) -> Self::Wrap<B>
     where
-        F: Fn(<Self as Unplug>::A) -> B + Copy,
+        F: Fn(Self::A) -> B + Copy,
     {
         match self {
             Self::Str(t) => BulkStr::Str(f(t)),
             Self::Nil => BulkStr::Nil,
         }
     }
-}
 
-impl<'a, A> RFunctor<'a> for BulkStr<A> {
-    fn as_ref(&'a self) -> <Self as Plug<&'a <Self as Unplug>::A>>::Result {
+    fn as_ref(&self) -> Self::Wrap<&Self::A> {
         match *self {
             Self::Str(ref t) => BulkStr::Str(t),
             Self::Nil => BulkStr::Nil,
         }
     }
 
-    fn as_mut(&'a mut self) -> <Self as Plug<&'a mut <Self as Unplug>::A>>::Result {
+    fn as_mut(&mut self) -> Self::Wrap<&mut Self::A> {
         match *self {
             Self::Str(ref mut t) => BulkStr::Str(t),
             Self::Nil => BulkStr::Nil,
         }
     }
 
-    fn map_in_place<F>(&'a mut self, f: F)
+    fn map_in_place<F>(&mut self, f: F)
     where
-        F: Fn(&'a mut <Self as Unplug>::A) + Copy,
+        F: Fn(&mut Self::A) + Copy,
     {
         match *self {
             Self::Str(ref mut t) => f(t),
@@ -155,45 +147,37 @@ impl<T> BulkStr<T> {
     }
 }
 
-impl<A, B> Plug<A> for Array<B> {
-    type Result = Array<A>;
-}
-
-impl<T> Unplug for Array<T> {
-    type F = Array<ForAll>;
+impl<T> Functor for Array<T> {
     type A = T;
-}
+    type Wrap<A> = Array<A>;
 
-impl<A> VFunctor for Array<A> {
-    fn map<B, F>(self, f: F) -> <Self as Plug<B>>::Result
+    fn map<B, F>(self, f: F) -> Self::Wrap<B>
     where
-        F: Fn(<Self as Unplug>::A) -> B + Copy,
+        F: Fn(Self::A) -> B + Copy,
     {
         match self {
             Self::Arr(t) => Array::Arr(t.into_iter().map(move |e| e.map(f)).collect()),
             Self::Nil => Array::Nil,
         }
     }
-}
 
-impl<'a, A> RFunctor<'a> for Array<A> {
-    fn as_ref(&'a self) -> <Self as Plug<&'a <Self as Unplug>::A>>::Result {
+    fn as_ref(&self) -> Self::Wrap<&Self::A> {
         match *self {
             Self::Arr(ref t) => Array::Arr(t.iter().map(|e| e.as_ref()).collect()),
             Self::Nil => Array::Nil,
         }
     }
 
-    fn as_mut(&'a mut self) -> <Self as Plug<&'a mut <Self as Unplug>::A>>::Result {
+    fn as_mut(&mut self) -> Self::Wrap<&mut Self::A> {
         match *self {
             Self::Arr(ref mut t) => Array::Arr(t.iter_mut().map(|e| e.as_mut()).collect()),
             Self::Nil => Array::Nil,
         }
     }
 
-    fn map_in_place<F>(&'a mut self, f: F)
+    fn map_in_place<F>(&mut self, f: F)
     where
-        F: Fn(&'a mut <Self as Unplug>::A) + Copy,
+        F: Fn(&mut Self::A) + Copy,
     {
         match *self {
             Self::Arr(ref mut arr) => {
@@ -206,19 +190,13 @@ impl<'a, A> RFunctor<'a> for Array<A> {
     }
 }
 
-impl<A, B> Plug<A> for Resp<B> {
-    type Result = Resp<A>;
-}
-
-impl<T> Unplug for Resp<T> {
-    type F = Resp<ForAll>;
+impl<T> Functor for Resp<T> {
     type A = T;
-}
+    type Wrap<A> = Resp<A>;
 
-impl<A> VFunctor for Resp<A> {
-    fn map<B, F>(self, f: F) -> <Self as Plug<B>>::Result
+    fn map<B, F>(self, f: F) -> Self::Wrap<B>
     where
-        F: Fn(<Self as Unplug>::A) -> B + Copy,
+        F: Fn(Self::A) -> B + Copy,
     {
         match self {
             Self::Error(t) => Resp::Error(f(t)),
@@ -228,10 +206,8 @@ impl<A> VFunctor for Resp<A> {
             Self::Arr(arr) => Resp::Arr(arr.map(f)),
         }
     }
-}
 
-impl<'a, A> RFunctor<'a> for Resp<A> {
-    fn as_ref(&'a self) -> <Self as Plug<&'a <Self as Unplug>::A>>::Result {
+    fn as_ref(&self) -> Self::Wrap<&Self::A> {
         match *self {
             Self::Error(ref t) => Resp::Error(t),
             Self::Simple(ref t) => Resp::Simple(t),
@@ -241,7 +217,7 @@ impl<'a, A> RFunctor<'a> for Resp<A> {
         }
     }
 
-    fn as_mut(&'a mut self) -> <Self as Plug<&'a mut <Self as Unplug>::A>>::Result {
+    fn as_mut(&mut self) -> Self::Wrap<&mut Self::A> {
         match *self {
             Self::Error(ref mut t) => Resp::Error(t),
             Self::Simple(ref mut t) => Resp::Simple(t),
@@ -251,9 +227,9 @@ impl<'a, A> RFunctor<'a> for Resp<A> {
         }
     }
 
-    fn map_in_place<F>(&'a mut self, f: F)
+    fn map_in_place<F>(&mut self, f: F)
     where
-        F: Fn(&'a mut <Self as Unplug>::A) + Copy,
+        F: Fn(&mut Self::A) + Copy,
     {
         match *self {
             Self::Error(ref mut t) => f(t),
@@ -313,15 +289,15 @@ impl PacketSizeHint for RespVec {
     }
 }
 
-pub trait AdvanceIndex<'a>: RFunctor<'a> + Unplug<A = DataIndex> {
-    fn advance(&'a mut self, count: usize);
+pub trait AdvanceIndex: Functor<A = DataIndex> {
+    fn advance(&mut self, count: usize);
 }
 
-impl<'a, T> AdvanceIndex<'a> for T
+impl<T> AdvanceIndex for T
 where
-    T: RFunctor<'a> + Unplug<A = DataIndex>,
+    T: Functor<A = DataIndex>,
 {
-    fn advance(&'a mut self, count: usize) {
+    fn advance(&mut self, count: usize) {
         self.map_in_place(move |DataIndex(s, e)| {
             *s += count;
             *e += count;

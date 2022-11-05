@@ -1,37 +1,13 @@
-// This is a small utils to implement higher kinded types for using functor.
-// The following codes are based on:
-// - https://gist.github.com/edmundsmith/855fcf0cb35dd467c29a9350481f0ecf
-// - https://gist.github.com/burjui/4ec90b395975709b79f999839dcf9674
+pub trait Functor {
+    type A; // Concrete inner type of Wrap<A>
+    type Wrap<T>: Functor; // In the form of Wrap<A>
 
-// Placeholder for any type.
-pub struct ForAll;
-
-pub trait Unplug {
-    type F; // In the form of Functor<ForAll>
-    type A; // Concrete inner type of Functor<A>
-}
-
-pub trait Plug<A> {
-    type Result;
-}
-
-// Functor takes self value.
-pub trait VFunctor: Unplug + Plug<<Self as Unplug>::A> {
-    fn map<B, F>(self, f: F) -> <Self as Plug<B>>::Result
+    fn map<B, F>(self, f: F) -> Self::Wrap<B>
     where
-        Self: Plug<B>,
-        F: Fn(<Self as Unplug>::A) -> B + Copy;
-}
-
-// Functor takes self reference.
-pub trait RFunctor<'a>: Unplug + Plug<<Self as Unplug>::A> {
-    fn as_ref(&'a self) -> <Self as Plug<&'a <Self as Unplug>::A>>::Result
+        F: Fn(Self::A) -> B + Copy;
+    fn as_ref(&self) -> Self::Wrap<&Self::A>;
+    fn as_mut(&mut self) -> Self::Wrap<&mut Self::A>;
+    fn map_in_place<F>(&mut self, f: F)
     where
-        Self: Plug<&'a <Self as Unplug>::A>;
-    fn as_mut(&'a mut self) -> <Self as Plug<&'a mut <Self as Unplug>::A>>::Result
-    where
-        Self: Plug<&'a mut <Self as Unplug>::A>;
-    fn map_in_place<F>(&'a mut self, f: F)
-    where
-        F: Fn(&'a mut <Self as Unplug>::A) + Copy;
+        F: Fn(&mut Self::A) + Copy;
 }

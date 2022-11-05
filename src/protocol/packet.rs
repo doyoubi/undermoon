@@ -1,6 +1,6 @@
 use super::decoder::DecodeError;
 use super::encoder::{command_to_buf, encode_resp};
-use super::fp::{RFunctor, VFunctor};
+use super::fp::Functor;
 use super::resp::{BinSafeStr, IndexedResp, Resp, RespSlice, RespVec};
 use super::stateless::{parse_indexed_resp, ParseError};
 use crate::common::utils::{
