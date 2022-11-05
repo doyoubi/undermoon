@@ -473,7 +473,7 @@ where
 
     fn handle_umctl_ready(&self, cmd_ctx: CmdCtx) {
         let is_ready = self.manager.is_ready();
-        let n = if is_ready { 1 } else { 0 };
+        let n = i32::from(is_ready);
         cmd_ctx.set_resp_result(Ok(Resp::Integer(n.to_string().into_bytes())))
     }
 

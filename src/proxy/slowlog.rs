@@ -220,7 +220,7 @@ impl SlowRequestLogger {
 pub fn slowlogs_to_resp(logs: Vec<Arc<SlowlogRecord>>) -> RespVec {
     let elements = logs
         .into_iter()
-        .map(|log| slowlog_to_report(&(*log)))
+        .map(|log| slowlog_to_report(&log))
         .collect();
     Resp::Arr(Array::Arr(elements))
 }

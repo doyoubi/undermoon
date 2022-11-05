@@ -108,8 +108,8 @@ fn gen_conf() -> Result<(MemBrokerConfig, ClusterConfig), &'static str> {
         "migration_scan_count",
     ];
     for field in cluster_fields.iter() {
-        if let Ok(value) = s.get::<String>(*field) {
-            if cluster_config.set_field(*field, value.as_str()).is_err() {
+        if let Ok(value) = s.get::<String>(field) {
+            if cluster_config.set_field(field, value.as_str()).is_err() {
                 return Err(*field);
             }
         }

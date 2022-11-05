@@ -35,9 +35,7 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::SlotsAlreadyEven);
         }
 
-        if let Err(err) = Self::check_running_tasks(cluster) {
-            return Err(err);
-        }
+        Self::check_running_tasks(cluster)?;
 
         let migration_slots = Self::remove_slots_from_src(cluster, new_epoch);
         Self::assign_dst_slots(cluster, migration_slots.clone());
@@ -305,9 +303,7 @@ impl<'a> MetaStoreMigrate<'a> {
             return Err(MetaStoreError::FreeNodeFound);
         }
 
-        if let Err(err) = Self::check_running_tasks(cluster) {
-            return Err(err);
-        }
+        Self::check_running_tasks(cluster)?;
 
         if new_node_num == 0
             || new_node_num % CHUNK_NODE_NUM != 0

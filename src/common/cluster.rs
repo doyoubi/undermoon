@@ -511,13 +511,13 @@ impl MigrationTaskMeta {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ReplPeer {
     pub node_address: String,
     pub proxy_address: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Master,
     Replica,
@@ -549,7 +549,7 @@ impl<'de> Deserialize<'de> for Role {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ReplMeta {
     role: Role,
     peers: Vec<ReplPeer>,
@@ -593,7 +593,7 @@ impl ReplMeta {
 // Replica Node will only be used for replication.
 // (2) Coordinator will send the master Node metadata to proxies' cluster module
 // and the replica Node metadata to proxies' replication module.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Node {
     address: String,
     proxy_address: String,
@@ -707,13 +707,13 @@ impl Cluster {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PeerProxy {
     pub proxy_address: String,
     pub slots: Vec<SlotRange>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Proxy {
     cluster_name: Option<ClusterName>,
     address: String,

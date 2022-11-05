@@ -40,7 +40,7 @@ pub fn parse_resp(buf: &[u8]) -> Result<(RespIndex, usize), ParseError> {
         return Err(ParseError::NotEnoughData);
     }
 
-    let prefix = *buf.get(0).ok_or(ParseError::UnexpectedErr)?;
+    let prefix = *buf.first().ok_or(ParseError::UnexpectedErr)?;
     let next_buf = buf.get(1..).ok_or(ParseError::InvalidProtocol)?;
 
     match prefix {

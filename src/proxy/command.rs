@@ -17,7 +17,7 @@ use std::str;
 
 const MAX_COMMAND_NAME_LENGTH: usize = 64;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CmdType {
     Ping,
     Info,
@@ -78,7 +78,7 @@ impl CmdType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum DataCmdType {
     // String commands
     Append,

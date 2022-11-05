@@ -225,7 +225,8 @@ impl<P: ProxyFailureRetriever, H: ProxyFailureHandler> FailureHandler for ParFai
     clippy::indexing_slicing,
     clippy::panic,
     clippy::panic_in_result_fn,
-    clippy::unreachable
+    clippy::unreachable,
+    dead_code
 )]
 mod trait_mod {
     use super::*;
