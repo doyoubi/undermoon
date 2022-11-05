@@ -6,7 +6,7 @@ use crate::common::response;
 use crate::common::utils::{generate_lock_slot, pretty_print_bytes, RetryError, Wrapper};
 use crate::migration::scan_migration::{pttl_to_restore_expire_time, PTTL_KEY_NOT_FOUND};
 use crate::migration::stats::MigrationStats;
-use crate::protocol::{Array, BinSafeStr, BulkStr, RFunctor, Resp, RespVec, VFunctor};
+use crate::protocol::{Array, BinSafeStr, BulkStr, Functor, Resp, RespVec};
 use arc_swap::ArcSwapOption;
 use dashmap::DashSet;
 use either::Either;

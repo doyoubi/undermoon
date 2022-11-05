@@ -30,7 +30,7 @@ mod tests {
     use undermoon::common::utils::pretty_print_bytes;
     use undermoon::common::version::UNDERMOON_MIGRATION_VERSION;
     use undermoon::migration::task::{MgrSubCmd, MigrationState, SwitchArg};
-    use undermoon::protocol::{Array, BinSafeStr, BulkStr, Resp, RespPacket, RespVec, VFunctor};
+    use undermoon::protocol::{Array, BinSafeStr, BulkStr, Functor, Resp, RespPacket, RespVec};
     use undermoon::proxy::command::{new_command_pair, CmdReplyReceiver, Command};
     use undermoon::proxy::manager::MetaManager;
     use undermoon::proxy::manager::MetaMap;
