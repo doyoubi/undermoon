@@ -1,5 +1,5 @@
 Jinja2==2.11.3
 loguru==0.4.1
-redis==2.10.6
+redis==4.5.3
 requests==2.22.0
 requests-unixsocket==0.2.0
